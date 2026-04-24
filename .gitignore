@@ -208,3 +208,11 @@ __marimo__/
 
 # Worktrees
 .worktrees/
+
+# Generated data (do not commit raw or projection parquet)
+data/raw/
+data/features/
+data/projections/
+data/backtests/
+data/manifests/
+*.duckdb
