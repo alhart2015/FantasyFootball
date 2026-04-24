@@ -55,8 +55,14 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
     df = raw.rename(columns=_RENAME).copy()
 
     # Coerce dtypes that nfl_data_py sometimes returns as floats.
-    for int_col in ("passing_tds", "interceptions", "rushing_tds", "receptions",
-                    "receiving_tds", "fumbles_lost"):
+    for int_col in (
+        "passing_tds",
+        "interceptions",
+        "rushing_tds",
+        "receptions",
+        "receiving_tds",
+        "fumbles_lost",
+    ):
         if int_col in df.columns:
             df[int_col] = df[int_col].fillna(0).astype(int)
 
@@ -84,9 +90,7 @@ def refresh_weekly_stats(data_root: Path, *, seasons: Iterable[int]) -> list[Pat
     for season in seasons:
         raw = _fetch_raw_weekly([season])
         df = _normalize_one_season(raw)
-        path = write_partition(
-            data_root / "raw", "weekly_stats", df, season=season, week=None
-        )
+        path = write_partition(data_root / "raw", "weekly_stats", df, season=season, week=None)
         record_manifest(data_root, table="weekly_stats", season=season, df=df)
         written.append(path)
     return written

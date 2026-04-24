@@ -39,8 +39,8 @@ def test_normal_sample_summary() -> None:
 
 def test_gamma_positive_support() -> None:
     d = ParametricGamma(shape=4.0, scale=3.0)
-    assert d.mean() == pytest.approx(12.0)         # shape * scale
-    assert d.std() == pytest.approx(math.sqrt(36)) # sqrt(shape) * scale
+    assert d.mean() == pytest.approx(12.0)  # shape * scale
+    assert d.std() == pytest.approx(math.sqrt(36))  # sqrt(shape) * scale
     rng = np.random.default_rng(1)
     s = d.sample(10_000, rng=rng)
     assert (s >= 0).all()

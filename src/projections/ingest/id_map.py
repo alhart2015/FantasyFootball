@@ -58,11 +58,7 @@ def build_id_map(data_root: Path) -> Path:
     df["position"] = df["position"].astype(_PYARROW_STR)
 
     # team is nullable — map to canonical value or pd.NA
-    df["team"] = (
-        df["team"]
-        .map(_normalize_team)
-        .astype(_PYARROW_STR)
-    )
+    df["team"] = df["team"].map(_normalize_team).astype(_PYARROW_STR)
 
     df = df.drop_duplicates(subset=["gsis_id"], keep="first").reset_index(drop=True)
 
