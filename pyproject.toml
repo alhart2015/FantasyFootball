@@ -51,3 +51,7 @@ src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "RUF"]
+
+[tool.ruff.format]
+# Defaults: black-compatible, double quotes, trailing commas in multi-line.
+# No overrides needed for v1.
