@@ -8,6 +8,8 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 **Projections Core — Plan 1 (Foundations) merged to `main` at commit `8f02a6c`.**
 
+**Dev tooling — pre-commit hooks (ruff lint+format, mypy, housekeeping), `CONTRIBUTING.md`, terse `CLAUDE.md`, README refresh — merged via `feat/dev-tooling`.** Resolves TODO #0.
+
 89 passing tests, mypy strict clean, ruff clean. In place:
 
 - Project bootstrap (`pyproject.toml`, mypy strict, ruff with E/F/W/I/B/UP/N/RUF)
@@ -21,17 +23,15 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ## Next action
 
-**Recommended: TODO #0 first, then Plan 2.**
+**Recommended: Plan 2 — Ingest expansion + per-position features.**
 
-The natural next implementation step is **Plan 2 — Ingest expansion + per-position features** (schedules, snap_counts, depth_charts, NGS ingest paths plus the per-position feature builders the spec called out). It follows the foundations patterns and should move quickly.
-
-Before that, a 30-min detour for **TODO #0** (pre-commit hooks + `CONTRIBUTING.md`) is worth doing — it locks the conventions in CI before Plan 2 expands the codebase, so any drift is caught automatically rather than relying on per-PR discipline.
+With dev tooling in place (pre-commit catches lint/format/typecheck on every commit), the codebase is ready to grow. Plan 2 adds the remaining `nfl_data_py` ingest sources (schedules, snap_counts, depth_charts, NGS) and introduces the per-position feature builders the Projections Core spec called out (rolling usage, opponent-adjusted rates, Vegas implied totals). It follows the patterns from foundations and should move quickly.
 
 ### Three options considered, in order of recommendation:
 
-1. **TODO #0 (~30 min)** — pre-commit hooks (mypy + ruff + pytest) and CONTRIBUTING.md. Locks conventions in CI before Plan 2 grows the codebase. Picked.
-2. **Plan 2 (large)** — Ingest expansion + features. Biggest momentum gain, follows foundations patterns. Next after TODO #0.
-3. **Drive-by minor cleanups (~15 min)** — `_PYARROW_STR` consolidation into `schemas.py`, programmatic `_INTEGER_STATS` from `StatLine` annotations, drop helpers from ingest `__all__`. Not blocking; can fold into Plan 2 or land separately.
+1. **Plan 2 — Ingest expansion + features (large)** — natural next step. Foundations patterns are established; biggest momentum gain. Picked.
+2. **Drive-by minor cleanups (~15 min)** — `_PYARROW_STR` consolidation into `schemas.py`, programmatic `_INTEGER_STATS` from `StatLine` annotations, drop helpers from ingest `__all__`. Not blocking; can fold into Plan 2 or land separately.
+3. **TODO #1 — option D exploration** — research, not implementation. Worth doing before DFS Engine, not urgent now.
 
 ---
 
@@ -48,6 +48,9 @@ Before that, a 30-min detour for **TODO #0** (pre-commit hooks + `CONTRIBUTING.m
 | 2026-04-24 | Strong typing posture: pandera schemas at module boundaries, pydantic models for configs/records, NewType per ID flavor, mypy strict, enums for every reused string-keyed concept | User had prior pain with stringly-typed/dict-laden code. Catch errors at boundaries, not three modules deep. |
 | 2026-04-24 | Parquet + DuckDB storage | Friendly to free-tier hosting (Streamlit Community Cloud, HF Spaces, DuckDB-WASM in browser). |
 | 2026-04-24 | Subagent-driven execution for foundations plan | Faster iteration, fresh context per task, two-stage review (spec then code quality) at higher-risk tasks. |
+| 2026-04-24 | Pre-commit hooks (ruff lint+format, mypy, housekeeping); no GitHub Actions CI; pytest manual before PR | Catches the regressions that matter at commit time without slowing commits with full pytest. CI deferred indefinitely per user direction. |
+| 2026-04-24 | No direct commits to `main` — specs, plans, and implementation all on feature branch via PR | User correction after I committed a spec to main. Conventions encoded in CONTRIBUTING.md and CLAUDE.md. |
+| 2026-04-24 | `CLAUDE.md` trimmed; `CONTRIBUTING.md` is the deep contributor doc | CLAUDE.md auto-loads into Claude's context every interaction; every line costs context budget. Detail moves to CONTRIBUTING.md. |
 
 ---
 
@@ -70,7 +73,6 @@ Roughly in order. Each is its own brainstorm → spec → plan cycle.
 
 ### Cross-cutting
 
-- **TODO #0** — pre-commit hooks + `CONTRIBUTING.md` (conventions in CI). Recommended next.
 - **TODO #1** — option D exploration: joint-correlation projections (covariance / scenario sim / factor / copula). Decide before DFS Engine.
 - **`score_distribution` vectorization** — TODO marker in code; needed before backtest scale (~85M Pydantic instantiations otherwise).
 - Minor cleanups from foundations review: `_PYARROW_STR` to `schemas.py`, programmatic `_INTEGER_STATS`, drop ingest helpers from `__all__`.
