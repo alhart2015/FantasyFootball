@@ -79,6 +79,11 @@ def score_distribution(
         samples_per_stat[stat] = s
 
     # Score each row.
+    # TODO(perf): vectorize this Python loop. Each iteration constructs a
+    # Pydantic StatLine instance (~5-10us); at backtest scale (~500 players x
+    # 17 weeks x 10k samples = 85M iterations) this dominates. The score()
+    # math is linear and can be expressed as a dot product over per-stat
+    # arrays without per-row object construction.
     points = np.empty(n_samples, dtype=np.float64)
     for i in range(n_samples):
         kwargs: dict[str, float | int] = {}
