@@ -64,3 +64,25 @@ def test_build_id_map_drops_rows_without_gsis_id(
     df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
     assert df["gsis_id"].notna().all()
     assert len(df) == 3
+
+
+def test_build_id_map_filters_unsupported_positions(
+    tmp_path: Path,
+    fake_id_map_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fb_row = {
+        "gsis_id": "00-0099999",
+        "espn_id": "9999999",
+        "sleeper_id": "9999",
+        "pfr_id": "FbPla00",
+        "name": "FB Player",
+        "position": "FB",
+        "team": "MIN",
+    }
+    with_fb = pd.concat([fake_id_map_df, pd.DataFrame([fb_row])], ignore_index=True)
+    monkeypatch.setattr("projections.ingest.id_map._fetch_raw_id_map", lambda: with_fb)
+    build_id_map(tmp_path)
+    df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
+    assert "00-0099999" not in df["gsis_id"].tolist()
+    assert len(df) == 3

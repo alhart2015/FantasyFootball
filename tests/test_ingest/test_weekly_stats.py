@@ -80,3 +80,36 @@ def test_refresh_weekly_stats_idempotent(
     refresh_weekly_stats(tmp_path, seasons=[2024])
     df = read_partition(tmp_path / "raw", "weekly_stats", season=2024)
     assert len(df) == 2  # not 4 — second run replaced the partition
+
+
+def test_refresh_weekly_stats_filters_unsupported_positions(
+    tmp_path: Path,
+    fake_weekly_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fb_row = {
+        "player_id": "00-0099999",
+        "season": 2024,
+        "week": 3,
+        "position": "FB",
+        "recent_team": "MIN",
+        "opponent_team": "HOU",
+        "passing_yards": 0.0,
+        "passing_tds": 0,
+        "interceptions": 0,
+        "rushing_yards": 5.0,
+        "rushing_tds": 0,
+        "receptions": 1,
+        "receiving_yards": 8.0,
+        "receiving_tds": 0,
+        "fumbles_lost": 0,
+    }
+    with_fb = pd.concat([fake_weekly_df, pd.DataFrame([fb_row])], ignore_index=True)
+    monkeypatch.setattr(
+        "projections.ingest.weekly_stats._fetch_raw_weekly",
+        lambda seasons: with_fb,
+    )
+    refresh_weekly_stats(tmp_path, seasons=[2024])
+    df = read_partition(tmp_path / "raw", "weekly_stats", season=2024)
+    assert "00-0099999" not in df["gsis_id"].tolist()
+    assert len(df) == 2

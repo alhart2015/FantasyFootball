@@ -13,7 +13,7 @@ import nfl_data_py as nfl
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
-from projections.schemas import WeeklyStatsSchema, normalize_team_code
+from projections.schemas import Position, WeeklyStatsSchema, normalize_team_code
 from projections.store import write_partition
 
 _PYARROW_STR = pd.StringDtype("pyarrow")  # match Task 13 / pandera Series[str] expectation
@@ -68,6 +68,7 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
     df["opponent"] = df["opponent"].map(_normalize_team).astype(_PYARROW_STR)
 
     df = df[[c for c in _KEEP if c in df.columns]].copy()
+    df = df[df["position"].isin([p.value for p in Position])].copy()
     df = df[df["gsis_id"].notna()].copy()
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["position"] = df["position"].astype(_PYARROW_STR)
