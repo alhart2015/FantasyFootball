@@ -44,8 +44,14 @@ class ParametricGamma:
     scale: float
 
     def __post_init__(self) -> None:
-        if self.shape <= 0 or self.scale <= 0:
-            raise ValueError(f"shape and scale must be positive; got {self.shape}, {self.scale}")
+        # Coerce ints to floats so callers passing `shape=4` get float behavior — matches
+        # ParametricNormal's __init__ discipline and avoids surprise int returns from mean().
+        object.__setattr__(self, "shape", float(self.shape))
+        object.__setattr__(self, "scale", float(self.scale))
+        if self.shape <= 0:
+            raise ValueError(f"shape must be positive, got {self.shape}")
+        if self.scale <= 0:
+            raise ValueError(f"scale must be positive, got {self.scale}")
 
     def mean(self) -> float:
         return self.shape * self.scale

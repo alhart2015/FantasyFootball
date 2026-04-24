@@ -14,6 +14,10 @@ class Distribution(Protocol):
     underlying stat). Backings: parametric (Normal/Gamma), empirical-quantile,
     or sampled. Same surface regardless."""
 
+    # NOTE: @runtime_checkable enables isinstance() checks but performs structural
+    # (attribute-presence) checking only — it does NOT verify method signatures or
+    # return types. Trust mypy for that, not isinstance.
+
     def mean(self) -> float: ...
     def std(self) -> float: ...
     def quantile(self, q: float) -> float: ...

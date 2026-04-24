@@ -52,3 +52,34 @@ def test_gamma_quantile_monotonic() -> None:
     q50 = d.quantile(0.5)
     q90 = d.quantile(0.9)
     assert q10 < q50 < q90
+
+
+def test_normal_rejects_nonpositive_std() -> None:
+    with pytest.raises(ValueError, match="std must be positive"):
+        ParametricNormal(mean=0.0, std=0.0)
+    with pytest.raises(ValueError, match="std must be positive"):
+        ParametricNormal(mean=0.0, std=-1.0)
+
+
+def test_gamma_rejects_nonpositive_shape() -> None:
+    with pytest.raises(ValueError, match="shape must be positive"):
+        ParametricGamma(shape=0.0, scale=1.0)
+    with pytest.raises(ValueError, match="shape must be positive"):
+        ParametricGamma(shape=-1.0, scale=1.0)
+
+
+def test_gamma_rejects_nonpositive_scale() -> None:
+    with pytest.raises(ValueError, match="scale must be positive"):
+        ParametricGamma(shape=1.0, scale=0.0)
+    with pytest.raises(ValueError, match="scale must be positive"):
+        ParametricGamma(shape=1.0, scale=-1.0)
+
+
+@pytest.mark.parametrize("q", [-0.1, 0.0, 1.0, 1.1])
+def test_quantile_rejects_out_of_range_q(q: float) -> None:
+    n = ParametricNormal(mean=0.0, std=1.0)
+    g = ParametricGamma(shape=1.0, scale=1.0)
+    with pytest.raises(ValueError, match="q must be in"):
+        n.quantile(q)
+    with pytest.raises(ValueError, match="q must be in"):
+        g.quantile(q)
