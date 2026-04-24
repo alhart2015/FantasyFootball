@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
+from typing import Final, NewType
 
 
 class Position(StrEnum):
@@ -128,3 +130,23 @@ class Stat(StrEnum):
     RECEIVING_2PT = "receiving_2pt_conversions"
     FUMBLES_LOST = "fumbles_lost"
     RETURN_TDS = "return_tds"
+
+
+# Each ID flavor is a distinct mypy type so passing one where another is expected
+# is a type error. At runtime they are bare strings.
+GsisId = NewType("GsisId", str)
+EspnId = NewType("EspnId", str)
+SleeperId = NewType("SleeperId", str)
+PfrId = NewType("PfrId", str)
+
+GSIS_ID_PATTERN: Final[str] = r"\d{2}-\d{7}"
+_GSIS_ID_RE = re.compile(rf"^{GSIS_ID_PATTERN}$")
+
+
+def validate_gsis_id(raw: str) -> GsisId:
+    """Validate that `raw` matches the canonical gsis_id format and return it
+    as a `GsisId`. The only sanctioned way to construct a `GsisId` from
+    untrusted input."""
+    if not _GSIS_ID_RE.fullmatch(raw):
+        raise ValueError(f"Invalid gsis_id format: {raw!r}")
+    return GsisId(raw)
