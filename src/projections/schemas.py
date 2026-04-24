@@ -247,6 +247,30 @@ class WeeklyStatsSchema(pa.DataFrameModel):
         strict = "filter"  # extra columns are dropped, not errored
 
 
+class SchedulesSchema(pa.DataFrameModel):
+    """Per-game schedule + Vegas line data — what `ingest.schedules` produces."""
+
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    game_id: Series[str]
+    home_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    away_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    kickoff: Series[pd.DatetimeTZDtype] = pa.Field(
+        dtype_kwargs={"tz": "UTC", "unit": "us"}, nullable=True
+    )
+    spread_line: Series[float] = pa.Field(nullable=True)
+    total_line: Series[float] = pa.Field(ge=0, le=100, nullable=True)
+    home_moneyline: Series[int] = pa.Field(nullable=True)
+    away_moneyline: Series[int] = pa.Field(nullable=True)
+    surface: Series[str] = pa.Field(nullable=True)
+    roof: Series[str] = pa.Field(nullable=True)
+    temp: Series[int] = pa.Field(nullable=True)
+    wind: Series[int] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
 class IdMapSchema(pa.DataFrameModel):
     """Cross-platform player id translation table."""
 
