@@ -6,6 +6,9 @@ import re
 from enum import StrEnum
 from typing import Final, NewType
 
+import pandas as pd
+import pandera.pandas as pa
+from pandera.typing import Series
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -196,3 +199,77 @@ class Ruleset(BaseModel):
     @classmethod
     def standard(cls) -> Ruleset:
         return cls(name="STANDARD", reception_pts=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Pandera DataFrame schemas
+# ---------------------------------------------------------------------------
+
+_POSITION_VALUES = [p.value for p in Position]
+_TEAM_VALUES = [t.value for t in Team]
+_DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
+
+
+class WeeklyStatsSchema(pa.DataFrameModel):
+    """Canonical weekly stats — what `ingest.weekly_stats` produces."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    passing_yards: Series[float] = pa.Field(ge=-100, le=800)
+    passing_tds: Series[int] = pa.Field(ge=0, le=15)
+    interceptions: Series[int] = pa.Field(ge=0, le=15)
+    rushing_yards: Series[float] = pa.Field(ge=-50, le=400)
+    rushing_tds: Series[int] = pa.Field(ge=0, le=10)
+    receptions: Series[int] = pa.Field(ge=0, le=30)
+    receiving_yards: Series[float] = pa.Field(ge=-50, le=400)
+    receiving_tds: Series[int] = pa.Field(ge=0, le=10)
+    fumbles_lost: Series[int] = pa.Field(ge=0, le=10)
+
+    class Config:
+        strict = "filter"  # extra columns are dropped, not errored
+
+
+class IdMapSchema(pa.DataFrameModel):
+    """Cross-platform player id translation table."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", unique=True)
+    espn_id: Series[str] = pa.Field(nullable=True)
+    sleeper_id: Series[str] = pa.Field(nullable=True)
+    pfr_id: Series[str] = pa.Field(nullable=True)
+    full_name: Series[str]
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES, nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
+class ProjectionWeeklySchema(pa.DataFrameModel):
+    """Published per-week projection (the consumer-facing contract)."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    ruleset: Series[str]
+    family: Series[str] = pa.Field(isin=_DIST_FAMILY_VALUES)
+    params: Series[bytes]
+    mean: Series[float]
+    p10: Series[float]
+    p50: Series[float]
+    p90: Series[float]
+    model_id: Series[str]
+    # pandas >=2.0 stores timezone-aware timestamps as datetime64[us, UTC];
+    # use unit='us' to match the actual dtype produced by pd.Timestamp(..., tz='UTC').
+    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(
+        dtype_kwargs={"tz": "UTC", "unit": "us"}
+    )
+
+    class Config:
+        strict = "filter"

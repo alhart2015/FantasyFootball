@@ -41,7 +41,7 @@ python_version = "3.11"
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["nfl_data_py.*", "pandera.*", "scipy.*", "joblib.*"]
+module = ["nfl_data_py.*", "pandera.*", "scipy.*", "joblib.*", "pandas.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
