@@ -271,9 +271,12 @@ def wr_schedules() -> pd.DataFrame:
             "kickoff": pd.to_datetime(
                 ["2024-10-06T17:00:00Z", "2024-10-06T20:25:00Z"], utc=True
             ).as_unit("us"),
-            # spread_line is the HOME team's spread (nfl_data_py convention).
-            # CHI is home dog; MIN/KC (away) favored by 3.5/7.5 -> +3.5/+7.5.
-            "spread_line": [3.5, 7.5],
+            # nfl_data_py.import_schedules convention (verified empirically
+            # against 2023 data): positive spread_line = HOME favored,
+            # negative spread_line = AWAY favored. INVERTS standard sportsbook
+            # convention. CHI is home dog vs MIN/KC favored on the road, so
+            # spread_line is negative: -3.5 / -7.5.
+            "spread_line": [-3.5, -7.5],
             "total_line": [48.5, 51.0],
             "home_moneyline": pd.array([155, 280], dtype=pd.Int64Dtype()),
             "away_moneyline": pd.array([-180, -340], dtype=pd.Int64Dtype()),

@@ -120,37 +120,44 @@ def _build_game_environment(schedules: pd.DataFrame) -> pd.DataFrame:
         season, week, team, opp_team, is_home, spread, implied_team_total,
         roof_dome.
 
-    Sign convention: `nfl_data_py.spread_line` is the HOME team's spread in
-    standard sportsbook terms (negative = home favored, positive = home dog /
-    away favored). We follow that convention end-to-end:
+    Sign convention: empirically verified against
+    `nfl_data_py.import_schedules([2023])`, `spread_line` is positive when the
+    HOME team is favored and negative when the AWAY team is favored. This
+    INVERTS the standard sportsbook convention. Concretely:
 
-        home_implied = (total_line - spread_line) / 2
-        away_implied = (total_line + spread_line) / 2
+        spread_line = +13.0 (KC home vs CHI, home_moneyline=-750) -> KC favored
+        spread_line = -11.5 (ARI home vs DAL, home_moneyline=+470) -> ARI dog
+
+    Implied team totals follow directly from spread_line:
+
+        home_implied = (total_line + spread_line) / 2
+        away_implied = (total_line - spread_line) / 2
 
     The per-team `spread` column we expose downstream is the team's own signed
-    spread (negative = that team favored). Therefore:
+    spread in the standard convention (favorite negative, dog positive):
 
-        home_spread = +spread_line   # home dog gets positive
-        away_spread = -spread_line   # away favorite gets negative
+        home_spread = -spread_line   # home favored -> negative
+        away_spread = +spread_line   # away favored -> negative (since spread_line is negative)
     """
     home = schedules[
         ["season", "week", "home_team", "away_team", "spread_line", "total_line", "roof"]
     ].rename(columns={"home_team": "team", "away_team": "opp_team"})
     home["is_home"] = True
-    home["spread"] = home["spread_line"].astype(float)
+    home["spread"] = -home["spread_line"].astype(float)
+    home["implied_team_total"] = (
+        home["total_line"].astype(float) + home["spread_line"].astype(float)
+    ) / 2.0
 
     away = schedules[
         ["season", "week", "home_team", "away_team", "spread_line", "total_line", "roof"]
     ].rename(columns={"away_team": "team", "home_team": "opp_team"})
     away["is_home"] = False
-    away["spread"] = -away["spread_line"].astype(float)
+    away["spread"] = away["spread_line"].astype(float)
+    away["implied_team_total"] = (
+        away["total_line"].astype(float) - away["spread_line"].astype(float)
+    ) / 2.0
 
     game_env = pd.concat([home, away], ignore_index=True)
-    # Implied team total = (total - team's signed spread) / 2. The favored team
-    # has a negative spread, so it correctly gets the higher implied total.
-    game_env["implied_team_total"] = (
-        game_env["total_line"].astype(float) - game_env["spread"].astype(float)
-    ) / 2.0
     game_env["roof_dome"] = game_env["roof"].isin(["dome", "closed"]).fillna(False).astype(bool)
     return game_env[
         [
