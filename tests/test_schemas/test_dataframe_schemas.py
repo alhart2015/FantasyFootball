@@ -8,6 +8,7 @@ from pandera.errors import SchemaError
 
 from projections.schemas import (
     _PYARROW_STR,
+    DepthChartsSchema,
     IdMapSchema,
     ProjectionWeeklySchema,
     SchedulesSchema,
@@ -238,3 +239,34 @@ def test_snap_counts_schema_rejects_unsupported_position() -> None:
     )
     with pytest.raises(SchemaError):
         SnapCountsSchema.validate(df)
+
+
+def test_depth_charts_schema_accepts_valid_frame() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036322", "00-0034857"], dtype=_PYARROW_STR),
+            "season": [2024, 2024],
+            "week": [3, 3],
+            "team": pd.array(["MIN", "KC"], dtype=_PYARROW_STR),
+            "position": pd.array(["WR", "QB"], dtype=_PYARROW_STR),
+            "depth_team": pd.array(["WR1", "QB1"], dtype=_PYARROW_STR),
+            "depth_rank": [1, 1],
+        }
+    )
+    DepthChartsSchema.validate(df)
+
+
+def test_depth_charts_schema_rejects_rank_out_of_range() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036322"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [3],
+            "team": pd.array(["MIN"], dtype=_PYARROW_STR),
+            "position": pd.array(["WR"], dtype=_PYARROW_STR),
+            "depth_team": pd.array(["WR1"], dtype=_PYARROW_STR),
+            "depth_rank": [12],  # > 10, invalid
+        }
+    )
+    with pytest.raises(SchemaError):
+        DepthChartsSchema.validate(df)

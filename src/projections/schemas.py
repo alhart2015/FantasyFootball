@@ -291,6 +291,25 @@ class SnapCountsSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class DepthChartsSchema(pa.DataFrameModel):
+    """Per-team per-week depth chart — what `ingest.depth_charts` produces.
+
+    `depth_team` is the raw slot label from nfl_data_py (e.g., "WR1", "LWR").
+    `depth_rank` is parsed numeric rank within the position group (1 = starter).
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    depth_team: Series[str]
+    depth_rank: Series[int] = pa.Field(ge=1, le=10)
+
+    class Config:
+        strict = "filter"
+
+
 class IdMapSchema(pa.DataFrameModel):
     """Cross-platform player id translation table."""
 
