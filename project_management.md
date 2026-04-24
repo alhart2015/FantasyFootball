@@ -6,32 +6,28 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ## Current status (as of 2026-04-24)
 
-**Projections Core — Plan 1 (Foundations) merged to `main` at commit `8f02a6c`.**
+**Projections Core — Plan 2a (Ingest expansion + WR feature builder) merged to `main` at commit `<TBD-after-merge>`.**
 
-**Dev tooling — pre-commit hooks (ruff lint+format, mypy, housekeeping), `CONTRIBUTING.md`, terse `CLAUDE.md`, README refresh — merged via `feat/dev-tooling`.** Resolves TODO #0.
+**Predecessors:**
+- Plan 1 (Foundations) merged at `8f02a6c`.
+- Dev tooling merged via `feat/dev-tooling`.
 
-89 passing tests, mypy strict clean, ruff clean. In place:
-
-- Project bootstrap (`pyproject.toml`, mypy strict, ruff with E/F/W/I/B/UP/N/RUF)
-- `src/projections/schemas.py` — single source of truth for canonical types: `Position`/`Team`/`RosterSlot`/`DistributionFamily`/`Stat` enums, `GsisId`/`EspnId`/`SleeperId`/`PfrId` NewTypes, `Ruleset` pydantic model with ESPN_PPR/ESPN_HALF/STANDARD presets, pandera schemas (`WeeklyStatsSchema`, `IdMapSchema`, `ProjectionWeeklySchema`)
-- `src/projections/distributions/` — `Distribution` Protocol + `ParametricNormal` + `ParametricGamma`
-- `src/projections/scoring/` — `StatLine` + `score()` + `score_distribution()` (Monte Carlo) + `SampledDistribution`
-- `src/projections/store/` — partitioned parquet read/write (idempotent) + DuckDB view layer
-- `src/projections/ingest/` — `build_id_map()`, `refresh_weekly_stats()` with team-code normalization and position filtering, manifest with SHA-256 checksum and idempotent upsert
+**Plan 2a delivered:**
+- Four new ingest modules (`schedules`, `snap_counts`, `depth_charts`, `ngs` parameterized over passing/rushing/receiving) + 6 new partition tables, all idempotent.
+- `WeeklyStatsSchema` extended with `targets`, `receiving_air_yards`, `carries` (foundations-era omission).
+- `src/projections/features/` package with shared `_rolling.py`, `_opponent.py` helpers and a fully-tested `build_wr_features` (pure-function, no parquet storage).
+- 158 total tests (was 89 baseline; +69 new). 5 leakage tests for the WR builder, one per input source.
+- Drive-by cleanups: `_PYARROW_STR` to `schemas.py` (covering `weekly_stats.py` AND `id_map.py`), programmatic `_INTEGER_STATS`, trimmed ingest `__all__`.
 
 ---
 
 ## Next action
 
-**Recommended: Plan 2 — Ingest expansion + per-position features.**
+**Recommended: Plan 2b — per-position feature builders for QB / RB / TE / K / DST.**
 
-With dev tooling in place (pre-commit catches lint/format/typecheck on every commit), the codebase is ready to grow. Plan 2 adds the remaining `nfl_data_py` ingest sources (schedules, snap_counts, depth_charts, NGS) and introduces the per-position feature builders the Projections Core spec called out (rolling usage, opponent-adjusted rates, Vegas implied totals). It follows the patterns from foundations and should move quickly.
+2a validated the feature-builder pattern (signatures, leakage prevention, schemas, tests) end-to-end on WR. 2b copy-pastes the pattern across the remaining five positions, reusing `_rolling.py` and `_opponent.py` from 2a. Each position gets its own pandera schema (`QbFeaturesSchema`, etc.) following `WrFeaturesSchema` as the template. One PR per position or one bundled — TBD when 2b is brainstormed.
 
-### Three options considered, in order of recommendation:
-
-1. **Plan 2 — Ingest expansion + features (large)** — natural next step. Foundations patterns are established; biggest momentum gain. Picked.
-2. **Drive-by minor cleanups (~15 min)** — `_PYARROW_STR` consolidation into `schemas.py`, programmatic `_INTEGER_STATS` from `StatLine` annotations, drop helpers from ingest `__all__`. Not blocking; can fold into Plan 2 or land separately.
-3. **TODO #1 — option D exploration** — research, not implementation. Worth doing before DFS Engine, not urgent now.
+After 2b, Plan 3 (Model A baseline + season aggregation + backtest harness) becomes unblocked.
 
 ---
 
@@ -39,6 +35,18 @@ With dev tooling in place (pre-commit catches lint/format/typecheck on every com
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-04-24 | `nfl_data_py.import_snap_counts` returns `pfr_player_id` not `gsis_id`; ingest joins on id_map | Discovered during fixture-construction (Task 8). Snap_counts ingest now reads id_map.parquet and inner-joins pfr_id → gsis_id; bench/practice players with no id_map match are dropped silently |
+| 2026-04-24 | `spread_line` from `nfl_data_py` is positive when home favored (inverts standard sportsbook) | Discovered during code review of Task 15. Empirically verified against import_schedules([2023]). `_build_game_environment` in features/wr.py uses the empirically-correct convention; team-perspective `spread` follows standard "favorite is negative" |
+| 2026-04-24 | Split Plan 2 into 2a (ingest expansion + WR feature builder) and 2b (QB / RB / TE / K / DST feature builders) | Validate the feature-builder pattern end-to-end on one position before copy-pasting across five files; isolate ingest (mechanical) from features (greenfield design) |
+| 2026-04-24 | WR is the first end-to-end position | Exercises every new ingest source (snap_counts, depth_charts, NGS receiving) in one builder; surfaces design issues before propagating to other positions |
+| 2026-04-24 | Feature builders are pure functions in 2a — no parquet storage | Output is small (~1.8K rows/season for WR) and computes in milliseconds; defer caching until backtest performance demands it (Plan 3+) |
+| 2026-04-24 | Ingest all three NGS stat types (passing, rushing, receiving) in 2a, even though only NGS receiving is consumed by WR | The hard part of NGS ingest is the snapshot/partition decision; make it once across all three rather than three times |
+| 2026-04-24 | Opponent strength via `opp_allowed_fppg_l4` proxy in 2a, not play-by-play EPA | True EPA needs play-by-play ingest (separate concern, deferred); the FPPG-allowed proxy is sufficient for v1 baseline |
+| 2026-04-24 | Shared `_rolling.py` and `_opponent.py` helpers built and tested in 2a | Pin helper API on the first builder so 2b's five other builders consume a stable contract |
+| 2026-04-24 | Schedule ingest captures Vegas lines (spread, total, moneyline) | "Implied team total" is a load-bearing feature for every offensive position |
+| 2026-04-24 | Drive-by cleanups (`_PYARROW_STR` to `schemas.py`, programmatic `_INTEGER_STATS`, ingest `__all__`) folded into 2a | We're touching every ingest module anyway; cheaper to clean up once than across two PRs |
+| 2026-04-24 | Extend `WeeklyStatsSchema` with `targets`, `receiving_air_yards`, `carries` | Discovered during plan-writing: WR feature builder needs these source columns and the foundations-era schema didn't include them. All three are present in raw `nfl_data_py.import_weekly_data` output |
+| 2026-04-24 | Test fixtures are synthetic in-memory `pd.DataFrame`s, not real-data parquet snapshots | Matches existing convention from foundations (`fake_weekly_df` etc.); simpler maintenance; `nfl_data_py` API drift is handled separately by opt-in network smoke tests (TODO #8) |
 | 2026-04-24 | Decompose project into 4 sub-projects (Projections Core, Draft Hub, Mid-season Manager, DFS Engine) | Each subsystem has different consumer logic; shared dependency is a probabilistic projection engine. Keeps any single design doc executable. |
 | 2026-04-24 | Build Projections Core first | Earliest dependency for everything else. |
 | 2026-04-24 | `nfl_data_py` as primary data source | Free, comprehensive, modern; Python-native. Paid feeds (PFF, FantasyPros API) deferred until we've validated need. |
