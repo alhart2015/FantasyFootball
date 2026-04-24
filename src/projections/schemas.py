@@ -134,12 +134,16 @@ class Stat(StrEnum):
     RUSHING_YARDS = "rushing_yards"
     RUSHING_TDS = "rushing_tds"
     RUSHING_2PT = "rushing_2pt_conversions"
+    CARRIES = "carries"
     RECEPTIONS = "receptions"
     RECEIVING_YARDS = "receiving_yards"
     RECEIVING_TDS = "receiving_tds"
     RECEIVING_2PT = "receiving_2pt_conversions"
+    RECEIVING_AIR_YARDS = "receiving_air_yards"
+    TARGETS = "targets"
     FUMBLES_LOST = "fumbles_lost"
     RETURN_TDS = "return_tds"
+    OFFENSE_PCT = "offense_pct"
 
 
 # Each ID flavor is a distinct mypy type so passing one where another is expected
@@ -229,9 +233,12 @@ class WeeklyStatsSchema(pa.DataFrameModel):
     interceptions: Series[int] = pa.Field(ge=0, le=15)
     rushing_yards: Series[float] = pa.Field(ge=-50, le=400)
     rushing_tds: Series[int] = pa.Field(ge=0, le=10)
+    carries: Series[int] = pa.Field(ge=0, le=50)
     receptions: Series[int] = pa.Field(ge=0, le=30)
     receiving_yards: Series[float] = pa.Field(ge=-50, le=400)
     receiving_tds: Series[int] = pa.Field(ge=0, le=10)
+    receiving_air_yards: Series[float] = pa.Field(ge=-50, le=400)
+    targets: Series[int] = pa.Field(ge=0, le=30)
     fumbles_lost: Series[int] = pa.Field(ge=0, le=10)
 
     class Config:

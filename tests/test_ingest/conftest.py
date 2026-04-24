@@ -38,9 +38,12 @@ def fake_weekly_df() -> pd.DataFrame:
             "interceptions": [0, 1],
             "rushing_yards": [0.0, 12.0],
             "rushing_tds": [0, 0],
+            "carries": [0, 3],
             "receptions": [9, 0],
             "receiving_yards": [110.0, 0.0],
             "receiving_tds": [1, 0],
+            "receiving_air_yards": [145.0, 0.0],
+            "targets": [12, 0],
             "fumbles_lost": [0, 0],
         }
     )

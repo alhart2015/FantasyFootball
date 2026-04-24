@@ -28,9 +28,12 @@ _KEEP = [
     "interceptions",
     "rushing_yards",
     "rushing_tds",
+    "carries",
     "receptions",
     "receiving_yards",
     "receiving_tds",
+    "receiving_air_yards",
+    "targets",
     "fumbles_lost",
 ]
 
@@ -57,14 +60,16 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
         "passing_tds",
         "interceptions",
         "rushing_tds",
+        "carries",
         "receptions",
         "receiving_tds",
+        "targets",
         "fumbles_lost",
     ):
         if int_col in df.columns:
             df[int_col] = df[int_col].fillna(0).astype(int)
 
-    for float_col in ("passing_yards", "rushing_yards", "receiving_yards"):
+    for float_col in ("passing_yards", "rushing_yards", "receiving_yards", "receiving_air_yards"):
         if float_col in df.columns:
             df[float_col] = df[float_col].fillna(0.0).astype(float)
 

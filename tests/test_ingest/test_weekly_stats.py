@@ -113,3 +113,28 @@ def test_refresh_weekly_stats_filters_unsupported_positions(
     df = read_partition(tmp_path / "raw", "weekly_stats", season=2024)
     assert "00-0099999" not in df["gsis_id"].tolist()
     assert len(df) == 2
+
+
+def test_refresh_weekly_stats_persists_new_columns(
+    tmp_path: Path,
+    fake_weekly_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Targets, carries, receiving_air_yards must round-trip through ingest."""
+    monkeypatch.setattr(
+        "projections.ingest.weekly_stats._fetch_raw_weekly",
+        lambda seasons: fake_weekly_df,
+    )
+    refresh_weekly_stats(tmp_path, seasons=[2024])
+    df = read_partition(tmp_path / "raw", "weekly_stats", season=2024)
+    assert "targets" in df.columns
+    assert "carries" in df.columns
+    assert "receiving_air_yards" in df.columns
+    # WR row: 12 targets, 0 carries, 145 air yards
+    wr_row = df[df["gsis_id"] == "00-0036322"].iloc[0]
+    assert int(wr_row["targets"]) == 12
+    assert int(wr_row["carries"]) == 0
+    assert float(wr_row["receiving_air_yards"]) == 145.0
+    # QB row: 0 targets, 3 carries
+    qb_row = df[df["gsis_id"] == "00-0034857"].iloc[0]
+    assert int(qb_row["carries"]) == 3

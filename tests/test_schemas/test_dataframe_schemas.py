@@ -27,9 +27,12 @@ def _good_weekly_stats() -> pd.DataFrame:
             "interceptions": [0],
             "rushing_yards": [0.0],
             "rushing_tds": [0],
+            "carries": [0],
             "receptions": [9],
             "receiving_yards": [110.0],
             "receiving_tds": [1],
+            "receiving_air_yards": [145.0],
+            "targets": [12],
             "fumbles_lost": [0],
         }
     )
