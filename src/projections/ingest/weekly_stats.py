@@ -73,7 +73,7 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["position"] = df["position"].astype(_PYARROW_STR)
 
-    WeeklyStatsSchema.validate(df)
+    df = WeeklyStatsSchema.validate(df)
     return df
 
 
