@@ -5,6 +5,8 @@ a roster in week as_of_week of season. Validates against WrFeaturesSchema."""
 
 from __future__ import annotations
 
+from typing import Final
+
 import pandas as pd
 
 from projections.features._opponent import opp_allowed_fppg
@@ -13,10 +15,11 @@ from projections.schemas import (
     _PYARROW_STR,
     Position,
     Ruleset,
+    Stat,
     WrFeaturesSchema,
 )
 
-_DESIGNED_RUSHER_THRESHOLD = 1.5  # carries/game over trailing 4
+_DESIGNED_RUSHER_THRESHOLD: Final = 1.5  # carries/game over trailing 4
 
 # Columns that represent rolling-window per-game means; rookies with no prior
 # games receive 0.0 for these (the schema disallows NaN on them).
@@ -208,22 +211,22 @@ def build_wr_features(
     sc_wr = sc[sc["position"] == Position.WR.value].copy()
 
     # --- Per-player rolling features --------------------------------------
-    targets_l4 = _trailing_4_per_player(ws_wr, "targets").rename(
+    targets_l4 = _trailing_4_per_player(ws_wr, Stat.TARGETS.value).rename(
         columns={"mean_l4": "targets_per_game_l4"}
     )
-    rec_l4 = _trailing_4_per_player(ws_wr, "receptions").rename(
+    rec_l4 = _trailing_4_per_player(ws_wr, Stat.RECEPTIONS.value).rename(
         columns={"mean_l4": "receptions_per_game_l4"}
     )
-    rec_yd_l4 = _trailing_4_per_player(ws_wr, "receiving_yards").rename(
+    rec_yd_l4 = _trailing_4_per_player(ws_wr, Stat.RECEIVING_YARDS.value).rename(
         columns={"mean_l4": "receiving_yards_per_game_l4"}
     )
-    rec_td_l4 = _trailing_4_per_player(ws_wr, "receiving_tds").rename(
+    rec_td_l4 = _trailing_4_per_player(ws_wr, Stat.RECEIVING_TDS.value).rename(
         columns={"mean_l4": "receiving_tds_per_game_l4"}
     )
-    rush_att_l4 = _trailing_4_per_player(ws_wr, "carries").rename(
+    rush_att_l4 = _trailing_4_per_player(ws_wr, Stat.CARRIES.value).rename(
         columns={"mean_l4": "rushing_attempts_per_game_l4"}
     )
-    rush_yd_l4 = _trailing_4_per_player(ws_wr, "rushing_yards").rename(
+    rush_yd_l4 = _trailing_4_per_player(ws_wr, Stat.RUSHING_YARDS.value).rename(
         columns={"mean_l4": "rushing_yards_per_game_l4"}
     )
 
@@ -238,19 +241,19 @@ def build_wr_features(
         )
     else:
         targets_std = (
-            ws_this_season.groupby("gsis_id", as_index=False, observed=True)["targets"]
+            ws_this_season.groupby("gsis_id", as_index=False, observed=True)[Stat.TARGETS.value]
             .mean()
-            .rename(columns={"targets": "targets_per_game_std"})
+            .rename(columns={Stat.TARGETS.value: "targets_per_game_std"})
         )
 
-    target_share = _trailing_4_share_per_team(ws_wr, "targets").rename(
+    target_share = _trailing_4_share_per_team(ws_wr, Stat.TARGETS.value).rename(
         columns={"share_l4": "target_share_l4"}
     )
-    air_yards_share = _trailing_4_share_per_team(ws_wr, "receiving_air_yards").rename(
+    air_yards_share = _trailing_4_share_per_team(ws_wr, Stat.RECEIVING_AIR_YARDS.value).rename(
         columns={"share_l4": "air_yards_share_l4"}
     )
 
-    snap_l4 = _trailing_4_per_player(sc_wr, "offense_pct").rename(
+    snap_l4 = _trailing_4_per_player(sc_wr, Stat.OFFENSE_PCT.value).rename(
         columns={"mean_l4": "snap_pct_l4"}
     )
 

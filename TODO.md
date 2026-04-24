@@ -67,8 +67,10 @@ One per ingest source, marked `@pytest.mark.network`, skipped by default. Hits t
 
 ### 9. WR feature builder edge cases for production data
 
-Two issues flagged during Task 15 code review that don't manifest on the synthetic fixtures but could surface in real `nfl_data_py` data:
+Issues flagged during Task 15 / final code review that don't manifest on the synthetic fixtures but could surface in real `nfl_data_py` data:
 
 a) `is_home` and `roof_dome` are non-nullable in `WrFeaturesSchema` but the schedule join is a left-merge — if a depth-chart team has no schedule row in the target week (bye week, missing future game), validation fails. Fix: filter rostered teams to only those with schedule rows, OR mark the columns nullable. Revisit when Plan 3 wires real data.
 
 b) `IdMapSchema.pfr_id` is not marked `unique=True`. The snap_counts ingest does an inner-join on pfr_id; duplicate pfr_ids in id_map would multiply rows. Add `unique=True` to `pfr_id` (and to `espn_id`/`sleeper_id` for symmetry) as defense-in-depth, or add `.drop_duplicates(subset=["pfr_id"])` in the snap_counts join helper.
+
+c) `_trailing_4_share_per_team` in `features/wr.py` groups by `(gsis_id, team)`, which produces two rows for any player traded mid-season. The downstream merge in `build_wr_features` joins on `gsis_id` only, so duplicates would propagate into the output. Not exercised by the synthetic fixtures (no traded players). Fix: filter `last4_player` to only the player's *current* team before computing the share, or merge on `(gsis_id, team)` so only the matching team's row survives.
