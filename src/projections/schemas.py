@@ -11,6 +11,11 @@ import pandera.pandas as pa
 from pandera.typing import Series
 from pydantic import BaseModel, ConfigDict, Field
 
+# Module constant: pyarrow-backed nullable string dtype.
+# Used by every ingest module that needs to satisfy a pandera Series[str] field
+# (object-dtype + plain strings will fail validation in pandera 0.31+).
+_PYARROW_STR: Final = pd.StringDtype("pyarrow")
+
 
 class Position(StrEnum):
     """NFL fantasy-relevant positions. Use Position.QB, never the string "QB"."""

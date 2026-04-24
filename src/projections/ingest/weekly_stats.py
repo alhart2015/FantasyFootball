@@ -13,10 +13,8 @@ import nfl_data_py as nfl
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
-from projections.schemas import Position, WeeklyStatsSchema, normalize_team_code
+from projections.schemas import _PYARROW_STR, Position, WeeklyStatsSchema, normalize_team_code
 from projections.store import write_partition
-
-_PYARROW_STR = pd.StringDtype("pyarrow")  # match Task 13 / pandera Series[str] expectation
 
 _KEEP = [
     "gsis_id",
