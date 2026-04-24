@@ -17,6 +17,7 @@ from projections.schemas import (
     SchedulesSchema,
     SnapCountsSchema,
     WeeklyStatsSchema,
+    WrFeaturesSchema,
 )
 
 
@@ -372,3 +373,73 @@ def test_ngs_receiving_schema_allows_nan_below_threshold() -> None:
         }
     )
     NgsReceivingSchema.validate(df)
+
+
+def test_wr_features_schema_accepts_valid_row() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036322"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["MIN"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["DET"], dtype=_PYARROW_STR),
+            "targets_per_game_l4": [10.5],
+            "targets_per_game_std": [9.8],
+            "target_share_l4": [0.32],
+            "air_yards_share_l4": [0.41],
+            "receptions_per_game_l4": [7.25],
+            "receiving_yards_per_game_l4": [98.5],
+            "receiving_tds_per_game_l4": [0.75],
+            "rushing_attempts_per_game_l4": [0.5],
+            "rushing_yards_per_game_l4": [3.2],
+            "designed_rusher": [False],
+            "snap_pct_l4": [0.92],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "avg_separation_std": [3.1],
+            "avg_intended_air_yards_std": [11.8],
+            "percent_share_intended_air_yards_std": [0.40],
+            "avg_yac_above_expectation_std": [0.6],
+            "implied_team_total": [24.5],
+            "spread": [-3.5],
+            "is_home": [True],
+            "roof_dome": [False],
+            "opp_allowed_wr_fppg_l4": [22.5],
+        }
+    )
+    WrFeaturesSchema.validate(df)
+
+
+def test_wr_features_schema_rejects_target_share_over_one() -> None:
+    """target_share is a proportion; > 1 is impossible."""
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036322"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["MIN"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["DET"], dtype=_PYARROW_STR),
+            "targets_per_game_l4": [10.5],
+            "targets_per_game_std": [9.8],
+            "target_share_l4": [1.5],  # invalid
+            "air_yards_share_l4": [0.41],
+            "receptions_per_game_l4": [7.25],
+            "receiving_yards_per_game_l4": [98.5],
+            "receiving_tds_per_game_l4": [0.75],
+            "rushing_attempts_per_game_l4": [0.5],
+            "rushing_yards_per_game_l4": [3.2],
+            "designed_rusher": [False],
+            "snap_pct_l4": [0.92],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "avg_separation_std": [3.1],
+            "avg_intended_air_yards_std": [11.8],
+            "percent_share_intended_air_yards_std": [0.40],
+            "avg_yac_above_expectation_std": [0.6],
+            "implied_team_total": [24.5],
+            "spread": [-3.5],
+            "is_home": [True],
+            "roof_dome": [False],
+            "opp_allowed_wr_fppg_l4": [22.5],
+        }
+    )
+    with pytest.raises(SchemaError):
+        WrFeaturesSchema.validate(df)

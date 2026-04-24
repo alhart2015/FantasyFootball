@@ -386,6 +386,54 @@ class NgsReceivingSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class WrFeaturesSchema(pa.DataFrameModel):
+    """WR feature DataFrame produced by `features.wr.build_wr_features`.
+    Schema enforced at the module boundary — every column has a typed range
+    so a feature regression surfaces at validate(), not three modules deep."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+
+    # Receiving usage (rolling)
+    targets_per_game_l4: Series[float] = pa.Field(ge=0)
+    targets_per_game_std: Series[float] = pa.Field(ge=0)
+    target_share_l4: Series[float] = pa.Field(ge=0, le=1)
+    air_yards_share_l4: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    receptions_per_game_l4: Series[float] = pa.Field(ge=0)
+    receiving_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    receiving_tds_per_game_l4: Series[float] = pa.Field(ge=0)
+
+    # Rushing usage (Deebo / jet-sweep WRs)
+    rushing_attempts_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    designed_rusher: Series[bool]
+
+    # Snap / role
+    snap_pct_l4: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    depth_rank: Series[int] = pa.Field(ge=1, le=10, nullable=True)
+
+    # NGS receiving (season-to-date snapshot from prior week)
+    avg_separation_std: Series[float] = pa.Field(nullable=True)
+    avg_intended_air_yards_std: Series[float] = pa.Field(nullable=True)
+    percent_share_intended_air_yards_std: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    avg_yac_above_expectation_std: Series[float] = pa.Field(nullable=True)
+
+    # Game environment (from schedules)
+    implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
+    spread: Series[float] = pa.Field(nullable=True)
+    is_home: Series[bool]
+    roof_dome: Series[bool]
+
+    # Opponent strength (proxy: opp's allowed WR fantasy points/game over trailing 4)
+    opp_allowed_wr_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
 class IdMapSchema(pa.DataFrameModel):
     """Cross-platform player id translation table."""
 
