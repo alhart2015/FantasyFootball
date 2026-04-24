@@ -12,6 +12,7 @@ from pathlib import Path
 import nfl_data_py as nfl
 import pandas as pd
 
+from projections.ingest.manifest import record as record_manifest
 from projections.schemas import WeeklyStatsSchema, normalize_team_code
 from projections.store import write_partition
 
@@ -85,5 +86,6 @@ def refresh_weekly_stats(data_root: Path, *, seasons: Iterable[int]) -> list[Pat
         path = write_partition(
             data_root / "raw", "weekly_stats", df, season=season, week=None
         )
+        record_manifest(data_root, table="weekly_stats", season=season, df=df)
         written.append(path)
     return written

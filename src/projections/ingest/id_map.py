@@ -11,6 +11,7 @@ from pathlib import Path
 import nfl_data_py as nfl
 import pandas as pd
 
+from projections.ingest.manifest import record as record_manifest
 from projections.schemas import IdMapSchema, normalize_team_code
 from projections.store import write_partition
 
@@ -61,4 +62,6 @@ def build_id_map(data_root: Path) -> Path:
     df = df.drop_duplicates(subset=["gsis_id"], keep="first").reset_index(drop=True)
 
     IdMapSchema.validate(df)
-    return write_partition(data_root / "raw", "id_map", df, season=None, week=None)
+    out = write_partition(data_root / "raw", "id_map", df, season=None, week=None)
+    record_manifest(data_root, table="id_map", season=None, df=df)
+    return out
