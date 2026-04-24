@@ -59,6 +59,7 @@ def record(
     else:
         out = new_row
 
+    out["season"] = out["season"].astype("Int64")
     out.to_parquet(path, index=False)
 
 
