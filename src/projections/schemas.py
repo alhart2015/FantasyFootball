@@ -143,6 +143,8 @@ class Stat(StrEnum):
     TARGETS = "targets"
     FUMBLES_LOST = "fumbles_lost"
     RETURN_TDS = "return_tds"
+    # Snap-counts column (not weekly_stats) — reserved so feature builders can
+    # reference Stat.OFFENSE_PCT.value instead of a string literal.
     OFFENSE_PCT = "offense_pct"
 
 

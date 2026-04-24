@@ -138,3 +138,5 @@ def test_refresh_weekly_stats_persists_new_columns(
     # QB row: 0 targets, 3 carries
     qb_row = df[df["gsis_id"] == "00-0034857"].iloc[0]
     assert int(qb_row["carries"]) == 3
+    assert int(qb_row["targets"]) == 0
+    assert float(qb_row["receiving_air_yards"]) == 0.0
