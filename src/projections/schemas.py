@@ -310,6 +310,82 @@ class DepthChartsSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class NgsPassingSchema(pa.DataFrameModel):
+    """NGS passing — season-to-date weekly snapshot per QB.
+    Coverage starts 2016 (RFID-chip era)."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=2016, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    avg_time_to_throw: Series[float] = pa.Field(nullable=True)
+    avg_completed_air_yards: Series[float] = pa.Field(nullable=True)
+    avg_intended_air_yards: Series[float] = pa.Field(nullable=True)
+    avg_air_yards_differential: Series[float] = pa.Field(nullable=True)
+    aggressiveness: Series[float] = pa.Field(nullable=True)
+    max_completed_air_distance: Series[float] = pa.Field(nullable=True)
+    avg_air_yards_to_sticks: Series[float] = pa.Field(nullable=True)
+    completion_percentage: Series[float] = pa.Field(nullable=True)
+    expected_completion_percentage: Series[float] = pa.Field(nullable=True)
+    completion_percentage_above_expectation: Series[float] = pa.Field(nullable=True)
+    avg_air_distance: Series[float] = pa.Field(nullable=True)
+    max_air_distance: Series[float] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
+class NgsRushingSchema(pa.DataFrameModel):
+    """NGS rushing — season-to-date weekly snapshot per ball-carrier.
+    Coverage starts 2016."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=2016, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    efficiency: Series[float] = pa.Field(nullable=True)
+    percent_attempts_gte_eight_defenders: Series[float] = pa.Field(nullable=True)
+    avg_time_to_los: Series[float] = pa.Field(nullable=True)
+    rush_attempts: Series[int] = pa.Field(ge=0, nullable=True)
+    rush_yards: Series[int] = pa.Field(nullable=True)
+    expected_rush_yards: Series[float] = pa.Field(nullable=True)
+    rush_yards_over_expected: Series[float] = pa.Field(nullable=True)
+    avg_rush_yards: Series[float] = pa.Field(nullable=True)
+    rush_yards_over_expected_per_att: Series[float] = pa.Field(nullable=True)
+    rush_pct_over_expected: Series[float] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
+class NgsReceivingSchema(pa.DataFrameModel):
+    """NGS receiving — season-to-date weekly snapshot per target-receiver.
+    Coverage starts 2016."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=2016, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    avg_cushion: Series[float] = pa.Field(nullable=True)
+    avg_separation: Series[float] = pa.Field(nullable=True)
+    avg_intended_air_yards: Series[float] = pa.Field(nullable=True)
+    percent_share_of_intended_air_yards: Series[float] = pa.Field(nullable=True)
+    receptions: Series[int] = pa.Field(ge=0, nullable=True)
+    targets: Series[int] = pa.Field(ge=0, nullable=True)
+    catch_percentage: Series[float] = pa.Field(nullable=True)
+    yards: Series[int] = pa.Field(nullable=True)
+    rec_touchdowns: Series[int] = pa.Field(ge=0, nullable=True)
+    avg_yac: Series[float] = pa.Field(nullable=True)
+    avg_expected_yac: Series[float] = pa.Field(nullable=True)
+    avg_yac_above_expectation: Series[float] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
 class IdMapSchema(pa.DataFrameModel):
     """Cross-platform player id translation table."""
 

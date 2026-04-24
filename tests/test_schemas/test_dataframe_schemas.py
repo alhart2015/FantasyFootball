@@ -10,6 +10,9 @@ from projections.schemas import (
     _PYARROW_STR,
     DepthChartsSchema,
     IdMapSchema,
+    NgsPassingSchema,
+    NgsReceivingSchema,
+    NgsRushingSchema,
     ProjectionWeeklySchema,
     SchedulesSchema,
     SnapCountsSchema,
@@ -270,3 +273,102 @@ def test_depth_charts_schema_rejects_rank_out_of_range() -> None:
     )
     with pytest.raises(SchemaError):
         DepthChartsSchema.validate(df)
+
+
+def test_ngs_passing_schema_accepts_valid_frame() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0034857"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [3],
+            "team": pd.array(["KC"], dtype=_PYARROW_STR),
+            "position": pd.array(["QB"], dtype=_PYARROW_STR),
+            "avg_time_to_throw": [2.71],
+            "avg_completed_air_yards": [6.2],
+            "avg_intended_air_yards": [8.1],
+            "avg_air_yards_differential": [-1.9],
+            "aggressiveness": [12.5],
+            "max_completed_air_distance": [42.0],
+            "avg_air_yards_to_sticks": [-0.4],
+            "completion_percentage": [68.5],
+            "expected_completion_percentage": [65.2],
+            "completion_percentage_above_expectation": [3.3],
+            "avg_air_distance": [9.5],
+            "max_air_distance": [55.0],
+        }
+    )
+    NgsPassingSchema.validate(df)
+
+
+def test_ngs_rushing_schema_accepts_valid_frame() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0034796"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [3],
+            "team": pd.array(["PHI"], dtype=_PYARROW_STR),
+            "position": pd.array(["RB"], dtype=_PYARROW_STR),
+            "efficiency": [3.1],
+            "percent_attempts_gte_eight_defenders": [22.5],
+            "avg_time_to_los": [2.95],
+            "rush_attempts": pd.array([18], dtype=pd.Int64Dtype()),
+            "rush_yards": pd.array([102], dtype=pd.Int64Dtype()),
+            "expected_rush_yards": [85.4],
+            "rush_yards_over_expected": [16.6],
+            "avg_rush_yards": [5.7],
+            "rush_yards_over_expected_per_att": [0.9],
+            "rush_pct_over_expected": [12.0],
+        }
+    )
+    NgsRushingSchema.validate(df)
+
+
+def test_ngs_receiving_schema_accepts_valid_frame() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036322"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [3],
+            "team": pd.array(["MIN"], dtype=_PYARROW_STR),
+            "position": pd.array(["WR"], dtype=_PYARROW_STR),
+            "avg_cushion": [5.4],
+            "avg_separation": [3.2],
+            "avg_intended_air_yards": [12.1],
+            "percent_share_of_intended_air_yards": [29.5],
+            "receptions": pd.array([9], dtype=pd.Int64Dtype()),
+            "targets": pd.array([12], dtype=pd.Int64Dtype()),
+            "catch_percentage": [75.0],
+            "yards": pd.array([110], dtype=pd.Int64Dtype()),
+            "rec_touchdowns": pd.array([1], dtype=pd.Int64Dtype()),
+            "avg_yac": [4.0],
+            "avg_expected_yac": [3.5],
+            "avg_yac_above_expectation": [0.5],
+        }
+    )
+    NgsReceivingSchema.validate(df)
+
+
+def test_ngs_receiving_schema_allows_nan_below_threshold() -> None:
+    """Players who don't meet NGS qualifying thresholds have NaN columns."""
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0099999"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [3],
+            "team": pd.array(["MIN"], dtype=_PYARROW_STR),
+            "position": pd.array(["WR"], dtype=_PYARROW_STR),
+            "avg_cushion": [float("nan")],
+            "avg_separation": [float("nan")],
+            "avg_intended_air_yards": [float("nan")],
+            "percent_share_of_intended_air_yards": [float("nan")],
+            "receptions": pd.array([pd.NA], dtype=pd.Int64Dtype()),
+            "targets": pd.array([pd.NA], dtype=pd.Int64Dtype()),
+            "catch_percentage": [float("nan")],
+            "yards": pd.array([pd.NA], dtype=pd.Int64Dtype()),
+            "rec_touchdowns": pd.array([pd.NA], dtype=pd.Int64Dtype()),
+            "avg_yac": [float("nan")],
+            "avg_expected_yac": [float("nan")],
+            "avg_yac_above_expectation": [float("nan")],
+        }
+    )
+    NgsReceivingSchema.validate(df)
