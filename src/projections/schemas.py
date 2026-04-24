@@ -271,6 +271,26 @@ class SchedulesSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class SnapCountsSchema(pa.DataFrameModel):
+    """Per-player per-game snap counts — what `ingest.snap_counts` produces."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    offense_snaps: Series[int] = pa.Field(ge=0, le=200)
+    offense_pct: Series[float] = pa.Field(ge=0, le=1)
+    defense_snaps: Series[int] = pa.Field(ge=0, le=200)
+    defense_pct: Series[float] = pa.Field(ge=0, le=1)
+    st_snaps: Series[int] = pa.Field(ge=0, le=100)
+    st_pct: Series[float] = pa.Field(ge=0, le=1)
+
+    class Config:
+        strict = "filter"
+
+
 class IdMapSchema(pa.DataFrameModel):
     """Cross-platform player id translation table."""
 

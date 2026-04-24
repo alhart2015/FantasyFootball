@@ -11,6 +11,7 @@ from projections.schemas import (
     IdMapSchema,
     ProjectionWeeklySchema,
     SchedulesSchema,
+    SnapCountsSchema,
     WeeklyStatsSchema,
 )
 
@@ -175,3 +176,65 @@ def test_schedules_schema_allows_nullable_lines() -> None:
         }
     )
     SchedulesSchema.validate(df)
+
+
+def test_snap_counts_schema_accepts_valid_frame() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036322", "00-0034857"], dtype=_PYARROW_STR),
+            "season": [2024, 2024],
+            "week": [3, 3],
+            "team": pd.array(["MIN", "KC"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["HOU", "ATL"], dtype=_PYARROW_STR),
+            "position": pd.array(["WR", "QB"], dtype=_PYARROW_STR),
+            "offense_snaps": [62, 71],
+            "offense_pct": [0.95, 1.0],
+            "defense_snaps": [0, 0],
+            "defense_pct": [0.0, 0.0],
+            "st_snaps": [3, 0],
+            "st_pct": [0.10, 0.0],
+        }
+    )
+    SnapCountsSchema.validate(df)
+
+
+def test_snap_counts_schema_rejects_pct_over_one() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036322"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [3],
+            "team": pd.array(["MIN"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["HOU"], dtype=_PYARROW_STR),
+            "position": pd.array(["WR"], dtype=_PYARROW_STR),
+            "offense_snaps": [62],
+            "offense_pct": [1.5],  # invalid: > 1
+            "defense_snaps": [0],
+            "defense_pct": [0.0],
+            "st_snaps": [3],
+            "st_pct": [0.10],
+        }
+    )
+    with pytest.raises(SchemaError):
+        SnapCountsSchema.validate(df)
+
+
+def test_snap_counts_schema_rejects_unsupported_position() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0099999"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [3],
+            "team": pd.array(["MIN"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["HOU"], dtype=_PYARROW_STR),
+            "position": pd.array(["FB"], dtype=_PYARROW_STR),  # not in Position enum
+            "offense_snaps": [12],
+            "offense_pct": [0.20],
+            "defense_snaps": [0],
+            "defense_pct": [0.0],
+            "st_snaps": [4],
+            "st_pct": [0.13],
+        }
+    )
+    with pytest.raises(SchemaError):
+        SnapCountsSchema.validate(df)
