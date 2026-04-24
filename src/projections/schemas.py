@@ -6,6 +6,8 @@ import re
 from enum import StrEnum
 from typing import Final, NewType
 
+from pydantic import BaseModel, ConfigDict, Field
+
 
 class Position(StrEnum):
     """NFL fantasy-relevant positions. Use Position.QB, never the string "QB"."""
@@ -150,3 +152,47 @@ def validate_gsis_id(raw: str) -> GsisId:
     if not _GSIS_ID_RE.fullmatch(raw):
         raise ValueError(f"Invalid gsis_id format: {raw!r}")
     return GsisId(raw)
+
+
+class Ruleset(BaseModel):
+    """Scoring ruleset. Defaults match ESPN standard PPR.
+
+    Rulesets are immutable so we can hash/cache them and pass them around
+    confidently. Use the named class methods for common presets, or pass field
+    overrides for custom leagues.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str = "ESPN_PPR"
+
+    # Passing
+    passing_yds_per_pt: float = Field(default=25.0, gt=0)
+    passing_td_pts: float = 4.0
+    interception_pts: float = -2.0
+
+    # Rushing
+    rushing_yds_per_pt: float = Field(default=10.0, gt=0)
+    rushing_td_pts: float = 6.0
+
+    # Receiving
+    receiving_yds_per_pt: float = Field(default=10.0, gt=0)
+    receiving_td_pts: float = 6.0
+    reception_pts: float = 1.0  # PPR
+
+    # Misc
+    fumble_lost_pts: float = -2.0
+    two_pt_pts: float = 2.0
+    return_td_pts: float = 6.0
+
+    @classmethod
+    def espn_ppr(cls) -> Ruleset:
+        return cls()
+
+    @classmethod
+    def espn_half(cls) -> Ruleset:
+        return cls(name="ESPN_HALF", reception_pts=0.5)
+
+    @classmethod
+    def standard(cls) -> Ruleset:
+        return cls(name="STANDARD", reception_pts=0.0)
