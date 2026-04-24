@@ -284,11 +284,32 @@ Add canonical column names referenced by the new feature/scoring code, so misspe
 class Stat(StrEnum):
     # ... existing entries ...
     TARGETS = "targets"
+    CARRIES = "carries"
+    RECEIVING_AIR_YARDS = "receiving_air_yards"
     OFFENSE_PCT = "offense_pct"
-    AIR_YARDS = "air_yards"  # weekly air-yards if/when we reference it directly
 ```
 
-### 4.3 Module-constant promotion
+### 4.3 `WeeklyStatsSchema` extension
+
+The current `WeeklyStatsSchema` (foundations) ingests a minimal subset of `nfl_data_py.import_weekly_data` columns. The WR feature builder requires three additional columns that are present in the raw `nfl_data_py` output but not currently retained:
+
+- `targets` (int) — for `targets_per_game_l4`, `targets_per_game_std`, `target_share_l4`.
+- `receiving_air_yards` (float) — for properly-weighted `air_yards_share_l4` (sum across the window divided by team-total air yards, not naive average of per-game shares).
+- `carries` (int) — for `rushing_attempts_per_game_l4` and the `designed_rusher` flag.
+
+`WeeklyStatsSchema` adds three new fields:
+
+```python
+targets: Series[int] = pa.Field(ge=0, le=30)
+receiving_air_yards: Series[float] = pa.Field(ge=-50, le=400)
+carries: Series[int] = pa.Field(ge=0, le=50)
+```
+
+The existing `_KEEP` list in `src/projections/ingest/weekly_stats.py` is extended to include the three new column names (`carries`, `targets`, `receiving_air_yards` are the raw-side names — `nfl_data_py` returns them under those exact names, no rename needed). The existing `_normalize_one_season` int/float coercion lists are extended.
+
+The existing `fake_weekly_df` fixture in `tests/test_ingest/conftest.py` is extended with the three new columns so existing tests continue to pass.
+
+### 4.4 Module-constant promotion
 
 `_PYARROW_STR = pd.StringDtype("pyarrow")` moves from `weekly_stats.py` to `schemas.py` as a module-level constant. All ingest modules import it from `schemas.py`. (Drive-by cleanup deferred from foundations review.)
 
@@ -371,7 +392,7 @@ Following the existing pattern under `tests/projections/`. New test packages: ex
 
 One test module per ingest module (4 modules total; the `ngs` test is parameterized across the three stat types). Same shape for each:
 
-- **Fixture parquet, not network.** Each source has a checked-in `tests/fixtures/raw_<source>_<season>.parquet` snapshot produced once by hand from a real `nfl_data_py` call. Tests monkeypatch `nfl.import_<source>` to return the fixture; CI never hits the network.
+- **Synthetic in-memory fixtures, not network or parquet snapshots.** Each source gets a `pytest.fixture` in `tests/test_ingest/conftest.py` returning a small synthetic `pd.DataFrame` matching `nfl_data_py.import_<source>`'s expected raw column shape. Tests monkeypatch `_fetch_raw_<source>` (per the existing `weekly_stats.py` pattern) to return the fixture. Matches the existing convention from foundations (`fake_id_map_df`, `fake_weekly_df`). CI never hits the network. Trade-off: synthetic fixtures don't catch real-world `nfl_data_py` API drift — that's tracked as a separate concern (see §7).
 - **Round-trip:** `refresh_<source>(tmp_path, seasons=[2023])` writes a partition; reading it back and re-validating the schema returns the same DataFrame.
 - **Schema enforcement:** mutate the fixture to violate the schema (wrong dtype, out-of-range value, unknown team code) and assert `_normalize_one_season` raises.
 - **Idempotency:** call `refresh_<source>` twice for the same season; assert manifest has one row per `(table, season)` (last-write-wins on `fetched_at` + checksum) and the partition is overwritten cleanly.
@@ -432,13 +453,14 @@ These are documented decisions to revisit, not blockers for 2a:
 - **Mid-season position changes.** A player listed as TE in `weekly_stats` may appear as FB in `depth_charts`. Joins use `gsis_id` only (not `position`); WR builder filters `weekly_stats.position == "WR"`, so a player who switches to RB mid-season correctly drops out. Behavior asserted in tests.
 - **Vegas line provenance.** `import_schedules` returns *closing* lines. For a backtest harness this is good enough; if Plan 5 ever projects pre-week selections, we revisit (would need opening or week-of lines from a separate source).
 - **Schedule pre-population for future weeks.** `import_schedules` returns the full season schedule including unplayed weeks (NaN for game-day weather, possibly TBD kickoff). Schemas mark those columns nullable; we ingest the full schedule.
+- **`nfl_data_py` API drift detection.** Synthetic fixtures (§6.1) don't catch column renames or type changes in real `nfl_data_py` output. Mitigation strategy: an opt-in `@pytest.mark.network` smoke test (one per ingest source) that hits the live API, fetches a tiny slice (e.g., 1 week of 2023), and asserts the column set matches the schema's expectation. Marked `skip` by default; run manually after `nfl_data_py` version bumps. **Building these network smoke tests is deferred to a future task; not in 2a's scope.** Captured as TODO #8.
 
 ---
 
 ## 8. Risks
 
 - **`nfl_data_py` API surface drift.** The library is community-maintained and occasionally renames columns between releases. Version is pinned in `pyproject.toml`; bumps are explicit, gated by green tests.
-- **Fixture staleness.** Checked-in fixture parquet files won't auto-update if `nfl_data_py` changes its output schema. Regenerating is a documented manual step bundled with any version bump.
+- **Synthetic-fixture blindness to API drift.** Synthetic in-memory fixtures match what we *expect* `nfl_data_py` to return, not what it *actually* returns. If a column is renamed, dropped, or retyped between versions, our tests stay green but production ingest breaks. Mitigation: opt-in network smoke tests on version bump (see §7, TODO #8).
 - **NGS coverage starts in 2016.** Anything earlier has no NGS. Schemas reflect this (`ge=2016` on NGS season fields). Backtest in Plan 3 will need to handle the discontinuity (restrict training to ≥2016, or train two model variants).
 
 ---
@@ -447,7 +469,7 @@ These are documented decisions to revisit, not blockers for 2a:
 
 In order:
 
-1. Schema additions to `schemas.py` (6 ingest schemas + `WrFeaturesSchema` + `Stat` enum entries + `_PYARROW_STR` constant).
+1. Schema additions to `schemas.py` (6 new ingest schemas + extension of `WeeklyStatsSchema` with `targets`/`receiving_air_yards`/`carries` + `WrFeaturesSchema` + `Stat` enum entries + `_PYARROW_STR` constant).
 2. Four new ingest modules (`schedules.py`, `snap_counts.py`, `depth_charts.py`, `ngs.py`), each with the `weekly_stats.py`-template structure, schema validation at the boundary, and idempotent partition writes. The `ngs.py` module is parameterized by `stat_type` and produces three partition tables.
 3. Per-source ingest tests against checked-in fixture parquet (no network).
 4. `src/projections/features/` package with `_rolling.py`, `_opponent.py`, `wr.py`, and `__init__.py`.
@@ -481,6 +503,8 @@ Append these rows to the decision log (newest at top of the table):
 | 2026-04-24 | Shared `_rolling.py` and `_opponent.py` helpers built and tested in 2a | Pin helper API on the first builder so 2b's five other builders consume a stable contract |
 | 2026-04-24 | Schedule ingest captures Vegas lines (spread, total, moneyline) | "Implied team total" is a load-bearing feature for every offensive position |
 | 2026-04-24 | Drive-by cleanups (`_PYARROW_STR` to `schemas.py`, programmatic `_INTEGER_STATS`, ingest `__all__`) folded into 2a | We're touching every ingest module anyway; cheaper to clean up once than across two PRs |
+| 2026-04-24 | Extend `WeeklyStatsSchema` with `targets`, `receiving_air_yards`, `carries` | Discovered during plan-writing: WR feature builder needs these source columns and the foundations-era schema didn't include them. All three are present in raw `nfl_data_py.import_weekly_data` output |
+| 2026-04-24 | Test fixtures are synthetic in-memory `pd.DataFrame`s, not real-data parquet snapshots | Matches existing convention from foundations (`fake_weekly_df` etc.); simpler maintenance; `nfl_data_py` API drift is handled separately by opt-in network smoke tests (TODO #8) |
 
 ### 10.2 `project_management.md` — status section update
 
@@ -500,7 +524,7 @@ Add as new numbered items:
 - **#5: NGS missing-data forward-fill policy.** v1 leaves NaN. Revisit after a notebook investigation against a recent season quantifying how often qualifying-threshold misses happen and whether forward-fill changes feature distributions materially.
 - **#6: Opening / week-of Vegas line source.** `import_schedules` returns *closing* lines. Closing is fine for backtest. Only worth pursuing if Plan 5 ever projects pre-week selections (e.g., DFS workflow uses lines that change through the week).
 - **#7: Depth chart slot-label parser refinement.** v1 extracts the trailing digit from labels like `WR1`, falling back to `1` for unrankable labels (`LWR`/`RWR`/`SWR`) with a warning. If Plan 3 model fitting shows depth_rank is noisy or wrong, build a richer parser using alignment + rank.
-- **#8: Document fixture regeneration.** Add a `CONTRIBUTING.md` section describing how to regenerate `tests/fixtures/raw_*.parquet` files from a live `nfl_data_py` call after a version bump. Manual step, not automated (regeneration from network would defeat the fixtures' purpose).
+- **#8: Build opt-in `nfl_data_py` API-drift smoke tests.** One per ingest source, marked `@pytest.mark.network`, skipped by default. Hits the live API, fetches a tiny slice (e.g., 1 week of 2023), asserts the column set matches the schema. Run manually after `nfl_data_py` version bumps. Document the run-after-bump step in `CONTRIBUTING.md`. The synthetic in-memory fixtures used by 2a's CI tests don't catch API drift on their own.
 
 ### 10.4 Decision-log accuracy
 
