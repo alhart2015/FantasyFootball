@@ -1,0 +1,37 @@
+# Pre-commit hooks for the FantasyFootball repo.
+# Setup: pip install -e ".[dev]" && pre-commit install
+# Run manually: pre-commit run --all-files
+# Update hook versions: pre-commit autoupdate
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  # mypy runs against the locally-installed environment so it sees the same
+  # types our editable install does. Slower than mirrors-mypy but avoids
+  # version drift between pre-commit's mypy and our pyproject mypy floor.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: mypy
+        args: ["src", "tests"]
+        language: system
+        types: [python]
+        pass_filenames: false

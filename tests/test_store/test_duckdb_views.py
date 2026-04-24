@@ -10,12 +10,8 @@ from projections.store import query, write_partition
 
 
 def _seed(root: Path) -> None:
-    df1 = pd.DataFrame(
-        {"gsis_id": ["00-0036322"], "season": [2024], "week": [1], "mean": [18.0]}
-    )
-    df2 = pd.DataFrame(
-        {"gsis_id": ["00-0036322"], "season": [2024], "week": [2], "mean": [22.5]}
-    )
+    df1 = pd.DataFrame({"gsis_id": ["00-0036322"], "season": [2024], "week": [1], "mean": [18.0]})
+    df2 = pd.DataFrame({"gsis_id": ["00-0036322"], "season": [2024], "week": [2], "mean": [22.5]})
     write_partition(root, "projections_weekly", df1, season=2024, week=1)
     write_partition(root, "projections_weekly", df2, season=2024, week=2)
 

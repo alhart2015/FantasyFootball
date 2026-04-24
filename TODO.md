@@ -4,16 +4,6 @@ Running project management list. Add items as they come up; remove or check off 
 
 ## Open
 
-### 0. Pick lint/format config and write CONTRIBUTING.md
-
-**Context.** Typing posture (pandera schemas, pydantic models, NewType IDs, mypy --strict, enums for reused values) is committed in the projections-core spec. What still needs deciding is the surrounding ergonomic config:
-- `ruff` rule set + line length + import sort
-- `pyproject.toml` layout (single package vs src layout)
-- pre-commit hooks
-- CONTRIBUTING.md describing the workflow (test commands, type-check command, how to add a schema)
-
-**Definition of done.** `pyproject.toml`, `.pre-commit-config.yaml`, and `CONTRIBUTING.md` checked in. Doesn't gate the projections-core implementation plan but should land alongside the first PR so conventions are enforced from commit one.
-
 ### 1. Explore option D: joint-correlation projections
 
 **Context.** During Projections Core brainstorming we picked option C (full per-player distributions, marginal only). Option D would extend C to model how player outcomes *co-move* — same-game stacks, opponent dependencies, game-script effects. We deferred D because it adds storage and modeling complexity we may not need until DFS tournament work; we want C's schema to make D an additive upgrade rather than a rewrite.

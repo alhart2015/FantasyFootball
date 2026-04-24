@@ -70,9 +70,9 @@ class Team(StrEnum):
 _TEAM_ALIASES: dict[str, Team] = {
     "jax": Team.JAC,
     "la": Team.LAR,
-    "stl": Team.LAR,   # Rams pre-2016
-    "sd": Team.LAC,    # Chargers pre-2017
-    "oak": Team.LV,    # Raiders pre-2020
+    "stl": Team.LAR,  # Rams pre-2016
+    "sd": Team.LAC,  # Chargers pre-2017
+    "oak": Team.LV,  # Raiders pre-2020
     "wsh": Team.WAS,
     # Self-aliases for fast normalize_team_code passthrough:
     **{t.value.lower(): t for t in Team},
@@ -101,7 +101,7 @@ class RosterSlot(StrEnum):
     RB = "RB"
     WR = "WR"
     TE = "TE"
-    FLEX = "FLEX"          # RB / WR / TE
+    FLEX = "FLEX"  # RB / WR / TE
     SUPER_FLEX = "SUPER_FLEX"  # QB / RB / WR / TE
     K = "K"
     DST = "DST"
@@ -115,7 +115,7 @@ class DistributionFamily(StrEnum):
     NORMAL = "NORMAL"
     GAMMA = "GAMMA"
     EMPIRICAL_QUANTILE = "EMPIRICAL_QUANTILE"  # quantile-regression output
-    SAMPLED = "SAMPLED"                        # explicit sample array
+    SAMPLED = "SAMPLED"  # explicit sample array
 
 
 class Stat(StrEnum):
@@ -267,9 +267,7 @@ class ProjectionWeeklySchema(pa.DataFrameModel):
     model_id: Series[str]
     # pandas >=2.0 stores timezone-aware timestamps as datetime64[us, UTC];
     # use unit='us' to match the actual dtype produced by pd.Timestamp(..., tz='UTC').
-    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(
-        dtype_kwargs={"tz": "UTC", "unit": "us"}
-    )
+    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(dtype_kwargs={"tz": "UTC", "unit": "us"})
 
     class Config:
         strict = "filter"

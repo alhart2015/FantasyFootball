@@ -33,8 +33,7 @@ def _connect_with_views(root: Path) -> duckdb.DuckDBPyConnection:
             # Unpartitioned table.
             path = entry.as_posix()
             con.execute(
-                f"CREATE OR REPLACE VIEW {entry.stem} AS "
-                f"SELECT * FROM read_parquet('{path}')"
+                f"CREATE OR REPLACE VIEW {entry.stem} AS SELECT * FROM read_parquet('{path}')"
             )
     return con
 

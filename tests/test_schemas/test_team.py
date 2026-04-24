@@ -25,8 +25,8 @@ def test_canonical_codes_are_uppercase_short() -> None:
         ("LA", Team.LAR),
         ("LAR", Team.LAR),
         ("STL", Team.LAR),  # Rams pre-2016
-        ("SD", Team.LAC),   # Chargers pre-2017
-        ("OAK", Team.LV),   # Raiders pre-2020
+        ("SD", Team.LAC),  # Chargers pre-2017
+        ("OAK", Team.LV),  # Raiders pre-2020
         ("WAS", Team.WAS),
         ("WSH", Team.WAS),
     ],

@@ -15,9 +15,7 @@ def test_id_map_refresh_records_manifest_entry(
     fake_id_map_df: pd.DataFrame,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "projections.ingest.id_map._fetch_raw_id_map", lambda: fake_id_map_df
-    )
+    monkeypatch.setattr("projections.ingest.id_map._fetch_raw_id_map", lambda: fake_id_map_df)
     build_id_map(tmp_path)
     manifest = read_manifest(tmp_path)
     rows = manifest[manifest["table"] == "id_map"]
@@ -70,7 +68,7 @@ def test_manifest_season_dtype_is_nullable_int(
     monkeypatch.setattr(
         "projections.ingest.weekly_stats._fetch_raw_weekly", lambda seasons: fake_weekly_df
     )
-    build_id_map(tmp_path)                        # writes a row with season=NA
+    build_id_map(tmp_path)  # writes a row with season=NA
     refresh_weekly_stats(tmp_path, seasons=[2024])  # writes a row with season=2024
     manifest = read_manifest(tmp_path)
     assert manifest["season"].dtype == pd.Int64Dtype()

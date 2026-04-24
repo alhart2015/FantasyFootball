@@ -54,7 +54,7 @@ def test_refresh_weekly_stats_normalizes_team_codes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     aliased = fake_weekly_df.copy()
-    aliased.loc[0, "recent_team"] = "JAX"   # alias for JAC
+    aliased.loc[0, "recent_team"] = "JAX"  # alias for JAC
     aliased.loc[1, "opponent_team"] = "LA"  # alias for LAR
     monkeypatch.setattr(
         "projections.ingest.weekly_stats._fetch_raw_weekly",
