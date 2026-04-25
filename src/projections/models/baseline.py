@@ -19,6 +19,33 @@ from sklearn.linear_model import RidgeCV
 
 from projections.schemas import DistributionFamily, Position, Stat
 
+_GAMMA_ALPHA_CLIP: Final[tuple[float, float]] = (0.01, 100.0)
+
+
+def _gamma_alpha_from_residuals(*, mu_hat: np.ndarray, residuals: np.ndarray) -> float:
+    """Method-of-moments shape parameter alpha for a Gamma distribution
+    parameterized by (alpha, beta=alpha/mu_hat). var = mu_hat^2 / alpha, so
+    alpha_hat = mean(mu_hat)^2 / var(residuals).
+
+    Clipped to [0.01, 100] for numerical safety; the MoM estimator is
+    degenerate for very rare events. Spec section 3.4 documents this choice.
+    """
+    mean_mu = float(mu_hat.mean())
+    var_resid = float(residuals.var())  # population variance (ddof=0)
+    if mean_mu == 0.0 or var_resid == 0.0:
+        # Degenerate; pick the most permissive clip.
+        return _GAMMA_ALPHA_CLIP[1] if var_resid == 0.0 else _GAMMA_ALPHA_CLIP[0]
+    raw = (mean_mu * mean_mu) / var_resid
+    return float(min(max(raw, _GAMMA_ALPHA_CLIP[0]), _GAMMA_ALPHA_CLIP[1]))
+
+
+def _normal_std_from_residuals(residuals: np.ndarray) -> float:
+    """Global per-stat residual std for the Normal family. Floored at a
+    tiny positive epsilon so ParametricNormal's std>0 invariant always holds."""
+    s = float(residuals.std())
+    return max(s, 1e-6)
+
+
 _WR_TARGET_STATS: Final[tuple[Stat, ...]] = (
     Stat.RECEPTIONS,
     Stat.RECEIVING_YARDS,
@@ -77,7 +104,7 @@ class BaselineModel:
 
     # Populated by .fit() — None on an unfitted instance.
     feature_means: pd.Series | None = field(default=None)
-    ridges: dict[Stat, object] = field(default_factory=dict)
+    ridges: dict[Stat, RidgeCV] = field(default_factory=dict)
     variance_params: dict[Stat, dict[str, float]] = field(default_factory=dict)
     train_seasons: tuple[int, int] | None = field(default=None)
     code_hash: str | None = field(default=None)
@@ -110,6 +137,13 @@ class BaselineModel:
             validate="one_to_one",
         )
 
+        if joined.empty:
+            raise ValueError(
+                "Inner-join of features and weekly_stats produced 0 rows. "
+                "Check that (gsis_id, season, week) tuples overlap and that "
+                f"weekly_stats contains position={self.position.value} rows."
+            )
+
         # Build feature matrix, persist column order. Drop rows with NaN in any
         # feature column at fit time (mostly week-1-of-season rows where
         # rolling features have no prior history).
@@ -141,9 +175,25 @@ class BaselineModel:
             ridge.fit(x, y)
             self.ridges[stat] = ridge
 
-        # Record the season range we trained on.
-        seasons = sorted(joined["season"].unique().tolist())
-        self.train_seasons = (int(seasons[0]), int(seasons[-1]))
+        # Variance estimation (spec section 3.4).
+        for stat in self.target_stats:
+            ridge = self.ridges[stat]
+            mu_hat = ridge.predict(x).astype(np.float64)
+            y = truth_frame[stat.value].to_numpy(dtype=np.float64)
+            residuals = y - mu_hat
+            family = self.dist_families[stat]
+            if family is DistributionFamily.NORMAL:
+                self.variance_params[stat] = {"std": _normal_std_from_residuals(residuals)}
+            elif family is DistributionFamily.GAMMA:
+                self.variance_params[stat] = {
+                    "shape": _gamma_alpha_from_residuals(mu_hat=mu_hat, residuals=residuals)
+                }
+            else:  # pragma: no cover — only NORMAL/GAMMA configured today
+                raise ValueError(f"Unsupported family {family} for stat {stat}")
+
+        # Record the season range we trained on (post-dropna training set).
+        trained_seasons = sorted(joined.loc[feature_frame.index, "season"].unique().tolist())
+        self.train_seasons = (int(trained_seasons[0]), int(trained_seasons[-1]))
 
 
 def wr_baseline() -> BaselineModel:

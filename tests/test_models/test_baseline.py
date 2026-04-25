@@ -62,3 +62,64 @@ def test_baseline_fit_records_train_seasons(
     # Fixture covers 2024 + 2025; the fit signature consumes whatever it
     # receives, so train_seasons is just min/max season seen in training.
     assert model.train_seasons == (2024, 2025)
+
+
+def test_baseline_fit_populates_normal_variance_params(
+    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+) -> None:
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    # Normal stats: variance_params should have a positive 'std'.
+    for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
+        params = model.variance_params[stat]
+        assert "std" in params
+        assert params["std"] > 0
+
+
+def test_baseline_fit_populates_gamma_variance_params(
+    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+) -> None:
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    # Gamma stats: variance_params should have a 'shape' in [0.01, 100].
+    for stat in (Stat.RECEPTIONS, Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
+        params = model.variance_params[stat]
+        assert "shape" in params
+        assert 0.01 <= params["shape"] <= 100.0
+
+
+def test_method_of_moments_alpha_matches_hand_computed_value() -> None:
+    """Verify _gamma_alpha_from_residuals on a hand-built example."""
+    import numpy as np
+
+    from projections.models.baseline import _gamma_alpha_from_residuals
+
+    # mu_hat = [1, 2, 3, 4, 5] -> mean(mu_hat) = 3
+    # residuals = y - mu_hat; var(residuals) = ?
+    # Let var = 4.5 (arbitrary but easy). Then alpha_hat = 3^2 / 4.5 = 2.0
+    mu_hat = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    # Build residuals with sample variance = 4.5
+    # variance is computed with ddof=0 (numpy default for .var()) -- match it.
+    residuals = np.array([3.0, -3.0, 0.0, 1.5, -1.5])
+    assert abs(residuals.var() - 4.5) < 1e-9
+    alpha = _gamma_alpha_from_residuals(mu_hat=mu_hat, residuals=residuals)
+    assert abs(alpha - 2.0) < 1e-9
+
+
+def test_gamma_alpha_clipped_to_safety_range() -> None:
+    """Pathological residuals should clip to [0.01, 100]."""
+    import numpy as np
+
+    from projections.models.baseline import _gamma_alpha_from_residuals
+
+    # Almost-zero variance -> alpha blows up -> clipped to 100
+    mu_hat = np.array([1.0, 1.0, 1.0])
+    near_zero_resid = np.array([0.0001, 0.0, -0.0001])
+    alpha = _gamma_alpha_from_residuals(mu_hat=mu_hat, residuals=near_zero_resid)
+    assert alpha == 100.0
+
+    # Massive variance with near-zero mean -> alpha ~0 -> clipped to 0.01
+    mu_hat_zero = np.array([0.001, 0.001])
+    huge_resid = np.array([100.0, -100.0])
+    alpha = _gamma_alpha_from_residuals(mu_hat=mu_hat_zero, residuals=huge_resid)
+    assert alpha == 0.01
