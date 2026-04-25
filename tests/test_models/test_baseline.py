@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from sklearn.linear_model import RidgeCV
 
+from projections.distributions.parametric import ParametricGamma, ParametricNormal
 from projections.models import wr_baseline
 from projections.schemas import DistributionFamily, Position, Stat
 
@@ -123,3 +125,49 @@ def test_gamma_alpha_clipped_to_safety_range() -> None:
     huge_resid = np.array([100.0, -100.0])
     alpha = _gamma_alpha_from_residuals(mu_hat=mu_hat_zero, residuals=huge_resid)
     assert alpha == 0.01
+
+
+def test_build_stat_distributions_returns_one_per_row(
+    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+) -> None:
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    # Pick a single week of test features.
+    week_features = baseline_features[
+        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    ]
+    assert not week_features.empty
+    stat_dists_per_row = model._build_stat_distributions(week_features)
+    assert len(stat_dists_per_row) == len(week_features)
+    for row_dists in stat_dists_per_row:
+        assert set(row_dists.keys()) == set(model.target_stats)
+        # Family-specific concrete types.
+        assert isinstance(row_dists[Stat.RECEIVING_YARDS], ParametricNormal)
+        assert isinstance(row_dists[Stat.RECEPTIONS], ParametricGamma)
+
+
+def test_build_stat_distributions_clamps_gamma_mu() -> None:
+    """A regression that predicts mu_hat <= 0 for a gamma stat should produce a
+    ParametricGamma with finite, positive scale."""
+    model = wr_baseline()
+    # Hand-craft a fake fitted state with one stat configured.
+    model.target_stats = (Stat.RECEPTIONS,)
+    model.dist_families = {Stat.RECEPTIONS: DistributionFamily.GAMMA}
+    model.feature_columns = ("dummy_feat",)
+    model.feature_means = pd.Series({"dummy_feat": 0.0}, dtype=float)
+    model.variance_params = {Stat.RECEPTIONS: {"shape": 2.0}}
+
+    class _FakeRidge:
+        def predict(self, x: np.ndarray) -> np.ndarray:
+            # Predict negative mu (should be clamped at predict time).
+            return np.full(x.shape[0], -5.0)
+
+    model.ridges = {Stat.RECEPTIONS: _FakeRidge()}
+
+    fake_features = pd.DataFrame({"dummy_feat": [1.0]})
+    out = model._build_stat_distributions(fake_features)
+    assert len(out) == 1
+    rec_dist = out[0][Stat.RECEPTIONS]
+    assert isinstance(rec_dist, ParametricGamma)
+    # mean = shape * scale > 0 (clamped, not negative)
+    assert rec_dist.mean() > 0

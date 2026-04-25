@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import RidgeCV
 
+from projections.distributions import Distribution, ParametricGamma, ParametricNormal
 from projections.schemas import DistributionFamily, Position, Stat
 
 _GAMMA_ALPHA_CLIP: Final[tuple[float, float]] = (0.01, 100.0)
@@ -109,6 +110,11 @@ class BaselineModel:
     train_seasons: tuple[int, int] | None = field(default=None)
     code_hash: str | None = field(default=None)
 
+    # Floor for predicted Gamma mean (mu_hat). Ridge can predict <=0 for low-mean
+    # stats (e.g., fumbles_lost). Clamping keeps the rate parameter (alpha/mu)
+    # well-defined. Spec section 3.2 step 3.
+    _GAMMA_MU_FLOOR: Final[float] = 1e-3
+
     def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:
         """Train one RidgeCV per target stat. See spec §3.1 for the pipeline."""
         # Schema validation — defensive at the boundary even though our caller
@@ -194,6 +200,52 @@ class BaselineModel:
         # Record the season range we trained on (post-dropna training set).
         trained_seasons = sorted(joined.loc[feature_frame.index, "season"].unique().tolist())
         self.train_seasons = (int(trained_seasons[0]), int(trained_seasons[-1]))
+
+    def _build_stat_distributions(self, features: pd.DataFrame) -> list[dict[Stat, Distribution]]:
+        """Build per-row dicts of {Stat -> Distribution} from fitted regressors.
+
+        Pure function over the fitted state. Does not call score_distribution
+        (that's predict_distribution's job, Task 9). Useful for unit tests and
+        for any caller that wants per-stat dists for analysis.
+        """
+        if not self.ridges or self.feature_means is None:
+            raise RuntimeError("Model is not fitted; call fit() before predict.")
+
+        # Build feature matrix with same column order, impute, coerce bools.
+        x_cols = list(self.feature_columns)
+        x_frame = features[x_cols].copy()
+        for col in x_frame.columns:
+            if x_frame[col].dtype == bool:
+                x_frame[col] = x_frame[col].astype(np.int8)
+        x_frame = x_frame.fillna(self.feature_means)
+        x = x_frame.to_numpy(dtype=np.float64)
+
+        # Per-stat predict + Distribution construction.
+        per_stat_mu: dict[Stat, np.ndarray] = {}
+        for stat in self.target_stats:
+            mu = self.ridges[stat].predict(x).astype(np.float64)
+            if self.dist_families[stat] is DistributionFamily.GAMMA:
+                mu = np.maximum(mu, self._GAMMA_MU_FLOOR)
+            per_stat_mu[stat] = mu
+
+        out: list[dict[Stat, Distribution]] = []
+        for i in range(len(x)):
+            row: dict[Stat, Distribution] = {}
+            for stat in self.target_stats:
+                mu_i = float(per_stat_mu[stat][i])
+                family = self.dist_families[stat]
+                params = self.variance_params[stat]
+                if family is DistributionFamily.NORMAL:
+                    row[stat] = ParametricNormal(mean=mu_i, std=params["std"])
+                elif family is DistributionFamily.GAMMA:
+                    shape = params["shape"]
+                    # rate = alpha / mu; scale = 1/rate = mu / alpha
+                    scale = mu_i / shape
+                    row[stat] = ParametricGamma(shape=shape, scale=scale)
+                else:  # pragma: no cover
+                    raise ValueError(f"Unsupported family {family}")
+            out.append(row)
+        return out
 
 
 def wr_baseline() -> BaselineModel:
