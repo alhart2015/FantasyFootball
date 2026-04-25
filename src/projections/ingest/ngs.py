@@ -126,7 +126,9 @@ def _normalize_one_season(stat_type: NgsStatType, raw: pd.DataFrame) -> pd.DataF
     for int_col in ("season", "week"):
         if int_col in df.columns:
             df[int_col] = df[int_col].astype("int64")
-    df = df[df["week"] >= 1].copy()
+    # NGS sometimes includes synthetic week numbers (0=season summary,
+    # 23+=pro bowl / all-star). Schema declares week in [1, 22]; filter.
+    df = df[(df["week"] >= 1) & (df["week"] <= 22)].copy()
 
     df = df[df["gsis_id"].notna()].copy()
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
