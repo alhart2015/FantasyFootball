@@ -79,9 +79,37 @@ _TEAM_ALIASES: dict[str, Team] = {
     "sd": Team.LAC,  # Chargers pre-2017
     "oak": Team.LV,  # Raiders pre-2020
     "wsh": Team.WAS,
+    # pro-football-reference 3-letter aliases (used by nfl_data_py.import_ids()).
+    "gbp": Team.GB,
+    "kan": Team.KC,
+    "nwe": Team.NE,
+    "nor": Team.NO,
+    "sdg": Team.LAC,
+    "tam": Team.TB,
+    "sfo": Team.SF,
+    "lvr": Team.LV,
+    "rai": Team.LV,  # PFR's pre-Vegas Raiders
+    "ram": Team.LAR,  # PFR's pre-2016 Rams
+    "phx": Team.ARI,  # Phoenix Cardinals (pre-1994)
+    "crd": Team.ARI,  # PFR's Cardinals
+    "rav": Team.BAL,  # PFR's Ravens
+    "clt": Team.IND,  # PFR's Colts (Baltimore -> Indianapolis legacy)
+    "htx": Team.HOU,  # PFR's Texans
+    "oti": Team.TEN,  # PFR's Titans (Oilers/Titans legacy)
+    # Additional 3-letter team aliases observed in nfl_data_py.import_ids().
+    "kcc": Team.KC,
+    "nep": Team.NE,
+    "nos": Team.NO,
+    "sdc": Team.LAC,
+    "tbb": Team.TB,
     # Self-aliases for fast normalize_team_code passthrough:
     **{t.value.lower(): t for t in Team},
 }
+
+# Sentinel codes meaning "no team" (free agent / not on a roster). These
+# should map to None at ingest time rather than raise. Used by
+# id_map ingest where ``team`` is nullable.
+_NO_TEAM_CODES: frozenset[str] = frozenset({"fa", "fa*"})
 
 
 def normalize_team_code(code: str) -> Team:

@@ -12,7 +12,13 @@ import nfl_data_py as nfl
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
-from projections.schemas import _PYARROW_STR, IdMapSchema, Position, normalize_team_code
+from projections.schemas import (
+    _NO_TEAM_CODES,
+    _PYARROW_STR,
+    IdMapSchema,
+    Position,
+    normalize_team_code,
+)
 from projections.store import write_partition
 
 
@@ -23,7 +29,10 @@ def _fetch_raw_id_map() -> pd.DataFrame:
 def _normalize_team(v: str | None) -> str | None:
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return None
-    return normalize_team_code(str(v)).value
+    s = str(v)
+    if s.lower() in _NO_TEAM_CODES:
+        return None
+    return normalize_team_code(s).value
 
 
 def build_id_map(data_root: Path) -> Path:
@@ -39,6 +48,13 @@ def build_id_map(data_root: Path) -> Path:
 
     # Drop rows without canonical id; downstream joins are unusable without it.
     df = df[df["gsis_id"].notna()].copy()
+
+    # Drop rows whose gsis_id does not match the canonical pattern (some
+    # nfl_data_py.import_ids() rows carry legacy PFR-style IDs in the
+    # gsis_id column for very old players — those are not joinable).
+    from projections.schemas import GSIS_ID_PATTERN
+
+    df = df[df["gsis_id"].astype(str).str.match(rf"^{GSIS_ID_PATTERN}$")].copy()
 
     # Drop players at positions outside our covered set (offensive line, punters, etc.)
     # nfl_data_py.import_ids() returns roster-wide rows; we only model the positions

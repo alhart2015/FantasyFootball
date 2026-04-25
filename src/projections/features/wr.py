@@ -64,7 +64,13 @@ def build_wr_features(
     sch = schedules[exact_week_mask(schedules, season=season, as_of_week=as_of_week)].copy()
 
     # --- Rostered WRs in target week (depth chart drives roster set) ------
-    wr_dc = dc[dc["position"] == Position.WR.value].copy()
+    # Restrict to teams that have a schedule row this week — bye-week WRs
+    # have no opponent / is_home / roof_dome to populate, and the schema
+    # rejects NaN on those columns. Closing TODO #9a from PR #4 review.
+    sch_teams = set(sch["home_team"].astype(str)) | set(sch["away_team"].astype(str))
+    wr_dc = dc[
+        (dc["position"] == Position.WR.value) & (dc["team"].astype(str).isin(sch_teams))
+    ].copy()
     if wr_dc.empty:
         empty_cols = list(WrFeaturesSchema.to_schema().columns.keys())
         return WrFeaturesSchema.validate(pd.DataFrame(columns=empty_cols))
@@ -116,6 +122,10 @@ def build_wr_features(
     air_yards_share = trailing_n_share_in_group(
         ws_wr, value_col=Stat.RECEIVING_AIR_YARDS.value
     ).rename(columns={"share_l4": "air_yards_share_l4"})
+    # receiving_air_yards can be slightly negative on a TFL behind LOS, so the
+    # per-player share can dip negative even though semantically we want a
+    # [0, 1] feature. Clip — the schema's lower bound is 0.
+    air_yards_share["air_yards_share_l4"] = air_yards_share["air_yards_share_l4"].clip(0.0, 1.0)
 
     snap_l4 = trailing_4_per_player(sc_wr, Stat.OFFENSE_PCT.value).rename(
         columns={"mean_l4": "snap_pct_l4"}
@@ -192,8 +202,13 @@ def build_wr_features(
     )
 
     # Rookies / players with no prior games: fill schema-required floats with 0.
+    # Real-data weekly stats permit slightly-negative yardage (TFL behind
+    # LOS); the feature schema declares these rolling means as ``ge=0``, so
+    # clip after the fillna. The clip is essentially a no-op for clean fits
+    # — only fires on the few rows where 4-week-mean rushing/receiving
+    # yardage went negative, which is noise we can safely floor at 0.
     for c in _ROLLING_ZERO_FILL_COLS:
-        out[c] = out[c].fillna(0.0).astype(float)
+        out[c] = out[c].fillna(0.0).astype(float).clip(lower=0.0)
 
     out["designed_rusher"] = out["rushing_attempts_per_game_l4"] >= _DESIGNED_RUSHER_THRESHOLD
 

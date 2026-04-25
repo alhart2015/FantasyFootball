@@ -120,6 +120,14 @@ def _normalize_one_season(stat_type: NgsStatType, raw: pd.DataFrame) -> pd.DataF
         if int_col in df.columns:
             df[int_col] = df[int_col].astype(pd.Int64Dtype())
 
+    # nfl_data_py returns int32 for season/week; pandera Series[int] requires int64.
+    # NGS also includes season-summary rows with week=0 — drop them.
+    df = df[df["season"].notna() & df["week"].notna()].copy()
+    for int_col in ("season", "week"):
+        if int_col in df.columns:
+            df[int_col] = df[int_col].astype("int64")
+    df = df[df["week"] >= 1].copy()
+
     df = df[df["gsis_id"].notna()].copy()
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["team"] = df["team"].map(_normalize_team).astype(_PYARROW_STR)
