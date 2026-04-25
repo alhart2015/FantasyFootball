@@ -7,7 +7,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from projections.ingest import build_id_map, read_manifest, refresh_weekly_stats
+from projections.ingest import build_id_map, refresh_weekly_stats
+from projections.ingest.manifest import read_manifest
 
 
 def test_id_map_refresh_records_manifest_entry(

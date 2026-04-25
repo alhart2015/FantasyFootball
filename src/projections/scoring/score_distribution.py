@@ -43,20 +43,17 @@ class SampledDistribution:
         return rng.choice(self.samples, size=n, replace=True)
 
 
-_INTEGER_STATS: frozenset[Stat] = frozenset(
-    {
-        Stat.PASSING_TDS,
-        Stat.INTERCEPTIONS,
-        Stat.PASSING_2PT,
-        Stat.RUSHING_TDS,
-        Stat.RUSHING_2PT,
-        Stat.RECEPTIONS,
-        Stat.RECEIVING_TDS,
-        Stat.RECEIVING_2PT,
-        Stat.FUMBLES_LOST,
-        Stat.RETURN_TDS,
+def _derive_integer_stats() -> frozenset[Stat]:
+    """Programmatically determine which Stat enum members map to integer
+    fields on StatLine. Single source of truth: if StatLine adds a new int
+    field, this set updates without manual edits."""
+    int_field_names = {
+        name for name, field in StatLine.model_fields.items() if field.annotation is int
     }
-)
+    return frozenset(stat for stat in Stat if stat.value in int_field_names)
+
+
+_INTEGER_STATS: frozenset[Stat] = _derive_integer_stats()
 
 
 def score_distribution(

@@ -36,3 +36,41 @@ Running project management list. Add items as they come up; remove or check off 
 
 **Definition of done for this exploration.**
 A short written recommendation: pick one modeling approach (covariance / scenario sim / factor / copula), one storage format, and a concrete API addition to the C-era projections schema. Include a backtest plan so we know whether D is actually paying off before we commit to building it.
+
+### 2. Plan 2b — remaining position feature builders
+
+QB, RB, TE, K, DST. Each consuming the validated `wr.py` pattern, `_rolling.py`, and `_opponent.py` helpers from 2a. Each gets its own pandera schema (`QbFeaturesSchema`, `RbFeaturesSchema`, etc.). One PR per position or one bundled — TBD when 2b is brainstormed.
+
+### 3. Play-by-play ingest (`nfl_data_py.import_pbp_data`)
+
+Required for true opponent-adjusted EPA features. Defer until Plan 3 backtest reveals whether the `opp_allowed_fppg_l4` proxy is good enough. If not, ingest PBP and add EPA-derived opponent features in a focused plan.
+
+### 4. Decide feature parquet storage during Plan 3
+
+Gated on backtest performance: if a single training pass takes >~30s recomputing features, add `data/features/{position}/...` storage and a `refresh_features` CLI verb; otherwise stay pure-function.
+
+### 5. NGS missing-data forward-fill policy
+
+v1 leaves NaN. Revisit after a notebook investigation against a recent season quantifying how often qualifying-threshold misses happen and whether forward-fill changes feature distributions materially.
+
+### 6. Opening / week-of Vegas line source
+
+`import_schedules` returns *closing* lines. Closing is fine for backtest. Only worth pursuing if Plan 5 ever projects pre-week selections (e.g., DFS workflow uses lines that change through the week).
+
+### 7. Depth chart slot-label parser refinement
+
+v1 extracts the trailing digit from labels like `WR1`, falling back to `1` for unrankable labels (`LWR`/`RWR`/`SWR`) with a warning. If Plan 3 model fitting shows `depth_rank` is noisy or wrong, build a richer parser using alignment + rank.
+
+### 8. Build opt-in `nfl_data_py` API-drift smoke tests
+
+One per ingest source, marked `@pytest.mark.network`, skipped by default. Hits the live API, fetches a tiny slice (e.g., 1 week of 2023), asserts the column set matches the schema. Run manually after `nfl_data_py` version bumps. Document the run-after-bump step in `CONTRIBUTING.md`. The synthetic in-memory fixtures used by 2a's CI tests don't catch API drift on their own.
+
+### 9. WR feature builder edge cases for production data
+
+Issues flagged during Task 15 / final code review that don't manifest on the synthetic fixtures but could surface in real `nfl_data_py` data:
+
+a) `is_home` and `roof_dome` are non-nullable in `WrFeaturesSchema` but the schedule join is a left-merge — if a depth-chart team has no schedule row in the target week (bye week, missing future game), validation fails. Fix: filter rostered teams to only those with schedule rows, OR mark the columns nullable. Revisit when Plan 3 wires real data.
+
+b) `IdMapSchema.pfr_id` is not marked `unique=True`. The snap_counts ingest does an inner-join on pfr_id; duplicate pfr_ids in id_map would multiply rows. Add `unique=True` to `pfr_id` (and to `espn_id`/`sleeper_id` for symmetry) as defense-in-depth, or add `.drop_duplicates(subset=["pfr_id"])` in the snap_counts join helper.
+
+c) `_trailing_4_share_per_team` in `features/wr.py` groups by `(gsis_id, team)`, which produces two rows for any player traded mid-season. The downstream merge in `build_wr_features` joins on `gsis_id` only, so duplicates would propagate into the output. Not exercised by the synthetic fixtures (no traded players). Fix: filter `last4_player` to only the player's *current* team before computing the share, or merge on `(gsis_id, team)` so only the matching team's row survives.

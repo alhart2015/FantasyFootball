@@ -12,10 +12,8 @@ import nfl_data_py as nfl
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
-from projections.schemas import IdMapSchema, Position, normalize_team_code
+from projections.schemas import _PYARROW_STR, IdMapSchema, Position, normalize_team_code
 from projections.store import write_partition
-
-_PYARROW_STR = pd.StringDtype("pyarrow")
 
 
 def _fetch_raw_id_map() -> pd.DataFrame:
