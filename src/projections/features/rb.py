@@ -89,17 +89,16 @@ def build_rb_features(
     )
 
     # --- Shares -----------------------------------------------------------
-    # rush_share: among the team's RBs only.
+    # Helper returns one row per (gsis_id, team); the (gsis_id, team) join in
+    # the assemble step below picks the share for the player's current team
+    # and naturally drops non-RB rows from the pass-catcher input as well as
+    # secondary rows for players traded mid-window.
     rush_share = trailing_n_share_in_group(ws_rb, value_col=Stat.CARRIES.value).rename(
         columns={"share_l4": "rush_share_l4"}
     )
-    # target_share: among the team's full pass-catching group (WR + RB + TE).
-    all_target_share = trailing_n_share_in_group(
-        ws_pass_catchers, value_col=Stat.TARGETS.value
-    ).rename(columns={"share_l4": "target_share_l4"})
-    # Filter the resulting share frame to RB players only (for the merge below).
-    rb_gsis_ids = set(ws_rb["gsis_id"].unique())
-    target_share = all_target_share[all_target_share["gsis_id"].isin(rb_gsis_ids)].copy()
+    target_share = trailing_n_share_in_group(ws_pass_catchers, value_col=Stat.TARGETS.value).rename(
+        columns={"share_l4": "target_share_l4"}
+    )
 
     # --- Season-to-date targets-per-game (RBs only) -----------------------
     ws_this_season = ws_rb[ws_rb["season"] == season]
@@ -166,11 +165,11 @@ def build_rb_features(
     out = out.merge(carries_l4, on="gsis_id", how="left")
     out = out.merge(rush_yd_l4, on="gsis_id", how="left")
     out = out.merge(rush_td_l4, on="gsis_id", how="left")
-    out = out.merge(rush_share, on="gsis_id", how="left")
+    out = out.merge(rush_share, on=["gsis_id", "team"], how="left")
     out = out.merge(targets_l4, on="gsis_id", how="left")
     out = out.merge(rec_l4, on="gsis_id", how="left")
     out = out.merge(rec_yd_l4, on="gsis_id", how="left")
-    out = out.merge(target_share, on="gsis_id", how="left")
+    out = out.merge(target_share, on=["gsis_id", "team"], how="left")
     out = out.merge(targets_std, on="gsis_id", how="left")
     out = out.merge(snap_l4, on="gsis_id", how="left")
     out = out.merge(ngs_cols, on="gsis_id", how="left")

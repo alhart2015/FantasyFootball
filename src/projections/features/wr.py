@@ -125,29 +125,15 @@ def build_wr_features(
             .rename(columns={Stat.TARGETS.value: "targets_per_game_std"})
         )
 
+    # Helper returns one row per (gsis_id, team); the join on ["gsis_id", "team"]
+    # below picks the share for the player's depth-chart-current team and
+    # naturally drops the secondary row for players traded mid-window.
     target_share = trailing_n_share_in_group(ws_wr, value_col=Stat.TARGETS.value).rename(
         columns={"share_l4": "target_share_l4"}
     )
     air_yards_share = trailing_n_share_in_group(
         ws_wr, value_col=Stat.RECEIVING_AIR_YARDS.value
     ).rename(columns={"share_l4": "air_yards_share_l4"})
-    # ``trailing_n_share_in_group`` groups by (gsis_id, team), so a player
-    # traded mid-trailing-window appears in two rows (one per team). The
-    # downstream merges on gsis_id alone would multiply output rows. Dedupe
-    # keeping the row with the highest share — a proxy for the player's
-    # primary team. This is a v1 hack; TODO #15 tracks a proper fix that
-    # restructures ``trailing_n_share_in_group`` to expose ``team`` and lets
-    # callers join on the canonical (gsis_id, team) pair.
-    target_share = (
-        target_share.sort_values(["gsis_id", "target_share_l4"], ascending=[True, False])
-        .drop_duplicates(subset=["gsis_id"], keep="first")
-        .copy()
-    )
-    air_yards_share = (
-        air_yards_share.sort_values(["gsis_id", "air_yards_share_l4"], ascending=[True, False])
-        .drop_duplicates(subset=["gsis_id"], keep="first")
-        .copy()
-    )
     # receiving_air_yards can be slightly negative on a TFL behind LOS, so the
     # per-player share can dip negative even though semantically we want a
     # [0, 1] feature. Clip — the schema's lower bound is 0.
@@ -212,8 +198,8 @@ def build_wr_features(
 
     out = out.merge(targets_l4, on="gsis_id", how="left")
     out = out.merge(targets_std, on="gsis_id", how="left")
-    out = out.merge(target_share, on="gsis_id", how="left")
-    out = out.merge(air_yards_share, on="gsis_id", how="left")
+    out = out.merge(target_share, on=["gsis_id", "team"], how="left")
+    out = out.merge(air_yards_share, on=["gsis_id", "team"], how="left")
     out = out.merge(rec_l4, on="gsis_id", how="left")
     out = out.merge(rec_yd_l4, on="gsis_id", how="left")
     out = out.merge(rec_td_l4, on="gsis_id", how="left")

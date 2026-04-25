@@ -115,16 +115,6 @@ Two fix options:
 
 Decide before Plan 3c's backtest output consumes ProjectionWeeklySchema rows.
 
-### 15. Restructure `trailing_n_share_in_group` to expose `team`
-
-Surfaced during Plan 3a Task 17 (real-data training). `trailing_n_share_in_group` (in `src/projections/features/_rolling.py`) groups by `(gsis_id, team)` so a player traded mid-trailing-window appears in two rows. Downstream merges on `gsis_id` alone multiply rows.
-
-Plan 3a's WR builder currently works around this with a per-`gsis_id` dedupe in `wr.py` keeping the row with the highest share — a pragmatic v1 hack documented inline. Same root cause affects RB/TE builders (verified: `rb.py` and `te.py` both merge target_share on `gsis_id` only). They will need the same hack OR the proper fix when QB/RB/TE Model A baselines train on real data in Plan 3b.
-
-Proper fix: change the helper to return `[gsis_id, team, share_l4]` and let callers join on `(gsis_id, team)`. Update WR / RB / TE builders to use the new join keys. Remove the per-`gsis_id` dedupe hacks. Schema for `trailing_n_share_in_group` returns is internal — no migration concerns.
-
-Tackle in Plan 3b alongside QB/RB/TE Model A generalization, when those builders also need real-data hardening.
-
 ### 16. Real-data drifts not caught by synthetic-fixture tests
 
 Surfaced during Plan 3a Tasks 14-17. The synthetic fixtures used by 2a/2b/3a's CI tests don't exercise the real `nfl_data_py` API surface. Eight ingest/feature drifts had to be patched live during Plan 3a's first real-data pull:

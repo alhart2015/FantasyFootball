@@ -136,14 +136,17 @@ def trailing_n_share_in_group(
     Denominator: sum across all players in ``weekly_stats`` on the same team
     (over the same trailing-N windows).
 
-    Returns a frame keyed by ``gsis_id`` with column ``share_l<n>`` (``share_l4``
-    when n=4, the default).
+    Returns a frame keyed by ``(gsis_id, team)`` with column ``share_l<n>``
+    (``share_l4`` when n=4, the default). A player traded mid-window appears
+    once per team they played on; callers MUST join on ``(gsis_id, team)`` to
+    pick the share for the player's current team.
 
     The caller controls the share-group by pre-filtering ``weekly_stats``:
 
     - WR target_share among the team's WRs: filter input to ``position == WR``.
     - RB target_share among the team's pass-catchers: filter input to
-      ``position in {WR, RB, TE}``, then keep only the RB rows from the output.
+      ``position in {WR, RB, TE}``; the (gsis_id, team) join naturally
+      restricts to the depth-chart-current team.
     - RB rush_share among the team's RBs: filter input to ``position == RB``.
     """
     out_col = f"share_l{n}"
@@ -156,6 +159,7 @@ def trailing_n_share_in_group(
         return pd.DataFrame(
             {
                 "gsis_id": pd.array([], dtype=_PYARROW_STR),
+                "team": pd.array([], dtype=_PYARROW_STR),
                 out_col: pd.array([], dtype=float),
             }
         )
@@ -177,4 +181,4 @@ def trailing_n_share_in_group(
     merged[out_col] = (merged[value_col].astype(float) / merged["team_total"].astype(float)).where(
         merged["team_total"] > 0, 0.0
     )
-    return merged[["gsis_id", out_col]]
+    return merged[["gsis_id", "team", out_col]]
