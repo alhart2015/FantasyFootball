@@ -11,14 +11,28 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Final
 
+import msgpack
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import RidgeCV
 
 from projections.distributions import Distribution, ParametricGamma, ParametricNormal
-from projections.schemas import DistributionFamily, Position, Stat
+from projections.models.base import compute_code_hash
+from projections.schemas import (
+    _PYARROW_STR,
+    DistributionFamily,
+    Position,
+    ProjectionWeeklySchema,
+    Ruleset,
+    Stat,
+    WeeklyStatsSchema,
+    WrFeaturesSchema,
+)
+from projections.scoring import score_distribution
 
 _GAMMA_ALPHA_CLIP: Final[tuple[float, float]] = (0.01, 100.0)
 
@@ -115,18 +129,28 @@ class BaselineModel:
     # well-defined. Spec section 3.2 step 3.
     _GAMMA_MU_FLOOR: Final[float] = 1e-3
 
-    def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:
-        """Train one RidgeCV per target stat. See spec §3.1 for the pipeline."""
-        # Schema validation — defensive at the boundary even though our caller
-        # is supposed to have already validated.
-        from projections.schemas import WeeklyStatsSchema, WrFeaturesSchema
+    def _x_frame_with_bool_coercion(self, features: pd.DataFrame) -> pd.DataFrame:
+        """Select feature_columns (preserving order) and coerce bool to int8.
+        Caller decides NaN policy (fit drops; predict imputes).
+        """
+        x_cols = list(self.feature_columns)
+        x_frame = features[x_cols].copy()
+        for col in x_frame.columns:
+            if x_frame[col].dtype == bool:
+                x_frame[col] = x_frame[col].astype(np.int8)
+        return x_frame
 
+    def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:
+        """Train one RidgeCV per target stat. See spec section 3.1 for the
+        pipeline."""
+        # Schema validation -- defensive at the boundary even though our caller
+        # is supposed to have already validated.
         features = WrFeaturesSchema.validate(features)
         weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
 
         # Inner-join features with truth on (gsis_id, season, week). Players in
         # the depth chart who didn't actually play that week have no truth and
-        # are silently dropped — that's correct, the model only learns from
+        # are silently dropped -- that's correct, the model only learns from
         # players who played.
         ws = weekly_stats[weekly_stats["position"] == self.position.value].copy()
         joined = features.merge(
@@ -153,12 +177,7 @@ class BaselineModel:
         # Build feature matrix, persist column order. Drop rows with NaN in any
         # feature column at fit time (mostly week-1-of-season rows where
         # rolling features have no prior history).
-        x_cols = list(self.feature_columns)
-        feature_frame = joined[x_cols].copy()
-        # Coerce booleans to 0/1.
-        for col in feature_frame.columns:
-            if feature_frame[col].dtype == bool:
-                feature_frame[col] = feature_frame[col].astype(np.int8)
+        feature_frame = self._x_frame_with_bool_coercion(joined)
         # Persist medians BEFORE dropping NaN rows so predict-time imputation
         # uses the broadest possible signal.
         self.feature_means = feature_frame.median(skipna=True).astype(float)
@@ -194,12 +213,27 @@ class BaselineModel:
                 self.variance_params[stat] = {
                     "shape": _gamma_alpha_from_residuals(mu_hat=mu_hat, residuals=residuals)
                 }
-            else:  # pragma: no cover — only NORMAL/GAMMA configured today
+            else:  # pragma: no cover -- only NORMAL/GAMMA configured today
                 raise ValueError(f"Unsupported family {family} for stat {stat}")
 
         # Record the season range we trained on (post-dropna training set).
         trained_seasons = sorted(joined.loc[feature_frame.index, "season"].unique().tolist())
         self.train_seasons = (int(trained_seasons[0]), int(trained_seasons[-1]))
+
+        # Code hash over source files whose change should invalidate the
+        # artifact. Spec section 5.2 lists the canonical set.
+        repo_root = Path(__file__).resolve().parents[3]
+        tracked = [
+            repo_root / "src" / "projections" / "models" / "base.py",
+            repo_root / "src" / "projections" / "models" / "baseline.py",
+            repo_root / "src" / "projections" / "features" / "wr.py",
+            repo_root / "src" / "projections" / "features" / "_shared.py",
+            repo_root / "src" / "projections" / "features" / "_rolling.py",
+            repo_root / "src" / "projections" / "features" / "_opponent.py",
+            repo_root / "src" / "projections" / "scoring" / "score.py",
+            repo_root / "src" / "projections" / "scoring" / "score_distribution.py",
+        ]
+        self.code_hash = compute_code_hash(tracked)
 
     def _build_stat_distributions(self, features: pd.DataFrame) -> list[dict[Stat, Distribution]]:
         """Build per-row dicts of {Stat -> Distribution} from fitted regressors.
@@ -212,11 +246,7 @@ class BaselineModel:
             raise RuntimeError("Model is not fitted; call fit() before predict.")
 
         # Build feature matrix with same column order, impute, coerce bools.
-        x_cols = list(self.feature_columns)
-        x_frame = features[x_cols].copy()
-        for col in x_frame.columns:
-            if x_frame[col].dtype == bool:
-                x_frame[col] = x_frame[col].astype(np.int8)
+        x_frame = self._x_frame_with_bool_coercion(features)
         x_frame = x_frame.fillna(self.feature_means)
         x = x_frame.to_numpy(dtype=np.float64)
 
@@ -246,6 +276,79 @@ class BaselineModel:
                     raise ValueError(f"Unsupported family {family}")
             out.append(row)
         return out
+
+    @property
+    def model_id(self) -> str:
+        """Stable identifier of the form
+        ``"baseline:<position>:<8-char-code-hash>:<train-start>-<train-end>"``.
+
+        Undefined for unfitted models (raises RuntimeError); both ``code_hash``
+        and ``train_seasons`` are populated by ``fit()``.
+        """
+        if self.code_hash is None or self.train_seasons is None:
+            raise RuntimeError("model_id is undefined for unfitted models")
+        return (
+            f"baseline:{self.position.value.lower()}:{self.code_hash}"
+            f":{self.train_seasons[0]}-{self.train_seasons[1]}"
+        )
+
+    def predict_distribution(self, features: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
+        """Predict per-player-week fantasy-points distributions under
+        ``ruleset``. Returns a DataFrame validated against
+        ``ProjectionWeeklySchema``.
+        """
+        features = WrFeaturesSchema.validate(features)
+        if features.empty:
+            empty_cols = list(ProjectionWeeklySchema.to_schema().columns.keys())
+            return ProjectionWeeklySchema.validate(pd.DataFrame(columns=empty_cols))
+
+        stat_dists_per_row = self._build_stat_distributions(features)
+
+        # Compose each row's per-stat distribution dict into a fantasy-points
+        # SampledDistribution via score_distribution.
+        rows: list[dict[str, object]] = []
+        generated_at = datetime.now(UTC)
+        for (_idx, feat_row), stat_dists in zip(
+            features.reset_index(drop=True).iterrows(), stat_dists_per_row, strict=True
+        ):
+            points = score_distribution(stat_dists, ruleset, n_samples=10_000, seed=42)
+            family_blob = msgpack.packb(
+                {
+                    "samples_summary": {
+                        "n": len(points.samples),
+                        "mean": float(points.mean()),
+                    }
+                },
+                use_bin_type=True,
+            )
+            rows.append(
+                {
+                    "gsis_id": feat_row["gsis_id"],
+                    "season": int(feat_row["season"]),
+                    "week": int(feat_row["week"]),
+                    "position": self.position.value,
+                    "team": feat_row["team"],
+                    "opponent": feat_row["opponent"],
+                    "ruleset": ruleset.name,
+                    "family": DistributionFamily.SAMPLED.value,
+                    "params": family_blob,
+                    "mean": points.mean(),
+                    "p10": points.quantile(0.1),
+                    "p50": points.quantile(0.5),
+                    "p90": points.quantile(0.9),
+                    "model_id": self.model_id,
+                    "generated_at": pd.Timestamp(generated_at).as_unit("us"),
+                }
+            )
+
+        out = pd.DataFrame(rows)
+        # Coerce the string columns to pyarrow string per schema convention.
+        for col in ("gsis_id", "team", "opponent", "ruleset", "family", "model_id"):
+            out[col] = out[col].astype(_PYARROW_STR)
+        # Persist position as pyarrow string too -- ProjectionWeeklySchema
+        # declares Series[str] and pandera+coerce will error on object dtype.
+        out["position"] = out["position"].astype(_PYARROW_STR)
+        return ProjectionWeeklySchema.validate(out)
 
 
 def wr_baseline() -> BaselineModel:

@@ -8,7 +8,7 @@ from sklearn.linear_model import RidgeCV
 
 from projections.distributions.parametric import ParametricGamma, ParametricNormal
 from projections.models import wr_baseline
-from projections.schemas import DistributionFamily, Position, Stat
+from projections.schemas import DistributionFamily, Position, ProjectionWeeklySchema, Ruleset, Stat
 
 
 def test_wr_baseline_factory_returns_unfitted_model() -> None:
@@ -171,3 +171,46 @@ def test_build_stat_distributions_clamps_gamma_mu() -> None:
     assert isinstance(rec_dist, ParametricGamma)
     # mean = shape * scale > 0 (clamped, not negative)
     assert rec_dist.mean() > 0
+
+
+def test_predict_distribution_returns_projection_weekly_schema_valid_frame(
+    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+) -> None:
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    week_features = baseline_features[
+        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    ]
+    out = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
+    # Schema validates without raising.
+    ProjectionWeeklySchema.validate(out)
+    assert len(out) == len(week_features)
+    # Identity columns preserved.
+    assert set(out["gsis_id"].astype(str)) == set(week_features["gsis_id"].astype(str))
+    # ruleset / model_id / generated_at populated.
+    assert (out["ruleset"] == "ESPN_PPR").all()
+    assert out["model_id"].str.startswith("baseline:wr:").all()
+
+
+def test_predict_distribution_empty_input_returns_empty_schema_valid_frame(
+    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+) -> None:
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    empty = baseline_features.iloc[0:0]
+    out = model.predict_distribution(empty, ruleset=Ruleset.espn_ppr())
+    assert out.empty
+    ProjectionWeeklySchema.validate(out)
+
+
+def test_predict_distribution_p10_le_p50_le_p90(
+    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+) -> None:
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    week_features = baseline_features[
+        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    ]
+    out = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
+    assert (out["p10"] <= out["p50"]).all()
+    assert (out["p50"] <= out["p90"]).all()
