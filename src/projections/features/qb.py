@@ -10,7 +10,7 @@ from typing import Final
 import pandas as pd
 
 from projections.features._opponent import opp_allowed_fppg
-from projections.features._rolling import last_n_per_group
+from projections.features._rolling import latest_ngs_snapshot, trailing_4_per_player
 from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
 from projections.schemas import (
     _PYARROW_STR,
@@ -32,40 +32,6 @@ _ROLLING_ZERO_FILL_COLS: tuple[str, ...] = (
     "rushing_attempts_per_game_l4",
     "rushing_yards_per_game_l4",
 )
-
-
-def _trailing_4_per_player(weekly_stats: pd.DataFrame, value_col: str) -> pd.DataFrame:
-    """Per-player mean of `value_col` over the trailing 4 games."""
-    if weekly_stats.empty:
-        return pd.DataFrame(
-            {
-                "gsis_id": pd.array([], dtype=_PYARROW_STR),
-                "mean_l4": pd.array([], dtype=float),
-            }
-        )
-    last4 = last_n_per_group(
-        weekly_stats,
-        group_cols=["gsis_id"],
-        sort_cols=["season", "week"],
-        n=4,
-    )
-    return (
-        last4.groupby("gsis_id", as_index=False, observed=True)[value_col]
-        .mean()
-        .rename(columns={value_col: "mean_l4"})
-    )
-
-
-def _latest_ngs_snapshot(ngs: pd.DataFrame) -> pd.DataFrame:
-    """Per-player most-recent NGS row (assumes ngs already prior-filtered)."""
-    if ngs.empty:
-        return pd.DataFrame()
-    return (
-        ngs.sort_values(["season", "week"])
-        .groupby("gsis_id", as_index=False, observed=True)
-        .tail(1)
-        .copy()
-    )
 
 
 def build_qb_features(
@@ -96,25 +62,25 @@ def build_qb_features(
     sc_qb = sc[sc["position"] == Position.QB.value].copy()
 
     # --- Per-player rolling features --------------------------------------
-    pass_att_l4 = _trailing_4_per_player(ws_qb, Stat.PASSING_ATTEMPTS.value).rename(
+    pass_att_l4 = trailing_4_per_player(ws_qb, Stat.PASSING_ATTEMPTS.value).rename(
         columns={"mean_l4": "pass_attempts_per_game_l4"}
     )
-    pass_yd_l4 = _trailing_4_per_player(ws_qb, Stat.PASSING_YARDS.value).rename(
+    pass_yd_l4 = trailing_4_per_player(ws_qb, Stat.PASSING_YARDS.value).rename(
         columns={"mean_l4": "passing_yards_per_game_l4"}
     )
-    pass_td_l4 = _trailing_4_per_player(ws_qb, Stat.PASSING_TDS.value).rename(
+    pass_td_l4 = trailing_4_per_player(ws_qb, Stat.PASSING_TDS.value).rename(
         columns={"mean_l4": "passing_tds_per_game_l4"}
     )
-    int_l4 = _trailing_4_per_player(ws_qb, Stat.INTERCEPTIONS.value).rename(
+    int_l4 = trailing_4_per_player(ws_qb, Stat.INTERCEPTIONS.value).rename(
         columns={"mean_l4": "interceptions_per_game_l4"}
     )
-    sacks_l4 = _trailing_4_per_player(ws_qb, Stat.SACKS.value).rename(
+    sacks_l4 = trailing_4_per_player(ws_qb, Stat.SACKS.value).rename(
         columns={"mean_l4": "sacks_per_game_l4"}
     )
-    rush_att_l4 = _trailing_4_per_player(ws_qb, Stat.CARRIES.value).rename(
+    rush_att_l4 = trailing_4_per_player(ws_qb, Stat.CARRIES.value).rename(
         columns={"mean_l4": "rushing_attempts_per_game_l4"}
     )
-    rush_yd_l4 = _trailing_4_per_player(ws_qb, Stat.RUSHING_YARDS.value).rename(
+    rush_yd_l4 = trailing_4_per_player(ws_qb, Stat.RUSHING_YARDS.value).rename(
         columns={"mean_l4": "rushing_yards_per_game_l4"}
     )
 
@@ -135,12 +101,12 @@ def build_qb_features(
             .rename(columns={Stat.PASSING_YARDS.value: "passing_yards_per_game_std"})
         )
 
-    snap_l4 = _trailing_4_per_player(sc_qb, Stat.OFFENSE_PCT.value).rename(
+    snap_l4 = trailing_4_per_player(sc_qb, Stat.OFFENSE_PCT.value).rename(
         columns={"mean_l4": "snap_pct_l4"}
     )
 
     # --- NGS latest snapshot per player → *_std columns -------------------
-    ngs_latest = _latest_ngs_snapshot(ngs)
+    ngs_latest = latest_ngs_snapshot(ngs)
     ngs_std_cols = (
         "aggressiveness_std",
         "completion_percentage_above_expectation_std",

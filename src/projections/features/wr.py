@@ -10,7 +10,11 @@ from typing import Final
 import pandas as pd
 
 from projections.features._opponent import opp_allowed_fppg
-from projections.features._rolling import last_n_per_group, trailing_n_share_in_group
+from projections.features._rolling import (
+    latest_ngs_snapshot,
+    trailing_4_per_player,
+    trailing_n_share_in_group,
+)
 from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
 from projections.schemas import (
     _PYARROW_STR,
@@ -34,44 +38,6 @@ _ROLLING_ZERO_FILL_COLS: tuple[str, ...] = (
     "rushing_yards_per_game_l4",
     "target_share_l4",
 )
-
-
-def _trailing_4_per_player(weekly_stats: pd.DataFrame, value_col: str) -> pd.DataFrame:
-    """Return a per-player frame with `mean_l4` = mean of `value_col` over the
-    trailing 4 games. Players with 0 prior games are simply absent — the caller
-    fills their value with 0.0 after the merge."""
-    if weekly_stats.empty:
-        return pd.DataFrame(
-            {
-                "gsis_id": pd.array([], dtype=_PYARROW_STR),
-                "mean_l4": pd.array([], dtype=float),
-            }
-        )
-    last4 = last_n_per_group(
-        weekly_stats,
-        group_cols=["gsis_id"],
-        sort_cols=["season", "week"],
-        n=4,
-    )
-    return (
-        last4.groupby("gsis_id", as_index=False, observed=True)[value_col]
-        .mean()
-        .rename(columns={value_col: "mean_l4"})
-    )
-
-
-def _latest_ngs_snapshot(ngs: pd.DataFrame) -> pd.DataFrame:
-    """Per-player most-recent NGS snapshot (the season-to-date columns the WR
-    builder propagates as `*_std` features). `ngs` is assumed already filtered
-    to leakage-safe rows by the caller."""
-    if ngs.empty:
-        return pd.DataFrame()
-    return (
-        ngs.sort_values(["season", "week"])
-        .groupby("gsis_id", as_index=False, observed=True)
-        .tail(1)
-        .copy()
-    )
 
 
 def build_wr_features(
@@ -109,22 +75,22 @@ def build_wr_features(
     sc_wr = sc[sc["position"] == Position.WR.value].copy()
 
     # --- Per-player rolling features --------------------------------------
-    targets_l4 = _trailing_4_per_player(ws_wr, Stat.TARGETS.value).rename(
+    targets_l4 = trailing_4_per_player(ws_wr, Stat.TARGETS.value).rename(
         columns={"mean_l4": "targets_per_game_l4"}
     )
-    rec_l4 = _trailing_4_per_player(ws_wr, Stat.RECEPTIONS.value).rename(
+    rec_l4 = trailing_4_per_player(ws_wr, Stat.RECEPTIONS.value).rename(
         columns={"mean_l4": "receptions_per_game_l4"}
     )
-    rec_yd_l4 = _trailing_4_per_player(ws_wr, Stat.RECEIVING_YARDS.value).rename(
+    rec_yd_l4 = trailing_4_per_player(ws_wr, Stat.RECEIVING_YARDS.value).rename(
         columns={"mean_l4": "receiving_yards_per_game_l4"}
     )
-    rec_td_l4 = _trailing_4_per_player(ws_wr, Stat.RECEIVING_TDS.value).rename(
+    rec_td_l4 = trailing_4_per_player(ws_wr, Stat.RECEIVING_TDS.value).rename(
         columns={"mean_l4": "receiving_tds_per_game_l4"}
     )
-    rush_att_l4 = _trailing_4_per_player(ws_wr, Stat.CARRIES.value).rename(
+    rush_att_l4 = trailing_4_per_player(ws_wr, Stat.CARRIES.value).rename(
         columns={"mean_l4": "rushing_attempts_per_game_l4"}
     )
-    rush_yd_l4 = _trailing_4_per_player(ws_wr, Stat.RUSHING_YARDS.value).rename(
+    rush_yd_l4 = trailing_4_per_player(ws_wr, Stat.RUSHING_YARDS.value).rename(
         columns={"mean_l4": "rushing_yards_per_game_l4"}
     )
 
@@ -151,12 +117,12 @@ def build_wr_features(
         ws_wr, value_col=Stat.RECEIVING_AIR_YARDS.value
     ).rename(columns={"share_l4": "air_yards_share_l4"})
 
-    snap_l4 = _trailing_4_per_player(sc_wr, Stat.OFFENSE_PCT.value).rename(
+    snap_l4 = trailing_4_per_player(sc_wr, Stat.OFFENSE_PCT.value).rename(
         columns={"mean_l4": "snap_pct_l4"}
     )
 
     # --- NGS latest snapshot per player → *_std columns -------------------
-    ngs_latest = _latest_ngs_snapshot(ngs)
+    ngs_latest = latest_ngs_snapshot(ngs)
     ngs_std_cols = (
         "avg_separation_std",
         "avg_intended_air_yards_std",

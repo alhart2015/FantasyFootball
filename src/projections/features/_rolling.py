@@ -77,6 +77,53 @@ def season_to_date_mean(
     return result
 
 
+def trailing_4_per_player(weekly_stats: pd.DataFrame, value_col: str) -> pd.DataFrame:
+    """Per-player frame with ``mean_l4`` = mean of ``value_col`` over the
+    trailing 4 games. Players with 0 prior games are simply absent — the
+    caller fills their value with 0.0 after the merge.
+
+    Hardcoded N=4 because every position builder uses the same window
+    today; if that ever needs to vary, change the signature and add an
+    ``n`` keyword (call sites also depend on the literal ``mean_l4``
+    column name in their ``.rename(columns=...)`` calls)."""
+    if weekly_stats.empty:
+        # Local import avoids any future cycle if schemas grows to import
+        # from _rolling — schemas does not currently import from here.
+        from projections.schemas import _PYARROW_STR
+
+        return pd.DataFrame(
+            {
+                "gsis_id": pd.array([], dtype=_PYARROW_STR),
+                "mean_l4": pd.array([], dtype=float),
+            }
+        )
+    last4 = last_n_per_group(
+        weekly_stats,
+        group_cols=["gsis_id"],
+        sort_cols=["season", "week"],
+        n=4,
+    )
+    return (
+        last4.groupby("gsis_id", as_index=False, observed=True)[value_col]
+        .mean()
+        .rename(columns={value_col: "mean_l4"})
+    )
+
+
+def latest_ngs_snapshot(ngs: pd.DataFrame) -> pd.DataFrame:
+    """Per-player most-recent NGS row. The caller is responsible for
+    filtering ``ngs`` to leakage-safe rows before calling — this helper
+    just picks the latest (season, week) per ``gsis_id``."""
+    if ngs.empty:
+        return pd.DataFrame()
+    return (
+        ngs.sort_values(["season", "week"])
+        .groupby("gsis_id", as_index=False, observed=True)
+        .tail(1)
+        .copy()
+    )
+
+
 def trailing_n_share_in_group(
     weekly_stats: pd.DataFrame,
     *,

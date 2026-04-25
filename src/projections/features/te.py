@@ -5,7 +5,11 @@ from __future__ import annotations
 import pandas as pd
 
 from projections.features._opponent import opp_allowed_fppg
-from projections.features._rolling import last_n_per_group, trailing_n_share_in_group
+from projections.features._rolling import (
+    latest_ngs_snapshot,
+    trailing_4_per_player,
+    trailing_n_share_in_group,
+)
 from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
 from projections.schemas import (
     _PYARROW_STR,
@@ -29,38 +33,6 @@ _ROLLING_ZERO_FILL_COLS: tuple[str, ...] = (
     "receiving_yards_per_game_l4",
     "receiving_tds_per_game_l4",
 )
-
-
-def _trailing_4_per_player(weekly_stats: pd.DataFrame, value_col: str) -> pd.DataFrame:
-    if weekly_stats.empty:
-        return pd.DataFrame(
-            {
-                "gsis_id": pd.array([], dtype=_PYARROW_STR),
-                "mean_l4": pd.array([], dtype=float),
-            }
-        )
-    last4 = last_n_per_group(
-        weekly_stats,
-        group_cols=["gsis_id"],
-        sort_cols=["season", "week"],
-        n=4,
-    )
-    return (
-        last4.groupby("gsis_id", as_index=False, observed=True)[value_col]
-        .mean()
-        .rename(columns={value_col: "mean_l4"})
-    )
-
-
-def _latest_ngs_snapshot(ngs: pd.DataFrame) -> pd.DataFrame:
-    if ngs.empty:
-        return pd.DataFrame()
-    return (
-        ngs.sort_values(["season", "week"])
-        .groupby("gsis_id", as_index=False, observed=True)
-        .tail(1)
-        .copy()
-    )
 
 
 def build_te_features(
@@ -90,16 +62,16 @@ def build_te_features(
     ws_pass_catchers = ws[ws["position"].isin(_PASS_CATCHING_POSITIONS)].copy()
 
     # Rolling per-player receiving features (TE rows only)
-    targets_l4 = _trailing_4_per_player(ws_te, Stat.TARGETS.value).rename(
+    targets_l4 = trailing_4_per_player(ws_te, Stat.TARGETS.value).rename(
         columns={"mean_l4": "targets_per_game_l4"}
     )
-    rec_l4 = _trailing_4_per_player(ws_te, Stat.RECEPTIONS.value).rename(
+    rec_l4 = trailing_4_per_player(ws_te, Stat.RECEPTIONS.value).rename(
         columns={"mean_l4": "receptions_per_game_l4"}
     )
-    rec_yd_l4 = _trailing_4_per_player(ws_te, Stat.RECEIVING_YARDS.value).rename(
+    rec_yd_l4 = trailing_4_per_player(ws_te, Stat.RECEIVING_YARDS.value).rename(
         columns={"mean_l4": "receiving_yards_per_game_l4"}
     )
-    rec_td_l4 = _trailing_4_per_player(ws_te, Stat.RECEIVING_TDS.value).rename(
+    rec_td_l4 = trailing_4_per_player(ws_te, Stat.RECEIVING_TDS.value).rename(
         columns={"mean_l4": "receiving_tds_per_game_l4"}
     )
 
@@ -126,12 +98,12 @@ def build_te_features(
             .rename(columns={Stat.TARGETS.value: "targets_per_game_std"})
         )
 
-    snap_l4 = _trailing_4_per_player(sc_te, Stat.OFFENSE_PCT.value).rename(
+    snap_l4 = trailing_4_per_player(sc_te, Stat.OFFENSE_PCT.value).rename(
         columns={"mean_l4": "snap_pct_l4"}
     )
 
     # NGS receiving latest snapshot
-    ngs_latest = _latest_ngs_snapshot(ngs)
+    ngs_latest = latest_ngs_snapshot(ngs)
     ngs_std_cols = (
         "avg_separation_std",
         "avg_intended_air_yards_std",
