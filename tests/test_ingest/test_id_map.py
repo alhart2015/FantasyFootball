@@ -26,7 +26,12 @@ def test_build_id_map_writes_validated_parquet(
 
     df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
     IdMapSchema.validate(df)  # raises if anything is off
-    assert set(df["gsis_id"]) == {"00-0036322", "00-0034857", "00-0034796"}
+    assert set(df["gsis_id"]) == {
+        "00-0036322",
+        "00-0034857",
+        "00-0034796",
+        "00-0030506",
+    }
 
 
 def test_build_id_map_renames_name_column(
@@ -63,7 +68,7 @@ def test_build_id_map_drops_rows_without_gsis_id(
     build_id_map(tmp_path)
     df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
     assert df["gsis_id"].notna().all()
-    assert len(df) == 3
+    assert len(df) == 4
 
 
 def test_build_id_map_filters_unsupported_positions(
@@ -85,4 +90,4 @@ def test_build_id_map_filters_unsupported_positions(
     build_id_map(tmp_path)
     df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
     assert "00-0099999" not in df["gsis_id"].tolist()
-    assert len(df) == 3
+    assert len(df) == 4

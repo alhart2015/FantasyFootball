@@ -16,75 +16,91 @@ import pytest
 
 @pytest.fixture
 def fake_id_map_df() -> pd.DataFrame:
-    """Mimics `nfl_data_py.import_ids()` — a row per player with cross-platform IDs."""
+    """Mimics `nfl_data_py.import_ids()` — a row per player with cross-platform IDs.
+
+    Kelce (TE/KC) is included so the smoke test can exercise the TE feature
+    builder end-to-end through the snap_counts pfr_id -> gsis_id join.
+    """
     return pd.DataFrame(
         {
-            "gsis_id": ["00-0036322", "00-0034857", "00-0034796"],
-            "espn_id": ["4262921", "3915511", "4035687"],
-            "sleeper_id": ["6794", "5849", "5045"],
-            "pfr_id": ["JeffJu00", "MahoPa00", "BarkSa00"],
-            "name": ["Justin Jefferson", "Patrick Mahomes", "Saquon Barkley"],
-            "position": ["WR", "QB", "RB"],
-            "team": ["MIN", "KC", "PHI"],
+            "gsis_id": ["00-0036322", "00-0034857", "00-0034796", "00-0030506"],
+            "espn_id": ["4262921", "3915511", "4035687", "15847"],
+            "sleeper_id": ["6794", "5849", "5045", "1466"],
+            "pfr_id": ["JeffJu00", "MahoPa00", "BarkSa00", "KelcTr00"],
+            "name": [
+                "Justin Jefferson",
+                "Patrick Mahomes",
+                "Saquon Barkley",
+                "Travis Kelce",
+            ],
+            "position": ["WR", "QB", "RB", "TE"],
+            "team": ["MIN", "KC", "PHI", "KC"],
         }
     )
 
 
 @pytest.fixture
 def fake_weekly_df() -> pd.DataFrame:
-    """Mimics `nfl_data_py.import_weekly_data([2024])` — 2 player-weeks."""
+    """Mimics `nfl_data_py.import_weekly_data([2024])` — 3 player-weeks.
+
+    Kelce (TE/KC) is included so the smoke test can exercise the TE feature
+    builder against a non-empty weekly stats slice.
+    """
     return pd.DataFrame(
         {
-            "player_id": ["00-0036322", "00-0034857"],
-            "season": [2024, 2024],
-            "week": [3, 3],
-            "position": ["WR", "QB"],
-            "recent_team": ["MIN", "KC"],
-            "opponent_team": ["HOU", "ATL"],
-            "passing_yards": [0.0, 286.0],
-            "passing_tds": [0, 2],
-            "interceptions": [0, 1],
-            "attempts": [0, 38],
-            "completions": [0, 24],
-            "sacks": [0, 2],
-            "rushing_yards": [0.0, 12.0],
-            "rushing_tds": [0, 0],
-            "carries": [0, 3],
-            "receptions": [9, 0],
-            "receiving_yards": [110.0, 0.0],
-            "receiving_tds": [1, 0],
-            "receiving_air_yards": [145.0, 0.0],
-            "targets": [12, 0],
-            "fumbles_lost": [0, 0],
+            "player_id": ["00-0036322", "00-0034857", "00-0030506"],
+            "season": [2024, 2024, 2024],
+            "week": [3, 3, 3],
+            "position": ["WR", "QB", "TE"],
+            "recent_team": ["MIN", "KC", "KC"],
+            "opponent_team": ["HOU", "ATL", "ATL"],
+            "passing_yards": [0.0, 286.0, 0.0],
+            "passing_tds": [0, 2, 0],
+            "interceptions": [0, 1, 0],
+            "attempts": [0, 38, 0],
+            "completions": [0, 24, 0],
+            "sacks": [0, 2, 0],
+            "rushing_yards": [0.0, 12.0, 0.0],
+            "rushing_tds": [0, 0, 0],
+            "carries": [0, 3, 0],
+            "receptions": [9, 0, 5],
+            "receiving_yards": [110.0, 0.0, 58.0],
+            "receiving_tds": [1, 0, 1],
+            "receiving_air_yards": [145.0, 0.0, 70.0],
+            "targets": [12, 0, 7],
+            "fumbles_lost": [0, 0, 0],
         }
     )
 
 
 @pytest.fixture
 def fake_schedules_df() -> pd.DataFrame:
-    """Mimics `nfl_data_py.import_schedules([2024])` — 2 games for week 3.
+    """Mimics `nfl_data_py.import_schedules([2024])` — 3 games for week 3.
 
     Raw column names (before our _RENAME): nfl_data_py uses `gameday` (date)
     and `gametime` (HH:MM string) for kickoff; the ingest module combines them
     into a UTC `kickoff` timestamp.
+
+    A PHI@TB game is included so the smoke test's RB builder (Barkley) has a
+    real schedule row for the game-environment join.
     """
     return pd.DataFrame(
         {
-            "game_id": ["2024_03_KC_ATL", "2024_03_MIN_HOU"],
-            "season": [2024, 2024],
-            "week": [3, 3],
-            "home_team": ["ATL", "HOU"],
-            "away_team": ["KC", "MIN"],
-            "gameday": ["2024-09-22", "2024-09-22"],
-            "gametime": ["20:20", "13:00"],
-            "spread_line": [3.5, -2.5],
-            "total_line": [48.5, 44.0],
-            "home_moneyline": [155, -125],
-            "away_moneyline": [-180, 105],
-            "surface": ["fieldturf", "matrixturf"],
-            "roof": ["dome", "dome"],
-            "temp": [72, 72],
-            "wind": [0, 0],
+            "game_id": ["2024_03_KC_ATL", "2024_03_MIN_HOU", "2024_03_PHI_TB"],
+            "season": [2024, 2024, 2024],
+            "week": [3, 3, 3],
+            "home_team": ["ATL", "HOU", "TB"],
+            "away_team": ["KC", "MIN", "PHI"],
+            "gameday": ["2024-09-22", "2024-09-22", "2024-09-22"],
+            "gametime": ["20:20", "13:00", "13:00"],
+            "spread_line": [3.5, -2.5, 3.5],
+            "total_line": [48.5, 44.0, 45.5],
+            "home_moneyline": [155, -125, 150],
+            "away_moneyline": [-180, 105, -175],
+            "surface": ["fieldturf", "matrixturf", "grass"],
+            "roof": ["dome", "dome", "outdoors"],
+            "temp": [72, 72, 85],
+            "wind": [0, 0, 6],
         }
     )
 
@@ -101,48 +117,60 @@ def fake_snap_counts_df() -> pd.DataFrame:
     """
     return pd.DataFrame(
         {
-            "game_id": ["2024_03_KC_ATL", "2024_03_MIN_HOU"],
-            "season": [2024, 2024],
-            "week": [3, 3],
-            "player": ["Patrick Mahomes", "Justin Jefferson"],
-            "position": ["QB", "WR"],
-            "team": ["KC", "MIN"],
-            "opponent": ["ATL", "HOU"],
-            "offense_snaps": [71, 62],
-            "offense_pct": [1.0, 0.95],
-            "defense_snaps": [0, 0],
-            "defense_pct": [0.0, 0.0],
-            "st_snaps": [0, 3],
-            "st_pct": [0.0, 0.10],
-            "pfr_player_id": ["MahoPa00", "JeffJu00"],
+            "game_id": [
+                "2024_03_KC_ATL",
+                "2024_03_MIN_HOU",
+                "2024_03_KC_ATL",
+            ],
+            "season": [2024, 2024, 2024],
+            "week": [3, 3, 3],
+            "player": ["Patrick Mahomes", "Justin Jefferson", "Travis Kelce"],
+            "position": ["QB", "WR", "TE"],
+            "team": ["KC", "MIN", "KC"],
+            "opponent": ["ATL", "HOU", "ATL"],
+            "offense_snaps": [71, 62, 58],
+            "offense_pct": [1.0, 0.95, 0.89],
+            "defense_snaps": [0, 0, 0],
+            "defense_pct": [0.0, 0.0, 0.0],
+            "st_snaps": [0, 3, 0],
+            "st_pct": [0.0, 0.10, 0.0],
+            "pfr_player_id": ["MahoPa00", "JeffJu00", "KelcTr00"],
         }
     )
 
 
 @pytest.fixture
 def fake_depth_charts_df() -> pd.DataFrame:
-    """Mimics `nfl_data_py.import_depth_charts([2024])` — 3 player-weeks.
+    """Mimics `nfl_data_py.import_depth_charts([2024])` — 4 player-weeks.
 
     Raw column names: `club_code` is the team (renamed to `team`); `depth_team`
     is the raw slot label (e.g., 'WR1', 'LWR'); `depth_position` may already
     be a numeric rank — the ingest module prefers `depth_position` if present
     and otherwise parses the trailing digit from `depth_team`.
+
+    Kelce (TE/KC) is included so the smoke test can exercise the TE feature
+    builder end-to-end.
     """
     return pd.DataFrame(
         {
-            "season": [2024, 2024, 2024],
-            "club_code": ["MIN", "KC", "PHI"],
-            "week": [3, 3, 3],
-            "depth_team": ["WR1", "QB1", "RB1"],
-            "last_name": ["Jefferson", "Mahomes", "Barkley"],
-            "first_name": ["Justin", "Patrick", "Saquon"],
-            "formation": ["Offense", "Offense", "Offense"],
-            "gsis_id": ["00-0036322", "00-0034857", "00-0034796"],
-            "jersey_number": [18, 15, 26],
-            "position": ["WR", "QB", "RB"],
-            "elias_id": ["JEF845899", "MAH335103", "BAR123456"],
-            "depth_position": [1, 1, 1],
-            "football_name": ["Justin Jefferson", "Patrick Mahomes", "Saquon Barkley"],
+            "season": [2024, 2024, 2024, 2024],
+            "club_code": ["MIN", "KC", "PHI", "KC"],
+            "week": [3, 3, 3, 3],
+            "depth_team": ["WR1", "QB1", "RB1", "TE1"],
+            "last_name": ["Jefferson", "Mahomes", "Barkley", "Kelce"],
+            "first_name": ["Justin", "Patrick", "Saquon", "Travis"],
+            "formation": ["Offense", "Offense", "Offense", "Offense"],
+            "gsis_id": ["00-0036322", "00-0034857", "00-0034796", "00-0030506"],
+            "jersey_number": [18, 15, 26, 87],
+            "position": ["WR", "QB", "RB", "TE"],
+            "elias_id": ["JEF845899", "MAH335103", "BAR123456", "KEL235109"],
+            "depth_position": [1, 1, 1, 1],
+            "football_name": [
+                "Justin Jefferson",
+                "Patrick Mahomes",
+                "Saquon Barkley",
+                "Travis Kelce",
+            ],
         }
     )
 

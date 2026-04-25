@@ -27,7 +27,12 @@ def test_refresh_depth_charts_writes_partition(
 
     df = read_partition(tmp_path / "raw", "depth_charts", season=2024)
     DepthChartsSchema.validate(df)
-    assert set(df["gsis_id"]) == {"00-0036322", "00-0034857", "00-0034796"}
+    assert set(df["gsis_id"]) == {
+        "00-0036322",
+        "00-0034857",
+        "00-0034796",
+        "00-0030506",
+    }
 
 
 def test_refresh_depth_charts_renames_club_code_to_team(
@@ -93,7 +98,7 @@ def test_refresh_depth_charts_idempotent(
     refresh_depth_charts(tmp_path, seasons=[2024])
     refresh_depth_charts(tmp_path, seasons=[2024])
     df = read_partition(tmp_path / "raw", "depth_charts", season=2024)
-    assert len(df) == 3
+    assert len(df) == 4
 
 
 # --- _parse_depth_rank unit tests ---
