@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from projections.models import wr_baseline
+from projections.schemas import Stat
 
 
 def test_baseline_fit_does_not_use_post_as_of_week_data(
@@ -38,6 +39,8 @@ def test_baseline_fit_does_not_use_post_as_of_week_data(
     ws_mut.loc[mask, "receiving_yards"] = 0.0
     ws_mut.loc[mask, "receiving_tds"] = 0
     ws_mut.loc[mask, "targets"] = 0
+    ws_mut.loc[mask, "rushing_yards"] = 999.0
+    ws_mut.loc[mask, "rushing_tds"] = 9
 
     # Restrict feature input to rows with week <= 7 so neither model sees the
     # mutated truth at training time -- that's the whole leakage premise: we
@@ -61,3 +64,14 @@ def test_baseline_fit_does_not_use_post_as_of_week_data(
             err_msg=f"Leakage detected on stat {stat}",
         )
         assert model_b.ridges[stat].alpha_ == model_c.ridges[stat].alpha_
+
+    # Control: more training data SHOULD change coefficients. Without this
+    # assertion, model_b == model_c is satisfied by the pathological case
+    # where fit() always returns zero coefficients regardless of input.
+    # We pick RECEPTIONS (the strongest signal in the fixture) for the check.
+    receptions_coef_a = model_a.ridges[Stat.RECEPTIONS].coef_
+    receptions_coef_b = model_b.ridges[Stat.RECEPTIONS].coef_
+    assert not np.array_equal(receptions_coef_a, receptions_coef_b), (
+        "Sanity check: full-fixture fit and week<=7 fit should produce "
+        "different coefficients on RECEPTIONS"
+    )
