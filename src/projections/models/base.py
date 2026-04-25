@@ -8,6 +8,8 @@ the codebase needs isinstance() against Model (cf. Distribution which does).
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Protocol
 
@@ -63,3 +65,19 @@ class Model(Protocol):
         BaselineModel implements this as a regular @classmethod and structural
         matching covers the contract."""
         ...
+
+
+def compute_code_hash(paths: Iterable[Path]) -> str:
+    """SHA-256 (first 8 hex chars) of the concatenated content of ``paths``.
+
+    Used as the ``code_hash`` component of every model_id so we can detect when
+    a model artifact is stale relative to the current source.
+
+    Order-independent: paths are sorted by their string representation before
+    hashing so callers don't have to maintain a canonical order.
+    """
+    sorted_paths = sorted(paths, key=str)
+    hasher = hashlib.sha256()
+    for path in sorted_paths:
+        hasher.update(path.read_bytes())
+    return hasher.hexdigest()[:8]
