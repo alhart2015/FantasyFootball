@@ -140,3 +140,28 @@ def test_refresh_weekly_stats_persists_new_columns(
     assert int(qb_row["carries"]) == 3
     assert int(qb_row["targets"]) == 0
     assert float(qb_row["receiving_air_yards"]) == 0.0
+
+
+def test_refresh_weekly_stats_persists_qb_columns(
+    tmp_path: Path,
+    fake_weekly_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """attempts, completions, sacks must round-trip through ingest."""
+    monkeypatch.setattr(
+        "projections.ingest.weekly_stats._fetch_raw_weekly",
+        lambda seasons: fake_weekly_df,
+    )
+    refresh_weekly_stats(tmp_path, seasons=[2024])
+    df = read_partition(tmp_path / "raw", "weekly_stats", season=2024)
+    assert "attempts" in df.columns
+    assert "completions" in df.columns
+    assert "sacks" in df.columns
+    qb_row = df[df["gsis_id"] == "00-0034857"].iloc[0]
+    assert int(qb_row["attempts"]) == 38
+    assert int(qb_row["completions"]) == 24
+    assert int(qb_row["sacks"]) == 2
+    wr_row = df[df["gsis_id"] == "00-0036322"].iloc[0]
+    assert int(wr_row["attempts"]) == 0
+    assert int(wr_row["completions"]) == 0
+    assert int(wr_row["sacks"]) == 0

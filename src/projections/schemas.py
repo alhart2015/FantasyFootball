@@ -129,6 +129,9 @@ class Stat(StrEnum):
 
     PASSING_YARDS = "passing_yards"
     PASSING_TDS = "passing_tds"
+    PASSING_ATTEMPTS = "attempts"
+    COMPLETIONS = "completions"
+    SACKS = "sacks"
     INTERCEPTIONS = "interceptions"
     PASSING_2PT = "passing_2pt_conversions"
     RUSHING_YARDS = "rushing_yards"
@@ -233,6 +236,9 @@ class WeeklyStatsSchema(pa.DataFrameModel):
     passing_yards: Series[float] = pa.Field(ge=-100, le=800)
     passing_tds: Series[int] = pa.Field(ge=0, le=15)
     interceptions: Series[int] = pa.Field(ge=0, le=15)
+    attempts: Series[int] = pa.Field(ge=0, le=70)
+    completions: Series[int] = pa.Field(ge=0, le=60)
+    sacks: Series[int] = pa.Field(ge=0, le=15)
     rushing_yards: Series[float] = pa.Field(ge=-50, le=400)
     rushing_tds: Series[int] = pa.Field(ge=0, le=10)
     carries: Series[int] = pa.Field(ge=0, le=50)
