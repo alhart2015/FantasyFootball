@@ -10,7 +10,7 @@ from typing import Final
 import pandas as pd
 
 from projections.features._opponent import opp_allowed_fppg
-from projections.features._rolling import last_n_per_group
+from projections.features._rolling import last_n_per_group, trailing_n_share_in_group
 from projections.schemas import (
     _PYARROW_STR,
     Position,
@@ -65,41 +65,6 @@ def _trailing_4_per_player(weekly_stats: pd.DataFrame, value_col: str) -> pd.Dat
         .mean()
         .rename(columns={value_col: "mean_l4"})
     )
-
-
-def _trailing_4_share_per_team(weekly_stats: pd.DataFrame, value_col: str) -> pd.DataFrame:
-    """Trailing-4 player share of `value_col` within their team's WR group.
-
-    For each player, we sum `value_col` over their last 4 games. The team total
-    is the sum of those per-player trailing-4 sums across all WRs on the team.
-    The share is per-player-sum / team-sum (0 if team-sum is 0).
-    """
-    if weekly_stats.empty:
-        return pd.DataFrame(
-            {
-                "gsis_id": pd.array([], dtype=_PYARROW_STR),
-                "share_l4": pd.array([], dtype=float),
-            }
-        )
-    last4_player = last_n_per_group(
-        weekly_stats,
-        group_cols=["gsis_id"],
-        sort_cols=["season", "week"],
-        n=4,
-    )
-    player_sum = last4_player.groupby(["gsis_id", "team"], as_index=False, observed=True)[
-        value_col
-    ].sum()
-    team_sum = (
-        player_sum.groupby("team", as_index=False, observed=True)[value_col]
-        .sum()
-        .rename(columns={value_col: "team_total"})
-    )
-    merged = player_sum.merge(team_sum, on="team", how="left")
-    merged["share_l4"] = (
-        merged[value_col].astype(float) / merged["team_total"].astype(float)
-    ).where(merged["team_total"] > 0, 0.0)
-    return merged[["gsis_id", "share_l4"]]
 
 
 def _latest_ngs_snapshot(ngs: pd.DataFrame) -> pd.DataFrame:
@@ -246,12 +211,12 @@ def build_wr_features(
             .rename(columns={Stat.TARGETS.value: "targets_per_game_std"})
         )
 
-    target_share = _trailing_4_share_per_team(ws_wr, Stat.TARGETS.value).rename(
+    target_share = trailing_n_share_in_group(ws_wr, value_col=Stat.TARGETS.value).rename(
         columns={"share_l4": "target_share_l4"}
     )
-    air_yards_share = _trailing_4_share_per_team(ws_wr, Stat.RECEIVING_AIR_YARDS.value).rename(
-        columns={"share_l4": "air_yards_share_l4"}
-    )
+    air_yards_share = trailing_n_share_in_group(
+        ws_wr, value_col=Stat.RECEIVING_AIR_YARDS.value
+    ).rename(columns={"share_l4": "air_yards_share_l4"})
 
     snap_l4 = _trailing_4_per_player(sc_wr, Stat.OFFENSE_PCT.value).rename(
         columns={"mean_l4": "snap_pct_l4"}

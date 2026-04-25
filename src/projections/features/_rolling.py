@@ -75,3 +75,59 @@ def season_to_date_mean(
         .reset_index(level=list(range(len(group_cols_l))), drop=True)
     )
     return result
+
+
+def trailing_n_share_in_group(
+    weekly_stats: pd.DataFrame,
+    *,
+    value_col: str,
+    n: int = 4,
+) -> pd.DataFrame:
+    """Per-player share of ``value_col`` within their team over the trailing N games.
+
+    Numerator: each player's trailing-N sum of ``value_col``.
+    Denominator: sum across all players in ``weekly_stats`` on the same team
+    (over the same trailing-N windows).
+
+    Returns a frame keyed by ``gsis_id`` with column ``share_l<n>`` (``share_l4``
+    when n=4, the default).
+
+    The caller controls the share-group by pre-filtering ``weekly_stats``:
+
+    - WR target_share among the team's WRs: filter input to ``position == WR``.
+    - RB target_share among the team's pass-catchers: filter input to
+      ``position in {WR, RB, TE}``, then keep only the RB rows from the output.
+    - RB rush_share among the team's RBs: filter input to ``position == RB``.
+    """
+    out_col = f"share_l{n}"
+    if weekly_stats.empty:
+        # Schema-friendly empty frame so callers can merge without dtype churn.
+        # Local import avoids any future cycle if schemas grows to import from
+        # _rolling — schemas does not currently import from here.
+        from projections.schemas import _PYARROW_STR
+
+        return pd.DataFrame(
+            {
+                "gsis_id": pd.array([], dtype=_PYARROW_STR),
+                out_col: pd.array([], dtype=float),
+            }
+        )
+    last_n_player = last_n_per_group(
+        weekly_stats,
+        group_cols=["gsis_id"],
+        sort_cols=["season", "week"],
+        n=n,
+    )
+    player_sum = last_n_player.groupby(["gsis_id", "team"], as_index=False, observed=True)[
+        value_col
+    ].sum()
+    team_sum = (
+        player_sum.groupby("team", as_index=False, observed=True)[value_col]
+        .sum()
+        .rename(columns={value_col: "team_total"})
+    )
+    merged = player_sum.merge(team_sum, on="team", how="left")
+    merged[out_col] = (merged[value_col].astype(float) / merged["team_total"].astype(float)).where(
+        merged["team_total"] > 0, 0.0
+    )
+    return merged[["gsis_id", out_col]]
