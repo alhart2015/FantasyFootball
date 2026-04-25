@@ -614,3 +614,4 @@ class ProjectionWeeklySchema(pa.DataFrameModel):
 
     class Config:
         strict = "filter"
+        coerce = True  # see WrFeaturesSchema.Config — empty-output fast path
