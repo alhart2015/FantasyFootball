@@ -75,12 +75,13 @@ def build_te_features(
         columns={"mean_l4": "receiving_tds_per_game_l4"}
     )
 
-    # target_share against the full team pass-catching group
-    all_target_share = trailing_n_share_in_group(
-        ws_pass_catchers, value_col=Stat.TARGETS.value
-    ).rename(columns={"share_l4": "target_share_l4"})
-    te_gsis_ids = set(ws_te["gsis_id"].unique())
-    target_share = all_target_share[all_target_share["gsis_id"].isin(te_gsis_ids)].copy()
+    # target_share against the full team pass-catching group. Helper returns
+    # one row per (gsis_id, team); the (gsis_id, team) join in the assemble
+    # step below picks the share for the player's current team and naturally
+    # drops non-TE rows from the pass-catcher input.
+    target_share = trailing_n_share_in_group(ws_pass_catchers, value_col=Stat.TARGETS.value).rename(
+        columns={"share_l4": "target_share_l4"}
+    )
 
     # Season-to-date targets/game (TEs only)
     ws_this_season = ws_te[ws_te["season"] == season]
@@ -144,7 +145,7 @@ def build_te_features(
 
     out = out.merge(targets_l4, on="gsis_id", how="left")
     out = out.merge(targets_std, on="gsis_id", how="left")
-    out = out.merge(target_share, on="gsis_id", how="left")
+    out = out.merge(target_share, on=["gsis_id", "team"], how="left")
     out = out.merge(rec_l4, on="gsis_id", how="left")
     out = out.merge(rec_yd_l4, on="gsis_id", how="left")
     out = out.merge(rec_td_l4, on="gsis_id", how="left")

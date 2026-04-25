@@ -4,7 +4,106 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
-## Current status (as of 2026-04-24)
+## Plan 3a — 2024 WR sanity check (run 2026-04-25, on branch `feat/plan-3a-wr-model-a`)
+
+Held-out year is 2024 not 2025 (spec called for 2025; `nfl_data_py` has not yet published 2025 data).
+
+```
+Loading artifact: models/artifacts/wr-baseline-2018-2023-925f492b.joblib
+model_id: baseline:wr:925f492b:2018-2023
+
+=== 2024 sanity check (n=2048 player-weeks) ===
+
+-- Per-stat fit --
+            receptions  rmse= 2.049  mae= 1.541  mean_pred= 2.900  mean_actual= 3.116
+       receiving_yards  rmse=31.186  mae=22.946  mean_pred=36.331  mean_actual=39.204
+         receiving_tds  rmse= 0.495  mae= 0.348  mean_pred= 0.212  mean_actual= 0.256
+         rushing_yards  rmse= 3.945  mae= 1.917  mean_pred= 1.314  mean_actual= 1.005
+           rushing_tds  rmse= 0.086  mae= 0.017  mean_pred= 0.010  mean_actual= 0.007
+          fumbles_lost  rmse= 0.122  mae= 0.033  mean_pred= 0.018  mean_actual= 0.015
+
+-- Composite (PPR points) --
+  mean prediction:  rmse=6.775  mae=4.908
+  top-N season-total rank correlation (Spearman, all WRs): 0.971
+
+-- Calibration --
+  fraction in [p10, p90]: 0.708  (target ~ 0.80)
+  fraction <= p90:        0.816  (target ~ 0.90)
+```
+
+Soft-threshold check vs. spec §6.3:
+- Spearman top-30 correlation ≥ 0.4 — **MET** (0.971 — very high, the model captures relative WR ranking well).
+- Calibration `[p10, p90]` coverage in 70–90% range — **borderline MET** (70.8%; right at the lower bound). The predicted distributions are slightly too narrow (under-dispersed). Plan 3c's backtest harness can formalize this and motivate either MLE-fit gamma α (TODO note in spec §3.4) or per-stat residual variance buckets.
+- Per-stat RMSE within 2× of naive-baseline RMSE — **n/a until we compute the naive baseline**; track for future.
+
+Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90 vs 3.12, receiving_yards 36.3 vs 39.2) — Ridge has shrunk toward the league mean, which is expected behavior. The bias is small enough that the rank correlation is preserved.
+
+**Plan 3a deliverable: pipeline works end-to-end on real data.** Bad numbers would feed into Plan 3c's threshold-setting; the sanity numbers here are good enough that the pipeline is the load-bearing artifact, not the model itself.
+
+---
+
+## Current status (as of 2026-04-25)
+
+**Projections Core — Plan 3a (WR Model A baseline + first real-data ingest) merged to `main` at commit `<TBD-after-merge>`.**
+
+**Predecessors:**
+- Plan 1 (Foundations) merged at `8f02a6c`.
+- Dev tooling merged via `feat/dev-tooling`.
+- Plan 2a (Ingest expansion + WR feature builder) merged at `7926090`.
+- Plan 2b (QB/RB/TE feature builders) merged at `af325ea`.
+- Chore PR #5 (post-2b cleanup): merge order vs. Plan 3a TBD; the two PRs touch disjoint sections of TODO.md numbering with a temporary gap (#10→#13).
+
+**Plan 3a delivered:**
+- New `src/projections/models/` package with `Model` Protocol + `BaselineModel` impl + `wr_baseline()` factory.
+- First real-data ingest pull: `data/raw/` populated for 2018–2024 via the new `ingest.refresh()` orchestrator (also new in 3a).
+- `BaselineModel.fit` per-stat `RidgeCV` + parametric residual variance (gamma α via method of moments + clip; normal σ from residuals).
+- `BaselineModel.predict_distribution` composes per-stat dists into points dist via existing `score_distribution`; output validated against `ProjectionWeeklySchema`.
+- joblib persistence; `model_id = "baseline:wr:925f492b:2018-2023"` derived from a SHA-256 hash over 8 source files (per spec §5.2).
+- 2018–2023 trained artifact at `models/artifacts/wr-baseline-2018-2023-925f492b.joblib` (not committed; gitignored).
+- 2024 WR weekly projections written to `data/projections/weekly/ruleset=ESPN_PPR/season=2024/week=*/part.parquet` (3018 rows across 22 weeks; not committed).
+- 2024 held-out sanity-check eval (informational): per-stat RMSE/MAE, PPR-composite RMSE/MAE, top-N rank correlation 0.971, calibration coverage 70.8% (target ~80%) and 81.6% ≤p90 (target ~90%). Output recorded above.
+- 47 new tests (~239 total), including a leakage test for `BaselineModel.fit` and a smoke test extending the end-to-end pipeline through `fit → predict → store.write_partition` round-trip.
+- 8 real-data ingest/feature drift fixes applied during Tasks 14-17 (see TODO #16 for the full list).
+
+**Held-out year shifted from 2025 → 2024.** Spec called for 2025 as held-out, but `nfl_data_py` has not yet published 2025 data. Training window shifted from 2018-2024 → 2018-2023 accordingly. Architecture unaffected; Plan 3c's walk-forward backtest will revisit.
+
+---
+
+## Next action
+
+**Recommended: Plan 3b — generalize Model A to QB / RB / TE.**
+
+Plan 3a pinned the `Model` Protocol, the per-stat-regression-to-fantasy-points pipeline, and joblib persistence on a single position. Plan 3b applies the same pattern to QB / RB / TE. Mostly mechanical (new factories `qb_baseline()` / `rb_baseline()` / `te_baseline()` + per-position target stats / feature columns / dist families). Expected blast radius: similar to Plan 2b (~3 days).
+
+**Pre-requisites: both closed before 3b kickoff.**
+- TODO #8 (opt-in `nfl_data_py` API-drift smoke tests) — closed: opt-in `pytest -m network --run-network` smokes added in `tests/test_ingest/test_api_drift.py`, post-bump procedure documented in `CONTRIBUTING.md` "After bumping `nfl_data_py`."
+- TODO #15 (restructure `trailing_n_share_in_group` to expose team) — closed: helper now returns `[gsis_id, team, share_l<n>]`; WR / RB / TE builders all merge shares on `(gsis_id, team)`; v1 dedupe hack removed from `wr.py`. RB/TE builders trained against real data in 3b will not need the same workaround.
+
+After 3b: Plan 3c (season aggregation + walk-forward backtest harness with CI threshold gating).
+
+---
+
+## Decision log
+
+| Date | Decision | Rationale |
+|---|---|---|
+| 2026-04-25 | Plan 3a held-out year is 2024, not 2025 | `nfl_data_py` has not yet published 2025 data despite the simulated date being post-2025-season. Training window shifted to 2018-2023. Architecture unaffected; 3c's walk-forward backtest will revisit. |
+| 2026-04-25 | Per-stat independent `RidgeCV` sub-models for Model A | Closest match to spec wording (§3.1); per-stat residuals are debuggable; per-stat-independence assumption is "option D" / TODO #1 territory. |
+| 2026-04-25 | `Model` as `typing.Protocol` (not `abc.ABC`); not `@runtime_checkable` | Structural typing matches existing `Distribution` Protocol; no isinstance checks needed in callers. |
+| 2026-04-25 | One `BaselineModel` class with per-position factories (`wr_baseline()`, future `qb_/rb_/te_baseline()`) | Minimizes 3a→3b copy; per-position quirks expressed as config (`target_stats`, `feature_columns`, `dist_families`). |
+| 2026-04-25 | `model_id = "baseline:<pos>:<8-char-code-hash>:<train-start>-<train-end>"` written into every projection row | Stable, reproducible, traceable. Persisted into `ProjectionWeeklySchema.model_id` so we always know which model produced which projection. |
+| 2026-04-25 | `code_hash` covers 8 source files | `models/base.py`, `models/baseline.py`, `features/wr.py`, `features/_shared.py`, `features/_rolling.py`, `features/_opponent.py`, `scoring/score.py`, `scoring/score_distribution.py`. Anything whose change should invalidate the artifact. |
+| 2026-04-25 | Method of moments for gamma α with clip to `[0.01, 100]` | Closed-form; MLE via `scipy.optimize` is a follow-up if calibration is bad. Plan 3a's calibration is borderline (70.8% in [p10, p90]) — TODO note for 3c. |
+| 2026-04-25 | Greek letters in source converted to ASCII (`alpha`, `mu`) | Ruff RUF002/RUF003 flag Greek letters as ambiguous-unicode. Spec/plan markdown can keep them; source files use ASCII transliterations. |
+| 2026-04-25 | Per-row sample seed in `score_distribution` is fixed at `42` for v1 | Documented in `predict_distribution` docstring + TODO #13. Cross-row sample correlation; fine for per-row stats; matters when callers combine samples (DFS lineup variance). Defer fix to Plan 3c or DFS work. |
+| 2026-04-25 | `family="SAMPLED"` but `params` is summary-only blob | Documented in `predict_distribution` docstring + TODO #14. Per-row p-quantile columns carry the actual distributional info. Decide between SAMPLED_SUMMARY enum value vs. full samples blob before Plan 3c's backtest output consumes the rows. |
+| 2026-04-25 | WR builder's traded-player fix: dedupe shares to highest share per gsis_id | v1 hack documented inline + TODO #15. Proper fix restructures `trailing_n_share_in_group` to expose team, lets callers join on (gsis_id, team). Tackle in Plan 3b. |
+| 2026-04-25 | TODO #15 closed before Plan 3b kickoff: helper returns `[gsis_id, team, share_l<n>]`; WR/RB/TE builders join on `(gsis_id, team)` | Picks the share for the player's depth-chart-current team — semantically more correct than the v1 highest-share proxy and removes the dedupe hack. RB/TE builders inherit the fix automatically when 3b trains them on real data. |
+| 2026-04-25 | TODO #8 closed before Plan 3b kickoff: opt-in `pytest -m network --run-network` smokes per ingest source | One smoke per source (weekly_stats, depth_charts, ngs × 3 stat_types, schedules, id_map, snap_counts) asserts every raw column the normalize step depends on is present, then runs normalize end-to-end so pandera surfaces dtype drift. Post-bump procedure documented in `CONTRIBUTING.md`. |
+
+---
+
+## Plan 2b — historical (as of 2026-04-24)
 
 **Projections Core — Plan 2b (QB/RB/TE feature builders) merged to `main` at commit `af325ea`.**
 

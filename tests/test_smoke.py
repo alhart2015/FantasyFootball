@@ -195,3 +195,37 @@ def test_end_to_end_ingest_and_features(
 
     TeFeaturesSchema.validate(te_out)
     assert "00-0030506" in te_out["gsis_id"].tolist()  # Kelce
+
+
+def test_smoke_wr_baseline_fit_predict_write(
+    tmp_path: Path,
+    baseline_features: pd.DataFrame,
+    baseline_weekly_stats: pd.DataFrame,
+) -> None:
+    """End-to-end: fit BaselineModel on synthetic data, predict, write a
+    parquet partition through store.write_partition, read back, validate."""
+    from projections.models import wr_baseline
+    from projections.schemas import ProjectionWeeklySchema, Ruleset
+    from projections.store import read_partition, write_partition
+
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+
+    week_features = baseline_features[
+        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    ]
+    preds = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
+    ProjectionWeeklySchema.validate(preds)
+
+    write_partition(
+        tmp_path / "projections",
+        "weekly/ruleset=ESPN_PPR",
+        preds,
+        season=2025,
+        week=4,
+    )
+    round_tripped = read_partition(
+        tmp_path / "projections", "weekly/ruleset=ESPN_PPR", season=2025, week=4
+    )
+    ProjectionWeeklySchema.validate(round_tripped)
+    assert len(round_tripped) == len(preds)

@@ -29,7 +29,7 @@ from projections.schemas import (
 from projections.store import write_partition
 
 NgsStatType = Literal["passing", "rushing", "receiving"]
-_VALID_STAT_TYPES: tuple[NgsStatType, ...] = ("passing", "rushing", "receiving")
+STAT_TYPES: tuple[NgsStatType, ...] = ("passing", "rushing", "receiving")
 
 _RENAME = {
     "player_gsis_id": "gsis_id",
@@ -120,6 +120,16 @@ def _normalize_one_season(stat_type: NgsStatType, raw: pd.DataFrame) -> pd.DataF
         if int_col in df.columns:
             df[int_col] = df[int_col].astype(pd.Int64Dtype())
 
+    # nfl_data_py returns int32 for season/week; pandera Series[int] requires int64.
+    # NGS also includes season-summary rows with week=0 — drop them.
+    df = df[df["season"].notna() & df["week"].notna()].copy()
+    for int_col in ("season", "week"):
+        if int_col in df.columns:
+            df[int_col] = df[int_col].astype("int64")
+    # NGS sometimes includes synthetic week numbers (0=season summary,
+    # 23+=pro bowl / all-star). Schema declares week in [1, 22]; filter.
+    df = df[(df["week"] >= 1) & (df["week"] <= 22)].copy()
+
     df = df[df["gsis_id"].notna()].copy()
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["team"] = df["team"].map(_normalize_team).astype(_PYARROW_STR)
@@ -141,8 +151,8 @@ def refresh_ngs(
 
     Writes to `data/raw/ngs_{stat_type}/season=YYYY/part.parquet`.
     """
-    if stat_type not in _VALID_STAT_TYPES:
-        raise ValueError(f"stat_type must be one of {_VALID_STAT_TYPES}, got {stat_type!r}")
+    if stat_type not in STAT_TYPES:
+        raise ValueError(f"stat_type must be one of {STAT_TYPES}, got {stat_type!r}")
 
     table = f"ngs_{stat_type}"
     written: list[Path] = []

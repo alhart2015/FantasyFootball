@@ -65,9 +65,12 @@ def _normalize_one_season(raw: pd.DataFrame, data_root: Path) -> pd.DataFrame:
     # Resolve pfr_player_id -> gsis_id via id_map. Drops unmatched rows.
     df = _resolve_gsis_via_id_map(df, data_root)
 
-    for int_col in ("offense_snaps", "defense_snaps", "st_snaps"):
+    # Drop rows with NaN season/week before int64 coercion.
+    df = df[df["season"].notna() & df["week"].notna()].copy()
+    # nfl_data_py returns int32 for season/week; pandera Series[int] requires int64.
+    for int_col in ("season", "week", "offense_snaps", "defense_snaps", "st_snaps"):
         if int_col in df.columns:
-            df[int_col] = df[int_col].fillna(0).astype(int)
+            df[int_col] = df[int_col].fillna(0).astype("int64")
 
     # *_pct columns can be NaN when team total for that side is 0; fill to 0.0
     # so the non-nullable schema accepts them.

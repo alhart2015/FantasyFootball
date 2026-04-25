@@ -55,11 +55,33 @@ def _normalize_team(v: str) -> str:
     return normalize_team_code(v).value
 
 
+_FUMBLE_LOST_SOURCES = (
+    "rushing_fumbles_lost",
+    "receiving_fumbles_lost",
+    "sack_fumbles_lost",
+)
+
+
 def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
     df = raw.rename(columns=_RENAME).copy()
 
-    # Coerce dtypes that nfl_data_py sometimes returns as floats.
+    # Derive ``fumbles_lost`` (total) from nfl_data_py's source-specific
+    # columns. The upstream API does not provide an aggregated column —
+    # only ``rushing_fumbles_lost`` / ``receiving_fumbles_lost`` /
+    # ``sack_fumbles_lost``. Sum what's present; default 0 if all are
+    # missing (e.g., very old seasons).
+    present = [c for c in _FUMBLE_LOST_SOURCES if c in df.columns]
+    if present:
+        df["fumbles_lost"] = df[list(present)].fillna(0).sum(axis=1)
+    else:
+        df["fumbles_lost"] = 0
+
+    # Coerce dtypes that nfl_data_py sometimes returns as floats / int32.
+    # WeeklyStatsSchema's Series[int] requires int64; nfl_data_py returns
+    # int32 for season/week and floats for several stat columns.
     for int_col in (
+        "season",
+        "week",
         "passing_tds",
         "interceptions",
         "attempts",
@@ -73,7 +95,7 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
         "fumbles_lost",
     ):
         if int_col in df.columns:
-            df[int_col] = df[int_col].fillna(0).astype(int)
+            df[int_col] = df[int_col].fillna(0).astype("int64")
 
     for float_col in ("passing_yards", "rushing_yards", "receiving_yards", "receiving_air_yards"):
         if float_col in df.columns:

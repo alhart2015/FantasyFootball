@@ -215,4 +215,9 @@ data/features/
 data/projections/
 data/backtests/
 data/manifests/
+data/sanity_checks/
 *.duckdb
+
+# Trained model artifacts (joblib pickles; reproducible from source + data)
+models/artifacts/
+*.joblib

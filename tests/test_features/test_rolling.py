@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from projections.features._rolling import (
     last_n_per_group,
@@ -123,12 +124,63 @@ def _share_input_two_teams() -> pd.DataFrame:
 def test_trailing_n_share_in_group_basic_shares() -> None:
     df = _share_input_two_teams()
     out = trailing_n_share_in_group(df, value_col="value", n=4)
-    assert set(out.columns) == {"gsis_id", "share_l4"}
+    assert set(out.columns) == {"gsis_id", "team", "share_l4"}
     by_id = out.set_index("gsis_id")["share_l4"]
     assert by_id["00-000A001"] == 16 / 20  # 0.8
     assert by_id["00-000A002"] == 4 / 20  # 0.2
     assert by_id["00-000B001"] == 20 / 40  # 0.5
     assert by_id["00-000B002"] == 20 / 40  # 0.5
+
+
+def test_trailing_n_share_in_group_emits_team_column() -> None:
+    """The (gsis_id, team) key lets callers join on the player's current team."""
+    df = _share_input_two_teams()
+    out = trailing_n_share_in_group(df, value_col="value", n=4)
+    by_id = out.set_index("gsis_id")["team"].astype(str)
+    assert by_id["00-000A001"] == "A"
+    assert by_id["00-000A002"] == "A"
+    assert by_id["00-000B001"] == "B"
+    assert by_id["00-000B002"] == "B"
+
+
+def test_trailing_n_share_in_group_traded_player_emits_one_row_per_team() -> None:
+    """A player traded mid-window appears once per team they played on,
+    each share computed within that team's group. Callers join on
+    (gsis_id, team) to pick the share for the depth-chart-current team."""
+    rows = []
+    # Player X: 2 weeks on team A (value=2 each), 2 weeks on team B (value=8 each).
+    # Team A has one other player Y (value=8 each week → A total over X+Y = 4+32 = 36).
+    # Team B has one other player Z (value=2 each week → B total over X+Z = 16+8  = 24).
+    for week in (1, 2):
+        rows.extend(
+            [
+                {"gsis_id": "00-000XXXX", "season": 2024, "week": week, "team": "A", "value": 2},
+                {"gsis_id": "00-000YYYY", "season": 2024, "week": week, "team": "A", "value": 8},
+                {"gsis_id": "00-000ZZZZ", "season": 2024, "week": week, "team": "B", "value": 2},
+            ]
+        )
+    for week in (3, 4):
+        rows.extend(
+            [
+                {"gsis_id": "00-000XXXX", "season": 2024, "week": week, "team": "B", "value": 8},
+                {"gsis_id": "00-000YYYY", "season": 2024, "week": week, "team": "A", "value": 8},
+                {"gsis_id": "00-000ZZZZ", "season": 2024, "week": week, "team": "B", "value": 2},
+            ]
+        )
+    df = pd.DataFrame(rows)
+    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
+    df["team"] = df["team"].astype(_PYARROW_STR)
+    out = trailing_n_share_in_group(df, value_col="value", n=4)
+
+    x_rows = out[out["gsis_id"] == "00-000XXXX"].copy()
+    x_rows["team"] = x_rows["team"].astype(str)
+    x_rows = x_rows.set_index("team")["share_l4"]
+    # Team A view: X had 4 over 2 weeks; Y had 32 over all 4 weeks; team A
+    # trailing-N totals = X(4) + Y(32) = 36. X share on A = 4/36.
+    assert x_rows["A"] == pytest.approx(4 / 36)
+    # Team B view: X had 16 over 2 weeks; Z had 8 over 4 weeks; team B
+    # trailing-N totals = X(16) + Z(8) = 24. X share on B = 16/24.
+    assert x_rows["B"] == pytest.approx(16 / 24)
 
 
 def test_trailing_n_share_in_group_zero_team_total_yields_zero() -> None:
@@ -157,7 +209,7 @@ def test_trailing_n_share_in_group_empty_input() -> None:
     )
     out = trailing_n_share_in_group(df, value_col="value", n=4)
     assert len(out) == 0
-    assert set(out.columns) == {"gsis_id", "share_l4"}
+    assert set(out.columns) == {"gsis_id", "team", "share_l4"}
 
 
 def test_trailing_n_share_in_group_default_n_is_4() -> None:

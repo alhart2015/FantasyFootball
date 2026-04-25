@@ -61,10 +61,6 @@ v1 leaves NaN. Revisit after a notebook investigation against a recent season qu
 
 v1 extracts the trailing digit from labels like `WR1`, falling back to `1` for unrankable labels (`LWR`/`RWR`/`SWR`) with a warning. If Plan 3 model fitting shows `depth_rank` is noisy or wrong, build a richer parser using alignment + rank.
 
-### 8. Build opt-in `nfl_data_py` API-drift smoke tests
-
-One per ingest source, marked `@pytest.mark.network`, skipped by default. Hits the live API, fetches a tiny slice (e.g., 1 week of 2023), asserts the column set matches the schema. Run manually after `nfl_data_py` version bumps. Document the run-after-bump step in `CONTRIBUTING.md`. The synthetic in-memory fixtures used by 2a's CI tests don't catch API drift on their own.
-
 ### 9. WR feature builder edge cases for production data
 
 Issues flagged during Task 15 / final code review that don't manifest on the synthetic fixtures but could surface in real `nfl_data_py` data:
@@ -98,3 +94,34 @@ Surfaced in PR #4 review (latent issue #6). Both are thresholded booleans baked 
 - Keep but document explicitly that this threshold is the canonical league-wide convention and shouldn't be re-derived elsewhere.
 
 Revisit before Plan 3 model fitting — if the model never uses these booleans, just remove them.
+
+### 13. Per-row seed derivation in BaselineModel.predict_distribution
+
+Surfaced in PR for Plan 3a (Task 9 review). `BaselineModel.predict_distribution` calls `score_distribution(..., seed=42)` for every row, so the underlying Monte Carlo sample arrays are correlated across rows. Per-row stats (mean/p10/p50/p90) are unaffected, but downstream callers that combine multiple rows' samples (DFS lineup variance, roster-total simulation, joint correlations once TODO #1 lands) MUST NOT assume cross-row independence.
+
+Fix: derive per-row seeds from `(gsis_id, season, week, ruleset.name)` (e.g., `hash(...) & 0xFFFFFFFF`) so each row gets an independent draw. Cheap, no perf cost. Defer until Plan 3c's backtest harness or DFS work needs cross-row independence.
+
+### 14. ProjectionWeeklySchema params blob carries summary, not samples
+
+Surfaced in PR for Plan 3a (Task 9 review). `BaselineModel.predict_distribution` sets `family="SAMPLED"` but the `params` bytes encode only `{"samples_summary": {"n", "mean"}}`, not the full sample array. The persisted distributional info lives in `mean`/`p10`/`p50`/`p90`; `params` is a breadcrumb.
+
+Two fix options:
+- (a) Add `DistributionFamily.SAMPLED_SUMMARY` enum value; rename the family on these rows. Backward-compatible.
+- (b) Pack the full `points.samples` array (np.float64 × 10000 = 80KB per row, msgpack-compressible). Material storage cost; right answer once parquet partitioning is stable, but premature for v1.
+
+Decide before Plan 3c's backtest output consumes ProjectionWeeklySchema rows.
+
+### 16. Real-data drifts not caught by synthetic-fixture tests
+
+Surfaced during Plan 3a Tasks 14-17. The synthetic fixtures used by 2a/2b/3a's CI tests don't exercise the real `nfl_data_py` API surface. Eight ingest/feature drifts had to be patched live during Plan 3a's first real-data pull:
+
+1. `weekly_stats`: `fumbles_lost` had to be derived from three source-specific columns (no aggregated column upstream).
+2. `weekly_stats`/`depth_charts`/`ngs`/`snap_counts`: int32 vs int64 dtype mismatch on `season`/`week`.
+3. `depth_charts`/`ngs`/`snap_counts`: NaN season/week rows had to be filtered before int coercion.
+4. `ngs`: pro-bowl/all-star weeks (>22) and season-summary rows (week=0) had to be filtered.
+5. `id_map`: 16+ pro-football-reference 3-letter team aliases (GBP, KAN, NWE, NOR, SDG, TAM, etc.).
+6. `id_map`: "FA"/"FA*" (free agent) team codes had to be handled as None.
+7. `id_map`: malformed legacy gsis_ids (PFR-style strings) had to be filtered.
+8. `wr.py`: bye-week WRs without schedule rows; duplicate depth-chart entries; negative trailing-mean yardage; share calc going negative.
+
+The opt-in `pytest -m network --run-network` smokes (`tests/test_ingest/test_api_drift.py`, formerly TODO #8 — closed) now guard against the same class of column-rename / column-removal drift after a `nfl_data_py` version bump. They do NOT replace this drift list as historical context, and they will NOT catch every real-data edge case (some — like the `id_map` malformed-legacy-gsis-id rows — are data-quality issues per row, not column-level drift), so keep this entry as a record of what the synthetic fixtures missed and audit it after each `nfl_data_py` upgrade.

@@ -90,6 +90,14 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
         )
     df["depth_rank"] = ranks
 
+    # Drop rows with NaN season/week (corrupt rows that would coerce to 0
+    # and fail schema validation downstream).
+    df = df[df["season"].notna() & df["week"].notna()].copy()
+    # nfl_data_py returns int32 for season/week; pandera Series[int] requires int64.
+    for int_col in ("season", "week", "depth_rank"):
+        if int_col in df.columns:
+            df[int_col] = df[int_col].astype("int64")
+
     df = df[df["gsis_id"].notna()].copy()
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["team"] = df["team"].map(_normalize_team).astype(_PYARROW_STR)
