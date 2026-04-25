@@ -26,7 +26,11 @@ def test_refresh_schedules_writes_partition(
 
     df = read_partition(tmp_path / "raw", "schedules", season=2024)
     SchedulesSchema.validate(df)
-    assert set(df["game_id"]) == {"2024_03_KC_ATL", "2024_03_MIN_HOU"}
+    assert set(df["game_id"]) == {
+        "2024_03_KC_ATL",
+        "2024_03_MIN_HOU",
+        "2024_03_PHI_TB",
+    }
 
 
 def test_refresh_schedules_constructs_kickoff_from_gameday_and_gametime(
@@ -76,7 +80,7 @@ def test_refresh_schedules_idempotent(
     refresh_schedules(tmp_path, seasons=[2024])
     refresh_schedules(tmp_path, seasons=[2024])
     df = read_partition(tmp_path / "raw", "schedules", season=2024)
-    assert len(df) == 2  # not 4
+    assert len(df) == 3  # not 6
 
 
 def test_refresh_schedules_allows_nullable_lines(

@@ -129,6 +129,9 @@ class Stat(StrEnum):
 
     PASSING_YARDS = "passing_yards"
     PASSING_TDS = "passing_tds"
+    PASSING_ATTEMPTS = "attempts"
+    COMPLETIONS = "completions"
+    SACKS = "sacks"
     INTERCEPTIONS = "interceptions"
     PASSING_2PT = "passing_2pt_conversions"
     RUSHING_YARDS = "rushing_yards"
@@ -233,6 +236,9 @@ class WeeklyStatsSchema(pa.DataFrameModel):
     passing_yards: Series[float] = pa.Field(ge=-100, le=800)
     passing_tds: Series[int] = pa.Field(ge=0, le=15)
     interceptions: Series[int] = pa.Field(ge=0, le=15)
+    attempts: Series[int] = pa.Field(ge=0, le=80)
+    completions: Series[int] = pa.Field(ge=0, le=60)
+    sacks: Series[int] = pa.Field(ge=0, le=15)
     rushing_yards: Series[float] = pa.Field(ge=-50, le=400)
     rushing_tds: Series[int] = pa.Field(ge=0, le=10)
     carries: Series[int] = pa.Field(ge=0, le=50)
@@ -432,6 +438,142 @@ class WrFeaturesSchema(pa.DataFrameModel):
 
     class Config:
         strict = "filter"
+        # Required so the empty-depth-chart fast path validates: a
+        # `pd.DataFrame(columns=...)` produces object-dtype columns, which
+        # pandera otherwise rejects against the typed Series declarations.
+        coerce = True
+
+
+class QbFeaturesSchema(pa.DataFrameModel):
+    """QB feature DataFrame produced by `features.qb.build_qb_features`."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+
+    # Passing usage (rolling)
+    pass_attempts_per_game_l4: Series[float] = pa.Field(ge=0)
+    passing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    passing_tds_per_game_l4: Series[float] = pa.Field(ge=0)
+    interceptions_per_game_l4: Series[float] = pa.Field(ge=0)
+    sacks_per_game_l4: Series[float] = pa.Field(ge=0)
+    passing_yards_per_game_std: Series[float] = pa.Field(ge=0)
+
+    # Rushing usage
+    rushing_attempts_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_qb: Series[bool]
+
+    # Snap / role
+    snap_pct_l4: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    depth_rank: Series[int] = pa.Field(ge=1, le=10, nullable=True)
+
+    # NGS passing (season-to-date snapshot from prior week)
+    aggressiveness_std: Series[float] = pa.Field(nullable=True)
+    completion_percentage_above_expectation_std: Series[float] = pa.Field(nullable=True)
+    avg_intended_air_yards_std: Series[float] = pa.Field(nullable=True)
+    avg_time_to_throw_std: Series[float] = pa.Field(nullable=True)
+
+    # Game environment
+    implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
+    spread: Series[float] = pa.Field(nullable=True)
+    is_home: Series[bool]
+    roof_dome: Series[bool]
+
+    # Opponent strength proxy
+    opp_allowed_qb_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True  # see WrFeaturesSchema.Config for rationale
+
+
+class RbFeaturesSchema(pa.DataFrameModel):
+    """RB feature DataFrame produced by `features.rb.build_rb_features`."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+
+    # Rushing usage (rolling)
+    carries_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_tds_per_game_l4: Series[float] = pa.Field(ge=0)
+    rush_share_l4: Series[float] = pa.Field(ge=0, le=1)
+
+    # Receiving usage
+    targets_per_game_l4: Series[float] = pa.Field(ge=0)
+    receptions_per_game_l4: Series[float] = pa.Field(ge=0)
+    receiving_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    target_share_l4: Series[float] = pa.Field(ge=0, le=1)
+    targets_per_game_std: Series[float] = pa.Field(ge=0)
+
+    # Snap / role
+    snap_pct_l4: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    depth_rank: Series[int] = pa.Field(ge=1, le=10, nullable=True)
+    passing_down_back: Series[bool]
+
+    # NGS rushing (season-to-date snapshot from prior week)
+    efficiency_std: Series[float] = pa.Field(nullable=True)
+    rush_yards_over_expected_per_att_std: Series[float] = pa.Field(nullable=True)
+    percent_attempts_gte_eight_defenders_std: Series[float] = pa.Field(nullable=True)
+
+    # Game environment
+    implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
+    spread: Series[float] = pa.Field(nullable=True)
+    is_home: Series[bool]
+    roof_dome: Series[bool]
+
+    # Opponent strength proxy
+    opp_allowed_rb_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True  # see WrFeaturesSchema.Config for rationale
+
+
+class TeFeaturesSchema(pa.DataFrameModel):
+    """TE feature DataFrame produced by `features.te.build_te_features`."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+
+    # Receiving usage (rolling)
+    targets_per_game_l4: Series[float] = pa.Field(ge=0)
+    targets_per_game_std: Series[float] = pa.Field(ge=0)
+    target_share_l4: Series[float] = pa.Field(ge=0, le=1)
+    receptions_per_game_l4: Series[float] = pa.Field(ge=0)
+    receiving_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    receiving_tds_per_game_l4: Series[float] = pa.Field(ge=0)
+
+    # Snap / role
+    snap_pct_l4: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    depth_rank: Series[int] = pa.Field(ge=1, le=10, nullable=True)
+
+    # NGS receiving (season-to-date snapshot from prior week)
+    avg_separation_std: Series[float] = pa.Field(nullable=True)
+    avg_intended_air_yards_std: Series[float] = pa.Field(nullable=True)
+    avg_yac_above_expectation_std: Series[float] = pa.Field(nullable=True)
+
+    # Game environment
+    implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
+    spread: Series[float] = pa.Field(nullable=True)
+    is_home: Series[bool]
+    roof_dome: Series[bool]
+
+    # Opponent strength proxy
+    opp_allowed_te_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True  # see WrFeaturesSchema.Config for rationale
 
 
 class IdMapSchema(pa.DataFrameModel):

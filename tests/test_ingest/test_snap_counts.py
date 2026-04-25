@@ -41,8 +41,8 @@ def test_refresh_snap_counts_writes_partition(
 
     df = read_partition(tmp_path / "raw", "snap_counts", season=2024)
     SnapCountsSchema.validate(df)
-    # 2 rows in fixture, both match id_map; both should survive the join.
-    assert set(df["gsis_id"]) == {"00-0034857", "00-0036322"}
+    # 3 rows in fixture, all match id_map; all should survive the join.
+    assert set(df["gsis_id"]) == {"00-0034857", "00-0036322", "00-0030506"}
 
 
 def test_refresh_snap_counts_resolves_pfr_to_gsis(
@@ -103,8 +103,8 @@ def test_refresh_snap_counts_drops_rows_unmatched_in_id_map(
     )
     refresh_snap_counts(tmp_path, seasons=[2024])
     df = read_partition(tmp_path / "raw", "snap_counts", season=2024)
-    # 2 known players survive; bench guy with no id_map match is dropped.
-    assert len(df) == 2
+    # 3 known players survive; bench guy with no id_map match is dropped.
+    assert len(df) == 3
 
 
 def test_refresh_snap_counts_normalizes_team_codes(
@@ -183,7 +183,7 @@ def test_refresh_snap_counts_idempotent(
     refresh_snap_counts(tmp_path, seasons=[2024])
     refresh_snap_counts(tmp_path, seasons=[2024])
     df = read_partition(tmp_path / "raw", "snap_counts", season=2024)
-    assert len(df) == 2
+    assert len(df) == 3
 
 
 def test_refresh_snap_counts_fills_nan_pct_columns(

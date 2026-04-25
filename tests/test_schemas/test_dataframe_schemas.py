@@ -14,8 +14,11 @@ from projections.schemas import (
     NgsReceivingSchema,
     NgsRushingSchema,
     ProjectionWeeklySchema,
+    QbFeaturesSchema,
+    RbFeaturesSchema,
     SchedulesSchema,
     SnapCountsSchema,
+    TeFeaturesSchema,
     WeeklyStatsSchema,
     WrFeaturesSchema,
 )
@@ -33,6 +36,9 @@ def _good_weekly_stats() -> pd.DataFrame:
             "passing_yards": [0.0],
             "passing_tds": [0],
             "interceptions": [0],
+            "attempts": [0],
+            "completions": [0],
+            "sacks": [0],
             "rushing_yards": [0.0],
             "rushing_tds": [0],
             "carries": [0],
@@ -443,3 +449,196 @@ def test_wr_features_schema_rejects_target_share_over_one() -> None:
     )
     with pytest.raises(SchemaError):
         WrFeaturesSchema.validate(df)
+
+
+def test_qb_features_schema_accepts_valid_row() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0034857"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["KC"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["DET"], dtype=_PYARROW_STR),
+            "pass_attempts_per_game_l4": [38.5],
+            "passing_yards_per_game_l4": [285.0],
+            "passing_tds_per_game_l4": [2.25],
+            "interceptions_per_game_l4": [0.5],
+            "sacks_per_game_l4": [2.0],
+            "passing_yards_per_game_std": [275.0],
+            "rushing_attempts_per_game_l4": [4.5],
+            "rushing_yards_per_game_l4": [22.0],
+            "rushing_qb": [False],
+            "snap_pct_l4": [1.0],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "aggressiveness_std": [12.5],
+            "completion_percentage_above_expectation_std": [3.3],
+            "avg_intended_air_yards_std": [8.1],
+            "avg_time_to_throw_std": [2.71],
+            "implied_team_total": [27.5],
+            "spread": [-3.5],
+            "is_home": [True],
+            "roof_dome": [False],
+            "opp_allowed_qb_fppg_l4": [18.5],
+        }
+    )
+    QbFeaturesSchema.validate(df)
+
+
+def test_qb_features_schema_rejects_negative_pass_attempts() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0034857"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["KC"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["DET"], dtype=_PYARROW_STR),
+            "pass_attempts_per_game_l4": [-1.0],  # invalid
+            "passing_yards_per_game_l4": [285.0],
+            "passing_tds_per_game_l4": [2.25],
+            "interceptions_per_game_l4": [0.5],
+            "sacks_per_game_l4": [2.0],
+            "passing_yards_per_game_std": [275.0],
+            "rushing_attempts_per_game_l4": [4.5],
+            "rushing_yards_per_game_l4": [22.0],
+            "rushing_qb": [False],
+            "snap_pct_l4": [1.0],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "aggressiveness_std": [12.5],
+            "completion_percentage_above_expectation_std": [3.3],
+            "avg_intended_air_yards_std": [8.1],
+            "avg_time_to_throw_std": [2.71],
+            "implied_team_total": [27.5],
+            "spread": [-3.5],
+            "is_home": [True],
+            "roof_dome": [False],
+            "opp_allowed_qb_fppg_l4": [18.5],
+        }
+    )
+    with pytest.raises(SchemaError):
+        QbFeaturesSchema.validate(df)
+
+
+def test_rb_features_schema_accepts_valid_row() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0034796"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["PHI"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["DAL"], dtype=_PYARROW_STR),
+            "carries_per_game_l4": [18.5],
+            "rushing_yards_per_game_l4": [98.0],
+            "rushing_tds_per_game_l4": [0.75],
+            "rush_share_l4": [0.72],
+            "targets_per_game_l4": [4.5],
+            "receptions_per_game_l4": [3.5],
+            "receiving_yards_per_game_l4": [28.0],
+            "target_share_l4": [0.12],
+            "targets_per_game_std": [4.0],
+            "snap_pct_l4": [0.85],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "passing_down_back": [True],
+            "efficiency_std": [3.1],
+            "rush_yards_over_expected_per_att_std": [0.9],
+            "percent_attempts_gte_eight_defenders_std": [22.5],
+            "implied_team_total": [25.0],
+            "spread": [-2.5],
+            "is_home": [False],
+            "roof_dome": [False],
+            "opp_allowed_rb_fppg_l4": [20.5],
+        }
+    )
+    RbFeaturesSchema.validate(df)
+
+
+def test_rb_features_schema_rejects_rush_share_over_one() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0034796"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["PHI"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["DAL"], dtype=_PYARROW_STR),
+            "carries_per_game_l4": [18.5],
+            "rushing_yards_per_game_l4": [98.0],
+            "rushing_tds_per_game_l4": [0.75],
+            "rush_share_l4": [1.5],  # invalid, must be <= 1
+            "targets_per_game_l4": [4.5],
+            "receptions_per_game_l4": [3.5],
+            "receiving_yards_per_game_l4": [28.0],
+            "target_share_l4": [0.12],
+            "targets_per_game_std": [4.0],
+            "snap_pct_l4": [0.85],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "passing_down_back": [True],
+            "efficiency_std": [3.1],
+            "rush_yards_over_expected_per_att_std": [0.9],
+            "percent_attempts_gte_eight_defenders_std": [22.5],
+            "implied_team_total": [25.0],
+            "spread": [-2.5],
+            "is_home": [False],
+            "roof_dome": [False],
+            "opp_allowed_rb_fppg_l4": [20.5],
+        }
+    )
+    with pytest.raises(SchemaError):
+        RbFeaturesSchema.validate(df)
+
+
+def test_te_features_schema_accepts_valid_row() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036440"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["SF"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["SEA"], dtype=_PYARROW_STR),
+            "targets_per_game_l4": [7.5],
+            "targets_per_game_std": [7.0],
+            "target_share_l4": [0.18],
+            "receptions_per_game_l4": [5.5],
+            "receiving_yards_per_game_l4": [62.0],
+            "receiving_tds_per_game_l4": [0.5],
+            "snap_pct_l4": [0.92],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "avg_separation_std": [2.8],
+            "avg_intended_air_yards_std": [9.0],
+            "avg_yac_above_expectation_std": [0.4],
+            "implied_team_total": [24.0],
+            "spread": [-1.5],
+            "is_home": [True],
+            "roof_dome": [False],
+            "opp_allowed_te_fppg_l4": [10.5],
+        }
+    )
+    TeFeaturesSchema.validate(df)
+
+
+def test_te_features_schema_rejects_target_share_over_one() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036440"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["SF"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["SEA"], dtype=_PYARROW_STR),
+            "targets_per_game_l4": [7.5],
+            "targets_per_game_std": [7.0],
+            "target_share_l4": [1.2],  # invalid
+            "receptions_per_game_l4": [5.5],
+            "receiving_yards_per_game_l4": [62.0],
+            "receiving_tds_per_game_l4": [0.5],
+            "snap_pct_l4": [0.92],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "avg_separation_std": [2.8],
+            "avg_intended_air_yards_std": [9.0],
+            "avg_yac_above_expectation_std": [0.4],
+            "implied_team_total": [24.0],
+            "spread": [-1.5],
+            "is_home": [True],
+            "roof_dome": [False],
+            "opp_allowed_te_fppg_l4": [10.5],
+        }
+    )
+    with pytest.raises(SchemaError):
+        TeFeaturesSchema.validate(df)

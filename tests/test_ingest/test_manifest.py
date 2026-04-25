@@ -22,7 +22,7 @@ def test_id_map_refresh_records_manifest_entry(
     rows = manifest[manifest["table"] == "id_map"]
     assert len(rows) == 1
     row = rows.iloc[0]
-    assert row["rowcount"] == 3
+    assert row["rowcount"] == 4
     assert pd.isna(row["season"])
     assert isinstance(row["checksum"], str) and len(row["checksum"]) == 64
 
@@ -40,7 +40,7 @@ def test_weekly_refresh_records_one_entry_per_season(
     manifest = read_manifest(tmp_path)
     rows = manifest[manifest["table"] == "weekly_stats"]
     assert sorted(rows["season"].tolist()) == [2023, 2024]
-    assert (rows["rowcount"] == 2).all()
+    assert (rows["rowcount"] == 3).all()
 
 
 def test_re_refresh_replaces_manifest_entry(

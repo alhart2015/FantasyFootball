@@ -26,7 +26,7 @@ def test_refresh_weekly_stats_writes_partitioned_parquet(
 
     df = read_partition(tmp_path / "raw", "weekly_stats", season=2024)
     WeeklyStatsSchema.validate(df)
-    assert set(df["gsis_id"]) == {"00-0036322", "00-0034857"}
+    assert set(df["gsis_id"]) == {"00-0036322", "00-0034857", "00-0030506"}
 
 
 def test_refresh_weekly_stats_renames_columns(
@@ -79,7 +79,7 @@ def test_refresh_weekly_stats_idempotent(
     refresh_weekly_stats(tmp_path, seasons=[2024])
     refresh_weekly_stats(tmp_path, seasons=[2024])
     df = read_partition(tmp_path / "raw", "weekly_stats", season=2024)
-    assert len(df) == 2  # not 4 — second run replaced the partition
+    assert len(df) == 3  # not 6 — second run replaced the partition
 
 
 def test_refresh_weekly_stats_filters_unsupported_positions(
@@ -112,7 +112,7 @@ def test_refresh_weekly_stats_filters_unsupported_positions(
     refresh_weekly_stats(tmp_path, seasons=[2024])
     df = read_partition(tmp_path / "raw", "weekly_stats", season=2024)
     assert "00-0099999" not in df["gsis_id"].tolist()
-    assert len(df) == 2
+    assert len(df) == 3
 
 
 def test_refresh_weekly_stats_persists_new_columns(
@@ -140,3 +140,28 @@ def test_refresh_weekly_stats_persists_new_columns(
     assert int(qb_row["carries"]) == 3
     assert int(qb_row["targets"]) == 0
     assert float(qb_row["receiving_air_yards"]) == 0.0
+
+
+def test_refresh_weekly_stats_persists_qb_columns(
+    tmp_path: Path,
+    fake_weekly_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """attempts, completions, sacks must round-trip through ingest."""
+    monkeypatch.setattr(
+        "projections.ingest.weekly_stats._fetch_raw_weekly",
+        lambda seasons: fake_weekly_df,
+    )
+    refresh_weekly_stats(tmp_path, seasons=[2024])
+    df = read_partition(tmp_path / "raw", "weekly_stats", season=2024)
+    assert "attempts" in df.columns
+    assert "completions" in df.columns
+    assert "sacks" in df.columns
+    qb_row = df[df["gsis_id"] == "00-0034857"].iloc[0]
+    assert int(qb_row["attempts"]) == 38
+    assert int(qb_row["completions"]) == 24
+    assert int(qb_row["sacks"]) == 2
+    wr_row = df[df["gsis_id"] == "00-0036322"].iloc[0]
+    assert int(wr_row["attempts"]) == 0
+    assert int(wr_row["completions"]) == 0
+    assert int(wr_row["sacks"]) == 0
