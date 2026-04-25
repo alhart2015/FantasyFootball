@@ -71,6 +71,15 @@ def build_wr_features(
     wr_dc = dc[
         (dc["position"] == Position.WR.value) & (dc["team"].astype(str).isin(sch_teams))
     ].copy()
+    # Dedupe: a player can appear multiple times in the same depth chart (e.g.,
+    # listed under multiple slot labels like LWR + SWR, or traded mid-week).
+    # Keep the lowest depth_rank (the player's primary listing). Closing
+    # TODO #9c from PR #4 review.
+    wr_dc = (
+        wr_dc.sort_values(["gsis_id", "season", "week", "depth_rank"])
+        .drop_duplicates(subset=["gsis_id", "season", "week"], keep="first")
+        .copy()
+    )
     if wr_dc.empty:
         empty_cols = list(WrFeaturesSchema.to_schema().columns.keys())
         return WrFeaturesSchema.validate(pd.DataFrame(columns=empty_cols))
@@ -122,6 +131,23 @@ def build_wr_features(
     air_yards_share = trailing_n_share_in_group(
         ws_wr, value_col=Stat.RECEIVING_AIR_YARDS.value
     ).rename(columns={"share_l4": "air_yards_share_l4"})
+    # ``trailing_n_share_in_group`` groups by (gsis_id, team), so a player
+    # traded mid-trailing-window appears in two rows (one per team). The
+    # downstream merges on gsis_id alone would multiply output rows. Dedupe
+    # keeping the row with the highest share — a proxy for the player's
+    # primary team. This is a v1 hack; TODO #15 tracks a proper fix that
+    # restructures ``trailing_n_share_in_group`` to expose ``team`` and lets
+    # callers join on the canonical (gsis_id, team) pair.
+    target_share = (
+        target_share.sort_values(["gsis_id", "target_share_l4"], ascending=[True, False])
+        .drop_duplicates(subset=["gsis_id"], keep="first")
+        .copy()
+    )
+    air_yards_share = (
+        air_yards_share.sort_values(["gsis_id", "air_yards_share_l4"], ascending=[True, False])
+        .drop_duplicates(subset=["gsis_id"], keep="first")
+        .copy()
+    )
     # receiving_air_yards can be slightly negative on a TFL behind LOS, so the
     # per-player share can dip negative even though semantically we want a
     # [0, 1] feature. Clip — the schema's lower bound is 0.
@@ -162,9 +188,11 @@ def build_wr_features(
             }
         )
         # NGS reports share as a 0-100 percentage; the schema range is 0-1.
+        # Clip — real-data shares can dip slightly negative when team total
+        # air yards aggregates a TFL play, same situation as air_yards_share_l4.
         ngs_cols["percent_share_intended_air_yards_std"] = (
             ngs_cols["percent_share_intended_air_yards_std"].astype(float) / 100.0
-        )
+        ).clip(0.0, 1.0)
 
     # --- Game environment from schedules ---------------------------------
     game_env = build_game_environment(sch)
