@@ -8,7 +8,7 @@ import pandas as pd
 
 from projections.features._opponent import opp_allowed_fppg
 from projections.features._rolling import last_n_per_group, trailing_n_share_in_group
-from projections.features.wr import _build_game_environment, _exact_week_mask, _prior_mask
+from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
 from projections.schemas import (
     _PYARROW_STR,
     Position,
@@ -81,11 +81,11 @@ def build_rb_features(
     as_of_week: int,
 ) -> pd.DataFrame:
     """Build the RB feature DataFrame for week `as_of_week` of `season`."""
-    ws = weekly_stats[_prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
-    sc = snap_counts[_prior_mask(snap_counts, season=season, as_of_week=as_of_week)].copy()
-    ngs = ngs_rushing[_prior_mask(ngs_rushing, season=season, as_of_week=as_of_week)].copy()
-    dc = depth_charts[_exact_week_mask(depth_charts, season=season, as_of_week=as_of_week)].copy()
-    sch = schedules[_exact_week_mask(schedules, season=season, as_of_week=as_of_week)].copy()
+    ws = weekly_stats[prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
+    sc = snap_counts[prior_mask(snap_counts, season=season, as_of_week=as_of_week)].copy()
+    ngs = ngs_rushing[prior_mask(ngs_rushing, season=season, as_of_week=as_of_week)].copy()
+    dc = depth_charts[exact_week_mask(depth_charts, season=season, as_of_week=as_of_week)].copy()
+    sch = schedules[exact_week_mask(schedules, season=season, as_of_week=as_of_week)].copy()
 
     rb_dc = dc[dc["position"] == Position.RB.value].copy()
     if rb_dc.empty:
@@ -178,7 +178,7 @@ def build_rb_features(
         )
 
     # --- Game environment + opponent strength -----------------------------
-    game_env = _build_game_environment(sch)
+    game_env = build_game_environment(sch)
     opp_proxy_full = opp_allowed_fppg(
         ws_rb, position=Position.RB, ruleset=Ruleset.espn_ppr(), n_weeks=4
     )

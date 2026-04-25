@@ -11,6 +11,7 @@ import pandas as pd
 
 from projections.features._opponent import opp_allowed_fppg
 from projections.features._rolling import last_n_per_group, trailing_n_share_in_group
+from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
 from projections.schemas import (
     _PYARROW_STR,
     Position,
@@ -33,14 +34,6 @@ _ROLLING_ZERO_FILL_COLS: tuple[str, ...] = (
     "rushing_yards_per_game_l4",
     "target_share_l4",
 )
-
-
-def _prior_mask(df: pd.DataFrame, *, season: int, as_of_week: int) -> pd.Series:
-    return (df["season"] < season) | ((df["season"] == season) & (df["week"] < as_of_week))
-
-
-def _exact_week_mask(df: pd.DataFrame, *, season: int, as_of_week: int) -> pd.Series:
-    return (df["season"] == season) & (df["week"] == as_of_week)
 
 
 def _trailing_4_per_player(weekly_stats: pd.DataFrame, value_col: str) -> pd.DataFrame:
@@ -81,66 +74,6 @@ def _latest_ngs_snapshot(ngs: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _build_game_environment(schedules: pd.DataFrame) -> pd.DataFrame:
-    """Per-team game-environment row from a per-game schedules frame.
-
-    Output columns (one row per team-game, two per game):
-        season, week, team, opp_team, is_home, spread, implied_team_total,
-        roof_dome.
-
-    Sign convention: empirically verified against
-    `nfl_data_py.import_schedules([2023])`, `spread_line` is positive when the
-    HOME team is favored and negative when the AWAY team is favored. This
-    INVERTS the standard sportsbook convention. Concretely:
-
-        spread_line = +13.0 (KC home vs CHI, home_moneyline=-750) -> KC favored
-        spread_line = -11.5 (ARI home vs DAL, home_moneyline=+470) -> ARI dog
-
-    Implied team totals follow directly from spread_line:
-
-        home_implied = (total_line + spread_line) / 2
-        away_implied = (total_line - spread_line) / 2
-
-    The per-team `spread` column we expose downstream is the team's own signed
-    spread in the standard convention (favorite negative, dog positive):
-
-        home_spread = -spread_line   # home favored -> negative
-        away_spread = +spread_line   # away favored -> negative (since spread_line is negative)
-    """
-    home = schedules[
-        ["season", "week", "home_team", "away_team", "spread_line", "total_line", "roof"]
-    ].rename(columns={"home_team": "team", "away_team": "opp_team"})
-    home["is_home"] = True
-    home["spread"] = -home["spread_line"].astype(float)
-    home["implied_team_total"] = (
-        home["total_line"].astype(float) + home["spread_line"].astype(float)
-    ) / 2.0
-
-    away = schedules[
-        ["season", "week", "home_team", "away_team", "spread_line", "total_line", "roof"]
-    ].rename(columns={"away_team": "team", "home_team": "opp_team"})
-    away["is_home"] = False
-    away["spread"] = away["spread_line"].astype(float)
-    away["implied_team_total"] = (
-        away["total_line"].astype(float) - away["spread_line"].astype(float)
-    ) / 2.0
-
-    game_env = pd.concat([home, away], ignore_index=True)
-    game_env["roof_dome"] = game_env["roof"].isin(["dome", "closed"]).fillna(False).astype(bool)
-    return game_env[
-        [
-            "season",
-            "week",
-            "team",
-            "opp_team",
-            "is_home",
-            "spread",
-            "implied_team_total",
-            "roof_dome",
-        ]
-    ]
-
-
 def build_wr_features(
     *,
     weekly_stats: pd.DataFrame,
@@ -155,14 +88,14 @@ def build_wr_features(
 
     Inputs are validated against their respective schemas (caller's
     responsibility). The function filters every input to leakage-safe rows
-    before computing anything — see _prior_mask / _exact_week_mask.
+    before computing anything — see prior_mask / exact_week_mask.
     """
     # --- Leakage-safe input filtering -------------------------------------
-    ws = weekly_stats[_prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
-    sc = snap_counts[_prior_mask(snap_counts, season=season, as_of_week=as_of_week)].copy()
-    ngs = ngs_receiving[_prior_mask(ngs_receiving, season=season, as_of_week=as_of_week)].copy()
-    dc = depth_charts[_exact_week_mask(depth_charts, season=season, as_of_week=as_of_week)].copy()
-    sch = schedules[_exact_week_mask(schedules, season=season, as_of_week=as_of_week)].copy()
+    ws = weekly_stats[prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
+    sc = snap_counts[prior_mask(snap_counts, season=season, as_of_week=as_of_week)].copy()
+    ngs = ngs_receiving[prior_mask(ngs_receiving, season=season, as_of_week=as_of_week)].copy()
+    dc = depth_charts[exact_week_mask(depth_charts, season=season, as_of_week=as_of_week)].copy()
+    sch = schedules[exact_week_mask(schedules, season=season, as_of_week=as_of_week)].copy()
 
     # --- Rostered WRs in target week (depth chart drives roster set) ------
     wr_dc = dc[dc["position"] == Position.WR.value].copy()
@@ -258,7 +191,7 @@ def build_wr_features(
         )
 
     # --- Game environment from schedules ---------------------------------
-    game_env = _build_game_environment(sch)
+    game_env = build_game_environment(sch)
 
     # --- Opponent strength proxy ------------------------------------------
     opp_proxy_full = opp_allowed_fppg(

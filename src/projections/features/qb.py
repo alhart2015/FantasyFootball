@@ -11,7 +11,7 @@ import pandas as pd
 
 from projections.features._opponent import opp_allowed_fppg
 from projections.features._rolling import last_n_per_group
-from projections.features.wr import _build_game_environment, _exact_week_mask, _prior_mask
+from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
 from projections.schemas import (
     _PYARROW_STR,
     Position,
@@ -80,11 +80,11 @@ def build_qb_features(
 ) -> pd.DataFrame:
     """Build the QB feature DataFrame for week `as_of_week` of `season`."""
     # --- Leakage-safe input filtering -------------------------------------
-    ws = weekly_stats[_prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
-    sc = snap_counts[_prior_mask(snap_counts, season=season, as_of_week=as_of_week)].copy()
-    ngs = ngs_passing[_prior_mask(ngs_passing, season=season, as_of_week=as_of_week)].copy()
-    dc = depth_charts[_exact_week_mask(depth_charts, season=season, as_of_week=as_of_week)].copy()
-    sch = schedules[_exact_week_mask(schedules, season=season, as_of_week=as_of_week)].copy()
+    ws = weekly_stats[prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
+    sc = snap_counts[prior_mask(snap_counts, season=season, as_of_week=as_of_week)].copy()
+    ngs = ngs_passing[prior_mask(ngs_passing, season=season, as_of_week=as_of_week)].copy()
+    dc = depth_charts[exact_week_mask(depth_charts, season=season, as_of_week=as_of_week)].copy()
+    sch = schedules[exact_week_mask(schedules, season=season, as_of_week=as_of_week)].copy()
 
     # --- Rostered QBs in target week (depth chart drives roster set) ------
     qb_dc = dc[dc["position"] == Position.QB.value].copy()
@@ -173,7 +173,7 @@ def build_qb_features(
         )
 
     # --- Game environment from schedules ---------------------------------
-    game_env = _build_game_environment(sch)
+    game_env = build_game_environment(sch)
 
     # --- Opponent strength proxy ------------------------------------------
     opp_proxy_full = opp_allowed_fppg(

@@ -138,7 +138,7 @@ def test_end_to_end_ingest_and_features(
 
     # 5) Fixtures all describe week 3 of 2024. The feature builders require
     # depth chart + schedule rows for the *as_of_week* itself (filtered with
-    # `_exact_week_mask`). Compute features for as_of_week=4 so week 3 lands
+    # `exact_week_mask`). Compute features for as_of_week=4 so week 3 lands
     # in the prior window; inject week-4 depth/schedule rows from the week-3
     # ones.
     extra_dc = pd.concat([depth, depth.assign(week=4)], ignore_index=True)
