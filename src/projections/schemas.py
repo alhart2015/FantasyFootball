@@ -485,6 +485,51 @@ class QbFeaturesSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class RbFeaturesSchema(pa.DataFrameModel):
+    """RB feature DataFrame produced by `features.rb.build_rb_features`."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+
+    # Rushing usage (rolling)
+    carries_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_tds_per_game_l4: Series[float] = pa.Field(ge=0)
+    rush_share_l4: Series[float] = pa.Field(ge=0, le=1)
+
+    # Receiving usage
+    targets_per_game_l4: Series[float] = pa.Field(ge=0)
+    receptions_per_game_l4: Series[float] = pa.Field(ge=0)
+    receiving_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    target_share_l4: Series[float] = pa.Field(ge=0, le=1)
+    targets_per_game_std: Series[float] = pa.Field(ge=0)
+
+    # Snap / role
+    snap_pct_l4: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    depth_rank: Series[int] = pa.Field(ge=1, le=10, nullable=True)
+    passing_down_back: Series[bool]
+
+    # NGS rushing (season-to-date snapshot from prior week)
+    efficiency_std: Series[float] = pa.Field(nullable=True)
+    rush_yards_over_expected_per_att_std: Series[float] = pa.Field(nullable=True)
+    percent_attempts_gte_eight_defenders_std: Series[float] = pa.Field(nullable=True)
+
+    # Game environment
+    implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
+    spread: Series[float] = pa.Field(nullable=True)
+    is_home: Series[bool]
+    roof_dome: Series[bool]
+
+    # Opponent strength proxy
+    opp_allowed_rb_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
 class IdMapSchema(pa.DataFrameModel):
     """Cross-platform player id translation table."""
 
