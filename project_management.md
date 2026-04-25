@@ -6,28 +6,29 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ## Current status (as of 2026-04-24)
 
-**Projections Core — Plan 2a (Ingest expansion + WR feature builder) merged to `main` at commit `7926090`.**
+**Projections Core — Plan 2b (QB/RB/TE feature builders) merged to `main` at commit `<TBD-after-merge>`.**
 
 **Predecessors:**
 - Plan 1 (Foundations) merged at `8f02a6c`.
 - Dev tooling merged via `feat/dev-tooling`.
+- Plan 2a (Ingest expansion + WR feature builder) merged at `7926090`.
 
-**Plan 2a delivered:**
-- Four new ingest modules (`schedules`, `snap_counts`, `depth_charts`, `ngs` parameterized over passing/rushing/receiving) + 6 new partition tables, all idempotent.
-- `WeeklyStatsSchema` extended with `targets`, `receiving_air_yards`, `carries` (foundations-era omission).
-- `src/projections/features/` package with shared `_rolling.py`, `_opponent.py` helpers and a fully-tested `build_wr_features` (pure-function, no parquet storage).
-- 158 total tests (was 89 baseline; +69 new). 5 leakage tests for the WR builder, one per input source.
-- Drive-by cleanups: `_PYARROW_STR` to `schemas.py` (covering `weekly_stats.py` AND `id_map.py`), programmatic `_INTEGER_STATS`, trimmed ingest `__all__`.
+**Plan 2b delivered:**
+- `build_qb_features`, `build_rb_features`, `build_te_features` — pure-function builders mirroring `build_wr_features`'s shape.
+- Three new feature schemas (`QbFeaturesSchema`, `RbFeaturesSchema`, `TeFeaturesSchema`).
+- `WeeklyStatsSchema` extended with `attempts`, `completions`, `sacks` for QB features.
+- Generalized `trailing_n_share_in_group` helper in `_rolling.py` (migrated from `wr.py`'s local helper).
+- ~45 new tests (~200 total). 5 leakage tests per position (15 new).
 
 ---
 
 ## Next action
 
-**Recommended: Plan 2b — per-position feature builders for QB / RB / TE / K / DST.**
+**Recommended: Plan 3 — Model A baseline + season aggregation + first-class backtest harness.**
 
-2a validated the feature-builder pattern (signatures, leakage prevention, schemas, tests) end-to-end on WR. 2b copy-pastes the pattern across the remaining five positions, reusing `_rolling.py` and `_opponent.py` from 2a. Each position gets its own pandera schema (`QbFeaturesSchema`, etc.) following `WrFeaturesSchema` as the template. One PR per position or one bundled — TBD when 2b is brainstormed.
+All 4 offensive skill positions (QB/RB/WR/TE) now have feature builders. Plan 3 trains the v1 model per position, aggregates weekly outputs to season distributions (Monte Carlo with bye + availability), and stands up the backtest harness that gates future model changes.
 
-After 2b, Plan 3 (Model A baseline + season aggregation + backtest harness) becomes unblocked.
+K and DST builders (TODO #10) can land in parallel with Plan 3 — they're independent.
 
 ---
 
@@ -35,6 +36,14 @@ After 2b, Plan 3 (Model A baseline + season aggregation + backtest harness) beco
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-04-24 | `rushing_qb` boolean threshold = 5.0 carries/game over trailing 4; `passing_down_back` = 4.0 targets/game | Rough heuristics from feel. Not load-bearing; revisit at backtest time if categorization matters |
+| 2026-04-24 | TE target_share denominator includes WR + RB + TE (full pass-catching group) | TEs usually have only one fantasy-relevant player per team, so same-position-share would be ~1.0 and useless. Full-group share captures meaningful gradient |
+| 2026-04-24 | RB target_share denominator includes WR + RB + TE (full pass-catching group) | A workhorse RB getting 5 targets/game on a 30-target offense is meaningfully different from one getting 5 on a 20-target offense. Full-group denominator captures team passing volume, not just RB-on-RB share |
+| 2026-04-24 | Migrate `_trailing_4_share_per_team` from `wr.py` to `_rolling.py` as `trailing_n_share_in_group` | RB needs target_share against the full pass-catching group (not just RBs); TE needs the same. Generalize once, in the shared helper module, rather than duplicate in three builders |
+| 2026-04-24 | Extend `WeeklyStatsSchema` with `attempts`, `completions`, `sacks` | QB feature builder needs these source columns. All three are present in raw `nfl_data_py.import_weekly_data` output. Same incremental pattern as 2a's extension for `targets`/`carries`/`receiving_air_yards` |
+| 2026-04-24 | One bundled PR for QB/RB/TE (not three per-position PRs) | Repetitive, interlinked work; reviewing all three together catches drift. Each position lands as its own commit inside the bundle for easy retrospection |
+| 2026-04-24 | All 4 position builders use parallel files (no WR/TE shared base) | Each position's feature list will diverge over time as we add play-by-play-derived features. Premature DRY hurts later. Shared logic lives in `_rolling.py` / `_opponent.py` |
+| 2026-04-24 | K and DST split out into a future plan; 2b covers QB/RB/TE only | K needs FG-attempt data not in `WeeklyStatsSchema`; DST is team-level not player-level and needs play-by-play. Both should wait for the data they need rather than ship degraded v0 features |
 | 2026-04-24 | `nfl_data_py.import_snap_counts` returns `pfr_player_id` not `gsis_id`; ingest joins on id_map | Discovered during fixture-construction (Task 8). Snap_counts ingest now reads id_map.parquet and inner-joins pfr_id → gsis_id; bench/practice players with no id_map match are dropped silently |
 | 2026-04-24 | `spread_line` from `nfl_data_py` is positive when home favored (inverts standard sportsbook) | Discovered during code review of Task 15. Empirically verified against import_schedules([2023]). `_build_game_environment` in features/wr.py uses the empirically-correct convention; team-perspective `spread` follows standard "favorite is negative" |
 | 2026-04-24 | Split Plan 2 into 2a (ingest expansion + WR feature builder) and 2b (QB / RB / TE / K / DST feature builders) | Validate the feature-builder pattern end-to-end on one position before copy-pasting across five files; isolate ingest (mechanical) from features (greenfield design) |

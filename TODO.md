@@ -39,7 +39,7 @@ A short written recommendation: pick one modeling approach (covariance / scenari
 
 ### 2. Plan 2b — remaining position feature builders
 
-QB, RB, TE, K, DST. Each consuming the validated `wr.py` pattern, `_rolling.py`, and `_opponent.py` helpers from 2a. Each gets its own pandera schema (`QbFeaturesSchema`, `RbFeaturesSchema`, etc.). One PR per position or one bundled — TBD when 2b is brainstormed.
+**Status:** QB/RB/TE complete in Plan 2b (merged). K and DST split out into TODO #10.
 
 ### 3. Play-by-play ingest (`nfl_data_py.import_pbp_data`)
 
@@ -74,3 +74,14 @@ a) `is_home` and `roof_dome` are non-nullable in `WrFeaturesSchema` but the sche
 b) `IdMapSchema.pfr_id` is not marked `unique=True`. The snap_counts ingest does an inner-join on pfr_id; duplicate pfr_ids in id_map would multiply rows. Add `unique=True` to `pfr_id` (and to `espn_id`/`sleeper_id` for symmetry) as defense-in-depth, or add `.drop_duplicates(subset=["pfr_id"])` in the snap_counts join helper.
 
 c) `_trailing_4_share_per_team` in `features/wr.py` groups by `(gsis_id, team)`, which produces two rows for any player traded mid-season. The downstream merge in `build_wr_features` joins on `gsis_id` only, so duplicates would propagate into the output. Not exercised by the synthetic fixtures (no traded players). Fix: filter `last4_player` to only the player's *current* team before computing the share, or merge on `(gsis_id, team)` so only the matching team's row survives.
+
+### 10. Plan 2c — K and DST feature builders
+
+Both positions need data we don't currently ingest:
+
+- **K**: spec calls for "recent FG distance distribution" and "opp redzone TD allowed %." Neither is in `WeeklyStatsSchema`. Need to ingest a new source covering FG attempts by distance and accuracy by range. `nfl_data_py.import_weekly_pfr_data` may have this — verify before designing.
+- **DST**: team-level not player-level. Schema's primary key is `Team`, not `GsisId` — fundamentally different from the per-player pattern Plan 2a/2b established. Intended features (opp pass-block win rate, sack rate allowed, turnover-worthy throw rate) all need play-by-play (TODO #3).
+
+Decision before brainstorming Plan 2c: do we ingest the missing data first (extending the ingest layer), or build degraded v0 K/DST features from `implied_team_total` alone? The latter is fast but creates a future rewrite; the former takes longer but yields the right shape.
+
+Plan 3 (Model A baseline) doesn't depend on K/DST, so this can run in parallel.
