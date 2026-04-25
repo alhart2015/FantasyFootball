@@ -6,7 +6,7 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ## Current status (as of 2026-04-24)
 
-**Projections Core — Plan 2a (Ingest expansion + WR feature builder) merged to `main` at commit `<TBD-after-merge>`.**
+**Projections Core — Plan 2a (Ingest expansion + WR feature builder) merged to `main` at commit `7926090`.**
 
 **Predecessors:**
 - Plan 1 (Foundations) merged at `8f02a6c`.
