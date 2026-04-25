@@ -13,7 +13,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
+import numpy as np
 import pandas as pd
+from sklearn.linear_model import RidgeCV
 
 from projections.schemas import DistributionFamily, Position, Stat
 
@@ -79,6 +81,69 @@ class BaselineModel:
     variance_params: dict[Stat, dict[str, float]] = field(default_factory=dict)
     train_seasons: tuple[int, int] | None = field(default=None)
     code_hash: str | None = field(default=None)
+
+    def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:
+        """Train one RidgeCV per target stat. See spec §3.1 for the pipeline."""
+        # Schema validation — defensive at the boundary even though our caller
+        # is supposed to have already validated.
+        from projections.schemas import WeeklyStatsSchema, WrFeaturesSchema
+
+        features = WrFeaturesSchema.validate(features)
+        weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
+
+        # Inner-join features with truth on (gsis_id, season, week). Players in
+        # the depth chart who didn't actually play that week have no truth and
+        # are silently dropped — that's correct, the model only learns from
+        # players who played.
+        ws = weekly_stats[weekly_stats["position"] == self.position.value].copy()
+        joined = features.merge(
+            ws[
+                [
+                    "gsis_id",
+                    "season",
+                    "week",
+                    *(s.value for s in self.target_stats),
+                ]
+            ],
+            on=["gsis_id", "season", "week"],
+            how="inner",
+            validate="one_to_one",
+        )
+
+        # Build feature matrix, persist column order. Drop rows with NaN in any
+        # feature column at fit time (mostly week-1-of-season rows where
+        # rolling features have no prior history).
+        x_cols = list(self.feature_columns)
+        feature_frame = joined[x_cols].copy()
+        # Coerce booleans to 0/1.
+        for col in feature_frame.columns:
+            if feature_frame[col].dtype == bool:
+                feature_frame[col] = feature_frame[col].astype(np.int8)
+        # Persist medians BEFORE dropping NaN rows so predict-time imputation
+        # uses the broadest possible signal.
+        self.feature_means = feature_frame.median(skipna=True).astype(float)
+
+        feature_frame = feature_frame.dropna()
+        if feature_frame.empty:
+            raise ValueError(
+                "After dropping NaN feature rows, no training data remains. "
+                "Check the feature builder and inputs."
+            )
+        truth_frame = joined.loc[feature_frame.index, [s.value for s in self.target_stats]]
+
+        x = feature_frame.to_numpy(dtype=np.float64)
+
+        # Fit one RidgeCV per stat.
+        alphas = np.logspace(-3, 3, 13)
+        for stat in self.target_stats:
+            y = truth_frame[stat.value].to_numpy(dtype=np.float64)
+            ridge = RidgeCV(alphas=alphas)
+            ridge.fit(x, y)
+            self.ridges[stat] = ridge
+
+        # Record the season range we trained on.
+        seasons = sorted(joined["season"].unique().tolist())
+        self.train_seasons = (int(seasons[0]), int(seasons[-1]))
 
 
 def wr_baseline() -> BaselineModel:

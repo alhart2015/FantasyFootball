@@ -58,20 +58,22 @@ def _wr_weekly_stats_row(
 def baseline_weekly_stats() -> pd.DataFrame:
     """8 weeks of 2024 + 4 weeks of 2025 stats for 5 synthetic WRs.
 
-    2024 = training universe; 2025 = held-out.
+    2024 = training universe; 2025 = held-out. KC and MIN play each other
+    every week so the opponent-allowed-fppg proxy resolves (MIN's allowed WR
+    FPPG comes from KC's WRs and vice versa).
     """
     rows: list[dict[str, object]] = []
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
-            opp = "DEN" if week % 2 == 1 else "DET"
             for gsis_id, team, base_targets in zip(_GSIS_IDS, _TEAMS, _TARGETS_BASE, strict=True):
+                opponent = "MIN" if team == "KC" else "KC"
                 rows.append(
                     _wr_weekly_stats_row(
                         gsis_id=gsis_id,
                         season=season,
                         week=week,
                         team=team,
-                        opponent=opp if team != opp else ("CHI" if opp == "DEN" else "GB"),
+                        opponent=opponent,
                         base_targets=base_targets,
                     )
                 )
@@ -146,54 +148,60 @@ def baseline_features(baseline_weekly_stats: pd.DataFrame) -> pd.DataFrame:
     for col in ("gsis_id", "team", "position", "depth_team"):
         depth[col] = depth[col].astype(_PYARROW_STR)
 
-    # NGS: empty frame is acceptable to the builder (it'll fill NaN; with
-    # ProjectionWeeklySchema.coerce + WrFeaturesSchema nullable cols this is
-    # fine). Build minimal columns.
-    ngs = pd.DataFrame(
-        columns=[
-            "gsis_id",
-            "season",
-            "week",
-            "team",
-            "position",
-            "avg_separation",
-            "avg_intended_air_yards",
-            "percent_share_of_intended_air_yards",
-            "avg_yac_above_expectation",
-        ]
-    )
+    # NGS: per-(season, week) snapshot per WR with stable, per-player synthetic
+    # values keyed off base_targets so the rows are non-NaN at fit time.
+    # The wr.py builder applies prior_mask and then takes the latest snapshot
+    # per gsis_id; values vary slightly week-to-week so the snapshot isn't
+    # week-1-only.
+    ngs_rows: list[dict[str, object]] = []
+    for season in (2024, 2025):
+        weeks = range(1, 9) if season == 2024 else range(1, 5)
+        for week in weeks:
+            for gsis_id, team, base_targets in zip(_GSIS_IDS, _TEAMS, _TARGETS_BASE, strict=True):
+                ngs_rows.append(
+                    {
+                        "gsis_id": gsis_id,
+                        "season": season,
+                        "week": week,
+                        "team": team,
+                        "position": "WR",
+                        "avg_separation": 2.5 + base_targets * 0.05,
+                        "avg_intended_air_yards": 9.0 + base_targets * 0.2,
+                        # 0-100 scale (wr.py divides by 100 for the schema's 0-1 range).
+                        "percent_share_of_intended_air_yards": min(95.0, 5.0 + base_targets * 4.0),
+                        "avg_yac_above_expectation": -0.2 + base_targets * 0.05,
+                    }
+                )
+    ngs = pd.DataFrame(ngs_rows)
     for col in ("gsis_id", "team", "position"):
         ngs[col] = ngs[col].astype(_PYARROW_STR)
 
-    # Schedules: one game per team per week.
+    # Schedules: KC hosts MIN every week. Single game per (season, week)
+    # covers both teams' WRs.
     sch_rows: list[dict[str, object]] = []
     for season in (2024, 2025):
         weeks = range(1, 9) if season == 2024 else range(1, 5)
         for week in weeks:
-            opp = "DEN" if week % 2 == 1 else "DET"
-            for team in {"KC", "MIN"}:
-                home_team = team
-                away_team = opp if team != opp else ("CHI" if opp == "DEN" else "GB")
-                sch_rows.append(
-                    {
-                        "season": season,
-                        "week": week,
-                        "game_id": f"{season}_{week:02d}_{home_team}_{away_team}",
-                        "home_team": home_team,
-                        "away_team": away_team,
-                        "kickoff": pd.Timestamp(f"{season}-09-{week + 1:02d}T17:00:00Z")
-                        .tz_convert("UTC")
-                        .as_unit("us"),
-                        "spread_line": -3.0,
-                        "total_line": 47.0,
-                        "home_moneyline": -150,
-                        "away_moneyline": 130,
-                        "surface": "grass",
-                        "roof": "outdoors",
-                        "temp": 60,
-                        "wind": 5,
-                    }
-                )
+            sch_rows.append(
+                {
+                    "season": season,
+                    "week": week,
+                    "game_id": f"{season}_{week:02d}_KC_MIN",
+                    "home_team": "KC",
+                    "away_team": "MIN",
+                    "kickoff": pd.Timestamp(f"{season}-09-{week + 1:02d}T17:00:00Z")
+                    .tz_convert("UTC")
+                    .as_unit("us"),
+                    "spread_line": -3.0,
+                    "total_line": 47.0,
+                    "home_moneyline": -150,
+                    "away_moneyline": 130,
+                    "surface": "grass",
+                    "roof": "outdoors",
+                    "temp": 60,
+                    "wind": 5,
+                }
+            )
     schedules = pd.DataFrame(sch_rows)
     for col in ("game_id", "home_team", "away_team", "surface", "roof"):
         schedules[col] = schedules[col].astype(_PYARROW_STR)
