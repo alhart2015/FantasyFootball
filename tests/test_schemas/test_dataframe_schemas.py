@@ -14,6 +14,7 @@ from projections.schemas import (
     NgsReceivingSchema,
     NgsRushingSchema,
     ProjectionWeeklySchema,
+    QbFeaturesSchema,
     SchedulesSchema,
     SnapCountsSchema,
     WeeklyStatsSchema,
@@ -446,3 +447,70 @@ def test_wr_features_schema_rejects_target_share_over_one() -> None:
     )
     with pytest.raises(SchemaError):
         WrFeaturesSchema.validate(df)
+
+
+def test_qb_features_schema_accepts_valid_row() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0034857"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["KC"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["DET"], dtype=_PYARROW_STR),
+            "pass_attempts_per_game_l4": [38.5],
+            "passing_yards_per_game_l4": [285.0],
+            "passing_tds_per_game_l4": [2.25],
+            "interceptions_per_game_l4": [0.5],
+            "sacks_per_game_l4": [2.0],
+            "passing_yards_per_game_std": [275.0],
+            "rushing_attempts_per_game_l4": [4.5],
+            "rushing_yards_per_game_l4": [22.0],
+            "rushing_qb": [False],
+            "snap_pct_l4": [1.0],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "aggressiveness_std": [12.5],
+            "completion_percentage_above_expectation_std": [3.3],
+            "avg_intended_air_yards_std": [8.1],
+            "avg_time_to_throw_std": [2.71],
+            "implied_team_total": [27.5],
+            "spread": [-3.5],
+            "is_home": [True],
+            "roof_dome": [False],
+            "opp_allowed_qb_fppg_l4": [18.5],
+        }
+    )
+    QbFeaturesSchema.validate(df)
+
+
+def test_qb_features_schema_rejects_negative_pass_attempts() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0034857"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["KC"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["DET"], dtype=_PYARROW_STR),
+            "pass_attempts_per_game_l4": [-1.0],  # invalid
+            "passing_yards_per_game_l4": [285.0],
+            "passing_tds_per_game_l4": [2.25],
+            "interceptions_per_game_l4": [0.5],
+            "sacks_per_game_l4": [2.0],
+            "passing_yards_per_game_std": [275.0],
+            "rushing_attempts_per_game_l4": [4.5],
+            "rushing_yards_per_game_l4": [22.0],
+            "rushing_qb": [False],
+            "snap_pct_l4": [1.0],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "aggressiveness_std": [12.5],
+            "completion_percentage_above_expectation_std": [3.3],
+            "avg_intended_air_yards_std": [8.1],
+            "avg_time_to_throw_std": [2.71],
+            "implied_team_total": [27.5],
+            "spread": [-3.5],
+            "is_home": [True],
+            "roof_dome": [False],
+            "opp_allowed_qb_fppg_l4": [18.5],
+        }
+    )
+    with pytest.raises(SchemaError):
+        QbFeaturesSchema.validate(df)
