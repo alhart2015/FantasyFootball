@@ -530,6 +530,45 @@ class RbFeaturesSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class TeFeaturesSchema(pa.DataFrameModel):
+    """TE feature DataFrame produced by `features.te.build_te_features`."""
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+
+    # Receiving usage (rolling)
+    targets_per_game_l4: Series[float] = pa.Field(ge=0)
+    targets_per_game_std: Series[float] = pa.Field(ge=0)
+    target_share_l4: Series[float] = pa.Field(ge=0, le=1)
+    receptions_per_game_l4: Series[float] = pa.Field(ge=0)
+    receiving_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    receiving_tds_per_game_l4: Series[float] = pa.Field(ge=0)
+
+    # Snap / role
+    snap_pct_l4: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    depth_rank: Series[int] = pa.Field(ge=1, le=10, nullable=True)
+
+    # NGS receiving (season-to-date snapshot from prior week)
+    avg_separation_std: Series[float] = pa.Field(nullable=True)
+    avg_intended_air_yards_std: Series[float] = pa.Field(nullable=True)
+    avg_yac_above_expectation_std: Series[float] = pa.Field(nullable=True)
+
+    # Game environment
+    implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
+    spread: Series[float] = pa.Field(nullable=True)
+    is_home: Series[bool]
+    roof_dome: Series[bool]
+
+    # Opponent strength proxy
+    opp_allowed_te_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
 class IdMapSchema(pa.DataFrameModel):
     """Cross-platform player id translation table."""
 

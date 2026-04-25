@@ -18,6 +18,7 @@ from projections.schemas import (
     RbFeaturesSchema,
     SchedulesSchema,
     SnapCountsSchema,
+    TeFeaturesSchema,
     WeeklyStatsSchema,
     WrFeaturesSchema,
 )
@@ -582,3 +583,62 @@ def test_rb_features_schema_rejects_rush_share_over_one() -> None:
     )
     with pytest.raises(SchemaError):
         RbFeaturesSchema.validate(df)
+
+
+def test_te_features_schema_accepts_valid_row() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036440"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["SF"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["SEA"], dtype=_PYARROW_STR),
+            "targets_per_game_l4": [7.5],
+            "targets_per_game_std": [7.0],
+            "target_share_l4": [0.18],
+            "receptions_per_game_l4": [5.5],
+            "receiving_yards_per_game_l4": [62.0],
+            "receiving_tds_per_game_l4": [0.5],
+            "snap_pct_l4": [0.92],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "avg_separation_std": [2.8],
+            "avg_intended_air_yards_std": [9.0],
+            "avg_yac_above_expectation_std": [0.4],
+            "implied_team_total": [24.0],
+            "spread": [-1.5],
+            "is_home": [True],
+            "roof_dome": [False],
+            "opp_allowed_te_fppg_l4": [10.5],
+        }
+    )
+    TeFeaturesSchema.validate(df)
+
+
+def test_te_features_schema_rejects_target_share_over_one() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036440"], dtype=_PYARROW_STR),
+            "season": [2024],
+            "week": [6],
+            "team": pd.array(["SF"], dtype=_PYARROW_STR),
+            "opponent": pd.array(["SEA"], dtype=_PYARROW_STR),
+            "targets_per_game_l4": [7.5],
+            "targets_per_game_std": [7.0],
+            "target_share_l4": [1.2],  # invalid
+            "receptions_per_game_l4": [5.5],
+            "receiving_yards_per_game_l4": [62.0],
+            "receiving_tds_per_game_l4": [0.5],
+            "snap_pct_l4": [0.92],
+            "depth_rank": pd.array([1], dtype=pd.Int64Dtype()),
+            "avg_separation_std": [2.8],
+            "avg_intended_air_yards_std": [9.0],
+            "avg_yac_above_expectation_std": [0.4],
+            "implied_team_total": [24.0],
+            "spread": [-1.5],
+            "is_home": [True],
+            "roof_dome": [False],
+            "opp_allowed_te_fppg_l4": [10.5],
+        }
+    )
+    with pytest.raises(SchemaError):
+        TeFeaturesSchema.validate(df)
