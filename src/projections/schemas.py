@@ -236,7 +236,7 @@ class WeeklyStatsSchema(pa.DataFrameModel):
     passing_yards: Series[float] = pa.Field(ge=-100, le=800)
     passing_tds: Series[int] = pa.Field(ge=0, le=15)
     interceptions: Series[int] = pa.Field(ge=0, le=15)
-    attempts: Series[int] = pa.Field(ge=0, le=70)
+    attempts: Series[int] = pa.Field(ge=0, le=80)
     completions: Series[int] = pa.Field(ge=0, le=60)
     sacks: Series[int] = pa.Field(ge=0, le=15)
     rushing_yards: Series[float] = pa.Field(ge=-50, le=400)
@@ -438,6 +438,10 @@ class WrFeaturesSchema(pa.DataFrameModel):
 
     class Config:
         strict = "filter"
+        # Required so the empty-depth-chart fast path validates: a
+        # `pd.DataFrame(columns=...)` produces object-dtype columns, which
+        # pandera otherwise rejects against the typed Series declarations.
+        coerce = True
 
 
 class QbFeaturesSchema(pa.DataFrameModel):
@@ -483,6 +487,7 @@ class QbFeaturesSchema(pa.DataFrameModel):
 
     class Config:
         strict = "filter"
+        coerce = True  # see WrFeaturesSchema.Config for rationale
 
 
 class RbFeaturesSchema(pa.DataFrameModel):
@@ -528,6 +533,7 @@ class RbFeaturesSchema(pa.DataFrameModel):
 
     class Config:
         strict = "filter"
+        coerce = True  # see WrFeaturesSchema.Config for rationale
 
 
 class TeFeaturesSchema(pa.DataFrameModel):
@@ -567,6 +573,7 @@ class TeFeaturesSchema(pa.DataFrameModel):
 
     class Config:
         strict = "filter"
+        coerce = True  # see WrFeaturesSchema.Config for rationale
 
 
 class IdMapSchema(pa.DataFrameModel):
