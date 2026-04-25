@@ -29,7 +29,7 @@ from projections.schemas import (
 from projections.store import write_partition
 
 NgsStatType = Literal["passing", "rushing", "receiving"]
-_VALID_STAT_TYPES: tuple[NgsStatType, ...] = ("passing", "rushing", "receiving")
+STAT_TYPES: tuple[NgsStatType, ...] = ("passing", "rushing", "receiving")
 
 _RENAME = {
     "player_gsis_id": "gsis_id",
@@ -141,8 +141,8 @@ def refresh_ngs(
 
     Writes to `data/raw/ngs_{stat_type}/season=YYYY/part.parquet`.
     """
-    if stat_type not in _VALID_STAT_TYPES:
-        raise ValueError(f"stat_type must be one of {_VALID_STAT_TYPES}, got {stat_type!r}")
+    if stat_type not in STAT_TYPES:
+        raise ValueError(f"stat_type must be one of {STAT_TYPES}, got {stat_type!r}")
 
     table = f"ngs_{stat_type}"
     written: list[Path] = []
