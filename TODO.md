@@ -101,3 +101,30 @@ Two fix options:
 - (b) Pack the full `points.samples` array (np.float64 × 10000 = 80KB per row, msgpack-compressible). Material storage cost; right answer once parquet partitioning is stable, but premature for v1.
 
 Decide before Plan 3c's backtest output consumes ProjectionWeeklySchema rows.
+
+### 15. Restructure `trailing_n_share_in_group` to expose `team`
+
+Surfaced during Plan 3a Task 17 (real-data training). `trailing_n_share_in_group` (in `src/projections/features/_rolling.py`) groups by `(gsis_id, team)` so a player traded mid-trailing-window appears in two rows. Downstream merges on `gsis_id` alone multiply rows.
+
+Plan 3a's WR builder currently works around this with a per-`gsis_id` dedupe in `wr.py` keeping the row with the highest share — a pragmatic v1 hack documented inline. Same root cause affects RB/TE builders (verified: `rb.py` and `te.py` both merge target_share on `gsis_id` only). They will need the same hack OR the proper fix when QB/RB/TE Model A baselines train on real data in Plan 3b.
+
+Proper fix: change the helper to return `[gsis_id, team, share_l4]` and let callers join on `(gsis_id, team)`. Update WR / RB / TE builders to use the new join keys. Remove the per-`gsis_id` dedupe hacks. Schema for `trailing_n_share_in_group` returns is internal — no migration concerns.
+
+Tackle in Plan 3b alongside QB/RB/TE Model A generalization, when those builders also need real-data hardening.
+
+### 16. Real-data drifts not caught by synthetic-fixture tests
+
+Surfaced during Plan 3a Tasks 14-17. The synthetic fixtures used by 2a/2b/3a's CI tests don't exercise the real `nfl_data_py` API surface. Eight ingest/feature drifts had to be patched live during Plan 3a's first real-data pull:
+
+1. `weekly_stats`: `fumbles_lost` had to be derived from three source-specific columns (no aggregated column upstream).
+2. `weekly_stats`/`depth_charts`/`ngs`/`snap_counts`: int32 vs int64 dtype mismatch on `season`/`week`.
+3. `depth_charts`/`ngs`/`snap_counts`: NaN season/week rows had to be filtered before int coercion.
+4. `ngs`: pro-bowl/all-star weeks (>22) and season-summary rows (week=0) had to be filtered.
+5. `id_map`: 16+ pro-football-reference 3-letter team aliases (GBP, KAN, NWE, NOR, SDG, TAM, etc.).
+6. `id_map`: "FA"/"FA*" (free agent) team codes had to be handled as None.
+7. `id_map`: malformed legacy gsis_ids (PFR-style strings) had to be filtered.
+8. `wr.py`: bye-week WRs without schedule rows; duplicate depth-chart entries; negative trailing-mean yardage; share calc going negative.
+
+This is exactly what TODO #8 (opt-in `nfl_data_py` API-drift smoke tests) is supposed to catch. Plan 3a's experience strongly motivates building TODO #8 now rather than later — the next real-data pull (Plan 3b for QB/RB/TE; Plan 3c's backtest harness training) WILL hit similar drift, and catching it in CI saves ~1 hour of debugging per drift instance.
+
+Recommend: do TODO #8 before Plan 3b starts.
