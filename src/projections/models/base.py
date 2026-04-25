@@ -38,6 +38,9 @@ class Model(Protocol):
 
         Persisted into every projection row produced by predict_distribution
         so we can always trace which model produced which projection.
+
+        Implementations may raise ``RuntimeError`` if accessed on an unfitted
+        instance -- the model_id depends on training-time state.
         """
         ...
 

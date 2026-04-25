@@ -293,9 +293,26 @@ class BaselineModel:
         )
 
     def predict_distribution(self, features: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
-        """Predict per-player-week fantasy-points distributions under
-        ``ruleset``. Returns a DataFrame validated against
-        ``ProjectionWeeklySchema``.
+        """Predict per-player-week fantasy-points distributions under ``ruleset``.
+
+        Returns a DataFrame validated against ``ProjectionWeeklySchema`` with one
+        row per ``features`` row. The persisted ``mean`` / ``p10`` / ``p50`` /
+        ``p90`` columns are the canonical per-row distributional summary.
+
+        v1 limitation -- cross-row sample correlation: every row's Monte Carlo
+        uses the same RNG seed (42), so the underlying sample arrays are
+        correlated across rows. Per-row reductions (mean, quantiles) are
+        unaffected. Callers that *combine* multiple rows' samples (DFS lineup
+        variance, roster-total simulation) MUST NOT assume cross-row
+        independence. Tracked as TODO #13 (per-row seed derivation).
+
+        v1 limitation -- params blob is summary-only: family="SAMPLED" but the
+        ``params`` bytes encode only ``{"samples_summary": {"n", "mean"}}``,
+        not the full sample array. The persisted distributional info lives in
+        the ``mean`` / ``p10`` / ``p50`` / ``p90`` columns; ``params`` is a
+        breadcrumb. A future SAMPLED_SUMMARY enum value or a full-samples
+        params encoding can address this without breaking the schema. Tracked
+        as TODO #14.
         """
         features = WrFeaturesSchema.validate(features)
         if features.empty:
@@ -349,6 +366,32 @@ class BaselineModel:
         # declares Series[str] and pandera+coerce will error on object dtype.
         out["position"] = out["position"].astype(_PYARROW_STR)
         return ProjectionWeeklySchema.validate(out)
+
+    def save(self, path: Path) -> None:
+        """Serialize the fitted model to ``path`` via joblib.
+
+        Refuses to save an unfitted instance: an artifact without a
+        ``code_hash`` / ``train_seasons`` cannot derive a stable ``model_id``
+        and would silently produce un-traceable projections on load.
+        """
+        import joblib
+
+        if self.code_hash is None or self.train_seasons is None:
+            raise RuntimeError("Cannot save an unfitted BaselineModel")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(self, path)
+
+    @classmethod
+    def load(cls, path: Path) -> BaselineModel:
+        """Deserialize a BaselineModel from ``path``. Raises ``TypeError`` if
+        the artifact decodes to a different class -- defends against loading a
+        future GBM artifact through this entrypoint."""
+        import joblib
+
+        loaded = joblib.load(path)
+        if not isinstance(loaded, cls):
+            raise TypeError(f"Expected BaselineModel, got {type(loaded).__name__}")
+        return loaded
 
 
 def wr_baseline() -> BaselineModel:

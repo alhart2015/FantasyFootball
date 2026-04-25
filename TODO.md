@@ -85,3 +85,19 @@ Both positions need data we don't currently ingest:
 Decision before brainstorming Plan 2c: do we ingest the missing data first (extending the ingest layer), or build degraded v0 K/DST features from `implied_team_total` alone? The latter is fast but creates a future rewrite; the former takes longer but yields the right shape.
 
 Plan 3 (Model A baseline) doesn't depend on K/DST, so this can run in parallel.
+
+### 13. Per-row seed derivation in BaselineModel.predict_distribution
+
+Surfaced in PR for Plan 3a (Task 9 review). `BaselineModel.predict_distribution` calls `score_distribution(..., seed=42)` for every row, so the underlying Monte Carlo sample arrays are correlated across rows. Per-row stats (mean/p10/p50/p90) are unaffected, but downstream callers that combine multiple rows' samples (DFS lineup variance, roster-total simulation, joint correlations once TODO #1 lands) MUST NOT assume cross-row independence.
+
+Fix: derive per-row seeds from `(gsis_id, season, week, ruleset.name)` (e.g., `hash(...) & 0xFFFFFFFF`) so each row gets an independent draw. Cheap, no perf cost. Defer until Plan 3c's backtest harness or DFS work needs cross-row independence.
+
+### 14. ProjectionWeeklySchema params blob carries summary, not samples
+
+Surfaced in PR for Plan 3a (Task 9 review). `BaselineModel.predict_distribution` sets `family="SAMPLED"` but the `params` bytes encode only `{"samples_summary": {"n", "mean"}}`, not the full sample array. The persisted distributional info lives in `mean`/`p10`/`p50`/`p90`; `params` is a breadcrumb.
+
+Two fix options:
+- (a) Add `DistributionFamily.SAMPLED_SUMMARY` enum value; rename the family on these rows. Backward-compatible.
+- (b) Pack the full `points.samples` array (np.float64 × 10000 = 80KB per row, msgpack-compressible). Material storage cost; right answer once parquet partitioning is stable, but premature for v1.
+
+Decide before Plan 3c's backtest output consumes ProjectionWeeklySchema rows.

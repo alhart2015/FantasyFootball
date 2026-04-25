@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import RidgeCV
@@ -214,3 +216,54 @@ def test_predict_distribution_p10_le_p50_le_p90(
     out = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
     assert (out["p10"] <= out["p50"]).all()
     assert (out["p50"] <= out["p90"]).all()
+
+
+def test_baseline_save_load_round_trip_preserves_predictions(
+    tmp_path: Path,
+    baseline_features: pd.DataFrame,
+    baseline_weekly_stats: pd.DataFrame,
+) -> None:
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+
+    artifact = tmp_path / "wr-baseline.joblib"
+    model.save(artifact)
+    assert artifact.exists()
+
+    from projections.models import BaselineModel
+
+    loaded = BaselineModel.load(artifact)
+    assert loaded.position == model.position
+    assert loaded.model_id == model.model_id
+
+    week = baseline_features[
+        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    ]
+    out_orig = model.predict_distribution(week, ruleset=Ruleset.espn_ppr())
+    out_loaded = loaded.predict_distribution(week, ruleset=Ruleset.espn_ppr())
+    pd.testing.assert_frame_equal(
+        out_orig.drop(columns=["generated_at"]),
+        out_loaded.drop(columns=["generated_at"]),
+    )
+
+
+def test_model_id_format(
+    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+) -> None:
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    parts = model.model_id.split(":")
+    assert len(parts) == 4
+    assert parts[0] == "baseline"
+    assert parts[1] == "wr"
+    assert len(parts[2]) == 8  # code_hash
+    assert "-" in parts[3]
+
+
+def test_unfitted_model_id_raises() -> None:
+    model = wr_baseline()
+    try:
+        _ = model.model_id
+    except RuntimeError:
+        return
+    raise AssertionError("Unfitted model.model_id should raise RuntimeError")
