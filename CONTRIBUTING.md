@@ -213,6 +213,20 @@ Always test idempotency (run twice, assert row count doesn't double) and team-co
 
 Don't hit the network in tests. The `_fetch_raw_*` indirection exists exactly so monkeypatching is trivial.
 
+### After bumping `nfl_data_py`
+
+CI's synthetic fixtures don't exercise the live API surface, so a `nfl_data_py` version bump can pass `pytest -v` and still break a real refresh. We catch upstream column-rename / column-removal drift with opt-in smokes in `tests/test_ingest/test_api_drift.py`, marked `@pytest.mark.network` and skipped by default.
+
+Run them after any `nfl_data_py` version change in `pyproject.toml`:
+
+```bash
+pytest -m network --run-network -q
+```
+
+Each smoke fetches a tiny live slice (one season — currently 2023) for one ingest source, asserts every raw column the corresponding `_normalize_one_season` reads is present, and runs the normalize end-to-end so pandera surfaces dtype / value drift too. When a smoke fails, the assertion message names the missing column(s); patch the corresponding ingest module's `_RENAME` / `_KEEP` / schema and re-run. If the drift was non-trivial, log a TODO note alongside the existing TODO #16 entries.
+
+When you add a new ingest source, add a matching smoke test alongside the synthetic-fixture test — the pattern is one `test_<source>_api_columns_and_schema` function per source.
+
 ## Adding a new pandera schema
 
 Schemas live in `src/projections/schemas.py` (single source of truth). Append your schema after the existing ones.

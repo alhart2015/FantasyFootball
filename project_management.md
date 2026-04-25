@@ -75,9 +75,9 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 Plan 3a pinned the `Model` Protocol, the per-stat-regression-to-fantasy-points pipeline, and joblib persistence on a single position. Plan 3b applies the same pattern to QB / RB / TE. Mostly mechanical (new factories `qb_baseline()` / `rb_baseline()` / `te_baseline()` + per-position target stats / feature columns / dist families). Expected blast radius: similar to Plan 2b (~3 days).
 
-**Pre-requisite: TODO #8** (opt-in `nfl_data_py` API-drift smoke tests) is now strongly motivated by Plan 3a's experience — eight real-data drifts had to be patched live. Doing TODO #8 before Plan 3b starts will catch QB/RB/TE-specific drifts in CI rather than during training. Recommended.
-
-**Also pre-requisite: TODO #15** (restructure `trailing_n_share_in_group` to expose team) — Plan 3a's WR builder works around the traded-player issue with a per-`gsis_id` dedupe; RB/TE builders will need the same hack OR the proper fix.
+**Pre-requisites: both closed before 3b kickoff.**
+- TODO #8 (opt-in `nfl_data_py` API-drift smoke tests) — closed: opt-in `pytest -m network --run-network` smokes added in `tests/test_ingest/test_api_drift.py`, post-bump procedure documented in `CONTRIBUTING.md` "After bumping `nfl_data_py`."
+- TODO #15 (restructure `trailing_n_share_in_group` to expose team) — closed: helper now returns `[gsis_id, team, share_l<n>]`; WR / RB / TE builders all merge shares on `(gsis_id, team)`; v1 dedupe hack removed from `wr.py`. RB/TE builders trained against real data in 3b will not need the same workaround.
 
 After 3b: Plan 3c (season aggregation + walk-forward backtest harness with CI threshold gating).
 
@@ -98,6 +98,8 @@ After 3b: Plan 3c (season aggregation + walk-forward backtest harness with CI th
 | 2026-04-25 | Per-row sample seed in `score_distribution` is fixed at `42` for v1 | Documented in `predict_distribution` docstring + TODO #13. Cross-row sample correlation; fine for per-row stats; matters when callers combine samples (DFS lineup variance). Defer fix to Plan 3c or DFS work. |
 | 2026-04-25 | `family="SAMPLED"` but `params` is summary-only blob | Documented in `predict_distribution` docstring + TODO #14. Per-row p-quantile columns carry the actual distributional info. Decide between SAMPLED_SUMMARY enum value vs. full samples blob before Plan 3c's backtest output consumes the rows. |
 | 2026-04-25 | WR builder's traded-player fix: dedupe shares to highest share per gsis_id | v1 hack documented inline + TODO #15. Proper fix restructures `trailing_n_share_in_group` to expose team, lets callers join on (gsis_id, team). Tackle in Plan 3b. |
+| 2026-04-25 | TODO #15 closed before Plan 3b kickoff: helper returns `[gsis_id, team, share_l<n>]`; WR/RB/TE builders join on `(gsis_id, team)` | Picks the share for the player's depth-chart-current team — semantically more correct than the v1 highest-share proxy and removes the dedupe hack. RB/TE builders inherit the fix automatically when 3b trains them on real data. |
+| 2026-04-25 | TODO #8 closed before Plan 3b kickoff: opt-in `pytest -m network --run-network` smokes per ingest source | One smoke per source (weekly_stats, depth_charts, ngs × 3 stat_types, schedules, id_map, snap_counts) asserts every raw column the normalize step depends on is present, then runs normalize end-to-end so pandera surfaces dtype drift. Post-bump procedure documented in `CONTRIBUTING.md`. |
 
 ---
 

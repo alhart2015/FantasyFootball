@@ -61,10 +61,6 @@ v1 leaves NaN. Revisit after a notebook investigation against a recent season qu
 
 v1 extracts the trailing digit from labels like `WR1`, falling back to `1` for unrankable labels (`LWR`/`RWR`/`SWR`) with a warning. If Plan 3 model fitting shows `depth_rank` is noisy or wrong, build a richer parser using alignment + rank.
 
-### 8. Build opt-in `nfl_data_py` API-drift smoke tests
-
-One per ingest source, marked `@pytest.mark.network`, skipped by default. Hits the live API, fetches a tiny slice (e.g., 1 week of 2023), asserts the column set matches the schema. Run manually after `nfl_data_py` version bumps. Document the run-after-bump step in `CONTRIBUTING.md`. The synthetic in-memory fixtures used by 2a's CI tests don't catch API drift on their own.
-
 ### 9. WR feature builder edge cases for production data
 
 Issues flagged during Task 15 / final code review that don't manifest on the synthetic fixtures but could surface in real `nfl_data_py` data:
@@ -128,6 +124,4 @@ Surfaced during Plan 3a Tasks 14-17. The synthetic fixtures used by 2a/2b/3a's C
 7. `id_map`: malformed legacy gsis_ids (PFR-style strings) had to be filtered.
 8. `wr.py`: bye-week WRs without schedule rows; duplicate depth-chart entries; negative trailing-mean yardage; share calc going negative.
 
-This is exactly what TODO #8 (opt-in `nfl_data_py` API-drift smoke tests) is supposed to catch. Plan 3a's experience strongly motivates building TODO #8 now rather than later — the next real-data pull (Plan 3b for QB/RB/TE; Plan 3c's backtest harness training) WILL hit similar drift, and catching it in CI saves ~1 hour of debugging per drift instance.
-
-Recommend: do TODO #8 before Plan 3b starts.
+The opt-in `pytest -m network --run-network` smokes (`tests/test_ingest/test_api_drift.py`, formerly TODO #8 — closed) now guard against the same class of column-rename / column-removal drift after a `nfl_data_py` version bump. They do NOT replace this drift list as historical context, and they will NOT catch every real-data edge case (some — like the `id_map` malformed-legacy-gsis-id rows — are data-quality issues per row, not column-level drift), so keep this entry as a record of what the synthetic fixtures missed and audit it after each `nfl_data_py` upgrade.

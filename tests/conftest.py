@@ -22,6 +22,29 @@ import pytest
 from projections.schemas import _PYARROW_STR
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register `--run-network` so the live nfl_data_py API-drift smokes
+    only run when explicitly requested. The marker itself is declared in
+    `pyproject.toml`; this option toggles the skip behavior in
+    `pytest_collection_modifyitems` below."""
+    parser.addoption(
+        "--run-network",
+        action="store_true",
+        default=False,
+        help="Run @pytest.mark.network tests that hit the live nfl_data_py API.",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip network-marked tests unless `--run-network` was passed."""
+    if config.getoption("--run-network"):
+        return
+    skip_network = pytest.mark.skip(reason="needs --run-network to hit the live API")
+    for item in items:
+        if "network" in item.keywords:
+            item.add_marker(skip_network)
+
+
 @pytest.fixture
 def fake_id_map_df() -> pd.DataFrame:
     """Mimics `nfl_data_py.import_ids()` — a row per player with cross-platform IDs.
