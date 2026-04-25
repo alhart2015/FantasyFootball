@@ -86,6 +86,19 @@ Decision before brainstorming Plan 2c: do we ingest the missing data first (exte
 
 Plan 3 (Model A baseline) doesn't depend on K/DST, so this can run in parallel.
 
+### 11. Bound `percent_attempts_gte_eight_defenders_std`
+
+Surfaced in PR #4 review (latent issue #5). The field on `RbFeaturesSchema` currently has only `nullable=True` — no `ge`/`le`. NGS reports the metric as a 0–100 percentage, so a `ge=0, le=100` bound would catch a unit-mismatch upstream (e.g., if a future ingest change accidentally emits the same value as a 0–1 fraction). One-line fix; defer until any other RB schema work to keep the diff scoped.
+
+### 12. Lift `rushing_qb` / `passing_down_back` to consumption time
+
+Surfaced in PR #4 review (latent issue #6). Both are thresholded booleans baked into the persisted feature schema (`rushing_qb` = `rushing_attempts_per_game_l4 >= 5.0`, `passing_down_back` = `targets_per_game_l4 >= 4.0`). Decision logged in the Plan 2b plan as "rough heuristics from feel," but the threshold is now fixed at the producer side, so a downstream consumer (a model wanting a different cut, or a categorical instead of a boolean) has to recompute from the underlying `*_l4` column anyway. Two options:
+
+- Drop the boolean from the schema and compute at use time (cleanest; consumer holds the policy).
+- Keep but document explicitly that this threshold is the canonical league-wide convention and shouldn't be re-derived elsewhere.
+
+Revisit before Plan 3 model fitting — if the model never uses these booleans, just remove them.
+
 ### 13. Per-row seed derivation in BaselineModel.predict_distribution
 
 Surfaced in PR for Plan 3a (Task 9 review). `BaselineModel.predict_distribution` calls `score_distribution(..., seed=42)` for every row, so the underlying Monte Carlo sample arrays are correlated across rows. Per-row stats (mean/p10/p50/p90) are unaffected, but downstream callers that combine multiple rows' samples (DFS lineup variance, roster-total simulation, joint correlations once TODO #1 lands) MUST NOT assume cross-row independence.
