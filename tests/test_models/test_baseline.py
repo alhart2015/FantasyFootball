@@ -267,3 +267,63 @@ def test_unfitted_model_id_raises() -> None:
     except RuntimeError:
         return
     raise AssertionError("Unfitted model.model_id should raise RuntimeError")
+
+
+def test_predict_distribution_imputes_nan_features_with_persisted_means(
+    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+) -> None:
+    """If a predict-time feature row has NaN in a column, predict should impute
+    with feature_means rather than crash or propagate NaN to the output."""
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+
+    week = baseline_features[
+        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    ].copy()
+    # Forcibly NaN one value in a non-nullable feature column.
+    week.loc[week.index[0], "implied_team_total"] = np.nan
+    out = model.predict_distribution(week, ruleset=Ruleset.espn_ppr())
+    assert not out["mean"].isna().any()
+
+
+def test_fit_handles_bool_feature_columns(
+    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+) -> None:
+    """is_home / roof_dome / designed_rusher are bool in WrFeaturesSchema and
+    must be coerced to numeric for Ridge.fit()."""
+    model = wr_baseline()
+    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    # If fit succeeded, the boolean coercion worked.
+    assert model.feature_means is not None
+    for bool_col in ("is_home", "roof_dome", "designed_rusher"):
+        assert bool_col in model.feature_means.index
+
+
+def test_save_unfitted_model_raises(tmp_path: Path) -> None:
+    """Calling .save() on an unfitted model must raise RuntimeError so we
+    don't produce un-traceable artifacts (no model_id without train_seasons /
+    code_hash)."""
+    model = wr_baseline()
+    try:
+        model.save(tmp_path / "should-not-exist.joblib")
+    except RuntimeError:
+        return
+    raise AssertionError("save() on an unfitted model should raise RuntimeError")
+
+
+def test_load_rejects_non_baseline_artifact(tmp_path: Path) -> None:
+    """BaselineModel.load() must reject a joblib artifact that doesn't deserialize
+    to a BaselineModel — defense-in-depth against future GBMModel etc. being
+    loaded via the wrong classmethod."""
+    import joblib
+
+    artifact = tmp_path / "not-a-model.joblib"
+    joblib.dump({"not": "a model"}, artifact)
+
+    from projections.models import BaselineModel
+
+    try:
+        BaselineModel.load(artifact)
+    except TypeError:
+        return
+    raise AssertionError("load() on a non-BaselineModel artifact should raise TypeError")
