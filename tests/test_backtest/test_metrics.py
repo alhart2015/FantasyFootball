@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import pandas as pd
+import pytest
 
 from projections.backtest.metrics import (
     compute_calibration_metrics,
@@ -70,3 +71,42 @@ def test_compute_calibration_metrics(fake_eval_df: pd.DataFrame) -> None:
     out = compute_calibration_metrics(fake_eval_df)
     assert math.isclose(out["calibration_p10p90"], 1.0, rel_tol=1e-9)
     assert math.isclose(out["calibration_le_p90"], 1.0, rel_tol=1e-9)
+
+
+def test_compute_season_calibration_metrics_known_frame() -> None:
+    from projections.backtest.metrics import compute_season_calibration_metrics
+
+    df = pd.DataFrame(
+        {
+            "season_p10": [10.0] * 10,
+            "season_p90": [50.0] * 10,
+            "actual_season_total": [
+                5.0,  # below p10  -> not in p10p90, but <= p90 (5 <= 50)
+                15.0,  # in p10p90, <= p90
+                25.0,  # in p10p90, <= p90
+                40.0,  # in p10p90, <= p90
+                45.0,  # in p10p90, <= p90
+                49.0,  # in p10p90, <= p90
+                51.0,  # > p90, not <= p90
+                60.0,  # > p90
+                70.0,  # > p90
+                100.0,  # > p90
+            ],
+        }
+    )
+    out = compute_season_calibration_metrics(df)
+    # 5 of 10 in [10,50]: 15, 25, 40, 45, 49 -> 0.5
+    assert out["season_calibration_p10p90"] == pytest.approx(0.5)
+    # <= p90: 5, 15, 25, 40, 45, 49 -> 6 of 10 -> 0.6
+    assert out["season_calibration_le_p90"] == pytest.approx(0.6)
+
+
+def test_compute_season_calibration_metrics_empty_frame_returns_nan() -> None:
+    from math import isnan
+
+    from projections.backtest.metrics import compute_season_calibration_metrics
+
+    df = pd.DataFrame(columns=["season_p10", "season_p90", "actual_season_total"])
+    out = compute_season_calibration_metrics(df)
+    assert isnan(out["season_calibration_p10p90"])
+    assert isnan(out["season_calibration_le_p90"])

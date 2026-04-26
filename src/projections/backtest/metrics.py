@@ -97,3 +97,30 @@ def compute_all_metrics(
     out["spearman_topN"] = compute_spearman_topN(eval_df)
     out.update(compute_calibration_metrics(eval_df))
     return out
+
+
+def compute_season_calibration_metrics(season_eval_df: pd.DataFrame) -> dict[str, float]:
+    """Calibration coverage on season-total predictions.
+
+    Expects columns ``season_p10``, ``season_p90``, ``actual_season_total``.
+    Returns ``season_calibration_p10p90`` (fraction of (gsis_id, year) where
+    actual is in [season_p10, season_p90]) and ``season_calibration_le_p90``
+    (fraction where actual <= season_p90).
+
+    Mirrors compute_calibration_metrics's shape; not gated for the naive
+    baseline because point predictors have collapsed quantiles.
+
+    Returns NaN for both metrics on an empty frame.
+    """
+    if season_eval_df.empty:
+        return {
+            "season_calibration_p10p90": float("nan"),
+            "season_calibration_le_p90": float("nan"),
+        }
+    a = season_eval_df["actual_season_total"]
+    in_p10p90 = ((a >= season_eval_df["season_p10"]) & (a <= season_eval_df["season_p90"])).mean()
+    le_p90 = (a <= season_eval_df["season_p90"]).mean()
+    return {
+        "season_calibration_p10p90": float(in_p10p90),
+        "season_calibration_le_p90": float(le_p90),
+    }
