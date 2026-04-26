@@ -220,7 +220,7 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Current status (as of 2026-04-26)
 
-**Projections Core — Plan 3c (walk-forward backtest harness + snapshot-diff gate) merged to `main` at commit `<TBD-after-merge>` (PR #<TBD>).**
+**Projections Core — Plan 3c (walk-forward backtest harness + snapshot-diff gate) merged to `main` at commit `3db71a6` (PR #8).**
 
 **Predecessors:**
 - Plan 1 (Foundations) merged at `8f02a6c`.
