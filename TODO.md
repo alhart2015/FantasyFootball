@@ -125,3 +125,15 @@ Surfaced during Plan 3a Tasks 14-17. The synthetic fixtures used by 2a/2b/3a's C
 8. `wr.py`: bye-week WRs without schedule rows; duplicate depth-chart entries; negative trailing-mean yardage; share calc going negative.
 
 The opt-in `pytest -m network --run-network` smokes (`tests/test_ingest/test_api_drift.py`, formerly TODO #8 — closed) now guard against the same class of column-rename / column-removal drift after a `nfl_data_py` version bump. They do NOT replace this drift list as historical context, and they will NOT catch every real-data edge case (some — like the `id_map` malformed-legacy-gsis-id rows — are data-quality issues per row, not column-level drift), so keep this entry as a record of what the synthetic fixtures missed and audit it after each `nfl_data_py` upgrade.
+
+### 17. Retrain WR 2018-2023 artifact after Plan 3b
+
+Plan 3b adds two required fields (`feature_schema`, `code_hash_files`)
+to the `BaselineModel` dataclass. The existing artifact at
+`models/artifacts/wr-baseline-2018-2023-925f492b.joblib` (gitignored)
+becomes unloadable through `BaselineModel.load()` — joblib pickle
+reconstruction will raise `TypeError` on the missing required args.
+
+Mitigation: run `python scripts/train_baseline.py wr` (the new
+generalized script from Plan 3b Phase 5) once 3b is merged. Closes
+this entry.

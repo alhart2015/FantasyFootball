@@ -18,6 +18,7 @@ from typing import Final
 import msgpack
 import numpy as np
 import pandas as pd
+import pandera.pandas as pa
 from sklearn.linear_model import RidgeCV
 
 from projections.distributions import Distribution, ParametricGamma, ParametricNormal
@@ -116,6 +117,8 @@ class BaselineModel:
     target_stats: tuple[Stat, ...]
     feature_columns: tuple[str, ...]
     dist_families: Mapping[Stat, DistributionFamily]
+    feature_schema: type[pa.DataFrameModel]
+    code_hash_files: tuple[Path, ...]
 
     # Populated by .fit() — None on an unfitted instance.
     feature_means: pd.Series | None = field(default=None)
@@ -145,7 +148,7 @@ class BaselineModel:
         pipeline."""
         # Schema validation -- defensive at the boundary even though our caller
         # is supposed to have already validated.
-        features = WrFeaturesSchema.validate(features)
+        features = self.feature_schema.validate(features)
         weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
 
         # Inner-join features with truth on (gsis_id, season, week). Players in
@@ -220,20 +223,9 @@ class BaselineModel:
         trained_seasons = sorted(joined.loc[feature_frame.index, "season"].unique().tolist())
         self.train_seasons = (int(trained_seasons[0]), int(trained_seasons[-1]))
 
-        # Code hash over source files whose change should invalidate the
-        # artifact. Spec section 5.2 lists the canonical set.
-        repo_root = Path(__file__).resolve().parents[3]
-        tracked = [
-            repo_root / "src" / "projections" / "models" / "base.py",
-            repo_root / "src" / "projections" / "models" / "baseline.py",
-            repo_root / "src" / "projections" / "features" / "wr.py",
-            repo_root / "src" / "projections" / "features" / "_shared.py",
-            repo_root / "src" / "projections" / "features" / "_rolling.py",
-            repo_root / "src" / "projections" / "features" / "_opponent.py",
-            repo_root / "src" / "projections" / "scoring" / "score.py",
-            repo_root / "src" / "projections" / "scoring" / "score_distribution.py",
-        ]
-        self.code_hash = compute_code_hash(tracked)
+        # Code hash over the file list this factory declared. The exact set
+        # is per-position (each factory passes its own features/{pos}.py).
+        self.code_hash = compute_code_hash(self.code_hash_files)
 
     def _build_stat_distributions(self, features: pd.DataFrame) -> list[dict[Stat, Distribution]]:
         """Build per-row dicts of {Stat -> Distribution} from fitted regressors.
@@ -314,7 +306,7 @@ class BaselineModel:
         params encoding can address this without breaking the schema. Tracked
         as TODO #14.
         """
-        features = WrFeaturesSchema.validate(features)
+        features = self.feature_schema.validate(features)
         if features.empty:
             empty_cols = list(ProjectionWeeklySchema.to_schema().columns.keys())
             return ProjectionWeeklySchema.validate(pd.DataFrame(columns=empty_cols))
@@ -397,9 +389,21 @@ class BaselineModel:
 def wr_baseline() -> BaselineModel:
     """Construct an unfitted WR-baseline model. Caller invokes .fit(features,
     weekly_stats) and then .save(path)."""
+    repo_root = Path(__file__).resolve().parents[3]
     return BaselineModel(
         position=Position.WR,
         target_stats=_WR_TARGET_STATS,
         feature_columns=_WR_FEATURE_COLUMNS,
         dist_families=_WR_DIST_FAMILIES,
+        feature_schema=WrFeaturesSchema,
+        code_hash_files=(
+            repo_root / "src" / "projections" / "models" / "base.py",
+            repo_root / "src" / "projections" / "models" / "baseline.py",
+            repo_root / "src" / "projections" / "features" / "wr.py",
+            repo_root / "src" / "projections" / "features" / "_shared.py",
+            repo_root / "src" / "projections" / "features" / "_rolling.py",
+            repo_root / "src" / "projections" / "features" / "_opponent.py",
+            repo_root / "src" / "projections" / "scoring" / "score.py",
+            repo_root / "src" / "projections" / "scoring" / "score_distribution.py",
+        ),
     )
