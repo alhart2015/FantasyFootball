@@ -213,6 +213,7 @@ __marimo__/
 data/raw/
 data/features/
 data/projections/
+data/backtest/
 data/backtests/
 data/manifests/
 data/sanity_checks/
