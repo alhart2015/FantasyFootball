@@ -4,6 +4,106 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 3d — Real Monte Carlo season aggregation (run 2026-04-26, on branch `feat/plan-3d-monte-carlo-season`)
+
+**Closes:** TODO #13 (per-row seeds), TODO #14 (SAMPLED_SUMMARY family), TODO #19 (gate non-determinism by demonstration).
+
+Held-out years: 2021–2024 (same as Plan 3c). Snapshot at 400 rows
+(368 weekly metrics from 3c + 32 new season-calibration rows from 3d).
+Full gate runtime: 292.73 seconds.
+
+### Composite metrics by (position, year)
+
+| Position | Year | composite_rmse | composite_mae | spearman_topN | calibration_p10p90 | calibration_le_p90 |
+|---|---|---|---|---|---|---|
+| QB | 2021 | 7.841 | 6.357 | 0.933 | 0.675 | 0.857 |
+| QB | 2022 | 7.240 | 5.703 | 0.968 | 0.737 | 0.845 |
+| QB | 2023 | 7.324 | 5.868 | 0.945 | 0.709 | 0.831 |
+| QB | 2024 | 7.722 | 6.072 | 0.938 | 0.699 | 0.842 |
+| RB | 2021 | 6.864 | 5.147 | 0.970 | 0.745 | 0.846 |
+| RB | 2022 | 6.631 | 4.965 | 0.967 | 0.746 | 0.851 |
+| RB | 2023 | 6.322 | 4.641 | 0.967 | 0.791 | 0.867 |
+| RB | 2024 | 6.487 | 4.853 | 0.975 | 0.766 | 0.863 |
+| TE | 2021 | 5.352 | 3.856 | 0.966 | 0.727 | 0.845 |
+| TE | 2022 | 5.282 | 3.670 | 0.960 | 0.750 | 0.830 |
+| TE | 2023 | 4.978 | 3.527 | 0.969 | 0.735 | 0.821 |
+| TE | 2024 | 5.101 | 3.712 | 0.962 | 0.717 | 0.823 |
+| WR | 2021 | 6.746 | 5.040 | 0.970 | 0.700 | 0.827 |
+| WR | 2022 | 6.633 | 4.975 | 0.977 | 0.693 | 0.831 |
+| WR | 2023 | 6.531 | 4.737 | 0.968 | 0.723 | 0.832 |
+| WR | 2024 | 6.693 | 4.899 | 0.975 | 0.707 | 0.825 |
+
+Drift from Plan 3c snapshot was within tolerance for every weekly metric
+(largest absolute drift: `RB/2021/calibration_p10p90` 0.7536 -> 0.7452,
+abs delta 0.0084 vs 0.03 tolerance; largest relative drift: `RB/2024/composite_mae`
++0.165% vs 5% tolerance). 77 of 368 existing rows show non-zero drift; all
+are within tolerance. Cause: the per-row seed change in `score_distribution`
+(closes TODO #13) reorders Monte Carlo draws, but the underlying regression
+math is unchanged. See `/tmp/3d-pre-snapshot-drift.txt` for the raw
+`--check` output.
+
+### Season-total calibration (new in Plan 3d)
+
+| Position | Year | season_calibration_p10p90 | season_calibration_le_p90 |
+|---|---|---|---|
+| QB | 2021 | 0.317 | 0.976 |
+| QB | 2022 | 0.313 | 0.928 |
+| QB | 2023 | 0.388 | 0.900 |
+| QB | 2024 | 0.377 | 0.935 |
+| RB | 2021 | 0.521 | 0.896 |
+| RB | 2022 | 0.478 | 0.853 |
+| RB | 2023 | 0.413 | 0.857 |
+| RB | 2024 | 0.516 | 0.879 |
+| TE | 2021 | 0.500 | 0.925 |
+| TE | 2022 | 0.474 | 0.853 |
+| TE | 2023 | 0.540 | 0.876 |
+| TE | 2024 | 0.432 | 0.890 |
+| WR | 2021 | 0.505 | 0.881 |
+| WR | 2022 | 0.563 | 0.898 |
+| WR | 2023 | 0.562 | 0.881 |
+| WR | 2024 | 0.479 | 0.863 |
+
+Season-total `[p10, p90]` coverage is well below target (0.80) — typically
+0.30–0.55 across cells, worst on QB (0.31–0.39). This inherits 3c's weekly
+under-dispersion: when independent under-dispersed weekly distributions are
+summed (with no covariance), the season distribution under-disperses further
+because variances add but the systematic miss does not cancel. `<= p90`
+coverage is closer to target (0.85–0.98) — the upper-tail stretch from
+gamma summation partially masks the under-dispersion at p10. Plan 3e is
+the calibration-tightening follow-up.
+
+### Decision log (Plan 3d)
+
+| Date | Decision | Rationale |
+|---|---|---|
+| 2026-04-26 | params blob format = per-stat distribution params | Three orders of magnitude smaller than persisting full sample arrays; decomposable; deterministic regeneration via seed. |
+| 2026-04-26 | Per-row seed = sha256 of `(gsis_id, season, week, ruleset.name)` truncated to 32 bits | Deterministic across processes (Python `hash()` is salt-randomized via PYTHONHASHSEED); independent across rows; reproducible. |
+| 2026-04-26 | Aggregator regenerates per-week samples rather than persisting them | Storage 1000x smaller; regeneration is O(seconds); samples are deterministic given seed. |
+| 2026-04-26 | Modal-position resolution for traded players | Deterministic; rare edge case; documented in docstring. |
+| 2026-04-26 | Calibration tightening (MLE gamma alpha / variance buckets) explicitly deferred to Plan 3e | 3d's snapshot reflects under-dispersed calibration as the regression floor; tightening is a separable model-quality improvement. |
+
+### Current status (as of 2026-04-26)
+
+**Projections Core — Plan 3d (real Monte Carlo season aggregation) on branch `feat/plan-3d-monte-carlo-season`; PR pending.**
+
+**Predecessors:**
+- Plan 1 (Foundations) merged at `8f02a6c`.
+- Plan 2a merged at `7926090`; Plan 2b merged at `af325ea`.
+- Plan 3a (WR Model A baseline) merged at `598ab9c`.
+- Plan 3b (QB / RB / TE Model A baselines) merged at `c4a0401`.
+- Plan 3c (walk-forward backtest gate) merged at `3db71a6` (PR #8).
+
+### Next action
+
+**Recommended: Plan 3e — calibration tightening.** Replace
+`_gamma_alpha_from_residuals`'s method-of-moments with an MLE fit, and/or
+add per-stat residual-variance bucketing by predicted-mean tertile, to
+move weekly + season calibration coverage toward 0.80. The under-dispersion
+shows up most acutely on QB season totals (p10–p90 coverage 0.31–0.39);
+expect the largest tightening to come from QB-stat MLE fits.
+
+---
+
 ## Plan 3c — Walk-forward backtest gate (run 2026-04-26, on branch `feat/plan-3c-backtest-harness`)
 
 Held-out years: 2021, 2022, 2023, 2024 (4 years × 4 positions = 16 fits per gate run).
