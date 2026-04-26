@@ -46,18 +46,24 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip opt-in marked tests unless their gate flag is passed."""
+    """Skip opt-in marked tests unless their gate flag is passed.
+
+    Marker-based check via ``get_closest_marker`` rather than
+    ``in item.keywords`` — keywords also includes path-derived components
+    (directory and file names), which would over-match e.g. anything under
+    ``tests/backtest/`` regardless of whether the test carries the marker.
+    """
     if not config.getoption("--run-network"):
         skip_network = pytest.mark.skip(reason="needs --run-network to hit the live API")
         for item in items:
-            if "network" in item.keywords:
+            if item.get_closest_marker("network") is not None:
                 item.add_marker(skip_network)
     if not config.getoption("--run-backtest"):
         skip_backtest = pytest.mark.skip(
             reason="needs --run-backtest to run the full walk-forward gate"
         )
         for item in items:
-            if "backtest" in item.keywords:
+            if item.get_closest_marker("backtest") is not None:
                 item.add_marker(skip_backtest)
 
 
