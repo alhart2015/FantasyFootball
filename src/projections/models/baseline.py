@@ -379,7 +379,7 @@ class BaselineModel:
         # is per-position (each factory passes its own features/{pos}.py).
         self.code_hash = compute_code_hash(self.code_hash_files)
 
-    def _build_stat_distributions(self, features: pd.DataFrame) -> list[dict[Stat, Distribution]]:
+    def build_stat_distributions(self, features: pd.DataFrame) -> list[dict[Stat, Distribution]]:
         """Build per-row dicts of {Stat -> Distribution} from fitted regressors.
 
         Pure function over the fitted state. Does not call score_distribution
@@ -463,7 +463,7 @@ class BaselineModel:
             empty_cols = list(ProjectionWeeklySchema.to_schema().columns.keys())
             return ProjectionWeeklySchema.validate(pd.DataFrame(columns=empty_cols))
 
-        stat_dists_per_row = self._build_stat_distributions(features)
+        stat_dists_per_row = self.build_stat_distributions(features)
 
         # Compose each row's per-stat distribution dict into a fantasy-points
         # SampledDistribution via score_distribution.
