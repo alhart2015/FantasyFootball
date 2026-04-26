@@ -54,7 +54,13 @@ def build_te_features(
     dc = depth_charts[exact_week_mask(depth_charts, season=season, as_of_week=as_of_week)].copy()
     sch = schedules[exact_week_mask(schedules, season=season, as_of_week=as_of_week)].copy()
 
-    te_dc = dc[dc["position"] == Position.TE.value].copy()
+    # Restrict to teams that have a schedule row this week — bye-week TEs
+    # have no opponent / is_home / roof_dome to populate, and the schema
+    # rejects NaN on those columns. Mirrors the WR filter (PR #4 review).
+    sch_teams = set(sch["home_team"].astype(str)) | set(sch["away_team"].astype(str))
+    te_dc = dc[
+        (dc["position"] == Position.TE.value) & (dc["team"].astype(str).isin(sch_teams))
+    ].copy()
     if te_dc.empty:
         empty_cols = list(TeFeaturesSchema.to_schema().columns.keys())
         return TeFeaturesSchema.validate(pd.DataFrame(columns=empty_cols))
