@@ -197,23 +197,45 @@ def test_end_to_end_ingest_and_features(
     assert "00-0030506" in te_out["gsis_id"].tolist()  # Kelce
 
 
-def test_smoke_wr_baseline_fit_predict_write(
+@pytest.mark.parametrize(
+    "position_value,fixture_features,fixture_weekly_stats",
+    [
+        ("QB", "baseline_features_qb", "baseline_weekly_stats_qb"),
+        ("RB", "baseline_features_rb", "baseline_weekly_stats_rb"),
+        ("TE", "baseline_features_te", "baseline_weekly_stats_te"),
+        ("WR", "baseline_features_wr", "baseline_weekly_stats_wr"),
+    ],
+)
+def test_smoke_baseline_fit_predict_write_round_trip(
     tmp_path: Path,
-    baseline_features: pd.DataFrame,
-    baseline_weekly_stats: pd.DataFrame,
+    position_value: str,
+    fixture_features: str,
+    fixture_weekly_stats: str,
+    request: pytest.FixtureRequest,
 ) -> None:
-    """End-to-end: fit BaselineModel on synthetic data, predict, write a
-    parquet partition through store.write_partition, read back, validate."""
-    from projections.models import wr_baseline
-    from projections.schemas import ProjectionWeeklySchema, Ruleset
+    """End-to-end: for every position, fit BaselineModel on synthetic data,
+    predict, write a parquet partition through store.write_partition, read
+    back, validate.
+
+    Catches cross-position regressions (e.g., "I refactored BaselineModel
+    and broke one factory but not others") before the per-position test
+    files would surface them.
+    """
+    from projections.models import POSITION_DISPATCH
+    from projections.schemas import Position, ProjectionWeeklySchema, Ruleset
     from projections.store import read_partition, write_partition
 
-    model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    pos = Position(position_value)
+    dispatch = POSITION_DISPATCH[pos]
+    features = request.getfixturevalue(fixture_features)
+    weekly_stats = request.getfixturevalue(fixture_weekly_stats)
 
-    week_features = baseline_features[
-        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
-    ]
+    model = dispatch.factory()
+    model.fit(features=features, weekly_stats=weekly_stats)
+
+    week_features = features[(features["season"] == 2025) & (features["week"] == 4)]
+    if week_features.empty:
+        pytest.skip(f"no 2025 wk4 features in {position_value} fixture")
     preds = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
     ProjectionWeeklySchema.validate(preds)
 
@@ -229,3 +251,4 @@ def test_smoke_wr_baseline_fit_predict_write(
     )
     ProjectionWeeklySchema.validate(round_tripped)
     assert len(round_tripped) == len(preds)
+    assert (round_tripped["model_id"].str.startswith(f"baseline:{position_value.lower()}:")).all()

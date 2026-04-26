@@ -37,10 +37,10 @@ def test_wr_baseline_factory_returns_unfitted_model() -> None:
 
 
 def test_baseline_fit_populates_ridges_per_target_stat(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     # One fitted RidgeCV per target stat.
     assert set(model.ridges.keys()) == set(model.target_stats)
     for stat in model.target_stats:
@@ -50,29 +50,29 @@ def test_baseline_fit_populates_ridges_per_target_stat(
 
 
 def test_baseline_fit_persists_feature_means(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     assert model.feature_means is not None
     assert set(model.feature_means.index) == set(model.feature_columns)
 
 
 def test_baseline_fit_records_train_seasons(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     # Fixture covers 2024 + 2025; the fit signature consumes whatever it
     # receives, so train_seasons is just min/max season seen in training.
     assert model.train_seasons == (2024, 2025)
 
 
 def test_baseline_fit_populates_normal_variance_params(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     # Normal stats: variance_params should have a positive 'std'.
     for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
         params = model.variance_params[stat]
@@ -81,10 +81,10 @@ def test_baseline_fit_populates_normal_variance_params(
 
 
 def test_baseline_fit_populates_gamma_variance_params(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     # Gamma stats: variance_params should have a 'shape' in [0.01, 100].
     for stat in (Stat.RECEPTIONS, Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
         params = model.variance_params[stat]
@@ -130,13 +130,13 @@ def test_gamma_alpha_clipped_to_safety_range() -> None:
 
 
 def test_build_stat_distributions_returns_one_per_row(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     # Pick a single week of test features.
-    week_features = baseline_features[
-        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    week_features = baseline_features_wr[
+        (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
     ]
     assert not week_features.empty
     stat_dists_per_row = model._build_stat_distributions(week_features)
@@ -176,12 +176,12 @@ def test_build_stat_distributions_clamps_gamma_mu() -> None:
 
 
 def test_predict_distribution_returns_projection_weekly_schema_valid_frame(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
-    week_features = baseline_features[
-        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    week_features = baseline_features_wr[
+        (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
     ]
     out = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
     # Schema validates without raising.
@@ -195,23 +195,23 @@ def test_predict_distribution_returns_projection_weekly_schema_valid_frame(
 
 
 def test_predict_distribution_empty_input_returns_empty_schema_valid_frame(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
-    empty = baseline_features.iloc[0:0]
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    empty = baseline_features_wr.iloc[0:0]
     out = model.predict_distribution(empty, ruleset=Ruleset.espn_ppr())
     assert out.empty
     ProjectionWeeklySchema.validate(out)
 
 
 def test_predict_distribution_p10_le_p50_le_p90(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
-    week_features = baseline_features[
-        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    week_features = baseline_features_wr[
+        (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
     ]
     out = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
     assert (out["p10"] <= out["p50"]).all()
@@ -220,11 +220,11 @@ def test_predict_distribution_p10_le_p50_le_p90(
 
 def test_baseline_save_load_round_trip_preserves_predictions(
     tmp_path: Path,
-    baseline_features: pd.DataFrame,
-    baseline_weekly_stats: pd.DataFrame,
+    baseline_features_wr: pd.DataFrame,
+    baseline_weekly_stats_wr: pd.DataFrame,
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
 
     artifact = tmp_path / "wr-baseline.joblib"
     model.save(artifact)
@@ -236,8 +236,8 @@ def test_baseline_save_load_round_trip_preserves_predictions(
     assert loaded.position == model.position
     assert loaded.model_id == model.model_id
 
-    week = baseline_features[
-        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    week = baseline_features_wr[
+        (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
     ]
     out_orig = model.predict_distribution(week, ruleset=Ruleset.espn_ppr())
     out_loaded = loaded.predict_distribution(week, ruleset=Ruleset.espn_ppr())
@@ -248,10 +248,10 @@ def test_baseline_save_load_round_trip_preserves_predictions(
 
 
 def test_model_id_format(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     parts = model.model_id.split(":")
     assert len(parts) == 4
     assert parts[0] == "baseline"
@@ -270,15 +270,15 @@ def test_unfitted_model_id_raises() -> None:
 
 
 def test_predict_distribution_imputes_nan_features_with_persisted_means(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     """If a predict-time feature row has NaN in a column, predict should impute
     with feature_means rather than crash or propagate NaN to the output."""
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
 
-    week = baseline_features[
-        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    week = baseline_features_wr[
+        (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
     ].copy()
     # Forcibly NaN one value in a non-nullable feature column.
     week.loc[week.index[0], "implied_team_total"] = np.nan
@@ -287,12 +287,12 @@ def test_predict_distribution_imputes_nan_features_with_persisted_means(
 
 
 def test_fit_handles_bool_feature_columns(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     """is_home / roof_dome / designed_rusher are bool in WrFeaturesSchema and
     must be coerced to numeric for Ridge.fit()."""
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     # If fit succeeded, the boolean coercion worked.
     assert model.feature_means is not None
     for bool_col in ("is_home", "roof_dome", "designed_rusher"):

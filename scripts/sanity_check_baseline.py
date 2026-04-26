@@ -1,25 +1,23 @@
-"""Plan 3a -- sanity-check eval of WR Model A baseline against the held-out
-2024 season. Prints per-stat fit, composite (PPR points), and calibration
-spot-check metrics. NOT a CI gate -- Plan 3c builds the proper backtest
-harness with thresholds.
+"""Plan 3b -- sanity-check eval of Model A baseline for a position against
+the held-out 2024 season. Stdout-only; not a CI gate (Plan 3c builds the
+backtest harness with thresholds).
 
-Run from the repo root after train_wr_baseline.py:
-    python scripts/sanity_check_wr_baseline.py
+Replaces scripts/sanity_check_wr_baseline.py.
 
-Note: spec calls for 2025 held-out. nfl_data_py has not yet published
-2025; using 2024 as the most recent complete season instead.
+Usage (after train_baseline.py {pos}):
+    python scripts/sanity_check_baseline.py {qb|rb|te|wr}
 """
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from projections.features import build_wr_features
-from projections.models import BaselineModel
+from projections.models import POSITION_DISPATCH, BaselineModel
 from projections.schemas import Position, Ruleset
 from projections.scoring import score
 from projections.scoring.score import StatLine
@@ -28,13 +26,15 @@ from projections.store import read_partition
 _HELD_OUT_SEASON = 2024
 
 
-def _find_artifact(artifacts_root: Path) -> Path:
-    matches = sorted(artifacts_root.glob("wr-baseline-*.joblib"))
+def _find_artifact(artifacts_root: Path, position: Position) -> Path:
+    pattern = f"baseline-{position.value.lower()}-*.joblib"
+    matches = sorted(artifacts_root.glob(pattern))
     if not matches:
         raise FileNotFoundError(
-            f"No wr-baseline-*.joblib in {artifacts_root}. Run scripts/train_wr_baseline.py first."
+            f"No {pattern} in {artifacts_root}. "
+            f"Run scripts/train_baseline.py {position.value.lower()} first."
         )
-    return matches[-1]  # alphabetical sort puts highest train_end last
+    return matches[-1]
 
 
 def _realized_ppr_points(weekly_stats: pd.DataFrame, ruleset: Ruleset) -> pd.Series:
@@ -57,12 +57,23 @@ def _realized_ppr_points(weekly_stats: pd.DataFrame, ruleset: Ruleset) -> pd.Ser
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Sanity-check WR Model A on 2024.")
+    parser = argparse.ArgumentParser(description="Sanity-check Model A on 2024 for a position.")
+    parser.add_argument("position", choices=["qb", "rb", "te", "wr"], help="Target position.")
     parser.add_argument("--raw-root", type=Path, default=Path("data/raw"))
     parser.add_argument("--artifacts-root", type=Path, default=Path("models/artifacts"))
     args = parser.parse_args()
 
-    artifact = _find_artifact(args.artifacts_root)
+    position = Position(args.position.upper())
+    dispatch = POSITION_DISPATCH[position]
+    builder = dispatch.feature_builder
+    ngs_kwarg = {
+        "passing": "ngs_passing",
+        "rushing": "ngs_rushing",
+        "receiving": "ngs_receiving",
+    }[dispatch.ngs_stat_type]
+    ngs_table = f"ngs_{dispatch.ngs_stat_type}"
+
+    artifact = _find_artifact(args.artifacts_root, position)
     print(f"Loading artifact: {artifact}")
     model = BaselineModel.load(artifact)
     print(f"model_id: {model.model_id}")
@@ -74,13 +85,13 @@ def main() -> None:
     ws_held = read_partition(raw_root, "weekly_stats", season=_HELD_OUT_SEASON)
     sc_held = read_partition(raw_root, "snap_counts", season=_HELD_OUT_SEASON)
     dc_held = read_partition(raw_root, "depth_charts", season=_HELD_OUT_SEASON)
-    ngs_held = read_partition(raw_root, "ngs_receiving", season=_HELD_OUT_SEASON)
+    ngs_held = read_partition(raw_root, ngs_table, season=_HELD_OUT_SEASON)
     sch_held = read_partition(raw_root, "schedules", season=_HELD_OUT_SEASON)
 
     # Concatenate prior season for rolling windows (one season is enough for L4).
     ws_prior = read_partition(raw_root, "weekly_stats", season=_HELD_OUT_SEASON - 1)
     sc_prior = read_partition(raw_root, "snap_counts", season=_HELD_OUT_SEASON - 1)
-    ngs_prior = read_partition(raw_root, "ngs_receiving", season=_HELD_OUT_SEASON - 1)
+    ngs_prior = read_partition(raw_root, ngs_table, season=_HELD_OUT_SEASON - 1)
     ws_full = pd.concat([ws_prior, ws_held], ignore_index=True)
     sc_full = pd.concat([sc_prior, sc_held], ignore_index=True)
     ngs_full = pd.concat([ngs_prior, ngs_held], ignore_index=True)
@@ -88,15 +99,16 @@ def main() -> None:
     weeks = sorted(dc_held["week"].unique())
     rows: list[pd.DataFrame] = []
     for week in weeks:
-        feats = build_wr_features(
-            weekly_stats=ws_full,
-            snap_counts=sc_full,
-            depth_charts=dc_held,
-            ngs_receiving=ngs_full,
-            schedules=sch_held,
-            season=_HELD_OUT_SEASON,
-            as_of_week=int(week),
-        )
+        kwargs: dict[str, Any] = {
+            "weekly_stats": ws_full,
+            "snap_counts": sc_full,
+            "depth_charts": dc_held,
+            "schedules": sch_held,
+            "season": _HELD_OUT_SEASON,
+            "as_of_week": int(week),
+            ngs_kwarg: ngs_full,
+        }
+        feats = builder(**kwargs)
         if feats.empty:
             continue
         preds = model.predict_distribution(feats, ruleset=Ruleset.espn_ppr())
@@ -117,8 +129,8 @@ def main() -> None:
 
     all_preds = pd.concat(rows, ignore_index=True)
 
-    # Inner-join to actual weekly stats (filter to WRs).
-    actual = ws_held[ws_held["position"] == Position.WR.value].copy()
+    # Inner-join to actual weekly stats (filter to the requested position).
+    actual = ws_held[ws_held["position"] == position.value].copy()
     actual["actual_ppr"] = _realized_ppr_points(actual, Ruleset.espn_ppr())
     keep = ["gsis_id", "season", "week", "actual_ppr"] + [s.value for s in model.target_stats]
     eval_df = all_preds.merge(
@@ -128,7 +140,10 @@ def main() -> None:
         suffixes=("_pred", "_actual"),
     )
 
-    print(f"\n=== {_HELD_OUT_SEASON} sanity check (n={len(eval_df)} player-weeks) ===")
+    print(
+        f"\n=== {position.value} {_HELD_OUT_SEASON} sanity check "
+        f"(n={len(eval_df)} player-weeks) ==="
+    )
 
     # Per-stat fit.
     print("\n-- Per-stat fit --")
@@ -153,7 +168,9 @@ def main() -> None:
     actual_rank = eval_df.groupby("gsis_id")["actual_ppr"].sum().rank()
     common = pred_rank.index.intersection(actual_rank.index)
     spearman = float(np.corrcoef(pred_rank.loc[common], actual_rank.loc[common])[0, 1])
-    print(f"  top-N season-total rank correlation (Spearman, all WRs): {spearman:.3f}")
+    print(
+        f"  top-N season-total rank correlation (Spearman, all {position.value}s): {spearman:.3f}"
+    )
 
     # Calibration.
     print("\n-- Calibration --")

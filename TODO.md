@@ -125,3 +125,23 @@ Surfaced during Plan 3a Tasks 14-17. The synthetic fixtures used by 2a/2b/3a's C
 8. `wr.py`: bye-week WRs without schedule rows; duplicate depth-chart entries; negative trailing-mean yardage; share calc going negative.
 
 The opt-in `pytest -m network --run-network` smokes (`tests/test_ingest/test_api_drift.py`, formerly TODO #8 — closed) now guard against the same class of column-rename / column-removal drift after a `nfl_data_py` version bump. They do NOT replace this drift list as historical context, and they will NOT catch every real-data edge case (some — like the `id_map` malformed-legacy-gsis-id rows — are data-quality issues per row, not column-level drift), so keep this entry as a record of what the synthetic fixtures missed and audit it after each `nfl_data_py` upgrade.
+
+**Additional Plan 3b real-data drifts (Phase 6):**
+
+9. `WrFeaturesSchema` / `QbFeaturesSchema` / `RbFeaturesSchema` / `TeFeaturesSchema`: `*_yards_per_game_l4` and `passing_yards_per_game_std` had `ge=0` bounds inconsistent with the underlying weekly_stats schema (which allows negative yards from sacks / TFL / kneels). Trailing-4 means can therefore be negative; bounds dropped in commits `fa864ac` + `e25eb57`.
+10. QB/RB/TE feature builders missing the bye-week filter on rostered teams (analogous to WR's TODO #9a). Players on a team with no schedule row in `as_of_week` produced NaN `opponent`/`is_home`/`roof_dome` and failed schema validation. Filter ported from `wr.py` in commit `f79806a`.
+11. QB/RB/TE feature builders missing the depth-chart dedupe (analogous to WR's TODO #9c). Players listed under multiple slots or traded mid-week produced duplicate `(gsis_id, season, week)` rows and failed `BaselineModel.fit`'s one-to-one merge. Dedupe ported from `wr.py` in commit `54b6d95`.
+
+The TODO #8 opt-in network smokes confirmed no upstream column-rename drift in this run; the new entries are all schema-bound or builder-edge-case mismatches between WR's already-hardened path and QB/RB/TE's pre-3b path. The four fixes above bring QB/RB/TE feature builders to parity with WR.
+
+### 18. Add `python -m projections.ingest.refresh` CLI entry point
+
+Surfaced during Plan 3b Phase 6 ingest. `src/projections/ingest/refresh.py`
+exports a `refresh()` function but has no `if __name__ == "__main__":` block,
+so `python -m projections.ingest.refresh ...` doesn't work and ingest must
+be invoked via `python -c "from projections.ingest.refresh import refresh;
+refresh(data_root=Path('data'), seasons=range(2018, 2025))"`. A small
+argparse `main()` (with `--seasons RANGE` / `--data-root PATH` and a
+sensible default for `data_root=Path('data')`) would make the canonical
+ingest invocation a one-liner. Defer until next ingest-touching plan
+(Plan 4's CLI verbs are the natural home).

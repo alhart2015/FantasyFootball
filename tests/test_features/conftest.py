@@ -722,7 +722,10 @@ def te_weekly_stats() -> pd.DataFrame:
     the pass-catching group = 0.5 for each TE — easy to verify by hand.
 
     - Travis Kelce (KC, 00-0030506): 8 targets/game uniformly.
-    - George Kittle (SF, 00-0033084): 6 targets/game uniformly.
+    - George Kittle (SF, 00-0033084): 6 targets/game uniformly. Plan 3b
+      treats this id as a Taysom-Hill-shape TE for rushing-feature
+      coverage: 6 carries / 28 rushing yards / 1 rushing TD per game so
+      the trailing-4 rushing-mean rollups have non-zero data to verify.
     - Rashee Rice (KC WR, 00-0034950): 8 targets/game (matches Kelce).
     - Brandon Aiyuk (SF WR, 00-0035716): 6 targets/game (matches Kittle).
     """
@@ -735,10 +738,22 @@ def te_weekly_stats() -> pd.DataFrame:
                 "00-0030506", "TE", "KC", opp, week, targets=8, recs=6, yds=70, tds=1
             )
         )
-        # Kittle (TE, SF)
+        # Kittle (TE, SF) — doubles as the Taysom-Hill-shape rushing TE for
+        # Plan 3b's rushing-feature coverage.
         rows.append(
             _make_receiver_row(
-                "00-0033084", "TE", "SF", opp, week, targets=6, recs=4, yds=55, tds=0
+                "00-0033084",
+                "TE",
+                "SF",
+                opp,
+                week,
+                targets=6,
+                recs=4,
+                yds=55,
+                tds=0,
+                carries=6,
+                rushing_yards=28.0,
+                rushing_tds=1,
             )
         )
         # Rice (WR, KC)
@@ -772,8 +787,16 @@ def _make_receiver_row(
     recs: int,
     yds: float,
     tds: int,
+    carries: int = 0,
+    rushing_yards: float = 0.0,
+    rushing_tds: int = 0,
 ) -> dict[str, object]:
-    """Helper to build a synthetic receiver-shaped weekly_stats row."""
+    """Helper to build a synthetic receiver-shaped weekly_stats row.
+
+    Optional rushing fields default to zero so existing call sites are
+    unaffected; Plan 3b uses them to give Kittle a non-zero rushing
+    workload for the TE rushing-feature rollup tests.
+    """
     return {
         "gsis_id": gsis_id,
         "season": 2024,
@@ -787,9 +810,9 @@ def _make_receiver_row(
         "attempts": 0,
         "completions": 0,
         "sacks": 0,
-        "rushing_yards": 0.0,
-        "rushing_tds": 0,
-        "carries": 0,
+        "rushing_yards": float(rushing_yards),
+        "rushing_tds": rushing_tds,
+        "carries": carries,
         "receptions": recs,
         "receiving_yards": float(yds),
         "receiving_tds": tds,

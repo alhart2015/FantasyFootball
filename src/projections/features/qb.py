@@ -53,7 +53,22 @@ def build_qb_features(
     sch = schedules[exact_week_mask(schedules, season=season, as_of_week=as_of_week)].copy()
 
     # --- Rostered QBs in target week (depth chart drives roster set) ------
-    qb_dc = dc[dc["position"] == Position.QB.value].copy()
+    # Restrict to teams that have a schedule row this week — bye-week QBs
+    # have no opponent / is_home / roof_dome to populate, and the schema
+    # rejects NaN on those columns. Mirrors the WR filter (PR #4 review).
+    sch_teams = set(sch["home_team"].astype(str)) | set(sch["away_team"].astype(str))
+    qb_dc = dc[
+        (dc["position"] == Position.QB.value) & (dc["team"].astype(str).isin(sch_teams))
+    ].copy()
+    # Dedupe: a player can appear multiple times in the same depth chart (e.g.,
+    # listed under multiple slot labels, or traded mid-week). Keep the lowest
+    # depth_rank (the player's primary listing). Mirrors the WR dedupe (PR #4
+    # review, TODO #9c).
+    qb_dc = (
+        qb_dc.sort_values(["gsis_id", "season", "week", "depth_rank"])
+        .drop_duplicates(subset=["gsis_id", "season", "week"], keep="first")
+        .copy()
+    )
     if qb_dc.empty:
         empty_cols = list(QbFeaturesSchema.to_schema().columns.keys())
         return QbFeaturesSchema.validate(pd.DataFrame(columns=empty_cols))

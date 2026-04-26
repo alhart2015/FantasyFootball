@@ -32,6 +32,8 @@ _ROLLING_ZERO_FILL_COLS: tuple[str, ...] = (
     "receptions_per_game_l4",
     "receiving_yards_per_game_l4",
     "receiving_tds_per_game_l4",
+    "rushing_attempts_per_game_l4",
+    "rushing_yards_per_game_l4",
 )
 
 
@@ -52,7 +54,22 @@ def build_te_features(
     dc = depth_charts[exact_week_mask(depth_charts, season=season, as_of_week=as_of_week)].copy()
     sch = schedules[exact_week_mask(schedules, season=season, as_of_week=as_of_week)].copy()
 
-    te_dc = dc[dc["position"] == Position.TE.value].copy()
+    # Restrict to teams that have a schedule row this week — bye-week TEs
+    # have no opponent / is_home / roof_dome to populate, and the schema
+    # rejects NaN on those columns. Mirrors the WR filter (PR #4 review).
+    sch_teams = set(sch["home_team"].astype(str)) | set(sch["away_team"].astype(str))
+    te_dc = dc[
+        (dc["position"] == Position.TE.value) & (dc["team"].astype(str).isin(sch_teams))
+    ].copy()
+    # Dedupe: a player can appear multiple times in the same depth chart (e.g.,
+    # listed under multiple slot labels, or traded mid-week). Keep the lowest
+    # depth_rank (the player's primary listing). Mirrors the WR dedupe (PR #4
+    # review, TODO #9c).
+    te_dc = (
+        te_dc.sort_values(["gsis_id", "season", "week", "depth_rank"])
+        .drop_duplicates(subset=["gsis_id", "season", "week"], keep="first")
+        .copy()
+    )
     if te_dc.empty:
         empty_cols = list(TeFeaturesSchema.to_schema().columns.keys())
         return TeFeaturesSchema.validate(pd.DataFrame(columns=empty_cols))
@@ -73,6 +90,12 @@ def build_te_features(
     )
     rec_td_l4 = trailing_4_per_player(ws_te, Stat.RECEIVING_TDS.value).rename(
         columns={"mean_l4": "receiving_tds_per_game_l4"}
+    )
+    rush_att_l4 = trailing_4_per_player(ws_te, Stat.CARRIES.value).rename(
+        columns={"mean_l4": "rushing_attempts_per_game_l4"}
+    )
+    rush_yd_l4 = trailing_4_per_player(ws_te, Stat.RUSHING_YARDS.value).rename(
+        columns={"mean_l4": "rushing_yards_per_game_l4"}
     )
 
     # target_share against the full team pass-catching group. Helper returns
@@ -149,6 +172,8 @@ def build_te_features(
     out = out.merge(rec_l4, on="gsis_id", how="left")
     out = out.merge(rec_yd_l4, on="gsis_id", how="left")
     out = out.merge(rec_td_l4, on="gsis_id", how="left")
+    out = out.merge(rush_att_l4, on="gsis_id", how="left")
+    out = out.merge(rush_yd_l4, on="gsis_id", how="left")
     out = out.merge(snap_l4, on="gsis_id", how="left")
     out = out.merge(ngs_cols, on="gsis_id", how="left")
     out = out.merge(

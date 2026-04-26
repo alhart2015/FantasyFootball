@@ -4,7 +4,7 @@ distribution via the existing scoring layer.
 One BaselineModel class parameterized by (position, target_stats,
 feature_columns, dist_families); per-position factories (wr_baseline,
 qb_baseline, rb_baseline, te_baseline) construct correctly-configured
-instances. Plan 3a only ships wr_baseline.
+instances.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from typing import Final
 import msgpack
 import numpy as np
 import pandas as pd
+import pandera.pandas as pa
 from sklearn.linear_model import RidgeCV
 
 from projections.distributions import Distribution, ParametricGamma, ParametricNormal
@@ -27,8 +28,11 @@ from projections.schemas import (
     DistributionFamily,
     Position,
     ProjectionWeeklySchema,
+    QbFeaturesSchema,
+    RbFeaturesSchema,
     Ruleset,
     Stat,
+    TeFeaturesSchema,
     WeeklyStatsSchema,
     WrFeaturesSchema,
 )
@@ -107,6 +111,155 @@ _WR_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
 )
 
 
+_QB_TARGET_STATS: Final[tuple[Stat, ...]] = (
+    Stat.PASSING_YARDS,
+    Stat.PASSING_TDS,
+    Stat.INTERCEPTIONS,
+    Stat.RUSHING_YARDS,
+    Stat.RUSHING_TDS,
+    Stat.FUMBLES_LOST,
+)
+
+_QB_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
+    Stat.PASSING_YARDS: DistributionFamily.NORMAL,
+    Stat.PASSING_TDS: DistributionFamily.GAMMA,
+    Stat.INTERCEPTIONS: DistributionFamily.GAMMA,
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
+    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
+    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+}
+
+# Feature columns from QbFeaturesSchema, minus identity (gsis_id/season/week/team/opponent).
+# Boolean columns (rushing_qb / is_home / roof_dome) are coerced to 0/1 by fit/predict.
+_QB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
+    "depth_rank",
+    "pass_attempts_per_game_l4",
+    "passing_yards_per_game_l4",
+    "passing_tds_per_game_l4",
+    "interceptions_per_game_l4",
+    "sacks_per_game_l4",
+    "passing_yards_per_game_std",
+    "rushing_attempts_per_game_l4",
+    "rushing_yards_per_game_l4",
+    "rushing_qb",
+    "snap_pct_l4",
+    "aggressiveness_std",
+    "completion_percentage_above_expectation_std",
+    "avg_intended_air_yards_std",
+    "avg_time_to_throw_std",
+    "implied_team_total",
+    "spread",
+    "is_home",
+    "roof_dome",
+    "opp_allowed_qb_fppg_l4",
+)
+
+
+_RB_TARGET_STATS: Final[tuple[Stat, ...]] = (
+    Stat.RUSHING_YARDS,
+    Stat.RUSHING_TDS,
+    Stat.RECEPTIONS,
+    Stat.RECEIVING_YARDS,
+    Stat.RECEIVING_TDS,
+    Stat.FUMBLES_LOST,
+)
+
+_RB_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
+    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
+    Stat.RECEPTIONS: DistributionFamily.GAMMA,
+    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
+    Stat.RECEIVING_TDS: DistributionFamily.GAMMA,
+    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+}
+
+_RB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
+    "depth_rank",
+    "carries_per_game_l4",
+    "rushing_yards_per_game_l4",
+    "rushing_tds_per_game_l4",
+    "rush_share_l4",
+    "targets_per_game_l4",
+    "receptions_per_game_l4",
+    "receiving_yards_per_game_l4",
+    "target_share_l4",
+    "targets_per_game_std",
+    "passing_down_back",
+    "snap_pct_l4",
+    "efficiency_std",
+    "rush_yards_over_expected_per_att_std",
+    "percent_attempts_gte_eight_defenders_std",
+    "implied_team_total",
+    "spread",
+    "is_home",
+    "roof_dome",
+    "opp_allowed_rb_fppg_l4",
+)
+
+
+_TE_TARGET_STATS: Final[tuple[Stat, ...]] = (
+    Stat.RECEPTIONS,
+    Stat.RECEIVING_YARDS,
+    Stat.RECEIVING_TDS,
+    Stat.RUSHING_YARDS,
+    Stat.RUSHING_TDS,
+    Stat.FUMBLES_LOST,
+)
+
+_TE_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
+    Stat.RECEPTIONS: DistributionFamily.GAMMA,
+    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
+    Stat.RECEIVING_TDS: DistributionFamily.GAMMA,
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
+    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
+    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+}
+
+# Feature columns include rushing_*_per_game_l4 (added to TeFeaturesSchema in Plan 3b Phase 1).
+_TE_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
+    "depth_rank",
+    "targets_per_game_l4",
+    "targets_per_game_std",
+    "target_share_l4",
+    "receptions_per_game_l4",
+    "receiving_yards_per_game_l4",
+    "receiving_tds_per_game_l4",
+    "rushing_attempts_per_game_l4",
+    "rushing_yards_per_game_l4",
+    "snap_pct_l4",
+    "avg_separation_std",
+    "avg_intended_air_yards_std",
+    "avg_yac_above_expectation_std",
+    "implied_team_total",
+    "spread",
+    "is_home",
+    "roof_dome",
+    "opp_allowed_te_fppg_l4",
+)
+
+
+def _default_code_hash_files(position_module: str) -> tuple[Path, ...]:
+    """Build the canonical code-hash file tuple for a position factory.
+
+    The eight files are: models/base.py, models/baseline.py,
+    features/{position_module}, features/_shared.py, features/_rolling.py,
+    features/_opponent.py, scoring/score.py, scoring/score_distribution.py.
+
+    Used by every position factory so the per-factory call site is one line.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    return (
+        repo_root / "src" / "projections" / "models" / "base.py",
+        repo_root / "src" / "projections" / "models" / "baseline.py",
+        repo_root / "src" / "projections" / "features" / position_module,
+        repo_root / "src" / "projections" / "features" / "_shared.py",
+        repo_root / "src" / "projections" / "features" / "_rolling.py",
+        repo_root / "src" / "projections" / "features" / "_opponent.py",
+        repo_root / "src" / "projections" / "scoring" / "score.py",
+        repo_root / "src" / "projections" / "scoring" / "score_distribution.py",
+    )
+
+
 @dataclass
 class BaselineModel:
     """Per-stat Ridge baseline. Construct via per-position factories
@@ -116,6 +269,8 @@ class BaselineModel:
     target_stats: tuple[Stat, ...]
     feature_columns: tuple[str, ...]
     dist_families: Mapping[Stat, DistributionFamily]
+    feature_schema: type[pa.DataFrameModel]
+    code_hash_files: tuple[Path, ...]
 
     # Populated by .fit() — None on an unfitted instance.
     feature_means: pd.Series | None = field(default=None)
@@ -145,7 +300,7 @@ class BaselineModel:
         pipeline."""
         # Schema validation -- defensive at the boundary even though our caller
         # is supposed to have already validated.
-        features = WrFeaturesSchema.validate(features)
+        features = self.feature_schema.validate(features)
         weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
 
         # Inner-join features with truth on (gsis_id, season, week). Players in
@@ -220,20 +375,9 @@ class BaselineModel:
         trained_seasons = sorted(joined.loc[feature_frame.index, "season"].unique().tolist())
         self.train_seasons = (int(trained_seasons[0]), int(trained_seasons[-1]))
 
-        # Code hash over source files whose change should invalidate the
-        # artifact. Spec section 5.2 lists the canonical set.
-        repo_root = Path(__file__).resolve().parents[3]
-        tracked = [
-            repo_root / "src" / "projections" / "models" / "base.py",
-            repo_root / "src" / "projections" / "models" / "baseline.py",
-            repo_root / "src" / "projections" / "features" / "wr.py",
-            repo_root / "src" / "projections" / "features" / "_shared.py",
-            repo_root / "src" / "projections" / "features" / "_rolling.py",
-            repo_root / "src" / "projections" / "features" / "_opponent.py",
-            repo_root / "src" / "projections" / "scoring" / "score.py",
-            repo_root / "src" / "projections" / "scoring" / "score_distribution.py",
-        ]
-        self.code_hash = compute_code_hash(tracked)
+        # Code hash over the file list this factory declared. The exact set
+        # is per-position (each factory passes its own features/{pos}.py).
+        self.code_hash = compute_code_hash(self.code_hash_files)
 
     def _build_stat_distributions(self, features: pd.DataFrame) -> list[dict[Stat, Distribution]]:
         """Build per-row dicts of {Stat -> Distribution} from fitted regressors.
@@ -314,7 +458,7 @@ class BaselineModel:
         params encoding can address this without breaking the schema. Tracked
         as TODO #14.
         """
-        features = WrFeaturesSchema.validate(features)
+        features = self.feature_schema.validate(features)
         if features.empty:
             empty_cols = list(ProjectionWeeklySchema.to_schema().columns.keys())
             return ProjectionWeeklySchema.validate(pd.DataFrame(columns=empty_cols))
@@ -402,4 +546,42 @@ def wr_baseline() -> BaselineModel:
         target_stats=_WR_TARGET_STATS,
         feature_columns=_WR_FEATURE_COLUMNS,
         dist_families=_WR_DIST_FAMILIES,
+        feature_schema=WrFeaturesSchema,
+        code_hash_files=_default_code_hash_files("wr.py"),
+    )
+
+
+def qb_baseline() -> BaselineModel:
+    """Construct an unfitted QB-baseline model."""
+    return BaselineModel(
+        position=Position.QB,
+        target_stats=_QB_TARGET_STATS,
+        feature_columns=_QB_FEATURE_COLUMNS,
+        dist_families=_QB_DIST_FAMILIES,
+        feature_schema=QbFeaturesSchema,
+        code_hash_files=_default_code_hash_files("qb.py"),
+    )
+
+
+def rb_baseline() -> BaselineModel:
+    """Construct an unfitted RB-baseline model."""
+    return BaselineModel(
+        position=Position.RB,
+        target_stats=_RB_TARGET_STATS,
+        feature_columns=_RB_FEATURE_COLUMNS,
+        dist_families=_RB_DIST_FAMILIES,
+        feature_schema=RbFeaturesSchema,
+        code_hash_files=_default_code_hash_files("rb.py"),
+    )
+
+
+def te_baseline() -> BaselineModel:
+    """Construct an unfitted TE-baseline model."""
+    return BaselineModel(
+        position=Position.TE,
+        target_stats=_TE_TARGET_STATS,
+        feature_columns=_TE_FEATURE_COLUMNS,
+        dist_families=_TE_DIST_FAMILIES,
+        feature_schema=TeFeaturesSchema,
+        code_hash_files=_default_code_hash_files("te.py"),
     )
