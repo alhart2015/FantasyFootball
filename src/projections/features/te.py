@@ -61,6 +61,15 @@ def build_te_features(
     te_dc = dc[
         (dc["position"] == Position.TE.value) & (dc["team"].astype(str).isin(sch_teams))
     ].copy()
+    # Dedupe: a player can appear multiple times in the same depth chart (e.g.,
+    # listed under multiple slot labels, or traded mid-week). Keep the lowest
+    # depth_rank (the player's primary listing). Mirrors the WR dedupe (PR #4
+    # review, TODO #9c).
+    te_dc = (
+        te_dc.sort_values(["gsis_id", "season", "week", "depth_rank"])
+        .drop_duplicates(subset=["gsis_id", "season", "week"], keep="first")
+        .copy()
+    )
     if te_dc.empty:
         empty_cols = list(TeFeaturesSchema.to_schema().columns.keys())
         return TeFeaturesSchema.validate(pd.DataFrame(columns=empty_cols))
