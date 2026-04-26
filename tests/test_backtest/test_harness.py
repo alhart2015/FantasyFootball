@@ -11,13 +11,15 @@ from projections.schemas import Position
 
 
 def test_backtest_run_dataclass_shape() -> None:
-    """BacktestRun is a frozen slots dataclass with the four documented
-    attributes (timestamp, metrics, naive_metrics, per_row_results)."""
+    """BacktestRun is a frozen slots dataclass with the five documented
+    attributes (timestamp, metrics, naive_metrics, per_row_results,
+    per_player_results)."""
     run = BacktestRun(
         timestamp=pd.Timestamp("2026-04-26", tz="UTC"),
         metrics=pd.DataFrame(columns=["position", "year", "metric", "value"]),
         naive_metrics=pd.DataFrame(columns=["position", "year", "metric", "value"]),
         per_row_results=pd.DataFrame(),
+        per_player_results=pd.DataFrame(),
     )
     assert isinstance(run.metrics, pd.DataFrame)
     assert isinstance(run.naive_metrics, pd.DataFrame)

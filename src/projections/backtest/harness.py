@@ -15,7 +15,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from projections.backtest.metrics import compute_all_metrics
+from projections.aggregation import aggregate_to_season
+from projections.backtest.metrics import (
+    compute_all_metrics,
+    compute_season_calibration_metrics,
+)
 from projections.backtest.naive import compute_naive_predictions
 from projections.features.cache import read_features
 from projections.models import POSITION_DISPATCH
@@ -42,12 +46,16 @@ class BacktestRun:
         per_row_results: per-(position, year, week, gsis_id) row of
             actuals + model predictions for diagnosis. Plan 3c writes
             this to data/backtest/run_<ts>/results.parquet (gitignored).
+        per_player_results: per-(position, year, gsis_id) season eval row
+            for diagnosis. Plan 3d writes this to
+            data/backtest/run_<ts>/season_results.parquet (gitignored).
     """
 
     timestamp: pd.Timestamp
     metrics: pd.DataFrame
     naive_metrics: pd.DataFrame
     per_row_results: pd.DataFrame
+    per_player_results: pd.DataFrame
 
 
 def _realized_ppr_points(weekly_stats: pd.DataFrame, ruleset: Ruleset) -> pd.Series:
@@ -141,47 +149,6 @@ def _naive_metrics_for_cell(
     return compute_all_metrics(eval_df, target_stats=target_stats)
 
 
-def _model_metrics_for_cell(
-    *,
-    train_features: pd.DataFrame,
-    train_actuals: pd.DataFrame,
-    predict_features: pd.DataFrame,
-    holdout_actuals: pd.DataFrame,
-    position: Position,
-    ruleset: Ruleset,
-) -> tuple[dict[str, float], pd.DataFrame, tuple[Stat, ...]]:
-    """Train BaselineModel on train_features+train_actuals, predict each
-    week of predict_features, score against holdout_actuals. Returns
-    (metrics_dict, eval_df, target_stats) -- the third tuple element lets
-    the caller pass target_stats to the naive computation without
-    rebuilding a model instance."""
-    dispatch = POSITION_DISPATCH[position]
-    model = dispatch.factory()
-    model.fit(train_features, train_actuals)
-
-    predictions = model.predict_distribution(predict_features, ruleset=ruleset)
-    stat_dists_per_row = model.build_stat_distributions(predict_features)
-    per_stat_pred_means = pd.DataFrame(
-        {stat.value: [d[stat].mean() for d in stat_dists_per_row] for stat in model.target_stats}
-    )
-    per_stat_pred_means["gsis_id"] = predict_features["gsis_id"].values
-    per_stat_pred_means["season"] = predict_features["season"].astype(int).values
-    per_stat_pred_means["week"] = predict_features["week"].astype(int).values
-
-    holdout_pos = holdout_actuals[holdout_actuals["position"] == position.value].copy()
-    holdout_pos["actual_ppr"] = _realized_ppr_points(holdout_pos, ruleset)
-
-    target_stats = tuple(model.target_stats)
-    eval_df = _build_eval_df(
-        predictions=predictions,
-        per_stat_pred_means=per_stat_pred_means,
-        held_out_pos=holdout_pos,
-        target_stats=target_stats,
-    )
-    metrics = compute_all_metrics(eval_df, target_stats=target_stats)
-    return metrics, eval_df, target_stats
-
-
 def run_backtest(
     *,
     held_out_years: Iterable[int] = (2021, 2022, 2023, 2024),
@@ -204,6 +171,7 @@ def run_backtest(
     metrics_rows: list[dict[str, object]] = []
     naive_rows: list[dict[str, object]] = []
     per_row_frames: list[pd.DataFrame] = []
+    per_player_frames: list[pd.DataFrame] = []
 
     for position in positions_list:
         for year in years_list:
@@ -219,14 +187,33 @@ def run_backtest(
             predict_features = read_features(position, year, features_root=features_root)
             holdout_actuals = read_partition(raw_root, "weekly_stats", season=year)
 
-            model_metrics, eval_df, target_stats = _model_metrics_for_cell(
-                train_features=train_features,
-                train_actuals=train_actuals,
-                predict_features=predict_features,
-                holdout_actuals=holdout_actuals,
-                position=position,
-                ruleset=ruleset,
+            # Model: predict per-week, score weekly metrics.
+            dispatch = POSITION_DISPATCH[position]
+            model = dispatch.factory()
+            model.fit(train_features, train_actuals)
+            predictions = model.predict_distribution(predict_features, ruleset=ruleset)
+            stat_dists_per_row = model.build_stat_distributions(predict_features)
+            per_stat_pred_means = pd.DataFrame(
+                {
+                    stat.value: [d[stat].mean() for d in stat_dists_per_row]
+                    for stat in model.target_stats
+                }
             )
+            per_stat_pred_means["gsis_id"] = predict_features["gsis_id"].values
+            per_stat_pred_means["season"] = predict_features["season"].astype(int).values
+            per_stat_pred_means["week"] = predict_features["week"].astype(int).values
+
+            holdout_pos = holdout_actuals[holdout_actuals["position"] == position.value].copy()
+            holdout_pos["actual_ppr"] = _realized_ppr_points(holdout_pos, ruleset)
+
+            target_stats = tuple(model.target_stats)
+            eval_df = _build_eval_df(
+                predictions=predictions,
+                per_stat_pred_means=per_stat_pred_means,
+                held_out_pos=holdout_pos,
+                target_stats=target_stats,
+            )
+            model_metrics = compute_all_metrics(eval_df, target_stats=target_stats)
             for metric_name, value in model_metrics.items():
                 metrics_rows.append(
                     {
@@ -237,6 +224,26 @@ def run_backtest(
                     }
                 )
 
+            # Season aggregation.
+            season_predictions = aggregate_to_season(predictions, ruleset=ruleset)
+            season_actuals = (
+                holdout_pos.groupby("gsis_id", as_index=False)["actual_ppr"]
+                .sum()
+                .rename(columns={"actual_ppr": "actual_season_total"})
+            )
+            season_eval_df = season_predictions.merge(season_actuals, on="gsis_id", how="inner")
+            season_metrics = compute_season_calibration_metrics(season_eval_df)
+            for metric_name, value in season_metrics.items():
+                metrics_rows.append(
+                    {
+                        "position": position.value,
+                        "year": year,
+                        "metric": metric_name,
+                        "value": float(value),
+                    }
+                )
+
+            # Naive metrics (existing).
             naive_metrics = _naive_metrics_for_cell(
                 train_actuals=train_actuals,
                 holdout_actuals=holdout_actuals,
@@ -257,15 +264,21 @@ def run_backtest(
 
             eval_df = eval_df.assign(position=position.value)
             per_row_frames.append(eval_df)
+            season_eval_df = season_eval_df.assign(position=position.value)
+            per_player_frames.append(season_eval_df)
 
     metrics_df = pd.DataFrame(metrics_rows, columns=list(_METRICS_COLUMNS))
     naive_metrics_df = pd.DataFrame(naive_rows, columns=list(_METRICS_COLUMNS))
     per_row_results = (
         pd.concat(per_row_frames, ignore_index=True) if per_row_frames else pd.DataFrame()
     )
+    per_player_results = (
+        pd.concat(per_player_frames, ignore_index=True) if per_player_frames else pd.DataFrame()
+    )
     return BacktestRun(
         timestamp=timestamp,
         metrics=metrics_df,
         naive_metrics=naive_metrics_df,
         per_row_results=per_row_results,
+        per_player_results=per_player_results,
     )
