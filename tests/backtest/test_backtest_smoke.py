@@ -51,3 +51,16 @@ def test_backtest_smoke_one_cell() -> None:
     metric_names = set(out.metrics["metric"].unique())
     assert "composite_rmse" in metric_names
     assert "spearman_topN" in metric_names
+
+    # Plan 3d: season-calibration metrics are present and finite for the
+    # smoke cell (default-on smoke catches accidental regressions in the
+    # season aggregation wiring before a full --run-backtest).
+    season_metrics = out.metrics[
+        out.metrics["metric"].isin(["season_calibration_p10p90", "season_calibration_le_p90"])
+    ]
+    assert len(season_metrics) == 2, (
+        f"Expected 2 season_calibration rows, got {len(season_metrics)}: "
+        f"{season_metrics['metric'].tolist()}"
+    )
+    assert season_metrics["value"].notna().all()
+    assert ((season_metrics["value"] >= 0.0) & (season_metrics["value"] <= 1.0)).all()
