@@ -21,6 +21,21 @@ _SNAPSHOT_PATH = Path("tests/backtest/baseline_metrics.json")
 _TOLERANCES_PATH = Path("tests/backtest/tolerances.json")
 
 
+def _write_diagnostic_outputs(run: object) -> None:
+    """Write per-row + per-player diagnostic frames to
+    data/backtest/run_<ts>/. The directory is gitignored. Skipped silently
+    if either frame is empty (e.g., a synthetic test run with no positions)."""
+    timestamp_str = (
+        pd.Timestamp(run.timestamp).strftime("%Y%m%dT%H%M%SZ")  # type: ignore[attr-defined]
+    )
+    out_dir = Path("data/backtest") / f"run_{timestamp_str}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not run.per_row_results.empty:  # type: ignore[attr-defined]
+        run.per_row_results.to_parquet(out_dir / "results.parquet")  # type: ignore[attr-defined]
+    if not run.per_player_results.empty:  # type: ignore[attr-defined]
+        run.per_player_results.to_parquet(out_dir / "season_results.parquet")  # type: ignore[attr-defined]
+
+
 def _print_metrics_table(label: str, metrics: pd.DataFrame, naive: pd.DataFrame) -> None:
     """Print a per-(position, year) table merging model + naive metrics
     side by side."""
@@ -105,11 +120,13 @@ def main() -> None:
     run = run_backtest()
 
     if args.update_snapshot:
+        _write_diagnostic_outputs(run)
         sys.exit(_update(run))
     if args.report:
+        _write_diagnostic_outputs(run)
         _print_metrics_table("Backtest", run.metrics, run.naive_metrics)
         sys.exit(0)
-    # Default: check.
+    # Default: check (no diagnostic output to keep the gate hermetic).
     sys.exit(_check(run, tolerances))
 
 
