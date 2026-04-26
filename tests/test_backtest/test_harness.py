@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 from projections.backtest import BacktestRun, run_backtest
+from projections.schemas import Position
 
 
 def test_backtest_run_dataclass_shape() -> None:
@@ -30,3 +33,31 @@ def test_run_backtest_skeleton_returns_empty_metrics_when_no_positions() -> None
     assert list(out.metrics.columns) == ["position", "year", "metric", "value"]
     assert list(out.naive_metrics.columns) == ["position", "year", "metric", "value"]
     assert out.metrics.empty
+
+
+def test_run_backtest_populates_metrics_for_one_cell(
+    synthetic_backtest_layout: dict[str, Path],
+) -> None:
+    """End-to-end: train on prior seasons of synthetic features, predict the
+    held-out year, score, and emit long-form metric rows.
+
+    The root-scope WR fixtures only cover 2024 (weeks 1-8) + 2025 (weeks 1-4),
+    so we narrow train_start=2024 and held_out_years=[2025]. That's the
+    minimal range that exercises a single (position, year) cell with at
+    least one prior season of training and a non-empty holdout.
+    """
+    out = run_backtest(
+        held_out_years=[2025],
+        positions=[Position.WR],
+        train_start=2024,
+        features_root=synthetic_backtest_layout["features_root"],
+        raw_root=synthetic_backtest_layout["raw_root"],
+    )
+    assert not out.metrics.empty
+    assert set(out.metrics.columns) == {"position", "year", "metric", "value"}
+    # Should produce at least one composite_rmse + one spearman_topN row.
+    metric_names = set(out.metrics["metric"].unique())
+    assert "composite_rmse" in metric_names
+    assert "spearman_topN" in metric_names
+    # naive_metrics has the same shape and is non-empty.
+    assert not out.naive_metrics.empty
