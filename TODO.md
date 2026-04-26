@@ -45,9 +45,12 @@ A short written recommendation: pick one modeling approach (covariance / scenari
 
 Required for true opponent-adjusted EPA features. Defer until Plan 3 backtest reveals whether the `opp_allowed_fppg_l4` proxy is good enough. If not, ingest PBP and add EPA-derived opponent features in a focused plan.
 
-### 4. Decide feature parquet storage during Plan 3
+### 4. Feature parquet storage — closed in Plan 3c
 
-Gated on backtest performance: if a single training pass takes >~30s recomputing features, add `data/features/{position}/...` storage and a `refresh_features` CLI verb; otherwise stay pure-function.
+Closed 2026-04-26. `data/features/{position}/season=YYYY/week=WW/part.parquet`
+populated by `scripts/refresh_features.py`; read by `src/projections/features/cache.py`
+and consumed by the backtest harness. Manual invalidation only — see TODO #21
+below for code-hash auto-invalidation.
 
 ### 5. NGS missing-data forward-fill policy
 
@@ -145,3 +148,27 @@ argparse `main()` (with `--seasons RANGE` / `--data-root PATH` and a
 sensible default for `data_root=Path('data')`) would make the canonical
 ingest invocation a one-liner. Defer until next ingest-touching plan
 (Plan 4's CLI verbs are the natural home).
+
+### 19. Walk-forward gate non-determinism check
+
+Phase 6 of Plan 3c may surface tiny RMSE jitter on the 2021 cells
+where RidgeCV trains on only 3 prior seasons. If empirically observed
+on a re-run with unchanged data, add explicit `random_state` propagation
+through `BaselineModel.fit` and re-snapshot. Otherwise close.
+
+### 20. Naive-baseline parquet output for trend tracking
+
+Plan 3c writes naive metrics into the in-memory `BacktestRun` and prints
+them in `--report` mode but does not persist them. If we ever want to
+track "how much value is Model A adding over naive *over time*", persist
+naive metrics to a parquet table at `data/backtest/naive_history/...`
+keyed by run timestamp. Not load-bearing for v1.
+
+### 21. Feature cache code-hash auto-invalidation
+
+Plan 3c's feature cache is invalidated manually — the user must re-run
+`scripts/refresh_features.py` after touching any feature builder.
+Auto-invalidation reads the source files for the feature builder (the
+same set `BaselineModel.code_hash_files` already tracks) and refuses
+to read stale cache. Deferred until manual invalidation produces a
+real-world bug.

@@ -4,6 +4,66 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 3c — Walk-forward backtest gate (run 2026-04-26, on branch `feat/plan-3c-backtest-harness`)
+
+Held-out years: 2021, 2022, 2023, 2024 (4 years × 4 positions = 16 fits per gate run).
+Train window: expanding from 2018 → year-1.
+Snapshot file: `tests/backtest/baseline_metrics.json` (368 rows committed).
+Gate: `pytest -m backtest --run-backtest` — opt-in, pre-PR. Full run: 133 seconds.
+Default-on smoke: `tests/backtest/test_backtest_smoke.py` — one (WR, 2024) cell, ~15s.
+
+### Composite metrics by (position, year)
+
+| Position | Year | composite_rmse | composite_mae | spearman_topN | calibration_p10p90 | calibration_le_p90 |
+|---|---|---|---|---|---|---|
+| QB | 2021 | 7.846 | 6.364 | 0.933 | 0.677 | 0.860 |
+| QB | 2022 | 7.234 | 5.702 | 0.967 | 0.740 | 0.848 |
+| QB | 2023 | 7.323 | 5.868 | 0.945 | 0.712 | 0.834 |
+| QB | 2024 | 7.714 | 6.068 | 0.939 | 0.702 | 0.844 |
+| RB | 2021 | 6.868 | 5.143 | 0.970 | 0.754 | 0.849 |
+| RB | 2022 | 6.635 | 4.963 | 0.967 | 0.753 | 0.851 |
+| RB | 2023 | 6.324 | 4.636 | 0.967 | 0.796 | 0.868 |
+| RB | 2024 | 6.486 | 4.845 | 0.975 | 0.769 | 0.862 |
+| TE | 2021 | 5.351 | 3.857 | 0.966 | 0.720 | 0.841 |
+| TE | 2022 | 5.278 | 3.671 | 0.960 | 0.753 | 0.831 |
+| TE | 2023 | 4.973 | 3.527 | 0.970 | 0.738 | 0.825 |
+| TE | 2024 | 5.098 | 3.714 | 0.962 | 0.716 | 0.821 |
+| WR | 2021 | 6.743 | 5.044 | 0.970 | 0.698 | 0.827 |
+| WR | 2022 | 6.631 | 4.979 | 0.977 | 0.694 | 0.833 |
+| WR | 2023 | 6.529 | 4.742 | 0.968 | 0.726 | 0.833 |
+| WR | 2024 | 6.691 | 4.903 | 0.975 | 0.702 | 0.825 |
+
+### Naive baseline comparison (informational)
+
+Naive = per-player trailing-4-game stat mean, with cold-start fallback to
+per-position mean. **Model A beats naive on composite RMSE by 5–11% on
+every (position, year) cell** — no inverted cells.
+
+| Position | Naive composite RMSE range | Model A vs naive |
+|---|---|---|
+| QB | 7.83 – 8.53 | -6.2% to -10.8% |
+| RB | 6.77 – 7.45 | -5.4% to -7.8% |
+| TE | 5.30 – 5.67 | -5.6% to -6.2% |
+| WR | 7.02 – 7.17 | -5.5% to -7.3% |
+
+Spearman top-N: model and naive are tied within ±0.01 across all 16 cells.
+Trailing-4-mean is already a very strong rank-correlation baseline (because
+"good players keep being good"); Model A's value-add is in lower
+RMSE / MAE on per-stat and composite metrics, not in ranking signal.
+
+Calibration (`[p10, p90]` coverage): 0.67–0.80 across cells, target 0.80 — under-dispersed
+in the same direction as 3a/3b's WR sanity check. Plan 3d's MLE-fit gamma α / variance
+bucketing should tighten this; Plan 3c locks the current numbers in as the regression floor.
+
+### Phase 6 unplanned-but-necessary fixes
+
+Two issues surfaced during the first end-to-end run; both fixed in scope:
+
+- **`score_distribution` perf vectorization** (commit `dc122a7`). The original per-sample Python loop building a Pydantic StatLine per sample × per stat × per row dominated harness runtime — 20–30 minutes for the full 16-cell run. Spec section 1.2 had deferred this perf TODO to Plan 3d, but the runtime made the gate functionally unrunnable, so vectorization was pulled forward. Math is bit-identical (linear scoring rule + same RNG draw order); existing scoring tests pass unchanged. Full gate now runs in 133s.
+- **`tests/conftest.py` marker filter** (commit `4b5aea0`). The original `"backtest" in item.keywords` filter over-matched any test under `tests/backtest/` (pytest's keywords include path-derived components), wrongly skipping the default-on smoke test under the `--run-backtest` gate. Fixed by switching to `item.get_closest_marker("backtest")`. Network filter switched to the same idiom for consistency.
+
+---
+
 ## Plan 3b — 2024 sanity check (run on branch `feat/plan-3b-qb-rb-te-baseline`)
 
 Held-out year is 2024 (same as 3a; `nfl_data_py` has not yet published 2025). Each position trained on 2018-2023. Per-position evals are stdout-only — Plan 3c owns CI threshold gating.
@@ -158,44 +218,35 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ---
 
-## Current status (as of 2026-04-25)
+## Current status (as of 2026-04-26)
 
-**Projections Core — Plan 3b (generalize Model A baseline to QB / RB / TE) merged to `main` at commit `c4a0401` (PR #7).**
+**Projections Core — Plan 3c (walk-forward backtest harness + snapshot-diff gate) merged to `main` at commit `<TBD-after-merge>` (PR #<TBD>).**
 
 **Predecessors:**
 - Plan 1 (Foundations) merged at `8f02a6c`.
-- Dev tooling merged via `feat/dev-tooling`.
-- Plan 2a (Ingest expansion + WR feature builder) merged at `7926090`.
-- Plan 2b (QB/RB/TE feature builders) merged at `af325ea`.
-- Plan 3a (WR Model A baseline + first real-data ingest) merged at `598ab9c`.
+- Plan 2a merged at `7926090`; Plan 2b merged at `af325ea`.
+- Plan 3a (WR Model A baseline) merged at `598ab9c`.
+- Plan 3b (QB / RB / TE Model A baselines) merged at `c4a0401`.
 
-**Plan 3b delivered:**
-- `BaselineModel` constructor parameterized on `feature_schema` and `code_hash_files` (replaces hardcoded WR references).
-- Three new factory functions: `qb_baseline()`, `rb_baseline()`, `te_baseline()`.
-- `POSITION_DISPATCH` registry in `models/__init__.py` — one canonical "what positions does the system know about" answer, consumed by CLI scripts and (future) Plan 3c's backtest harness.
-- `TeFeaturesSchema` extended with `rushing_attempts_per_game_l4` / `rushing_yards_per_game_l4`; `build_te_features` populates them (Phase 1, Taysom-Hill rationale — TEs do occasionally rush).
-- Three CLI scripts unified to take a position argument: `train_baseline.py {pos}`, `predict_2024.py {pos}`, `sanity_check_baseline.py {pos}`. The three WR-specific scripts from Plan 3a were deleted.
-- Six new test files under `tests/test_models/` (3 unit + 3 leakage). Smoke test parametrized across all four positions.
-- Per-position 2024 sanity-check eval recorded above. Calibration in the 67-77% band for `[p10, p90]` (target ~80%); top-N rank correlation 0.928-0.975 across positions.
-- Per-position 2024 weekly projections at `data/projections/weekly/ruleset=ESPN_PPR/season=2024/week=WW/part.parquet` (gitignored).
-- Four trained artifacts at `models/artifacts/baseline-{pos}-2018-2023-<hash>.joblib` (gitignored).
-- Four real-data drift fixes during Phase 6 (commits `fa864ac`, `f79806a`, `e25eb57`, `54b6d95`) — see TODO #16 sub-section for details.
-
-**Held-out year remains 2024** (same constraint as 3a — `nfl_data_py` has not yet published 2025).
-
----
+**Plan 3c delivered:**
+- New `src/projections/backtest/` package: walk-forward harness, metric primitives, naive baseline, snapshot diff with direction-aware tolerances.
+- New `src/projections/features/cache.py` reader + `scripts/refresh_features.py` writer; closes TODO #4.
+- `tests/backtest/baseline_metrics.json` committed (368 rows). Per-metric-type tolerances in `tests/backtest/tolerances.json` (defaults: 5% RMSE/MAE relative; 0.02 Spearman absolute; 0.03 calibration absolute; 0.10 mean_pred relative).
+- Opt-in `pytest -m backtest --run-backtest` gate; default-on smoke covering one (WR, 2024) cell.
+- `scripts/backtest.py` CLI (`--check / --update-snapshot / --report`).
+- `score_distribution` vectorized for harness perf (pulled forward from Plan 3d).
+- ~40 new tests; default `pytest -v` is at 316 passed + 8 skipped (network) + 1 skipped (gate) on the post-3c branch.
+- TODO #4 closed.
+- TODOs #19–#21 filed (gate non-determinism check, naive-baseline trend persistence, feature-cache code-hash auto-invalidation).
 
 ## Next action
 
-**Recommended: Plan 3c — weekly→season aggregation + walk-forward backtest harness with CI threshold gating.**
+**Recommended: Plan 3d — real Monte Carlo season-distribution aggregation.**
 
-Plan 3a pinned the per-week interface for one position. Plan 3b generalized it to all four offensive skill positions (QB / RB / WR / TE). Plan 3c is the natural next step:
+Plan 3a/3b/3c land the per-week distribution + the regression gate.
+Plan 3d closes TODO #13 (per-row seeds), TODO #14 (SAMPLED_SUMMARY family), and tightens calibration via MLE gamma α / variance bucketing. Adds season-total calibration to the gated metrics. (Plan 3c pulled the score_distribution perf TODO forward, so 3d no longer carries that.)
 
-- Weekly → season aggregation via Monte Carlo over (bye, availability, schedule).
-- Walk-forward backtest harness with formal threshold gating.
-- CI threshold gating (turn the informational sanity-check numbers into hard pass/fail thresholds).
-
-**Pre-requisites: none currently open.** TODO #8 and #15 closed before 3b. TODO #16 (drift list) is documentation, not actionable.
+After 3d: Plan 4 (public Python API + CLI verbs + free-tier web hosting).
 
 ---
 
@@ -225,6 +276,12 @@ Plan 3a pinned the per-week interface for one position. Plan 3b generalized it t
 | 2026-04-25 | Plan 3b: three WR-specific scripts deleted; replaced by position-arg-driven generalized scripts | Q1 brainstorm C. Avoids producing four near-duplicate scripts after 3b. |
 | 2026-04-25 | Plan 3b real-data drift: `*_yards_per_game_l4` schema bound dropped to allow negative trailing means | Underlying weekly_stats yards columns allow negative values (sacks/TFL/kneels); commits `fa864ac` and `e25eb57` relax the bound on the trailing means and on `passing_yards_per_game_std`. |
 | 2026-04-25 | Plan 3b real-data drift: bye-week + dedupe filters ported from WR to QB/RB/TE | WR had these in 3a (TODO #9a, #9c); QB/RB/TE feature builders inherit the same shape. Commits `f79806a` (bye filter) and `54b6d95` (dedupe). |
+| 2026-04-26 | Plan 3c gate is opt-in `pytest -m backtest --run-backtest`, not default-on | A full gate run is ~2 minutes; default-on adds material drag to every dev iteration. Default-on smoke covering one (WR, 2024) cell catches harness wiring bugs cheaply. |
+| 2026-04-26 | Snapshot at (position, year, metric) granularity (368 rows); per-metric-type tolerances | Per-year visibility is the whole point of multi-year backtest; aggregating loses the "regressed only on 2022" signal. Tolerances grouped by metric type keeps maintenance low; per-row overrides added empirically as we observe noise. |
+| 2026-04-26 | Held-out years 2021-2024 (skip 2019 / 2020) | 2019's 1-season train window is too small; 2020 is COVID-shortened structural outlier. Each held-out year has at least 3 seasons of training history. |
+| 2026-04-26 | Plan 3c uses summed weekly means as season totals (degenerate aggregation); real Monte Carlo aggregation deferred to Plan 3d | Decouples gating infrastructure from season-distribution design. Plan 3d converges TODOs #13 / #14 and calibration tightening. |
+| 2026-04-26 | Feature cache invalidation is manual via `scripts/refresh_features.py`; auto-invalidation deferred (TODO #21) | Manual is documented in CONTRIBUTING.md and produces a clear FileNotFoundError pointing at the refresh command. Auto-invalidation via code-hash is straightforward but adds surface area; defer until manual produces a real-world bug. |
+| 2026-04-26 | `score_distribution` perf vectorization pulled forward from Plan 3d into Plan 3c | Spec section 1.2 deferred the perf TODO under "feature caching means we predict once per (player-week, year), not per training fold." Phase 6 demonstrated this was wrong: the per-sample Python loop still dominated at 20-30 minutes for the full harness. Math is bit-identical (linear scoring rule); fix is mechanically safe. |
 
 ---
 

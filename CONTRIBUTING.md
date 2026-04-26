@@ -227,6 +227,58 @@ Each smoke fetches a tiny live slice (one season — currently 2023) for one ing
 
 When you add a new ingest source, add a matching smoke test alongside the synthetic-fixture test — the pattern is one `test_<source>_api_columns_and_schema` function per source.
 
+### After touching `src/projections/features/`
+
+The feature cache at `data/features/{position}/season=YYYY/week=WW/part.parquet`
+is **not** auto-invalidated when feature builders change. After modifying
+any file under `src/projections/features/` you must rebuild the cache
+before running the backtest gate:
+
+```bash
+python scripts/refresh_features.py all --seasons 2018-2024
+```
+
+Then re-snapshot if your change intentionally alters Model A's metrics:
+
+```bash
+python scripts/backtest.py --update-snapshot
+git diff tests/backtest/baseline_metrics.json    # review the metric deltas
+git add tests/backtest/baseline_metrics.json
+```
+
+Auto-invalidation is TODO #21 (see TODO.md).
+
+### Running the backtest gate before opening a PR
+
+The gate is opt-in:
+
+```bash
+pytest -m backtest --run-backtest
+```
+
+Full 16-cell run takes about 2 minutes. If the gate fails, the failure
+message lists each regressing (position, year, metric) cell with
+baseline vs current values.
+
+If the regression is intentional (e.g., a feature change that
+legitimately improves the model on some cells but slightly worsens
+others within tolerance overrides), update the snapshot and commit:
+
+```bash
+python scripts/backtest.py --update-snapshot
+git add tests/backtest/baseline_metrics.json
+```
+
+For genuinely-noisy cells (rare-event RMSE on small samples, etc.),
+add a per-row override to `tests/backtest/tolerances.json` instead of
+loosening the default. Each override row needs a `rationale` field
+describing why the cell is noisy.
+
+A default-on smoke test (`tests/backtest/test_backtest_smoke.py`)
+runs one (WR, 2024) cell as part of `pytest -v`, taking ~15 seconds.
+It catches harness wiring bugs without requiring the full opt-in
+gate; auto-skips on fresh checkouts where the feature cache is empty.
+
 ## Adding a new pandera schema
 
 Schemas live in `src/projections/schemas.py` (single source of truth). Append your schema after the existing ones.
