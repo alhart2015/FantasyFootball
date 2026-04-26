@@ -493,7 +493,9 @@ class QbFeaturesSchema(pa.DataFrameModel):
     passing_tds_per_game_l4: Series[float] = pa.Field(ge=0)
     interceptions_per_game_l4: Series[float] = pa.Field(ge=0)
     sacks_per_game_l4: Series[float] = pa.Field(ge=0)
-    passing_yards_per_game_std: Series[float] = pa.Field(ge=0)
+    # Season-to-date mean of passing_yards: same negative-allowed underlying
+    # rationale as passing_yards_per_game_l4 above.
+    passing_yards_per_game_std: Series[float]
 
     # Rushing usage
     rushing_attempts_per_game_l4: Series[float] = pa.Field(ge=0)
