@@ -437,12 +437,15 @@ class WrFeaturesSchema(pa.DataFrameModel):
     target_share_l4: Series[float] = pa.Field(ge=0, le=1)
     air_yards_share_l4: Series[float] = pa.Field(ge=0, le=1, nullable=True)
     receptions_per_game_l4: Series[float] = pa.Field(ge=0)
-    receiving_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    # Trailing-mean yards: underlying weekly stat allows negatives (lost yardage,
+    # sacks bookkept against passing). The mean of nonneg + (occasionally) negs
+    # may itself be negative, so no ge=0 lower bound here.
+    receiving_yards_per_game_l4: Series[float]
     receiving_tds_per_game_l4: Series[float] = pa.Field(ge=0)
 
     # Rushing usage (Deebo / jet-sweep WRs)
     rushing_attempts_per_game_l4: Series[float] = pa.Field(ge=0)
-    rushing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_yards_per_game_l4: Series[float]  # see receiving_yards_per_game_l4 note
     designed_rusher: Series[bool]
 
     # Snap / role
@@ -483,7 +486,10 @@ class QbFeaturesSchema(pa.DataFrameModel):
 
     # Passing usage (rolling)
     pass_attempts_per_game_l4: Series[float] = pa.Field(ge=0)
-    passing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    # Trailing-mean yards: underlying weekly stat allows negatives (sacks
+    # subtract from passing_yards, scrambles can lose rushing yardage). The
+    # mean over 4 games can therefore go negative, so no ge=0 lower bound here.
+    passing_yards_per_game_l4: Series[float]
     passing_tds_per_game_l4: Series[float] = pa.Field(ge=0)
     interceptions_per_game_l4: Series[float] = pa.Field(ge=0)
     sacks_per_game_l4: Series[float] = pa.Field(ge=0)
@@ -491,7 +497,7 @@ class QbFeaturesSchema(pa.DataFrameModel):
 
     # Rushing usage
     rushing_attempts_per_game_l4: Series[float] = pa.Field(ge=0)
-    rushing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_yards_per_game_l4: Series[float]  # see passing_yards_per_game_l4 note
     rushing_qb: Series[bool]
 
     # Snap / role
@@ -529,14 +535,16 @@ class RbFeaturesSchema(pa.DataFrameModel):
 
     # Rushing usage (rolling)
     carries_per_game_l4: Series[float] = pa.Field(ge=0)
-    rushing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    # Trailing-mean yards: underlying weekly stat allows negatives (lost
+    # yardage on TFL/scrambles), so no ge=0 lower bound on the L4 mean.
+    rushing_yards_per_game_l4: Series[float]
     rushing_tds_per_game_l4: Series[float] = pa.Field(ge=0)
     rush_share_l4: Series[float] = pa.Field(ge=0, le=1)
 
     # Receiving usage
     targets_per_game_l4: Series[float] = pa.Field(ge=0)
     receptions_per_game_l4: Series[float] = pa.Field(ge=0)
-    receiving_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    receiving_yards_per_game_l4: Series[float]  # see rushing_yards_per_game_l4 note
     target_share_l4: Series[float] = pa.Field(ge=0, le=1)
     targets_per_game_std: Series[float] = pa.Field(ge=0)
 
@@ -578,13 +586,15 @@ class TeFeaturesSchema(pa.DataFrameModel):
     targets_per_game_std: Series[float] = pa.Field(ge=0)
     target_share_l4: Series[float] = pa.Field(ge=0, le=1)
     receptions_per_game_l4: Series[float] = pa.Field(ge=0)
-    receiving_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    # Trailing-mean yards: underlying weekly stat allows negatives, so no ge=0
+    # lower bound on the L4 mean.
+    receiving_yards_per_game_l4: Series[float]
     receiving_tds_per_game_l4: Series[float] = pa.Field(ge=0)
 
     # Rushing usage (rolling) — added Plan 3b for Taysom-Hill-shape TEs that
     # carry the ball; mirrors RB's rushing-feature shape.
     rushing_attempts_per_game_l4: Series[float] = pa.Field(ge=0)
-    rushing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_yards_per_game_l4: Series[float]  # see receiving_yards_per_game_l4 note
 
     # Snap / role
     snap_pct_l4: Series[float] = pa.Field(ge=0, le=1, nullable=True)
