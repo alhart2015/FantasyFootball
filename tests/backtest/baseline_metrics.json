@@ -1,0 +1,2210 @@
+[
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "calibration_le_p90",
+    "value": 0.8601503759398497
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "calibration_le_p90",
+    "value": 0.84779299847793
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "calibration_le_p90",
+    "value": 0.8343283582089552
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "calibration_le_p90",
+    "value": 0.8435672514619883
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "calibration_le_p90",
+    "value": 0.8494296577946768
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "calibration_le_p90",
+    "value": 0.8512396694214877
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "calibration_le_p90",
+    "value": 0.8680396643783371
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "calibration_le_p90",
+    "value": 0.8624620060790273
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "calibration_le_p90",
+    "value": 0.8407766990291262
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "calibration_le_p90",
+    "value": 0.8308823529411765
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "calibration_le_p90",
+    "value": 0.8251417769376181
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "calibration_le_p90",
+    "value": 0.8214616096207216
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "calibration_le_p90",
+    "value": 0.826932195353248
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "calibration_le_p90",
+    "value": 0.8325404376784015
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "calibration_le_p90",
+    "value": 0.8332576101771921
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "calibration_le_p90",
+    "value": 0.82470703125
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "calibration_p10p90",
+    "value": 0.6766917293233082
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "calibration_p10p90",
+    "value": 0.7397260273972602
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "calibration_p10p90",
+    "value": 0.7119402985074627
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "calibration_p10p90",
+    "value": 0.7017543859649122
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "calibration_p10p90",
+    "value": 0.7536121673003803
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "calibration_p10p90",
+    "value": 0.7528174305033809
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "calibration_p10p90",
+    "value": 0.7963386727688787
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "calibration_p10p90",
+    "value": 0.7689969604863222
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "calibration_p10p90",
+    "value": 0.7203883495145631
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "calibration_p10p90",
+    "value": 0.7527573529411765
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "calibration_p10p90",
+    "value": 0.7381852551984878
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "calibration_p10p90",
+    "value": 0.7160037002775208
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "calibration_p10p90",
+    "value": 0.6979611190137506
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "calibration_p10p90",
+    "value": 0.6936251189343482
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "calibration_p10p90",
+    "value": 0.7255792821444798
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "calibration_p10p90",
+    "value": 0.7021484375
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "composite_mae",
+    "value": 6.364027646967274
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "composite_mae",
+    "value": 5.701628031905229
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "composite_mae",
+    "value": 5.867994023781972
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "composite_mae",
+    "value": 6.068464322408789
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "composite_mae",
+    "value": 5.142636136782583
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "composite_mae",
+    "value": 4.962744749714664
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "composite_mae",
+    "value": 4.635856268581921
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "composite_mae",
+    "value": 4.844774748134971
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "composite_mae",
+    "value": 3.856808429045024
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "composite_mae",
+    "value": 3.6712581923512353
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "composite_mae",
+    "value": 3.527410694753128
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "composite_mae",
+    "value": 3.7140360393133025
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "composite_mae",
+    "value": 5.043543497632533
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "composite_mae",
+    "value": 4.979026352447194
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "composite_mae",
+    "value": 4.742162758937137
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "composite_mae",
+    "value": 4.902504905779195
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "composite_rmse",
+    "value": 7.845649622690081
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "composite_rmse",
+    "value": 7.234368058569501
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "composite_rmse",
+    "value": 7.323258264072554
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "composite_rmse",
+    "value": 7.713722197514986
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "composite_rmse",
+    "value": 6.868012535635689
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "composite_rmse",
+    "value": 6.635046277576479
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "composite_rmse",
+    "value": 6.324081783122174
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "composite_rmse",
+    "value": 6.486204991935239
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "composite_rmse",
+    "value": 5.350884203846414
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "composite_rmse",
+    "value": 5.27833960786083
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "composite_rmse",
+    "value": 4.972587011638189
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "composite_rmse",
+    "value": 5.097605906810358
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "composite_rmse",
+    "value": 6.742839245581704
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "composite_rmse",
+    "value": 6.631316254748038
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "composite_rmse",
+    "value": 6.528947461556218
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "composite_rmse",
+    "value": 6.690887218852475
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "fumbles_lost_mae",
+    "value": 0.2967351328817209
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "fumbles_lost_mae",
+    "value": 0.31005056072878107
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "fumbles_lost_mae",
+    "value": 0.3115406550107959
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "fumbles_lost_mae",
+    "value": 0.28684231212918604
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "fumbles_lost_mae",
+    "value": 0.09533198518491984
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "fumbles_lost_mae",
+    "value": 0.09386989942283622
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "fumbles_lost_mae",
+    "value": 0.0907967036398123
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "fumbles_lost_mae",
+    "value": 0.09120007444864382
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "fumbles_lost_mae",
+    "value": 0.03088843494862105
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "fumbles_lost_mae",
+    "value": 0.026101285599423523
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "fumbles_lost_mae",
+    "value": 0.030894718708731353
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "fumbles_lost_mae",
+    "value": 0.03450840010142049
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "fumbles_lost_mae",
+    "value": 0.036150453836787104
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "fumbles_lost_mae",
+    "value": 0.04430168304032092
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "fumbles_lost_mae",
+    "value": 0.03842215200011531
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "fumbles_lost_mae",
+    "value": 0.03415169993021014
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.1926108586248342
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.19425213754643386
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.18715597359406064
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.18041531600534313
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.05327400294262914
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.05172726542358027
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.04970947925039753
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.050537257682690795
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.01768694936689405
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.01633866069174156
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.014453542631662215
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.01577221176792379
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.018960286390385495
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.018855148533562786
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.019854987975366785
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "fumbles_lost_mean_pred",
+    "value": 0.01970586441540843
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.40436205489865007
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.43541589926866436
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.4497377206632427
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.39232803118913917
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.22347654955387478
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.2196618664093812
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.21702257655878832
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.2128658851142664
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.12468406662816359
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.10049079764790005
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.1292819803427115
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.13803001240766816
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.13290381084855468
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.16098996345056651
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.14133311630705947
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "fumbles_lost_rmse",
+    "value": 0.12225185733553365
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "interceptions_mae",
+    "value": 0.6962569408855243
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "interceptions_mae",
+    "value": 0.69595904308305
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "interceptions_mae",
+    "value": 0.6769098716270757
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "interceptions_mae",
+    "value": 0.6699313799376894
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "interceptions_mean_pred",
+    "value": 0.6717545647010509
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "interceptions_mean_pred",
+    "value": 0.6497793524182318
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "interceptions_mean_pred",
+    "value": 0.636676546442522
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "interceptions_mean_pred",
+    "value": 0.6105355233760071
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "interceptions_rmse",
+    "value": 0.8562957975524079
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "interceptions_rmse",
+    "value": 0.8397722824468824
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "interceptions_rmse",
+    "value": 0.8296958667400715
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "interceptions_rmse",
+    "value": 0.8174487345814901
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "passing_tds_mae",
+    "value": 0.8834391266085223
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_tds_mae",
+    "value": 0.8010499960553487
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "passing_tds_mae",
+    "value": 0.7809992974971697
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_tds_mae",
+    "value": 0.8425253187287789
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "passing_tds_mean_pred",
+    "value": 1.338940202559909
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_tds_mean_pred",
+    "value": 1.1771089812355586
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "passing_tds_mean_pred",
+    "value": 1.111502967527989
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_tds_mean_pred",
+    "value": 1.161951853731317
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "passing_tds_rmse",
+    "value": 1.0836578641985455
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_tds_rmse",
+    "value": 1.004215335477413
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "passing_tds_rmse",
+    "value": 0.9964107553861045
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_tds_rmse",
+    "value": 1.059789403921662
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "passing_yards_mae",
+    "value": 70.41527849099428
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_yards_mae",
+    "value": 64.65476035746691
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "passing_yards_mae",
+    "value": 66.15119754792345
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_yards_mae",
+    "value": 66.05516756281438
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "passing_yards_mean_pred",
+    "value": 208.78083455567213
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_yards_mean_pred",
+    "value": 194.2578261973959
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "passing_yards_mean_pred",
+    "value": 188.46416743003914
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_yards_mean_pred",
+    "value": 188.3335162907937
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "passing_yards_rmse",
+    "value": 86.96873882955326
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_yards_rmse",
+    "value": 81.76641700448502
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "passing_yards_rmse",
+    "value": 82.6863450036253
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_yards_rmse",
+    "value": 82.05055677382568
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "receiving_tds_mae",
+    "value": 0.1359678050540761
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_tds_mae",
+    "value": 0.1189960946747141
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "receiving_tds_mae",
+    "value": 0.12104825894645557
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_tds_mae",
+    "value": 0.12023548851151863
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "receiving_tds_mae",
+    "value": 0.3239074551589122
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_tds_mae",
+    "value": 0.29581239820654215
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "receiving_tds_mae",
+    "value": 0.2842046239228959
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_tds_mae",
+    "value": 0.28562603797188346
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "receiving_tds_mae",
+    "value": 0.361606690129602
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_tds_mae",
+    "value": 0.3351416063064042
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "receiving_tds_mae",
+    "value": 0.3215068197198208
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_tds_mae",
+    "value": 0.35494306643182816
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.07035554812259508
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.06560986820405919
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.06575729416340063
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.06787466199835417
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.21205961616315244
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.17775050812745744
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.17963672885234316
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.18981684902196566
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.24047577601053452
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.22742502269061615
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.21111502308753902
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_tds_mean_pred",
+    "value": 0.22521420274944165
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "receiving_tds_rmse",
+    "value": 0.28962410516415366
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_tds_rmse",
+    "value": 0.27155780355979825
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "receiving_tds_rmse",
+    "value": 0.2624732501936614
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_tds_rmse",
+    "value": 0.24859245422843435
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "receiving_tds_rmse",
+    "value": 0.44591664343236503
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_tds_rmse",
+    "value": 0.46036111704182925
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "receiving_tds_rmse",
+    "value": 0.42257485399208194
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_tds_rmse",
+    "value": 0.3966961816034228
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "receiving_tds_rmse",
+    "value": 0.49906390154840735
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_tds_rmse",
+    "value": 0.46635496935815096
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "receiving_tds_rmse",
+    "value": 0.45839614477736795
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_tds_rmse",
+    "value": 0.49371432516677255
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "receiving_yards_mae",
+    "value": 12.797392131159178
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_yards_mae",
+    "value": 11.62134555435934
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "receiving_yards_mae",
+    "value": 11.479531588459642
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_yards_mae",
+    "value": 11.281501079383895
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "receiving_yards_mae",
+    "value": 17.0913444185381
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_yards_mae",
+    "value": 16.14117589348498
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "receiving_yards_mae",
+    "value": 15.68894830618044
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_yards_mae",
+    "value": 16.508629507332014
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "receiving_yards_mae",
+    "value": 23.82207421572744
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_yards_mae",
+    "value": 23.834151955044742
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "receiving_yards_mae",
+    "value": 23.089757451827452
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_yards_mae",
+    "value": 22.969978053400972
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "receiving_yards_mean_pred",
+    "value": 14.627800022695753
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_yards_mean_pred",
+    "value": 13.984734952495423
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "receiving_yards_mean_pred",
+    "value": 13.626015144746992
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_yards_mean_pred",
+    "value": 13.422627484771956
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "receiving_yards_mean_pred",
+    "value": 25.44251300505667
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_yards_mean_pred",
+    "value": 22.606626967204942
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "receiving_yards_mean_pred",
+    "value": 23.096786974810136
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_yards_mean_pred",
+    "value": 24.632174413590388
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "receiving_yards_mean_pred",
+    "value": 39.939323401147206
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_yards_mean_pred",
+    "value": 38.58025976815686
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "receiving_yards_mean_pred",
+    "value": 36.916537763515464
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_yards_mean_pred",
+    "value": 38.23449421769264
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "receiving_yards_rmse",
+    "value": 17.99376171610846
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_yards_rmse",
+    "value": 16.10352035761133
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "receiving_yards_rmse",
+    "value": 15.910369434560945
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_yards_rmse",
+    "value": 15.370454489566516
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "receiving_yards_rmse",
+    "value": 23.464535431188406
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_yards_rmse",
+    "value": 22.128276198315422
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "receiving_yards_rmse",
+    "value": 21.691998560469884
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_yards_rmse",
+    "value": 22.35323083435021
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "receiving_yards_rmse",
+    "value": 31.53960821404214
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_yards_rmse",
+    "value": 31.409676326058207
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "receiving_yards_rmse",
+    "value": 31.569428732700597
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_yards_rmse",
+    "value": 30.848308586578103
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "receptions_mae",
+    "value": 1.335976926924142
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receptions_mae",
+    "value": 1.2831856997943594
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "receptions_mae",
+    "value": 1.2258140741445103
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receptions_mae",
+    "value": 1.1784739362608614
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "receptions_mae",
+    "value": 1.296880804118059
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receptions_mae",
+    "value": 1.2495730924842456
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "receptions_mae",
+    "value": 1.244480250067653
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receptions_mae",
+    "value": 1.366047261504441
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "receptions_mae",
+    "value": 1.58184736793193
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receptions_mae",
+    "value": 1.5903981549686732
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "receptions_mae",
+    "value": 1.5103915974479412
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receptions_mae",
+    "value": 1.5301829583136648
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "receptions_mean_pred",
+    "value": 1.9228983448059178
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receptions_mean_pred",
+    "value": 1.8813266235596076
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "receptions_mean_pred",
+    "value": 1.841083799360141
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receptions_mean_pred",
+    "value": 1.8002774388972203
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "receptions_mean_pred",
+    "value": 2.4085024637327797
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receptions_mean_pred",
+    "value": 2.201627816128757
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "receptions_mean_pred",
+    "value": 2.2654546277346737
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receptions_mean_pred",
+    "value": 2.3738036649813314
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "receptions_mean_pred",
+    "value": 3.10055643998094
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receptions_mean_pred",
+    "value": 3.060685126884188
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "receptions_mean_pred",
+    "value": 2.9447199477566186
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receptions_mean_pred",
+    "value": 2.994130720522911
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "receptions_rmse",
+    "value": 1.785568017065154
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receptions_rmse",
+    "value": 1.696129529296395
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "receptions_rmse",
+    "value": 1.5967728932423433
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receptions_rmse",
+    "value": 1.5165400639771767
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "receptions_rmse",
+    "value": 1.717335363649282
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receptions_rmse",
+    "value": 1.7089353709649104
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "receptions_rmse",
+    "value": 1.7245855195235487
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receptions_rmse",
+    "value": 1.891366225004804
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "receptions_rmse",
+    "value": 2.0812056912593198
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receptions_rmse",
+    "value": 2.088533458497537
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "receptions_rmse",
+    "value": 2.0191394102247657
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receptions_rmse",
+    "value": 2.023987059781488
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "rushing_tds_mae",
+    "value": 0.2629391213683108
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_tds_mae",
+    "value": 0.27008680123027673
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "rushing_tds_mae",
+    "value": 0.2588412463013464
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_tds_mae",
+    "value": 0.2772992422111922
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "rushing_tds_mae",
+    "value": 0.3726902846341563
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_tds_mae",
+    "value": 0.3699820431744724
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "rushing_tds_mae",
+    "value": 0.35757549889712853
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_tds_mae",
+    "value": 0.38034097021898355
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "rushing_tds_mae",
+    "value": 0.005743815489844655
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_tds_mae",
+    "value": 0.006215399786528905
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "rushing_tds_mae",
+    "value": 0.002843929600830262
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_tds_mae",
+    "value": 0.008378889226819976
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "rushing_tds_mae",
+    "value": 0.017704401414841423
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_tds_mae",
+    "value": 0.02094478233769646
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "rushing_tds_mae",
+    "value": 0.019753961673363057
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_tds_mae",
+    "value": 0.016496052466206612
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.16239577469048977
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.17224703292805324
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.15750713764338908
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.17909105464914837
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.2713488908560984
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.2674773285509859
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.2569613668392454
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.28568643177474684
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.0028580091499999035
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.002555186789008053
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.002843929600830262
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.0028341255156442103
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.007191340799326414
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.011439101541116409
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.009626666740543018
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_tds_mean_pred",
+    "value": 0.009485055511495158
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "rushing_tds_rmse",
+    "value": 0.4173381094194662
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_tds_rmse",
+    "value": 0.42327165267920613
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "rushing_tds_rmse",
+    "value": 0.408008087229115
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_tds_rmse",
+    "value": 0.43852583168298587
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "rushing_tds_rmse",
+    "value": 0.5235053622209536
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_tds_rmse",
+    "value": 0.5199057946275805
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "rushing_tds_rmse",
+    "value": 0.5087457563891129
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_tds_rmse",
+    "value": 0.5304796216127889
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "rushing_tds_rmse",
+    "value": 0.05383831933403004
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_tds_rmse",
+    "value": 0.06059566235862004
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "rushing_tds_rmse",
+    "value": 0.003584128740672973
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_tds_rmse",
+    "value": 0.11380309895141369
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "rushing_tds_rmse",
+    "value": 0.10768240737545168
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_tds_rmse",
+    "value": 0.10593198234177148
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "rushing_tds_rmse",
+    "value": 0.10235590941115547
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_tds_rmse",
+    "value": 0.08549365812714148
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "rushing_yards_mae",
+    "value": 11.023300579811389
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_yards_mae",
+    "value": 12.649656303580425
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "rushing_yards_mae",
+    "value": 11.5713253047482
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_yards_mae",
+    "value": 12.639183697134822
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "rushing_yards_mae",
+    "value": 21.691557403519564
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_yards_mae",
+    "value": 22.749099013239974
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "rushing_yards_mae",
+    "value": 21.07808826160524
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_yards_mae",
+    "value": 22.69169596122162
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "rushing_yards_mae",
+    "value": 0.25365952740221487
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_yards_mae",
+    "value": 0.22822344774389414
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "rushing_yards_mae",
+    "value": 0.1435951328664905
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_yards_mae",
+    "value": 0.3705797359279434
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "rushing_yards_mae",
+    "value": 2.1041271818114136
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_yards_mae",
+    "value": 2.3107703766045735
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "rushing_yards_mae",
+    "value": 2.1608735934867798
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_yards_mae",
+    "value": 1.855167245353644
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "rushing_yards_mean_pred",
+    "value": 13.82774534409458
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_yards_mean_pred",
+    "value": 16.19623044514971
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "rushing_yards_mean_pred",
+    "value": 14.584719297851231
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_yards_mean_pred",
+    "value": 16.553509803359038
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "rushing_yards_mean_pred",
+    "value": 37.110108188050745
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_yards_mean_pred",
+    "value": 38.58281025389714
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "rushing_yards_mean_pred",
+    "value": 38.818008499792214
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_yards_mean_pred",
+    "value": 39.723958187548234
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "rushing_yards_mean_pred",
+    "value": 0.12112170998457326
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_yards_mean_pred",
+    "value": 0.08664459840954182
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "rushing_yards_mean_pred",
+    "value": 0.08263719058922246
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_yards_mean_pred",
+    "value": 0.10264890112681443
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "rushing_yards_mean_pred",
+    "value": 1.1891772995703922
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_yards_mean_pred",
+    "value": 1.4141636934547166
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "rushing_yards_mean_pred",
+    "value": 1.2876128585887487
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_yards_mean_pred",
+    "value": 1.2460409674765986
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "rushing_yards_rmse",
+    "value": 16.240927699963546
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_yards_rmse",
+    "value": 18.866181034691156
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "rushing_yards_rmse",
+    "value": 15.801723129425302
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_yards_rmse",
+    "value": 17.724146529766102
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "rushing_yards_rmse",
+    "value": 28.93233134119051
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_yards_rmse",
+    "value": 30.41108746549301
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "rushing_yards_rmse",
+    "value": 28.435085572483235
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_yards_rmse",
+    "value": 30.16449986747634
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "rushing_yards_rmse",
+    "value": 0.9071762734359716
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_yards_rmse",
+    "value": 1.1948973500134095
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "rushing_yards_rmse",
+    "value": 0.4050717185348667
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_yards_rmse",
+    "value": 4.424188035841407
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "rushing_yards_rmse",
+    "value": 5.258979770719965
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_yards_rmse",
+    "value": 5.49978846245769
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "rushing_yards_rmse",
+    "value": 5.006042856205777
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_yards_rmse",
+    "value": 3.9459482737034075
+  },
+  {
+    "position": "QB",
+    "year": 2021,
+    "metric": "spearman_topN",
+    "value": 0.9329716674124415
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "spearman_topN",
+    "value": 0.9672764227642277
+  },
+  {
+    "position": "QB",
+    "year": 2023,
+    "metric": "spearman_topN",
+    "value": 0.945446958105186
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "spearman_topN",
+    "value": 0.9387077150439046
+  },
+  {
+    "position": "RB",
+    "year": 2021,
+    "metric": "spearman_topN",
+    "value": 0.9698543827756567
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "spearman_topN",
+    "value": 0.9669819165807122
+  },
+  {
+    "position": "RB",
+    "year": 2023,
+    "metric": "spearman_topN",
+    "value": 0.9673040731412957
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "spearman_topN",
+    "value": 0.9753850199480836
+  },
+  {
+    "position": "TE",
+    "year": 2021,
+    "metric": "spearman_topN",
+    "value": 0.9659851920208007
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "spearman_topN",
+    "value": 0.960100643204385
+  },
+  {
+    "position": "TE",
+    "year": 2023,
+    "metric": "spearman_topN",
+    "value": 0.970078780693546
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "spearman_topN",
+    "value": 0.9616092645501964
+  },
+  {
+    "position": "WR",
+    "year": 2021,
+    "metric": "spearman_topN",
+    "value": 0.9701764784488952
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "spearman_topN",
+    "value": 0.976889699914347
+  },
+  {
+    "position": "WR",
+    "year": 2023,
+    "metric": "spearman_topN",
+    "value": 0.9677371480121219
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "spearman_topN",
+    "value": 0.9747435096566381
+  }
+]
