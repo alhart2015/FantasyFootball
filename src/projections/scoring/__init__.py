@@ -6,7 +6,15 @@ from projections.scoring.score import StatLine, score
 from projections.scoring.score_distribution import (
     INTEGER_STATS,
     SampledDistribution,
+    derive_row_seed,
     score_distribution,
 )
 
-__all__ = ["INTEGER_STATS", "SampledDistribution", "StatLine", "score", "score_distribution"]
+__all__ = [
+    "INTEGER_STATS",
+    "SampledDistribution",
+    "StatLine",
+    "derive_row_seed",
+    "score",
+    "score_distribution",
+]

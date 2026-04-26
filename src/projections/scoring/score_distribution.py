@@ -15,6 +15,7 @@ and don't combine cleanly. Sampling lets us re-score under any ruleset for free.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
@@ -25,6 +26,26 @@ from numpy.typing import NDArray
 from projections.distributions import Distribution
 from projections.schemas import Ruleset, Stat
 from projections.scoring.score import StatLine
+
+
+def derive_row_seed(*, gsis_id: str, season: int, week: int, ruleset_name: str) -> int:
+    """Stable 32-bit seed from (gsis_id, season, week, ruleset_name).
+
+    Used by BaselineModel.predict_distribution and aggregate_to_season to keep
+    per-row Monte Carlo draws independent and reproducible.
+
+    Properties:
+      - Deterministic across processes. Python's built-in hash() is
+        salt-randomized via PYTHONHASHSEED; this uses sha256 instead.
+      - Independent: changes to any of the four inputs change the seed.
+      - Reproducible: identical inputs always produce identical samples
+        downstream.
+
+    Returns:
+        An int in [0, 2**32).
+    """
+    h = hashlib.sha256(f"{gsis_id}|{season}|{week}|{ruleset_name}".encode()).digest()
+    return int.from_bytes(h[:4], "big")
 
 
 @dataclass(slots=True, frozen=True)
