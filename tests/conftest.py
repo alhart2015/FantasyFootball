@@ -29,26 +29,36 @@ from projections.schemas import _PYARROW_STR
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Register `--run-network` so the live nfl_data_py API-drift smokes
-    only run when explicitly requested. The marker itself is declared in
-    `pyproject.toml`; this option toggles the skip behavior in
-    `pytest_collection_modifyitems` below."""
+    """Register `--run-network` and `--run-backtest` so the slow opt-in
+    suites only run when explicitly requested."""
     parser.addoption(
         "--run-network",
         action="store_true",
         default=False,
         help="Run @pytest.mark.network tests that hit the live nfl_data_py API.",
     )
+    parser.addoption(
+        "--run-backtest",
+        action="store_true",
+        default=False,
+        help="Run @pytest.mark.backtest tests (the full walk-forward gate).",
+    )
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip network-marked tests unless `--run-network` was passed."""
-    if config.getoption("--run-network"):
-        return
-    skip_network = pytest.mark.skip(reason="needs --run-network to hit the live API")
-    for item in items:
-        if "network" in item.keywords:
-            item.add_marker(skip_network)
+    """Skip opt-in marked tests unless their gate flag is passed."""
+    if not config.getoption("--run-network"):
+        skip_network = pytest.mark.skip(reason="needs --run-network to hit the live API")
+        for item in items:
+            if "network" in item.keywords:
+                item.add_marker(skip_network)
+    if not config.getoption("--run-backtest"):
+        skip_backtest = pytest.mark.skip(
+            reason="needs --run-backtest to run the full walk-forward gate"
+        )
+        for item in items:
+            if "backtest" in item.keywords:
+                item.add_marker(skip_backtest)
 
 
 @pytest.fixture
