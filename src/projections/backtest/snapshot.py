@@ -21,11 +21,11 @@ import pandas as pd
 _SCHEMA_COLUMNS: tuple[str, ...] = ("position", "year", "metric", "value")
 
 
-# Suffix-based metric -> tolerance-kind mapping. Order matters: longer
-# suffixes are tried first so "_mean_pred" matches before a hypothetical
-# "_pred". The keys are the tolerance kind names; the values are tuples of
-# substrings that, if present in the metric name, route the metric to
-# this kind.
+# Suffix-based metric -> tolerance-kind mapping. Rules are tried in
+# declaration order; declare more-specific suffixes before more-general
+# ones (e.g. "_mean_pred" before any future "_pred" rule). The keys are
+# the tolerance-kind names; the values are tuples of substrings that, if
+# present in the metric name, route the metric to this kind.
 _METRIC_KIND_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("mean_pred_relative", ("_mean_pred",)),
     ("rmse_relative", ("_rmse",)),
