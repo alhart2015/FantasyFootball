@@ -84,7 +84,7 @@ the calibration-tightening follow-up.
 
 ### Current status (as of 2026-04-26)
 
-**Projections Core — Plan 3d (real Monte Carlo season aggregation) on branch `feat/plan-3d-monte-carlo-season`; PR pending.**
+**Projections Core — Plan 3d (real Monte Carlo season aggregation) merged to `main` at commit `fe55d5b` (PR #9).**
 
 **Predecessors:**
 - Plan 1 (Foundations) merged at `8f02a6c`.
@@ -320,33 +320,36 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Current status (as of 2026-04-26)
 
-**Projections Core — Plan 3c (walk-forward backtest harness + snapshot-diff gate) merged to `main` at commit `3db71a6` (PR #8).**
+**Projections Core — Plan 3d (real Monte Carlo season aggregation) merged to `main` at commit `fe55d5b` (PR #9).**
 
 **Predecessors:**
 - Plan 1 (Foundations) merged at `8f02a6c`.
 - Plan 2a merged at `7926090`; Plan 2b merged at `af325ea`.
 - Plan 3a (WR Model A baseline) merged at `598ab9c`.
 - Plan 3b (QB / RB / TE Model A baselines) merged at `c4a0401`.
+- Plan 3c (walk-forward backtest gate) merged at `3db71a6` (PR #8).
 
-**Plan 3c delivered:**
-- New `src/projections/backtest/` package: walk-forward harness, metric primitives, naive baseline, snapshot diff with direction-aware tolerances.
-- New `src/projections/features/cache.py` reader + `scripts/refresh_features.py` writer; closes TODO #4.
-- `tests/backtest/baseline_metrics.json` committed (368 rows). Per-metric-type tolerances in `tests/backtest/tolerances.json` (defaults: 5% RMSE/MAE relative; 0.02 Spearman absolute; 0.03 calibration absolute; 0.10 mean_pred relative).
-- Opt-in `pytest -m backtest --run-backtest` gate; default-on smoke covering one (WR, 2024) cell.
-- `scripts/backtest.py` CLI (`--check / --update-snapshot / --report`).
-- `score_distribution` vectorized for harness perf (pulled forward from Plan 3d).
-- ~40 new tests; default `pytest -v` is at 316 passed + 8 skipped (network) + 1 skipped (gate) on the post-3c branch.
-- TODO #4 closed.
-- TODOs #19–#21 filed (gate non-determinism check, naive-baseline trend persistence, feature-cache code-hash auto-invalidation).
+**Plan 3d delivered:**
+- New `src/projections/aggregation/season.py`: `aggregate_to_season` real Monte Carlo season aggregator (regenerates per-week samples from the per-row seed; modal-position resolution for traded players).
+- New `src/projections/distributions/codec.py`: `pack_per_stat_params` / `unpack_per_stat_params` codec for `ProjectionWeeklySchema.params`.
+- `derive_row_seed` in `src/projections/scoring/score_distribution.py`: stable 32-bit per-row seed via sha256 of `(gsis_id, season, week, ruleset.name)`. Consumed by both `predict_distribution` and `aggregate_to_season`.
+- `BaselineModel.predict_distribution` now writes per-row seeds + per-stat params blob.
+- New `DistributionFamily.SAMPLED_SUMMARY` enum value; new `ProjectionSeasonSchema`.
+- Season-calibration metrics (`season_calibration_p10p90`, `season_calibration_le_p90`) wired into the harness; pinned to `calibration_absolute` tolerance classifier. Snapshot expanded from 368 → 400 rows.
+- `scripts/backtest.py` writes per-row + per-player results to `data/backtest/run_<ts>/`.
+- Default-on smoke asserts season metrics are present and finite.
+- Full gate runtime: 292.73s. Drift on the 368 existing weekly rows is within tolerance for every cell (max abs delta 0.0084 vs 0.03 tolerance; max rel delta +0.165% vs 5% tolerance). Cause: per-row seed change reorders Monte Carlo draws; underlying regression math unchanged.
+- Season `[p10, p90]` coverage well below target (0.30–0.55 vs 0.80) — inherits 3c's weekly under-dispersion. Plan 3e is the calibration-tightening follow-up.
+- TODO #13 (per-row seeds), TODO #14 (SAMPLED_SUMMARY family), TODO #19 (gate non-determinism by demonstration) closed.
+- TODO #22 filed (Plan 3e — calibration tightening).
 
 ## Next action
 
-**Recommended: Plan 3d — real Monte Carlo season-distribution aggregation.**
+**Recommended: Plan 3e — calibration tightening.**
 
-Plan 3a/3b/3c land the per-week distribution + the regression gate.
-Plan 3d closes TODO #13 (per-row seeds), TODO #14 (SAMPLED_SUMMARY family), and tightens calibration via MLE gamma α / variance bucketing. Adds season-total calibration to the gated metrics. (Plan 3c pulled the score_distribution perf TODO forward, so 3d no longer carries that.)
+Replace `_gamma_alpha_from_residuals`'s method-of-moments with an MLE fit, and/or add per-stat residual-variance bucketing by predicted-mean tertile, to move weekly + season calibration coverage toward 0.80. The under-dispersion shows up most acutely on QB season totals (`season_calibration_p10p90` 0.31–0.39); expect the largest tightening to come from QB-stat MLE fits.
 
-After 3d: Plan 4 (public Python API + CLI verbs + free-tier web hosting).
+After 3e: Plan 4 (public Python API + CLI verbs + free-tier web hosting).
 
 ---
 
