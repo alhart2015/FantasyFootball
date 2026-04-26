@@ -15,13 +15,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-import msgpack
 import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 from sklearn.linear_model import RidgeCV
 
-from projections.distributions import Distribution, ParametricGamma, ParametricNormal
+from projections.distributions import (
+    Distribution,
+    ParametricGamma,
+    ParametricNormal,
+    pack_per_stat_params,
+)
 from projections.models.base import compute_code_hash
 from projections.schemas import (
     _PYARROW_STR,
@@ -36,7 +40,7 @@ from projections.schemas import (
     WeeklyStatsSchema,
     WrFeaturesSchema,
 )
-from projections.scoring import score_distribution
+from projections.scoring import derive_row_seed, score_distribution
 
 _GAMMA_ALPHA_CLIP: Final[tuple[float, float]] = (0.01, 100.0)
 
@@ -440,23 +444,15 @@ class BaselineModel:
         """Predict per-player-week fantasy-points distributions under ``ruleset``.
 
         Returns a DataFrame validated against ``ProjectionWeeklySchema`` with one
-        row per ``features`` row. The persisted ``mean`` / ``p10`` / ``p50`` /
-        ``p90`` columns are the canonical per-row distributional summary.
+        row per ``features`` row. Each row's persisted ``mean`` / ``p10`` / ``p50``
+        / ``p90`` columns are the canonical per-row distributional summary; the
+        ``params`` blob carries per-stat distribution parameters via
+        ``pack_per_stat_params`` so a downstream consumer can rehydrate the
+        per-stat distributions and regenerate samples deterministically.
 
-        v1 limitation -- cross-row sample correlation: every row's Monte Carlo
-        uses the same RNG seed (42), so the underlying sample arrays are
-        correlated across rows. Per-row reductions (mean, quantiles) are
-        unaffected. Callers that *combine* multiple rows' samples (DFS lineup
-        variance, roster-total simulation) MUST NOT assume cross-row
-        independence. Tracked as TODO #13 (per-row seed derivation).
-
-        v1 limitation -- params blob is summary-only: family="SAMPLED" but the
-        ``params`` bytes encode only ``{"samples_summary": {"n", "mean"}}``,
-        not the full sample array. The persisted distributional info lives in
-        the ``mean`` / ``p10`` / ``p50`` / ``p90`` columns; ``params`` is a
-        breadcrumb. A future SAMPLED_SUMMARY enum value or a full-samples
-        params encoding can address this without breaking the schema. Tracked
-        as TODO #14.
+        Per-row Monte Carlo seed is derived from ``(gsis_id, season, week,
+        ruleset.name)`` via ``derive_row_seed``, giving cross-process reproducible
+        and cross-row independent samples.
         """
         features = self.feature_schema.validate(features)
         if features.empty:
@@ -465,23 +461,19 @@ class BaselineModel:
 
         stat_dists_per_row = self.build_stat_distributions(features)
 
-        # Compose each row's per-stat distribution dict into a fantasy-points
-        # SampledDistribution via score_distribution.
         rows: list[dict[str, object]] = []
         generated_at = datetime.now(UTC)
         for (_idx, feat_row), stat_dists in zip(
             features.reset_index(drop=True).iterrows(), stat_dists_per_row, strict=True
         ):
-            points = score_distribution(stat_dists, ruleset, n_samples=10_000, seed=42)
-            family_blob = msgpack.packb(
-                {
-                    "samples_summary": {
-                        "n": len(points.samples),
-                        "mean": float(points.mean()),
-                    }
-                },
-                use_bin_type=True,
+            seed = derive_row_seed(
+                gsis_id=str(feat_row["gsis_id"]),
+                season=int(feat_row["season"]),
+                week=int(feat_row["week"]),
+                ruleset_name=ruleset.name,
             )
+            points = score_distribution(stat_dists, ruleset, n_samples=10_000, seed=seed)
+            family_blob = pack_per_stat_params(stat_dists)
             rows.append(
                 {
                     "gsis_id": feat_row["gsis_id"],
@@ -491,7 +483,7 @@ class BaselineModel:
                     "team": feat_row["team"],
                     "opponent": feat_row["opponent"],
                     "ruleset": ruleset.name,
-                    "family": DistributionFamily.SAMPLED.value,
+                    "family": DistributionFamily.SAMPLED_SUMMARY.value,
                     "params": family_blob,
                     "mean": points.mean(),
                     "p10": points.quantile(0.1),
@@ -503,11 +495,8 @@ class BaselineModel:
             )
 
         out = pd.DataFrame(rows)
-        # Coerce the string columns to pyarrow string per schema convention.
         for col in ("gsis_id", "team", "opponent", "ruleset", "family", "model_id"):
             out[col] = out[col].astype(_PYARROW_STR)
-        # Persist position as pyarrow string too -- ProjectionWeeklySchema
-        # declares Series[str] and pandera+coerce will error on object dtype.
         out["position"] = out["position"].astype(_PYARROW_STR)
         return ProjectionWeeklySchema.validate(out)
 

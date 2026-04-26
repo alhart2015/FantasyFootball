@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 from sklearn.linear_model import RidgeCV
 
 from projections.distributions.parametric import ParametricGamma, ParametricNormal
@@ -327,3 +328,76 @@ def test_load_rejects_non_baseline_artifact(tmp_path: Path) -> None:
     except TypeError:
         return
     raise AssertionError("load() on a non-BaselineModel artifact should raise TypeError")
+
+
+def test_predict_distribution_writes_sampled_summary_family(
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
+) -> None:
+    from projections.schemas import DistributionFamily
+
+    model = wr_baseline()
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    week_features = baseline_features_wr[
+        (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
+    ]
+    out = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
+    assert (out["family"] == DistributionFamily.SAMPLED_SUMMARY.value).all()
+
+
+def test_predict_distribution_params_round_trips_to_per_stat_dists(
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
+) -> None:
+    from projections.distributions import unpack_per_stat_params
+
+    model = wr_baseline()
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    week_features = baseline_features_wr[
+        (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
+    ].head(3)
+    expected_dists_per_row = model.build_stat_distributions(week_features)
+    out = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
+
+    for row_idx, expected_dists in enumerate(expected_dists_per_row):
+        decoded = unpack_per_stat_params(out["params"].iloc[row_idx])
+        assert set(decoded.keys()) == set(expected_dists.keys())
+        for stat, expected_dist in expected_dists.items():
+            decoded_dist = decoded[stat]
+            assert type(decoded_dist) is type(expected_dist)
+            assert decoded_dist.mean() == pytest.approx(expected_dist.mean())
+            assert decoded_dist.std() == pytest.approx(expected_dist.std())
+
+
+def test_predict_distribution_uses_per_row_seeds(
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
+) -> None:
+    """Two rows for different (gsis_id, week) tuples must produce different
+    samples even if their per-stat dists happen to coincide. We check that
+    the persisted (mean, p10, p50, p90) summary is never identical across
+    distinct rows of the same week (would happen under shared seed=42)."""
+    model = wr_baseline()
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    week_features = baseline_features_wr[
+        (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
+    ]
+    out = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
+    summary_tuples = list(zip(out["mean"], out["p10"], out["p50"], out["p90"], strict=True))
+    assert len(set(summary_tuples)) == len(summary_tuples)
+
+
+def test_predict_distribution_is_deterministic_across_calls(
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
+) -> None:
+    """Two predict_distribution calls with the same fitted model and the same
+    input frame must produce bit-identical mean/p10/p50/p90 columns — closes
+    TODO #19's gate non-determinism check by demonstration."""
+    model = wr_baseline()
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    week_features = baseline_features_wr[
+        (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
+    ]
+    out_a = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
+    out_b = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
+    for col in ("mean", "p10", "p50", "p90"):
+        assert (out_a[col].to_numpy() == out_b[col].to_numpy()).all(), (
+            f"Determinism violated on column {col}"
+        )
