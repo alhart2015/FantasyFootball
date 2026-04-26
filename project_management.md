@@ -160,7 +160,7 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Current status (as of 2026-04-25)
 
-**Projections Core — Plan 3b (generalize Model A baseline to QB / RB / TE) merged to `main` at commit `<TBD-after-merge>`.**
+**Projections Core — Plan 3b (generalize Model A baseline to QB / RB / TE) merged to `main` at commit `c4a0401` (PR #7).**
 
 **Predecessors:**
 - Plan 1 (Foundations) merged at `8f02a6c`.
