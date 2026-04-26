@@ -149,6 +149,7 @@ class DistributionFamily(StrEnum):
     GAMMA = "GAMMA"
     EMPIRICAL_QUANTILE = "EMPIRICAL_QUANTILE"  # quantile-regression output
     SAMPLED = "SAMPLED"  # explicit sample array
+    SAMPLED_SUMMARY = "SAMPLED_SUMMARY"  # per-stat dist params + summary in mean/p10/p50/p90
 
 
 class Stat(StrEnum):
@@ -660,3 +661,51 @@ class ProjectionWeeklySchema(pa.DataFrameModel):
     class Config:
         strict = "filter"
         coerce = True  # see WrFeaturesSchema.Config — empty-output fast path
+
+
+class ProjectionSeasonSchema(pa.DataFrameModel):
+    """Published per-season projection (consumer-facing contract for season totals).
+
+    Aggregates per-week samples across the weeks a player has predictions for in a
+    season. n_weeks reports how many weeks were aggregated; consumers may filter
+    by it. position is the modal value from the input rows for the gsis_id (the
+    rare in-season position change inherits the most-frequent value).
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    ruleset: Series[str]
+    n_weeks: Series[int] = pa.Field(ge=1, le=22)
+    season_mean: Series[float]
+    season_p10: Series[float]
+    season_p50: Series[float]
+    season_p90: Series[float]
+    model_id: Series[str]
+    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(dtype_kwargs={"tz": "UTC", "unit": "us"})
+
+    # `coerce = True` is required for empty-DataFrame validation (an empty
+    # pd.DataFrame(columns=[...]) produces object-dtype columns); but pandera's
+    # coerce will silently UTC-localize a naive datetime column rather than reject
+    # it. We want naive timestamps treated as a producer bug, so we run a
+    # pre-coerce parser that raises SchemaError when the input is naive.
+    @pa.dataframe_parser
+    @classmethod
+    def _reject_naive_generated_at(cls, df: pd.DataFrame) -> pd.DataFrame:
+        if len(df) == 0 or "generated_at" not in df.columns:
+            return df
+        col = df["generated_at"]
+        if hasattr(col, "dt") and col.dt.tz is None:
+            # pandera's SchemaError lacks type stubs; narrow ignore to the missing-stub call.
+            raise pa.errors.SchemaError(  # type: ignore[no-untyped-call]
+                schema=cls.to_schema(),
+                data=df,
+                message=(
+                    "column 'generated_at': naive datetime not allowed; expected tz-aware UTC"
+                ),
+            )
+        return df
+
+    class Config:
+        strict = "filter"
+        coerce = True
