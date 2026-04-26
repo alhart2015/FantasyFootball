@@ -199,8 +199,8 @@ def test_end_to_end_ingest_and_features(
 
 def test_smoke_wr_baseline_fit_predict_write(
     tmp_path: Path,
-    baseline_features: pd.DataFrame,
-    baseline_weekly_stats: pd.DataFrame,
+    baseline_features_wr: pd.DataFrame,
+    baseline_weekly_stats_wr: pd.DataFrame,
 ) -> None:
     """End-to-end: fit BaselineModel on synthetic data, predict, write a
     parquet partition through store.write_partition, read back, validate."""
@@ -209,10 +209,10 @@ def test_smoke_wr_baseline_fit_predict_write(
     from projections.store import read_partition, write_partition
 
     model = wr_baseline()
-    model.fit(features=baseline_features, weekly_stats=baseline_weekly_stats)
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
 
-    week_features = baseline_features[
-        (baseline_features["season"] == 2025) & (baseline_features["week"] == 4)
+    week_features = baseline_features_wr[
+        (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
     ]
     preds = model.predict_distribution(week_features, ruleset=Ruleset.espn_ppr())
     ProjectionWeeklySchema.validate(preds)

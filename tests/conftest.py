@@ -7,14 +7,20 @@ They were promoted from `tests/test_ingest/conftest.py` so the top-level
 `test_smoke_2a.py` can request them via pytest's hierarchical fixture
 resolution.
 
-The `baseline_features` / `baseline_weekly_stats` fixtures (and their
-helpers `_GSIS_IDS`, `_TEAMS`, `_TARGETS_BASE`, `_wr_weekly_stats_row`)
+The `baseline_features_wr` / `baseline_weekly_stats_wr` fixtures (and
+their helpers `_GSIS_IDS`, `_TEAMS`, `_TARGETS_BASE`, `_wr_weekly_stats_row`)
 were promoted from `tests/test_models/conftest.py` for the same reason:
 the round-trip smoke test at this level needs to consume them, and pytest
 fixtures only inherit from parent conftests, not siblings.
+
+Plan 3b adds sibling per-position fixtures (`baseline_weekly_stats_{qb,
+rb,te}` + `baseline_features_{qb,rb,te}`) at root scope so the
+parametrized smoke test can resolve them across all four positions.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 import pandas as pd
 import pytest
@@ -341,8 +347,8 @@ def _wr_weekly_stats_row(
 
 
 @pytest.fixture
-def baseline_weekly_stats() -> pd.DataFrame:
-    """8 weeks of 2024 + 4 weeks of 2025 stats for 5 synthetic WRs.
+def baseline_weekly_stats_wr() -> pd.DataFrame:
+    """8 weeks of 2024 + 4 weeks of 2025 WR-shaped stats for 5 synthetic WRs.
 
     2024 = training universe; 2025 = held-out. KC and MIN play each other
     every week so the opponent-allowed-fppg proxy resolves (MIN's allowed WR
@@ -373,9 +379,9 @@ def baseline_weekly_stats() -> pd.DataFrame:
 
 
 @pytest.fixture
-def baseline_features(baseline_weekly_stats: pd.DataFrame) -> pd.DataFrame:
+def baseline_features_wr(baseline_weekly_stats_wr: pd.DataFrame) -> pd.DataFrame:
     """WR feature rows produced by build_wr_features for every (season, week)
-    in the training fixture. Built up-front so tests don't pay the cost
+    in the WR training fixture. Built up-front so tests don't pay the cost
     individually."""
     from projections.features import build_wr_features
 
@@ -396,7 +402,7 @@ def baseline_features(baseline_weekly_stats: pd.DataFrame) -> pd.DataFrame:
             "st_snaps": 2,
             "st_pct": 0.05,
         }
-        for _, r in baseline_weekly_stats.iterrows()
+        for _, r in baseline_weekly_stats_wr.iterrows()
     ]
     snap_counts = pd.DataFrame(snap_rows)
     for col in ("gsis_id", "team", "opponent", "position"):
@@ -500,7 +506,7 @@ def baseline_features(baseline_weekly_stats: pd.DataFrame) -> pd.DataFrame:
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
             f = build_wr_features(
-                weekly_stats=baseline_weekly_stats,
+                weekly_stats=baseline_weekly_stats_wr,
                 snap_counts=snap_counts,
                 depth_charts=depth,
                 ngs_receiving=ngs,
@@ -510,3 +516,428 @@ def baseline_features(baseline_weekly_stats: pd.DataFrame) -> pd.DataFrame:
             )
             feat_frames.append(f)
     return pd.concat(feat_frames, ignore_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Per-position baseline fixtures (Plan 3b).
+# Each {position} variant provides a baseline_weekly_stats_{position} +
+# baseline_features_{position} pair shaped to that position's target stats
+# and feature schema. The smoke test (test_smoke.py) parametrizes across
+# all four positions, so every fixture must live at root scope; pytest
+# fixtures only inherit downward.
+# ---------------------------------------------------------------------------
+
+# Synthetic universe per position. 5 players across 2 teams (KC/MIN), 8
+# weeks of 2024 + 4 weeks of 2025. KC and MIN play each other every week
+# so the opp_allowed_*_fppg_l4 proxy resolves.
+_POSITION_BASE_RATES: dict[str, list[float]] = {
+    "QB": [38.0, 32.0, 36.0, 26.0, 22.0],  # pass attempts/game baseline
+    "RB": [16.0, 12.0, 14.0, 8.0, 6.0],  # carries/game baseline
+    "TE": [9.0, 6.0, 8.0, 3.0, 2.0],  # targets/game baseline
+}
+
+
+def _qb_weekly_stats_row(
+    *,
+    gsis_id: str,
+    season: int,
+    week: int,
+    team: str,
+    opponent: str,
+    base_attempts: float,
+) -> dict[str, object]:
+    jitter = (week % 3) - 1
+    attempts = max(0, int(base_attempts + jitter))
+    completions = max(0, int(attempts * 0.65))
+    pass_yards = float(completions * 11.0)
+    pass_tds = 1 if (week + int(gsis_id[-1])) % 3 == 0 else 0
+    interceptions = 1 if (week + int(gsis_id[-1])) % 5 == 0 else 0
+    sacks = 1 if week % 4 == 0 else 0
+    rush_attempts = 3 + (week % 2)
+    rush_yards = float(rush_attempts * 4.0)
+    return {
+        "gsis_id": gsis_id,
+        "season": season,
+        "week": week,
+        "position": "QB",
+        "team": team,
+        "opponent": opponent,
+        "passing_yards": pass_yards,
+        "passing_tds": pass_tds,
+        "interceptions": interceptions,
+        "attempts": attempts,
+        "completions": completions,
+        "sacks": sacks,
+        "rushing_yards": rush_yards,
+        "rushing_tds": 0,
+        "carries": rush_attempts,
+        "receptions": 0,
+        "receiving_yards": 0.0,
+        "receiving_tds": 0,
+        "receiving_air_yards": 0.0,
+        "targets": 0,
+        "fumbles_lost": 0,
+    }
+
+
+def _rb_weekly_stats_row(
+    *,
+    gsis_id: str,
+    season: int,
+    week: int,
+    team: str,
+    opponent: str,
+    base_carries: float,
+) -> dict[str, object]:
+    jitter = (week % 3) - 1
+    carries = max(0, int(base_carries + jitter))
+    rush_yards = float(carries * 4.5)
+    rush_tds = 1 if (week + int(gsis_id[-1])) % 4 == 0 else 0
+    targets = max(0, int(base_carries * 0.25))
+    receptions = max(0, int(targets * 0.7))
+    return {
+        "gsis_id": gsis_id,
+        "season": season,
+        "week": week,
+        "position": "RB",
+        "team": team,
+        "opponent": opponent,
+        "passing_yards": 0.0,
+        "passing_tds": 0,
+        "interceptions": 0,
+        "attempts": 0,
+        "completions": 0,
+        "sacks": 0,
+        "rushing_yards": rush_yards,
+        "rushing_tds": rush_tds,
+        "carries": carries,
+        "receptions": receptions,
+        "receiving_yards": float(receptions * 7.0),
+        "receiving_tds": 0,
+        "receiving_air_yards": float(targets * 5.0),
+        "targets": targets,
+        "fumbles_lost": 0,
+    }
+
+
+def _te_weekly_stats_row(
+    *,
+    gsis_id: str,
+    season: int,
+    week: int,
+    team: str,
+    opponent: str,
+    base_targets: float,
+) -> dict[str, object]:
+    jitter = (week % 3) - 1
+    targets = max(0, int(base_targets + jitter))
+    receptions = max(0, int(targets * 0.65))
+    rec_yards = float(receptions * 11.0)
+    rec_tds = 1 if (week + int(gsis_id[-1])) % 4 == 0 else 0
+    # One synthetic TE rushes (Taysom-Hill-shape) when the gsis_id ends in
+    # "3"; this gives the new TeFeaturesSchema rushing columns non-zero
+    # rolling means.
+    is_rushing_te = gsis_id.endswith("3")
+    carries = 4 + (week % 2) if is_rushing_te else 0
+    rush_yards = float(carries * 4.0)
+    return {
+        "gsis_id": gsis_id,
+        "season": season,
+        "week": week,
+        "position": "TE",
+        "team": team,
+        "opponent": opponent,
+        "passing_yards": 0.0,
+        "passing_tds": 0,
+        "interceptions": 0,
+        "attempts": 0,
+        "completions": 0,
+        "sacks": 0,
+        "rushing_yards": rush_yards,
+        "rushing_tds": 1 if is_rushing_te and week % 4 == 0 else 0,
+        "carries": carries,
+        "receptions": receptions,
+        "receiving_yards": rec_yards,
+        "receiving_tds": rec_tds,
+        "receiving_air_yards": float(targets * 12.0),
+        "targets": targets,
+        "fumbles_lost": 0,
+    }
+
+
+# Callable[..., ...] (vs. a concrete signature) is the explicit escape hatch
+# for the dynamic-kwarg dispatch in `_build_position_weekly_stats`: each
+# builder takes a different position-specific keyword (`base_attempts` /
+# `base_carries` / `base_targets`), and we resolve which one to pass via
+# `_POSITION_BASE_KW`. mypy can't validate kwarg-name dispatch, so we narrow
+# the type to "any callable returning a row dict".
+_POSITION_ROW_BUILDERS: dict[str, Callable[..., dict[str, object]]] = {
+    "QB": _qb_weekly_stats_row,
+    "RB": _rb_weekly_stats_row,
+    "TE": _te_weekly_stats_row,
+}
+
+_POSITION_BASE_KW: dict[str, str] = {
+    "QB": "base_attempts",
+    "RB": "base_carries",
+    "TE": "base_targets",
+}
+
+
+def _build_position_weekly_stats(position: str) -> pd.DataFrame:
+    """Stack 8 weeks of 2024 + 4 weeks of 2025 for the synthetic universe,
+    using the row-builder registered for `position`."""
+    builder = _POSITION_ROW_BUILDERS[position]
+    base_rates = _POSITION_BASE_RATES[position]
+    base_kw = _POSITION_BASE_KW[position]
+    rows: list[dict[str, object]] = []
+    for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
+        for week in weeks:
+            for gsis_id, team, base_rate in zip(_GSIS_IDS, _TEAMS, base_rates, strict=True):
+                opponent = "MIN" if team == "KC" else "KC"
+                rows.append(
+                    builder(
+                        gsis_id=gsis_id,
+                        season=season,
+                        week=week,
+                        team=team,
+                        opponent=opponent,
+                        **{base_kw: base_rate},
+                    )
+                )
+    df = pd.DataFrame(rows)
+    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
+    df["position"] = df["position"].astype(_PYARROW_STR)
+    df["team"] = df["team"].astype(_PYARROW_STR)
+    df["opponent"] = df["opponent"].astype(_PYARROW_STR)
+    return df
+
+
+@pytest.fixture
+def baseline_weekly_stats_qb() -> pd.DataFrame:
+    """8 weeks of 2024 + 4 weeks of 2025 QB-shaped stats for 5 synthetic QBs."""
+    return _build_position_weekly_stats("QB")
+
+
+@pytest.fixture
+def baseline_weekly_stats_rb() -> pd.DataFrame:
+    """8 weeks of 2024 + 4 weeks of 2025 RB-shaped stats for 5 synthetic RBs."""
+    return _build_position_weekly_stats("RB")
+
+
+@pytest.fixture
+def baseline_weekly_stats_te() -> pd.DataFrame:
+    """8 weeks of 2024 + 4 weeks of 2025 TE-shaped stats for 5 synthetic TEs.
+
+    The TE whose gsis_id ends in "3" rushes (Taysom-Hill-shape) so the new
+    TeFeaturesSchema rushing columns from Phase 1 carry non-zero rolling
+    means.
+    """
+    return _build_position_weekly_stats("TE")
+
+
+def _build_position_supporting_frames(
+    weekly_stats: pd.DataFrame, position: str
+) -> dict[str, pd.DataFrame]:
+    """Build snap_counts / depth_charts / ngs (passing or rushing or receiving)
+    / schedules sub-frames matching the synthetic universe."""
+    base_rates = _POSITION_BASE_RATES[position]
+
+    snap_rows = [
+        {
+            "gsis_id": r["gsis_id"],
+            "season": r["season"],
+            "week": r["week"],
+            "team": r["team"],
+            "opponent": r["opponent"],
+            "position": position,
+            "offense_snaps": 60,
+            "offense_pct": 0.95,
+            "defense_snaps": 0,
+            "defense_pct": 0.0,
+            "st_snaps": 2,
+            "st_pct": 0.05,
+        }
+        for _, r in weekly_stats.iterrows()
+    ]
+    snap_counts = pd.DataFrame(snap_rows)
+    for col in ("gsis_id", "team", "opponent", "position"):
+        snap_counts[col] = snap_counts[col].astype(_PYARROW_STR)
+
+    dc_rows: list[dict[str, object]] = []
+    for season in (2024, 2025):
+        weeks = range(1, 9) if season == 2024 else range(1, 5)
+        for week in weeks:
+            for gsis_id, team, _base in zip(_GSIS_IDS, _TEAMS, base_rates, strict=True):
+                team_pool = sorted(
+                    [
+                        (g, t, b)
+                        for g, t, b in zip(_GSIS_IDS, _TEAMS, base_rates, strict=True)
+                        if t == team
+                    ],
+                    key=lambda x: -x[2],
+                )
+                rank = next(i for i, (g, _, _) in enumerate(team_pool, start=1) if g == gsis_id)
+                dc_rows.append(
+                    {
+                        "gsis_id": gsis_id,
+                        "season": season,
+                        "week": week,
+                        "team": team,
+                        "position": position,
+                        "depth_team": f"{position}{rank}",
+                        "depth_rank": rank,
+                    }
+                )
+    depth = pd.DataFrame(dc_rows)
+    for col in ("gsis_id", "team", "position", "depth_team"):
+        depth[col] = depth[col].astype(_PYARROW_STR)
+
+    # NGS source depends on position: QB->passing, RB->rushing, TE->receiving.
+    ngs_rows: list[dict[str, object]] = []
+    for season in (2024, 2025):
+        weeks = range(1, 9) if season == 2024 else range(1, 5)
+        for week in weeks:
+            for gsis_id, team, base in zip(_GSIS_IDS, _TEAMS, base_rates, strict=True):
+                row: dict[str, object] = {
+                    "gsis_id": gsis_id,
+                    "season": season,
+                    "week": week,
+                    "team": team,
+                    "position": position,
+                }
+                if position == "QB":
+                    row.update(
+                        {
+                            "avg_time_to_throw": 2.7 + base * 0.001,
+                            "avg_intended_air_yards": 8.0 + base * 0.05,
+                            "completion_percentage_above_expectation": -1.0 + base * 0.1,
+                            "aggressiveness": 12.0 + base * 0.05,
+                        }
+                    )
+                elif position == "RB":
+                    row.update(
+                        {
+                            "efficiency": 3.0 + base * 0.02,
+                            "rush_yards_over_expected_per_att": -0.5 + base * 0.05,
+                            "percent_attempts_gte_eight_defenders": 18.0 + base * 0.1,
+                        }
+                    )
+                else:  # TE
+                    row.update(
+                        {
+                            "avg_separation": 2.5 + base * 0.05,
+                            "avg_intended_air_yards": 9.0 + base * 0.2,
+                            "avg_yac_above_expectation": -0.2 + base * 0.05,
+                        }
+                    )
+                ngs_rows.append(row)
+    ngs = pd.DataFrame(ngs_rows)
+    for col in ("gsis_id", "team", "position"):
+        ngs[col] = ngs[col].astype(_PYARROW_STR)
+
+    sch_rows: list[dict[str, object]] = []
+    for season in (2024, 2025):
+        weeks = range(1, 9) if season == 2024 else range(1, 5)
+        for week in weeks:
+            sch_rows.append(
+                {
+                    "season": season,
+                    "week": week,
+                    "game_id": f"{season}_{week:02d}_KC_MIN",
+                    "home_team": "KC",
+                    "away_team": "MIN",
+                    "kickoff": pd.Timestamp(f"{season}-09-{week + 1:02d}T17:00:00Z")
+                    .tz_convert("UTC")
+                    .as_unit("us"),
+                    "spread_line": -3.0,
+                    "total_line": 47.0,
+                    "home_moneyline": -150,
+                    "away_moneyline": 130,
+                    "surface": "grass",
+                    "roof": "outdoors",
+                    "temp": 60,
+                    "wind": 5,
+                }
+            )
+    schedules = pd.DataFrame(sch_rows)
+    for col in ("game_id", "home_team", "away_team", "surface", "roof"):
+        schedules[col] = schedules[col].astype(_PYARROW_STR)
+    for col in ("temp", "wind", "home_moneyline", "away_moneyline"):
+        schedules[col] = schedules[col].astype(pd.Int64Dtype())
+
+    return {
+        "snap_counts": snap_counts,
+        "depth_charts": depth,
+        "ngs": ngs,
+        "schedules": schedules,
+    }
+
+
+@pytest.fixture
+def baseline_features_qb(baseline_weekly_stats_qb: pd.DataFrame) -> pd.DataFrame:
+    """QB feature rows produced by build_qb_features for every (season, week)."""
+    from projections.features import build_qb_features
+
+    aux = _build_position_supporting_frames(baseline_weekly_stats_qb, "QB")
+    feat_frames: list[pd.DataFrame] = []
+    for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
+        for week in weeks:
+            f = build_qb_features(
+                weekly_stats=baseline_weekly_stats_qb,
+                snap_counts=aux["snap_counts"],
+                depth_charts=aux["depth_charts"],
+                ngs_passing=aux["ngs"],
+                schedules=aux["schedules"],
+                season=season,
+                as_of_week=week,
+            )
+            if not f.empty:
+                feat_frames.append(f)
+    return pd.concat(feat_frames, ignore_index=True) if feat_frames else pd.DataFrame()
+
+
+@pytest.fixture
+def baseline_features_rb(baseline_weekly_stats_rb: pd.DataFrame) -> pd.DataFrame:
+    """RB feature rows produced by build_rb_features for every (season, week)."""
+    from projections.features import build_rb_features
+
+    aux = _build_position_supporting_frames(baseline_weekly_stats_rb, "RB")
+    feat_frames: list[pd.DataFrame] = []
+    for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
+        for week in weeks:
+            f = build_rb_features(
+                weekly_stats=baseline_weekly_stats_rb,
+                snap_counts=aux["snap_counts"],
+                depth_charts=aux["depth_charts"],
+                ngs_rushing=aux["ngs"],
+                schedules=aux["schedules"],
+                season=season,
+                as_of_week=week,
+            )
+            if not f.empty:
+                feat_frames.append(f)
+    return pd.concat(feat_frames, ignore_index=True) if feat_frames else pd.DataFrame()
+
+
+@pytest.fixture
+def baseline_features_te(baseline_weekly_stats_te: pd.DataFrame) -> pd.DataFrame:
+    """TE feature rows produced by build_te_features for every (season, week)."""
+    from projections.features import build_te_features
+
+    aux = _build_position_supporting_frames(baseline_weekly_stats_te, "TE")
+    feat_frames: list[pd.DataFrame] = []
+    for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
+        for week in weeks:
+            f = build_te_features(
+                weekly_stats=baseline_weekly_stats_te,
+                snap_counts=aux["snap_counts"],
+                depth_charts=aux["depth_charts"],
+                ngs_receiving=aux["ngs"],
+                schedules=aux["schedules"],
+                season=season,
+                as_of_week=week,
+            )
+            if not f.empty:
+                feat_frames.append(f)
+    return pd.concat(feat_frames, ignore_index=True) if feat_frames else pd.DataFrame()

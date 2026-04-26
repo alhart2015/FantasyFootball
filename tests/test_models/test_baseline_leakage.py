@@ -17,11 +17,11 @@ from projections.schemas import Stat
 
 
 def test_baseline_fit_does_not_use_post_as_of_week_data(
-    baseline_features: pd.DataFrame, baseline_weekly_stats: pd.DataFrame
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     # Restrict fixture to 2024 only for this test (so we have one season).
-    ws = baseline_weekly_stats[baseline_weekly_stats["season"] == 2024].copy()
-    feats = baseline_features[baseline_features["season"] == 2024].copy()
+    ws = baseline_weekly_stats_wr[baseline_weekly_stats_wr["season"] == 2024].copy()
+    feats = baseline_features_wr[baseline_features_wr["season"] == 2024].copy()
 
     # Train on the first version.
     model_a = wr_baseline()
