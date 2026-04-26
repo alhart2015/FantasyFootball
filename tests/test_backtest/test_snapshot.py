@@ -212,3 +212,10 @@ def test_diff_missing_baseline_row_fails() -> None:
     assert out.passed is False
     assert any("missing from baseline" in r.message for r in out.regressions)
     assert any(r.direction == "missing" for r in out.regressions)
+
+
+def test_classify_metric_routes_season_calibration_to_calibration_absolute() -> None:
+    from projections.backtest.snapshot import _classify_metric
+
+    assert _classify_metric("season_calibration_p10p90") == "calibration_absolute"
+    assert _classify_metric("season_calibration_le_p90") == "calibration_absolute"

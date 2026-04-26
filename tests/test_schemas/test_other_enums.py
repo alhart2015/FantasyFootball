@@ -24,6 +24,7 @@ def test_distribution_family_options() -> None:
         "GAMMA",
         "EMPIRICAL_QUANTILE",
         "SAMPLED",
+        "SAMPLED_SUMMARY",
     }
 
 

@@ -100,19 +100,11 @@ Revisit before Plan 3 model fitting — if the model never uses these booleans, 
 
 ### 13. Per-row seed derivation in BaselineModel.predict_distribution
 
-Surfaced in PR for Plan 3a (Task 9 review). `BaselineModel.predict_distribution` calls `score_distribution(..., seed=42)` for every row, so the underlying Monte Carlo sample arrays are correlated across rows. Per-row stats (mean/p10/p50/p90) are unaffected, but downstream callers that combine multiple rows' samples (DFS lineup variance, roster-total simulation, joint correlations once TODO #1 lands) MUST NOT assume cross-row independence.
-
-Fix: derive per-row seeds from `(gsis_id, season, week, ruleset.name)` (e.g., `hash(...) & 0xFFFFFFFF`) so each row gets an independent draw. Cheap, no perf cost. Defer until Plan 3c's backtest harness or DFS work needs cross-row independence.
+**Closed in Plan 3d.** `derive_row_seed` in `scoring/score_distribution.py` produces a stable 32-bit seed from `(gsis_id, season, week, ruleset.name)` via sha256; `predict_distribution` and `aggregate_to_season` both consume it. Determinism verified by re-running `--check` immediately after `--update-snapshot` in Phase 6 (closes TODO #19 by demonstration).
 
 ### 14. ProjectionWeeklySchema params blob carries summary, not samples
 
-Surfaced in PR for Plan 3a (Task 9 review). `BaselineModel.predict_distribution` sets `family="SAMPLED"` but the `params` bytes encode only `{"samples_summary": {"n", "mean"}}`, not the full sample array. The persisted distributional info lives in `mean`/`p10`/`p50`/`p90`; `params` is a breadcrumb.
-
-Two fix options:
-- (a) Add `DistributionFamily.SAMPLED_SUMMARY` enum value; rename the family on these rows. Backward-compatible.
-- (b) Pack the full `points.samples` array (np.float64 × 10000 = 80KB per row, msgpack-compressible). Material storage cost; right answer once parquet partitioning is stable, but premature for v1.
-
-Decide before Plan 3c's backtest output consumes ProjectionWeeklySchema rows.
+**Closed in Plan 3d.** New `DistributionFamily.SAMPLED_SUMMARY` enum value; `params` now encodes per-stat distribution parameters via `pack_per_stat_params` (codec in `distributions/codec.py`). Three orders of magnitude smaller than persisting full sample arrays; deterministic regeneration via the per-row seed makes samples available on demand.
 
 ### 16. Real-data drifts not caught by synthetic-fixture tests
 
@@ -151,10 +143,7 @@ ingest invocation a one-liner. Defer until next ingest-touching plan
 
 ### 19. Walk-forward gate non-determinism check
 
-Phase 6 of Plan 3c may surface tiny RMSE jitter on the 2021 cells
-where RidgeCV trains on only 3 prior seasons. If empirically observed
-on a re-run with unchanged data, add explicit `random_state` propagation
-through `BaselineModel.fit` and re-snapshot. Otherwise close.
+**Closed in Plan 3d.** With deterministic per-row seeds, re-running `python scripts/backtest.py --check` immediately after `--update-snapshot` produces zero drift. No `random_state` propagation needed inside `RidgeCV` because the regression itself is deterministic; non-determinism only entered through `score_distribution`'s seed.
 
 ### 20. Naive-baseline parquet output for trend tracking
 
@@ -172,3 +161,14 @@ Auto-invalidation reads the source files for the feature builder (the
 same set `BaselineModel.code_hash_files` already tracks) and refuses
 to read stale cache. Deferred until manual invalidation produces a
 real-world bug.
+
+### 22. Plan 3e — calibration tightening
+
+Plan 3c's snapshot showed weekly calibration coverage at 0.67–0.80 across
+all 16 cells (target 0.80). Plan 3d's season-calibration metrics inherit
+the same under-dispersion. Plan 3e replaces method-of-moments gamma alpha
+with an MLE fit (likely scipy.optimize.minimize on the residual log-likelihood)
+and/or adds per-stat residual-variance bucketing by predicted-mean tertile
+to capture heteroscedasticity. Validation surface: weekly calibration metrics
+move toward 0.80; season-calibration metrics widen accordingly. Re-snapshot
+required after Plan 3e ships.
