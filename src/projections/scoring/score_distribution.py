@@ -1,8 +1,13 @@
 """Convert a dict of per-stat distributions into a single fantasy-points distribution.
 
 Strategy: Monte Carlo. Sample n times from each underlying-stat distribution,
-score each row through the scoring function, and return an empirical (sampled)
+score each sample under the ruleset, and return an empirical (sampled)
 distribution backed by the resulting array.
+
+Vectorized: the scoring rule is linear over per-stat counts/yards, so
+points = sum_over_stats(coefficient(stat, ruleset) * samples_per_stat[stat]).
+This eliminates the per-sample StatLine construction that previously
+dominated runtime at backtest scale.
 
 This is intentionally NOT analytic: real per-stat distributions are not Gaussian
 and don't combine cleanly. Sampling lets us re-score under any ruleset for free.
@@ -12,13 +17,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Final
 
 import numpy as np
 from numpy.typing import NDArray
 
 from projections.distributions import Distribution
 from projections.schemas import Ruleset, Stat
-from projections.scoring.score import StatLine, score
+from projections.scoring.score import StatLine
 
 
 @dataclass(slots=True, frozen=True)
@@ -53,7 +59,35 @@ def _derive_integer_stats() -> frozenset[Stat]:
     return frozenset(stat for stat in Stat if stat.value in int_field_names)
 
 
-INTEGER_STATS: frozenset[Stat] = _derive_integer_stats()
+INTEGER_STATS: Final[frozenset[Stat]] = _derive_integer_stats()
+
+
+def _scoring_coefficients(ruleset: Ruleset) -> dict[Stat, float]:
+    """Per-stat fantasy-point coefficient under ``ruleset``. Mirrors the
+    13 contributions in ``score()`` exactly. Yards stats have inverse
+    coefficients (1 / yds_per_pt) because score divides; everything else
+    is a direct multiplier.
+
+    Stats not in this map are not part of the scoring rule and would have
+    been silently defaulted to 0 in the per-sample StatLine path or have
+    raised Pydantic ValidationError if passed; the vectorized path
+    fail-fasts in the validation step below.
+    """
+    return {
+        Stat.PASSING_YARDS: 1.0 / ruleset.passing_yds_per_pt,
+        Stat.PASSING_TDS: ruleset.passing_td_pts,
+        Stat.INTERCEPTIONS: ruleset.interception_pts,
+        Stat.PASSING_2PT: ruleset.two_pt_pts,
+        Stat.RUSHING_YARDS: 1.0 / ruleset.rushing_yds_per_pt,
+        Stat.RUSHING_TDS: ruleset.rushing_td_pts,
+        Stat.RUSHING_2PT: ruleset.two_pt_pts,
+        Stat.RECEPTIONS: ruleset.reception_pts,
+        Stat.RECEIVING_YARDS: 1.0 / ruleset.receiving_yds_per_pt,
+        Stat.RECEIVING_TDS: ruleset.receiving_td_pts,
+        Stat.RECEIVING_2PT: ruleset.two_pt_pts,
+        Stat.FUMBLES_LOST: ruleset.fumble_lost_pts,
+        Stat.RETURN_TDS: ruleset.return_td_pts,
+    }
 
 
 def score_distribution(
@@ -63,29 +97,35 @@ def score_distribution(
     n_samples: int = 10_000,
     seed: int | None = None,
 ) -> SampledDistribution:
-    """Build a points distribution by sampling each stat distribution and scoring."""
-    rng = np.random.default_rng(seed)
+    """Build a points distribution by sampling each stat distribution and scoring.
 
-    # Sample each stat n_samples times. Missing stats default to 0.
-    samples_per_stat: dict[Stat, NDArray[np.float64]] = {}
+    Vectorized: math equivalent to summing per-stat (coefficient * samples)
+    arrays. Stats with INTEGER_STATS membership are rounded and floored at 0
+    before scoring (same convention as the prior per-sample loop).
+
+    Raises:
+        ValueError: ``stat_dists`` contains a stat that has no coefficient
+            in the ruleset (would have raised Pydantic ValidationError in
+            the legacy code path).
+    """
+    rng = np.random.default_rng(seed)
+    coef_map = _scoring_coefficients(ruleset)
+
+    unknown = set(stat_dists.keys()) - set(coef_map.keys())
+    if unknown:
+        names = sorted(s.value for s in unknown)
+        raise ValueError(
+            f"Cannot score stats not in scoring rule: {names}. "
+            f"Known scorable stats: {sorted(s.value for s in coef_map)}"
+        )
+
+    points = np.zeros(n_samples, dtype=np.float64)
     for stat, dist in stat_dists.items():
         s = dist.sample(n_samples, rng=rng)
         if stat in INTEGER_STATS:
             # Round to non-negative integers; floor at 0 since count stats can't be negative.
             s = np.maximum(np.rint(s), 0.0)
-        samples_per_stat[stat] = s
-
-    # Score each row.
-    # TODO(perf): vectorize this Python loop. Each iteration constructs a
-    # Pydantic StatLine instance (~5-10us); at backtest scale (~500 players x
-    # 17 weeks x 10k samples = 85M iterations) this dominates. The score()
-    # math is linear and can be expressed as a dot product over per-stat
-    # arrays without per-row object construction.
-    points = np.empty(n_samples, dtype=np.float64)
-    for i in range(n_samples):
-        kwargs: dict[str, float | int] = {}
-        for stat, arr in samples_per_stat.items():
-            kwargs[stat.value] = arr[i] if stat not in INTEGER_STATS else int(arr[i])
-        points[i] = score(StatLine(**kwargs), ruleset)  # type: ignore[arg-type]
+        coef = coef_map[stat]
+        points += s * coef
 
     return SampledDistribution(samples=points)

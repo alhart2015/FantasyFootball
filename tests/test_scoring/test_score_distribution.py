@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 
 import pytest
 
@@ -40,3 +41,52 @@ def test_score_distribution_is_deterministic_with_seed() -> None:
     b = score_distribution(stat_dists, Ruleset.espn_ppr(), n_samples=1000, seed=7)
     assert a.mean() == pytest.approx(b.mean())
     assert a.std() == pytest.approx(b.std())
+
+
+def test_score_distribution_mean_matches_linear_combination_of_stat_means() -> None:
+    """For a linear scoring rule like ESPN_PPR, the mean of the points
+    distribution should equal sum(coef[stat] * mean(samples_per_stat[stat]))
+    -- regardless of whether the implementation is iterative or vectorized.
+    Verifies the scoring math without coupling to internal layout."""
+    rng_seed = 42
+    stat_dists: dict[Stat, Distribution] = {
+        Stat.RECEPTIONS: ParametricNormal(mean=5.0, std=1.5),
+        Stat.RECEIVING_YARDS: ParametricNormal(mean=70.0, std=20.0),
+        Stat.RECEIVING_TDS: ParametricNormal(mean=0.5, std=0.4),
+    }
+    ruleset = Ruleset.espn_ppr()
+    out = score_distribution(stat_dists, ruleset, n_samples=20_000, seed=rng_seed)
+
+    # Expected mean: rec_pts * 5 + (1/recv_yds_per_pt) * 70 + recv_td * 0.5
+    # (Note: receptions/receiving_tds are integer-rounded -- nudges the mean
+    # slightly relative to the unrounded multiply, so use a wider tolerance.)
+    expected_unrounded = (
+        ruleset.reception_pts * 5.0
+        + 70.0 / ruleset.receiving_yds_per_pt
+        + ruleset.receiving_td_pts * 0.5
+    )
+    assert abs(out.mean() - expected_unrounded) < 1.0  # within 1 PPR point
+
+
+def test_score_distribution_runs_fast_enough_for_backtest() -> None:
+    """Backtest scale: 10k samples per row, 16 cells x ~1700 rows = ~272M
+    underlying ops. The vectorized implementation should complete a single
+    10k-sample call in under 50ms on a modern dev box. The pre-vectorization
+    Python loop took several seconds at this scale.
+
+    Test budget is 200ms (4x the target) to absorb CI noise without losing
+    the 100x+ regression-detection signal."""
+    stat_dists: dict[Stat, Distribution] = {
+        Stat.RECEPTIONS: ParametricNormal(mean=5.0, std=1.5),
+        Stat.RECEIVING_YARDS: ParametricNormal(mean=70.0, std=20.0),
+        Stat.RECEIVING_TDS: ParametricNormal(mean=0.5, std=0.4),
+        Stat.RUSHING_YARDS: ParametricNormal(mean=2.0, std=2.5),
+        Stat.RUSHING_TDS: ParametricNormal(mean=0.05, std=0.2),
+        Stat.FUMBLES_LOST: ParametricNormal(mean=0.05, std=0.15),
+    }
+    ruleset = Ruleset.espn_ppr()
+
+    start = time.perf_counter()
+    score_distribution(stat_dists, ruleset, n_samples=10_000, seed=42)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 0.2, f"score_distribution took {elapsed:.3f}s, target <0.2s"
