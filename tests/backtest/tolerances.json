@@ -1,0 +1,10 @@
+{
+  "defaults": {
+    "rmse_relative": 0.05,
+    "mae_relative": 0.05,
+    "spearman_absolute": 0.02,
+    "calibration_absolute": 0.03,
+    "mean_pred_relative": 0.10
+  },
+  "overrides": []
+}
