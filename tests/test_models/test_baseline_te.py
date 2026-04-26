@@ -219,7 +219,7 @@ def test_te_baseline_taysom_hill_row_predicts_nonzero_rushing_yards_mean(
     if week.empty:
         pytest.skip("rushing-TE not present in 2025 wk4 fixture slice")
 
-    stat_dists = model._build_stat_distributions(week)
+    stat_dists = model.build_stat_distributions(week)
     rushing_yd_mu = stat_dists[0][Stat.RUSHING_YARDS].mean()
     assert rushing_yd_mu > 0.5, (
         f"Taysom-Hill-shape TE rushing_yards predicted mean is {rushing_yd_mu:.3f}; "

@@ -113,7 +113,7 @@ def main() -> None:
             continue
         preds = model.predict_distribution(feats, ruleset=Ruleset.espn_ppr())
         # Per-stat point predictions for fit metrics.
-        stat_dists_per_row = model._build_stat_distributions(feats)
+        stat_dists_per_row = model.build_stat_distributions(feats)
         per_stat_means = pd.DataFrame(
             {
                 stat.value: [d[stat].mean() for d in stat_dists_per_row]

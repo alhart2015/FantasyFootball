@@ -53,7 +53,7 @@ def _derive_integer_stats() -> frozenset[Stat]:
     return frozenset(stat for stat in Stat if stat.value in int_field_names)
 
 
-_INTEGER_STATS: frozenset[Stat] = _derive_integer_stats()
+INTEGER_STATS: frozenset[Stat] = _derive_integer_stats()
 
 
 def score_distribution(
@@ -70,7 +70,7 @@ def score_distribution(
     samples_per_stat: dict[Stat, NDArray[np.float64]] = {}
     for stat, dist in stat_dists.items():
         s = dist.sample(n_samples, rng=rng)
-        if stat in _INTEGER_STATS:
+        if stat in INTEGER_STATS:
             # Round to non-negative integers; floor at 0 since count stats can't be negative.
             s = np.maximum(np.rint(s), 0.0)
         samples_per_stat[stat] = s
@@ -85,7 +85,7 @@ def score_distribution(
     for i in range(n_samples):
         kwargs: dict[str, float | int] = {}
         for stat, arr in samples_per_stat.items():
-            kwargs[stat.value] = arr[i] if stat not in _INTEGER_STATS else int(arr[i])
+            kwargs[stat.value] = arr[i] if stat not in INTEGER_STATS else int(arr[i])
         points[i] = score(StatLine(**kwargs), ruleset)  # type: ignore[arg-type]
 
     return SampledDistribution(samples=points)

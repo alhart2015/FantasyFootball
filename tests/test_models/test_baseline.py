@@ -139,7 +139,7 @@ def test_build_stat_distributions_returns_one_per_row(
         (baseline_features_wr["season"] == 2025) & (baseline_features_wr["week"] == 4)
     ]
     assert not week_features.empty
-    stat_dists_per_row = model._build_stat_distributions(week_features)
+    stat_dists_per_row = model.build_stat_distributions(week_features)
     assert len(stat_dists_per_row) == len(week_features)
     for row_dists in stat_dists_per_row:
         assert set(row_dists.keys()) == set(model.target_stats)
@@ -167,7 +167,7 @@ def test_build_stat_distributions_clamps_gamma_mu() -> None:
     model.ridges = {Stat.RECEPTIONS: _FakeRidge()}
 
     fake_features = pd.DataFrame({"dummy_feat": [1.0]})
-    out = model._build_stat_distributions(fake_features)
+    out = model.build_stat_distributions(fake_features)
     assert len(out) == 1
     rec_dist = out[0][Stat.RECEPTIONS]
     assert isinstance(rec_dist, ParametricGamma)

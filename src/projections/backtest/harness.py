@@ -20,7 +20,7 @@ from projections.backtest.naive import compute_naive_predictions
 from projections.features.cache import read_features
 from projections.models import POSITION_DISPATCH
 from projections.schemas import Position, Ruleset, Stat
-from projections.scoring import score
+from projections.scoring import INTEGER_STATS, score
 from projections.scoring.score import StatLine
 from projections.store import read_partition
 
@@ -114,20 +114,12 @@ def _naive_metrics_for_cell(
     holdout_pos["actual_ppr"] = _realized_ppr_points(holdout_pos, ruleset)
 
     # Naive composite point prediction: feed naive per-stat into score().
-    integer_stats = {
-        "passing_tds",
-        "interceptions",
-        "rushing_tds",
-        "receiving_tds",
-        "receptions",
-        "fumbles_lost",
-    }
     naive_composite: list[float] = []
     for _idx, row in naive_per_stat.iterrows():
         kwargs_clean: dict[str, float | int] = {}
         for stat in target_stats:
             v = row[stat.value]
-            if stat.value in integer_stats:
+            if stat in INTEGER_STATS:
                 kwargs_clean[stat.value] = round(float(v))
             else:
                 kwargs_clean[stat.value] = float(v)
@@ -168,7 +160,7 @@ def _model_metrics_for_cell(
     model.fit(train_features, train_actuals)
 
     predictions = model.predict_distribution(predict_features, ruleset=ruleset)
-    stat_dists_per_row = model._build_stat_distributions(predict_features)
+    stat_dists_per_row = model.build_stat_distributions(predict_features)
     per_stat_pred_means = pd.DataFrame(
         {stat.value: [d[stat].mean() for d in stat_dists_per_row] for stat in model.target_stats}
     )
