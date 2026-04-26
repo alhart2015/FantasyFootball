@@ -4,6 +4,122 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 3b — 2024 sanity check (run on branch `feat/plan-3b-qb-rb-te-baseline`)
+
+Held-out year is 2024 (same as 3a; `nfl_data_py` has not yet published 2025). Each position trained on 2018-2023. Per-position evals are stdout-only — Plan 3c owns CI threshold gating.
+
+### WR (retrained under Plan 3b's `BaselineModel` constructor)
+
+```
+Loading artifact: models\artifacts\baseline-wr-2018-2023-a2f581cf.joblib
+model_id: baseline:wr:a2f581cf:2018-2023
+
+=== WR 2024 sanity check (n=2048 player-weeks) ===
+
+-- Per-stat fit --
+            receptions  rmse= 2.051  mae= 1.543  mean_pred= 2.892  mean_actual= 3.116
+       receiving_yards  rmse=31.198  mae=22.938  mean_pred=36.237  mean_actual=39.204
+         receiving_tds  rmse= 0.495  mae= 0.347  mean_pred= 0.212  mean_actual= 0.256
+         rushing_yards  rmse= 3.944  mae= 1.914  mean_pred= 1.311  mean_actual= 1.005
+           rushing_tds  rmse= 0.086  mae= 0.017  mean_pred= 0.010  mean_actual= 0.007
+          fumbles_lost  rmse= 0.122  mae= 0.033  mean_pred= 0.018  mean_actual= 0.015
+
+-- Composite (PPR points) --
+  mean prediction:  rmse=6.780  mae=4.910
+  top-N season-total rank correlation (Spearman, all WRs): 0.971
+
+-- Calibration --
+  fraction in [p10, p90]: 0.708  (target ~ 0.80)
+  fraction <= p90:        0.815  (target ~ 0.90)
+
+=== End sanity check (informational; not a CI gate) ===
+```
+
+### QB
+
+```
+Loading artifact: models\artifacts\baseline-qb-2018-2023-3907548e.joblib
+model_id: baseline:qb:3907548e:2018-2023
+
+=== QB 2024 sanity check (n=684 player-weeks) ===
+
+-- Per-stat fit --
+         passing_yards  rmse=84.538  mae=68.175  mean_pred=199.516  mean_actual=192.405
+           passing_tds  rmse= 1.068  mae= 0.866  mean_pred= 1.219  mean_actual= 1.219
+         interceptions  rmse= 0.829  mae= 0.699  mean_pred= 0.684  mean_actual= 0.585
+         rushing_yards  rmse=17.880  mae=13.369  mean_pred=18.163  mean_actual=17.197
+           rushing_tds  rmse= 0.440  mae= 0.287  mean_pred= 0.191  mean_actual= 0.171
+          fumbles_lost  rmse= 0.396  mae= 0.304  mean_pred= 0.205  mean_actual= 0.171
+
+-- Composite (PPR points) --
+  mean prediction:  rmse=7.810  mae=6.281
+  top-N season-total rank correlation (Spearman, all QBs): 0.928
+
+-- Calibration --
+  fraction in [p10, p90]: 0.667  (target ~ 0.80)
+  fraction <= p90:        0.860  (target ~ 0.90)
+
+=== End sanity check (informational; not a CI gate) ===
+```
+
+### RB
+
+```
+Loading artifact: models\artifacts\baseline-rb-2018-2023-a7f565e9.joblib
+model_id: baseline:rb:a7f565e9:2018-2023
+
+=== RB 2024 sanity check (n=1316 player-weeks) ===
+
+-- Per-stat fit --
+         rushing_yards  rmse=30.294  mae=22.628  mean_pred=38.617  mean_actual=39.458
+           rushing_tds  rmse= 0.531  mae= 0.373  mean_pred= 0.267  mean_actual= 0.296
+            receptions  rmse= 1.523  mae= 1.174  mean_pred= 1.751  mean_actual= 1.734
+       receiving_yards  rmse=15.410  mae=11.127  mean_pred=12.767  mean_actual=13.127
+         receiving_tds  rmse= 0.248  mae= 0.118  mean_pred= 0.065  mean_actual= 0.064
+          fumbles_lost  rmse= 0.213  mae= 0.093  mean_pred= 0.052  mean_actual= 0.047
+
+-- Composite (PPR points) --
+  mean prediction:  rmse=6.517  mae=4.802
+  top-N season-total rank correlation (Spearman, all RBs): 0.975
+
+-- Calibration --
+  fraction in [p10, p90]: 0.773  (target ~ 0.80)
+  fraction <= p90:        0.851  (target ~ 0.90)
+
+=== End sanity check (informational; not a CI gate) ===
+```
+
+### TE
+
+```
+Loading artifact: models\artifacts\baseline-te-2018-2023-4706d589.joblib
+model_id: baseline:te:4706d589:2018-2023
+
+=== TE 2024 sanity check (n=1081 player-weeks) ===
+
+-- Per-stat fit --
+            receptions  rmse= 1.911  mae= 1.372  mean_pred= 2.271  mean_actual= 2.596
+       receiving_yards  rmse=22.476  mae=16.371  mean_pred=23.030  mean_actual=26.175
+         receiving_tds  rmse= 0.397  mae= 0.286  mean_pred= 0.191  mean_actual= 0.166
+         rushing_yards  rmse= 4.423  mae= 0.399  mean_pred= 0.131  mean_actual= 0.256
+           rushing_tds  rmse= 0.114  mae= 0.008  mean_pred= 0.002  mean_actual= 0.006
+          fumbles_lost  rmse= 0.138  mae= 0.035  mean_pred= 0.016  mean_actual= 0.019
+
+-- Composite (PPR points) --
+  mean prediction:  rmse=5.143  mae=3.716
+  top-N season-total rank correlation (Spearman, all TEs): 0.960
+
+-- Calibration --
+  fraction in [p10, p90]: 0.741  (target ~ 0.80)
+  fraction <= p90:        0.821  (target ~ 0.90)
+
+=== End sanity check (informational; not a CI gate) ===
+```
+
+The WR retrain in Phase 6 produced a new `model_id` (`a2f581cf` vs 3a's `925f492b`) because Plan 3b modified `baseline.py` (which is part of the hashed code-files list); substantively the predictions match the merged 3a artifact's output to within numerical noise.
+
+---
+
 ## Plan 3a — 2024 WR sanity check (run 2026-04-25, on branch `feat/plan-3a-wr-model-a`)
 
 Held-out year is 2024 not 2025 (spec called for 2025; `nfl_data_py` has not yet published 2025 data).
@@ -44,42 +160,42 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Current status (as of 2026-04-25)
 
-**Projections Core — Plan 3a (WR Model A baseline + first real-data ingest) merged to `main` at commit `<TBD-after-merge>`.**
+**Projections Core — Plan 3b (generalize Model A baseline to QB / RB / TE) merged to `main` at commit `<TBD-after-merge>`.**
 
 **Predecessors:**
 - Plan 1 (Foundations) merged at `8f02a6c`.
 - Dev tooling merged via `feat/dev-tooling`.
 - Plan 2a (Ingest expansion + WR feature builder) merged at `7926090`.
 - Plan 2b (QB/RB/TE feature builders) merged at `af325ea`.
-- Chore PR #5 (post-2b cleanup): merge order vs. Plan 3a TBD; the two PRs touch disjoint sections of TODO.md numbering with a temporary gap (#10→#13).
+- Plan 3a (WR Model A baseline + first real-data ingest) merged at `598ab9c`.
 
-**Plan 3a delivered:**
-- New `src/projections/models/` package with `Model` Protocol + `BaselineModel` impl + `wr_baseline()` factory.
-- First real-data ingest pull: `data/raw/` populated for 2018–2024 via the new `ingest.refresh()` orchestrator (also new in 3a).
-- `BaselineModel.fit` per-stat `RidgeCV` + parametric residual variance (gamma α via method of moments + clip; normal σ from residuals).
-- `BaselineModel.predict_distribution` composes per-stat dists into points dist via existing `score_distribution`; output validated against `ProjectionWeeklySchema`.
-- joblib persistence; `model_id = "baseline:wr:925f492b:2018-2023"` derived from a SHA-256 hash over 8 source files (per spec §5.2).
-- 2018–2023 trained artifact at `models/artifacts/wr-baseline-2018-2023-925f492b.joblib` (not committed; gitignored).
-- 2024 WR weekly projections written to `data/projections/weekly/ruleset=ESPN_PPR/season=2024/week=*/part.parquet` (3018 rows across 22 weeks; not committed).
-- 2024 held-out sanity-check eval (informational): per-stat RMSE/MAE, PPR-composite RMSE/MAE, top-N rank correlation 0.971, calibration coverage 70.8% (target ~80%) and 81.6% ≤p90 (target ~90%). Output recorded above.
-- 47 new tests (~239 total), including a leakage test for `BaselineModel.fit` and a smoke test extending the end-to-end pipeline through `fit → predict → store.write_partition` round-trip.
-- 8 real-data ingest/feature drift fixes applied during Tasks 14-17 (see TODO #16 for the full list).
+**Plan 3b delivered:**
+- `BaselineModel` constructor parameterized on `feature_schema` and `code_hash_files` (replaces hardcoded WR references).
+- Three new factory functions: `qb_baseline()`, `rb_baseline()`, `te_baseline()`.
+- `POSITION_DISPATCH` registry in `models/__init__.py` — one canonical "what positions does the system know about" answer, consumed by CLI scripts and (future) Plan 3c's backtest harness.
+- `TeFeaturesSchema` extended with `rushing_attempts_per_game_l4` / `rushing_yards_per_game_l4`; `build_te_features` populates them (Phase 1, Taysom-Hill rationale — TEs do occasionally rush).
+- Three CLI scripts unified to take a position argument: `train_baseline.py {pos}`, `predict_2024.py {pos}`, `sanity_check_baseline.py {pos}`. The three WR-specific scripts from Plan 3a were deleted.
+- Six new test files under `tests/test_models/` (3 unit + 3 leakage). Smoke test parametrized across all four positions.
+- Per-position 2024 sanity-check eval recorded above. Calibration in the 67-77% band for `[p10, p90]` (target ~80%); top-N rank correlation 0.928-0.975 across positions.
+- Per-position 2024 weekly projections at `data/projections/weekly/ruleset=ESPN_PPR/season=2024/week=WW/part.parquet` (gitignored).
+- Four trained artifacts at `models/artifacts/baseline-{pos}-2018-2023-<hash>.joblib` (gitignored).
+- Four real-data drift fixes during Phase 6 (commits `fa864ac`, `f79806a`, `e25eb57`, `54b6d95`) — see TODO #16 sub-section for details.
 
-**Held-out year shifted from 2025 → 2024.** Spec called for 2025 as held-out, but `nfl_data_py` has not yet published 2025 data. Training window shifted from 2018-2024 → 2018-2023 accordingly. Architecture unaffected; Plan 3c's walk-forward backtest will revisit.
+**Held-out year remains 2024** (same constraint as 3a — `nfl_data_py` has not yet published 2025).
 
 ---
 
 ## Next action
 
-**Recommended: Plan 3b — generalize Model A to QB / RB / TE.**
+**Recommended: Plan 3c — weekly→season aggregation + walk-forward backtest harness with CI threshold gating.**
 
-Plan 3a pinned the `Model` Protocol, the per-stat-regression-to-fantasy-points pipeline, and joblib persistence on a single position. Plan 3b applies the same pattern to QB / RB / TE. Mostly mechanical (new factories `qb_baseline()` / `rb_baseline()` / `te_baseline()` + per-position target stats / feature columns / dist families). Expected blast radius: similar to Plan 2b (~3 days).
+Plan 3a pinned the per-week interface for one position. Plan 3b generalized it to all four offensive skill positions (QB / RB / WR / TE). Plan 3c is the natural next step:
 
-**Pre-requisites: both closed before 3b kickoff.**
-- TODO #8 (opt-in `nfl_data_py` API-drift smoke tests) — closed: opt-in `pytest -m network --run-network` smokes added in `tests/test_ingest/test_api_drift.py`, post-bump procedure documented in `CONTRIBUTING.md` "After bumping `nfl_data_py`."
-- TODO #15 (restructure `trailing_n_share_in_group` to expose team) — closed: helper now returns `[gsis_id, team, share_l<n>]`; WR / RB / TE builders all merge shares on `(gsis_id, team)`; v1 dedupe hack removed from `wr.py`. RB/TE builders trained against real data in 3b will not need the same workaround.
+- Weekly → season aggregation via Monte Carlo over (bye, availability, schedule).
+- Walk-forward backtest harness with formal threshold gating.
+- CI threshold gating (turn the informational sanity-check numbers into hard pass/fail thresholds).
 
-After 3b: Plan 3c (season aggregation + walk-forward backtest harness with CI threshold gating).
+**Pre-requisites: none currently open.** TODO #8 and #15 closed before 3b. TODO #16 (drift list) is documentation, not actionable.
 
 ---
 
@@ -100,6 +216,15 @@ After 3b: Plan 3c (season aggregation + walk-forward backtest harness with CI th
 | 2026-04-25 | WR builder's traded-player fix: dedupe shares to highest share per gsis_id | v1 hack documented inline + TODO #15. Proper fix restructures `trailing_n_share_in_group` to expose team, lets callers join on (gsis_id, team). Tackle in Plan 3b. |
 | 2026-04-25 | TODO #15 closed before Plan 3b kickoff: helper returns `[gsis_id, team, share_l<n>]`; WR/RB/TE builders join on `(gsis_id, team)` | Picks the share for the player's depth-chart-current team — semantically more correct than the v1 highest-share proxy and removes the dedupe hack. RB/TE builders inherit the fix automatically when 3b trains them on real data. |
 | 2026-04-25 | TODO #8 closed before Plan 3b kickoff: opt-in `pytest -m network --run-network` smokes per ingest source | One smoke per source (weekly_stats, depth_charts, ngs × 3 stat_types, schedules, id_map, snap_counts) asserts every raw column the normalize step depends on is present, then runs normalize end-to-end so pandera surfaces dtype drift. Post-bump procedure documented in `CONTRIBUTING.md`. |
+| 2026-04-25 | Plan 3b: BaselineModel gains required `feature_schema` + `code_hash_files` constructor args | Replaces hardcoded WR references; per-position config stays per-factory. Existing 3a artifact unloadable; retrain in Phase 6 (TODO #17 closed). |
+| 2026-04-25 | Plan 3b: TE model includes rushing as target stat (Taysom Hill) | Q3 brainstorm decision; Phase 1 added `rushing_*_per_game_l4` to `TeFeaturesSchema` and `build_te_features`; cost is two columns and a fixture row. |
+| 2026-04-25 | Plan 3b: NORMAL/GAMMA convention extended mechanically; POISSON deferred | WR's family choices carry to QB/RB/TE without per-position tuning. POISSON for low-mean integer counts (interceptions, fumbles_lost) deferred to 3c contingent on calibration evidence. |
+| 2026-04-25 | Plan 3b: centralized `POSITION_DISPATCH` registry in `models/__init__.py` | One canonical "what positions the system knows about" answer. Reused by CLI scripts and future 3c backtest harness. Adding a position is one new line. |
+| 2026-04-25 | Plan 3b: per-position test files (mirrors `tests/test_features/`) | Q6 brainstorm decision. Six new files; failure isolation per position is worth ~210 lines of necessary duplication. |
+| 2026-04-25 | Plan 3b: smoke test parametrized across all four positions | Q6 brainstorm B; catches "I broke RB silently" earlier than the per-position test files. ~20s smoke runtime acceptable. |
+| 2026-04-25 | Plan 3b: three WR-specific scripts deleted; replaced by position-arg-driven generalized scripts | Q1 brainstorm C. Avoids producing four near-duplicate scripts after 3b. |
+| 2026-04-25 | Plan 3b real-data drift: `*_yards_per_game_l4` schema bound dropped to allow negative trailing means | Underlying weekly_stats yards columns allow negative values (sacks/TFL/kneels); commits `fa864ac` and `e25eb57` relax the bound on the trailing means and on `passing_yards_per_game_std`. |
+| 2026-04-25 | Plan 3b real-data drift: bye-week + dedupe filters ported from WR to QB/RB/TE | WR had these in 3a (TODO #9a, #9c); QB/RB/TE feature builders inherit the same shape. Commits `f79806a` (bye filter) and `54b6d95` (dedupe). |
 
 ---
 
