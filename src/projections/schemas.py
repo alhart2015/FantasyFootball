@@ -581,6 +581,11 @@ class TeFeaturesSchema(pa.DataFrameModel):
     receiving_yards_per_game_l4: Series[float] = pa.Field(ge=0)
     receiving_tds_per_game_l4: Series[float] = pa.Field(ge=0)
 
+    # Rushing usage (rolling) — added Plan 3b for Taysom-Hill-shape TEs that
+    # carry the ball; mirrors RB's rushing-feature shape.
+    rushing_attempts_per_game_l4: Series[float] = pa.Field(ge=0)
+    rushing_yards_per_game_l4: Series[float] = pa.Field(ge=0)
+
     # Snap / role
     snap_pct_l4: Series[float] = pa.Field(ge=0, le=1, nullable=True)
     depth_rank: Series[int] = pa.Field(ge=1, le=10, nullable=True)

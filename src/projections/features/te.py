@@ -32,6 +32,8 @@ _ROLLING_ZERO_FILL_COLS: tuple[str, ...] = (
     "receptions_per_game_l4",
     "receiving_yards_per_game_l4",
     "receiving_tds_per_game_l4",
+    "rushing_attempts_per_game_l4",
+    "rushing_yards_per_game_l4",
 )
 
 
@@ -73,6 +75,12 @@ def build_te_features(
     )
     rec_td_l4 = trailing_4_per_player(ws_te, Stat.RECEIVING_TDS.value).rename(
         columns={"mean_l4": "receiving_tds_per_game_l4"}
+    )
+    rush_att_l4 = trailing_4_per_player(ws_te, Stat.CARRIES.value).rename(
+        columns={"mean_l4": "rushing_attempts_per_game_l4"}
+    )
+    rush_yd_l4 = trailing_4_per_player(ws_te, Stat.RUSHING_YARDS.value).rename(
+        columns={"mean_l4": "rushing_yards_per_game_l4"}
     )
 
     # target_share against the full team pass-catching group. Helper returns
@@ -149,6 +157,8 @@ def build_te_features(
     out = out.merge(rec_l4, on="gsis_id", how="left")
     out = out.merge(rec_yd_l4, on="gsis_id", how="left")
     out = out.merge(rec_td_l4, on="gsis_id", how="left")
+    out = out.merge(rush_att_l4, on="gsis_id", how="left")
+    out = out.merge(rush_yd_l4, on="gsis_id", how="left")
     out = out.merge(snap_l4, on="gsis_id", how="left")
     out = out.merge(ngs_cols, on="gsis_id", how="left")
     out = out.merge(

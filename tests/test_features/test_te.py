@@ -69,6 +69,36 @@ def test_build_te_features_targets_per_game_l4_correct(
     assert kelce["targets_per_game_l4"] == 8.0
 
 
+def test_build_te_features_emits_rushing_columns(
+    te_weekly_stats: pd.DataFrame,
+    te_snap_counts: pd.DataFrame,
+    te_depth_charts: pd.DataFrame,
+    te_ngs_receiving: pd.DataFrame,
+    te_schedules: pd.DataFrame,
+) -> None:
+    """TE schema includes rushing_attempts_per_game_l4 and rushing_yards_per_game_l4
+    so the TE Model A baseline (Plan 3b) can capture Taysom-Hill-style rushing
+    contribution. The columns are populated from the same WeeklyStatsSchema
+    rushing source as RB."""
+    out = build_te_features(
+        weekly_stats=te_weekly_stats,
+        snap_counts=te_snap_counts,
+        depth_charts=te_depth_charts,
+        ngs_receiving=te_ngs_receiving,
+        schedules=te_schedules,
+        season=2024,
+        as_of_week=5,
+    )
+    assert "rushing_attempts_per_game_l4" in out.columns
+    assert "rushing_yards_per_game_l4" in out.columns
+    # Kittle has uniform carries=6 and rushing_yards=28.0 for weeks 1-4 of 2024,
+    # so the trailing-4 mean at as_of_week=5 is exactly 6.0 / 28.0.
+    hill = out[out["gsis_id"] == "00-0033084"]
+    assert not hill.empty
+    assert hill["rushing_attempts_per_game_l4"].iloc[0] == pytest.approx(6.0, abs=1e-6)
+    assert hill["rushing_yards_per_game_l4"].iloc[0] == pytest.approx(28.0, abs=1e-6)
+
+
 def test_build_te_features_target_share_against_full_pass_catching_group(
     te_weekly_stats: pd.DataFrame,
     te_snap_counts: pd.DataFrame,
