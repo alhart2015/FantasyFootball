@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import msgpack
 import pandas as pd
 import pytest
 
@@ -77,3 +78,53 @@ def test_load_per_row_results_missing_file_raises(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError, match=r"results\.parquet"):
         load_per_row_results(tmp_path)
+
+
+def _build_params_blob_normal(stat_name: str, mean: float, std: float) -> bytes:
+    """Hand-rolled msgpack matching the Plan 3d codec's NORMAL family schema.
+    Avoids depending on pack_per_stat_params; the diagnostic only needs to
+    decode, not encode."""
+    payload = {
+        "schema_version": 1,
+        "stats": {stat_name: {"family": "NORMAL", "mean": mean, "std": std}},
+    }
+    return bytes(msgpack.packb(payload, use_bin_type=True))
+
+
+def test_extract_per_stat_residuals_long_form() -> None:
+    from diagnose_calibration import extract_per_stat_residuals
+
+    per_row = pd.DataFrame(
+        {
+            "gsis_id": ["00-1", "00-1"],
+            "season": [2024, 2024],
+            "week": [1, 2],
+            "position": ["QB", "QB"],
+            "params": [
+                _build_params_blob_normal("passing_yards", 250.0, 70.0),
+                _build_params_blob_normal("passing_yards", 280.0, 70.0),
+            ],
+            "passing_yards_pred": [250.0, 280.0],
+            "passing_yards_actual": [220.0, 300.0],
+        }
+    )
+    out = extract_per_stat_residuals(per_row)
+    # Only QB:passing_yards (the only stat present in per_row + params).
+    assert len(out) == 2
+    assert set(out.columns) >= {
+        "position",
+        "stat",
+        "gsis_id",
+        "season",
+        "week",
+        "pred",
+        "actual",
+        "residual",
+        "assumed_family",
+        "assumed_param_a",
+        "assumed_param_b",
+    }
+    assert out["residual"].tolist() == [-30.0, 20.0]
+    assert out["assumed_family"].iloc[0] == "NORMAL"
+    assert out["assumed_param_a"].iloc[0] == 70.0  # std for NORMAL
+    assert pd.isna(out["assumed_param_b"].iloc[0])  # NORMAL has only one param
