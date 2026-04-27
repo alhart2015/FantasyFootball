@@ -170,7 +170,10 @@ _WR_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
     Stat.RECEIVING_YARDS: DistributionFamily.STUDENT_T,
     Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
-    Stat.RUSHING_YARDS: DistributionFamily.STUDENT_T,  # soft pick — Task 2.6 reviews
+    # Reverted from STUDENT_T in Task 2.6: Phase 2 retrain produced a
+    # degenerate fit (df snapped to floor 2.5; mean ~1 yard, mostly zero
+    # rushing for WRs leaves too little signal for a meaningful Student-t).
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
     Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
@@ -302,7 +305,10 @@ _TE_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
     Stat.RECEIVING_YARDS: DistributionFamily.STUDENT_T,
     Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
-    Stat.RUSHING_YARDS: DistributionFamily.STUDENT_T,  # soft pick — Task 2.6 reviews
+    # Reverted from STUDENT_T in Task 2.6: Phase 2 retrain produced a
+    # degenerate fit (df snapped to floor 2.5; mean ~0.10 yard, virtually no
+    # rushing signal for TEs leaves too little signal for a meaningful Student-t).
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
     Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }

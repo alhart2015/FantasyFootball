@@ -32,7 +32,10 @@ def test_wr_baseline_factory_returns_unfitted_model() -> None:
     assert model.dist_families[Stat.RECEPTIONS] is DistributionFamily.GAMMA
     assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.STUDENT_T
     assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
-    assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.STUDENT_T
+    # Plan 3e Phase 1+ Task 2.6: WR RUSHING_YARDS reverted from STUDENT_T to
+    # NORMAL after Phase 2 retrain produced a degenerate Student-t fit
+    # (mean ~1 yard, df snapped to floor).
+    assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.NORMAL
     assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.feature_columns  # non-empty; specific list verified in Task 6
@@ -75,13 +78,25 @@ def test_baseline_fit_populates_student_t_variance_params(
 ) -> None:
     model = wr_baseline()
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
-    # Plan 3e Phase 2: yards stats route to STUDENT_T with (scale, df) params.
-    for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
-        params = model.variance_params[stat]
-        assert "scale" in params
-        assert "df" in params
-        assert params["scale"] > 0
-        assert params["df"] > 2.0
+    # Plan 3e Phase 2: WR RECEIVING_YARDS routes to STUDENT_T with (scale, df).
+    # WR RUSHING_YARDS was reverted to NORMAL in Task 2.6 (degenerate fit).
+    params = model.variance_params[Stat.RECEIVING_YARDS]
+    assert "scale" in params
+    assert "df" in params
+    assert params["scale"] > 0
+    assert params["df"] > 2.0
+
+
+def test_baseline_fit_populates_normal_variance_params(
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
+) -> None:
+    """Plan 3e Phase 1+ Task 2.6: WR RUSHING_YARDS reverted from STUDENT_T to
+    NORMAL after Phase 2 retrain produced a degenerate Student-t fit."""
+    model = wr_baseline()
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    params = model.variance_params[Stat.RUSHING_YARDS]
+    assert "std" in params
+    assert params["std"] > 0
 
 
 def test_baseline_fit_populates_gamma_variance_params(
