@@ -15,7 +15,7 @@ from typing import Protocol
 
 import pandas as pd
 
-from projections.schemas import Position, Ruleset
+from projections.schemas import Position, Ruleset, Stat
 
 
 class Model(Protocol):
@@ -32,6 +32,13 @@ class Model(Protocol):
     def position(self) -> Position: ...
 
     @property
+    def target_stats(self) -> tuple[Stat, ...]:
+        """Stats this model predicts. Per-position; identical between Model A
+        and Model C by construction (Plan 5 LightGBMModel reuses each
+        position's BaselineModel target stats)."""
+        ...
+
+    @property
     def model_id(self) -> str:
         """Stable identifier of the form
         ``"<class>:<position>:<8-char-code-hash>:<train-start>-<train-end>"``.
@@ -42,6 +49,26 @@ class Model(Protocol):
         Implementations may raise ``RuntimeError`` if accessed on an unfitted
         instance -- the model_id depends on training-time state.
         """
+        ...
+
+    @property
+    def train_seasons(self) -> tuple[int, int] | None:
+        """``(train_start, train_end)`` recorded at fit time, or ``None`` if
+        the model has not been fitted yet. Used by callers (CLI scripts,
+        backtest harness) for artifact naming and metadata reporting."""
+        ...
+
+    @property
+    def code_hash(self) -> str | None:
+        """SHA-256 (first 8 chars) of the source files this model depends on,
+        or ``None`` if the implementation only computes/records it after fit.
+
+        Computed deterministically from the implementation's declared file
+        list so callers can use it for artifact naming or staleness checks
+        without round-tripping through ``model_id``. Implementations that
+        compute on demand (e.g., ``LightGBMModel``) always return ``str``;
+        implementations that record at fit time (e.g., ``BaselineModel``)
+        return ``None`` until ``fit()`` has been called."""
         ...
 
     def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:

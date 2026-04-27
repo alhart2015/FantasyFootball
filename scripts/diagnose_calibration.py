@@ -81,10 +81,15 @@ def load_per_row_results(run_dir: Path) -> pd.DataFrame:
 def _resolve_target_stats() -> dict[str, tuple[str, ...]]:
     """Return {position_value: (stat_value, ...)} for every position in
     POSITION_DISPATCH. The factory call is cheap (constructs a dataclass
-    of constants); the resulting dict is built once per script invocation."""
+    of constants); the resulting dict is built once per script invocation.
+
+    target_stats are identical across Model A (baseline) and Model C
+    (lightgbm) by construction (Plan 5 LightGBMModel reuses each
+    position's BaselineModel target stats), so the baseline factory is a
+    fine source of truth here."""
     out: dict[str, tuple[str, ...]] = {}
     for position, dispatch in POSITION_DISPATCH.items():
-        model = dispatch.factory()
+        model = dispatch.factories["baseline"]()
         out[position.value] = tuple(s.value for s in model.target_stats)
     return out
 

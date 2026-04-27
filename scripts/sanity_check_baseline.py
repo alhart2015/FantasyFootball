@@ -1,11 +1,11 @@
-"""Plan 3b -- sanity-check eval of Model A baseline for a position against
-the held-out 2024 season. Stdout-only; not a CI gate (Plan 3c builds the
-backtest harness with thresholds).
+"""Plan 3b -- sanity-check eval of Model A baseline (or Plan 5 Model C
+lightgbm) for a position against the held-out 2024 season. Stdout-only;
+not a CI gate (Plan 3c builds the backtest harness with thresholds).
 
 Replaces scripts/sanity_check_wr_baseline.py.
 
-Usage (after train_baseline.py {pos}):
-    python scripts/sanity_check_baseline.py {qb|rb|te|wr}
+Usage (after train_baseline.py {pos} [--model lightgbm]):
+    python scripts/sanity_check_baseline.py {qb|rb|te|wr} [--model {baseline|lightgbm}]
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from projections.models import POSITION_DISPATCH, BaselineModel
+from projections.models import POSITION_DISPATCH, BaselineModel, LightGBMModel
 from projections.schemas import Position, Ruleset
 from projections.scoring import score
 from projections.scoring.score import StatLine
@@ -26,13 +26,14 @@ from projections.store import read_partition
 _HELD_OUT_SEASON = 2024
 
 
-def _find_artifact(artifacts_root: Path, position: Position) -> Path:
-    pattern = f"baseline-{position.value.lower()}-*.joblib"
+def _find_artifact(artifacts_root: Path, position: Position, model_class: str) -> Path:
+    pattern = f"{model_class}-{position.value.lower()}-*.joblib"
     matches = sorted(artifacts_root.glob(pattern))
     if not matches:
         raise FileNotFoundError(
             f"No {pattern} in {artifacts_root}. "
-            f"Run scripts/train_baseline.py {position.value.lower()} first."
+            f"Run scripts/train_baseline.py {position.value.lower()} "
+            f"--model {model_class} first."
         )
     return matches[-1]
 
@@ -57,8 +58,16 @@ def _realized_ppr_points(weekly_stats: pd.DataFrame, ruleset: Ruleset) -> pd.Ser
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Sanity-check Model A on 2024 for a position.")
+    parser = argparse.ArgumentParser(
+        description="Sanity-check Model A baseline or Model C lightgbm on 2024 for a position."
+    )
     parser.add_argument("position", choices=["qb", "rb", "te", "wr"], help="Target position.")
+    parser.add_argument(
+        "--model",
+        choices=["baseline", "lightgbm"],
+        default="baseline",
+        help="Which model class artifact to load (Model A or Model C). Default baseline.",
+    )
     parser.add_argument("--raw-root", type=Path, default=Path("data/raw"))
     parser.add_argument("--artifacts-root", type=Path, default=Path("models/artifacts"))
     args = parser.parse_args()
@@ -73,9 +82,13 @@ def main() -> None:
     }[dispatch.ngs_stat_type]
     ngs_table = f"ngs_{dispatch.ngs_stat_type}"
 
-    artifact = _find_artifact(args.artifacts_root, position)
+    artifact = _find_artifact(args.artifacts_root, position, args.model)
     print(f"Loading artifact: {artifact}")
-    model = BaselineModel.load(artifact)
+    model: BaselineModel | LightGBMModel
+    if args.model == "baseline":
+        model = BaselineModel.load(artifact)
+    else:
+        model = LightGBMModel.load(artifact)
     print(f"model_id: {model.model_id}")
 
     raw_root = args.raw_root
@@ -112,19 +125,25 @@ def main() -> None:
         if feats.empty:
             continue
         preds = model.predict_distribution(feats, ruleset=Ruleset.espn_ppr())
-        # Per-stat point predictions for fit metrics.
-        stat_dists_per_row = model.build_stat_distributions(feats)
-        per_stat_means = pd.DataFrame(
-            {
-                stat.value: [d[stat].mean() for d in stat_dists_per_row]
-                for stat in model.target_stats
-            }
-        )
-        per_stat_means["gsis_id"] = feats["gsis_id"].values
-        per_stat_means["season"] = _HELD_OUT_SEASON
-        per_stat_means["week"] = int(week)
-
-        joined = preds.merge(per_stat_means, on=["gsis_id", "season", "week"], how="left")
+        if isinstance(model, BaselineModel):
+            # Per-stat point predictions for fit metrics. BaselineModel exposes
+            # `build_stat_distributions`; LightGBMModel does not (per-stat
+            # quantile boosters live behind `_sub_models`). The composite
+            # PPR / calibration metrics below still run for lightgbm; only
+            # the per-stat fit table is skipped.
+            stat_dists_per_row = model.build_stat_distributions(feats)
+            per_stat_means = pd.DataFrame(
+                {
+                    stat.value: [d[stat].mean() for d in stat_dists_per_row]
+                    for stat in model.target_stats
+                }
+            )
+            per_stat_means["gsis_id"] = feats["gsis_id"].values
+            per_stat_means["season"] = _HELD_OUT_SEASON
+            per_stat_means["week"] = int(week)
+            joined = preds.merge(per_stat_means, on=["gsis_id", "season", "week"], how="left")
+        else:
+            joined = preds
         rows.append(joined)
 
     all_preds = pd.concat(rows, ignore_index=True)
@@ -132,31 +151,43 @@ def main() -> None:
     # Inner-join to actual weekly stats (filter to the requested position).
     actual = ws_held[ws_held["position"] == position.value].copy()
     actual["actual_ppr"] = _realized_ppr_points(actual, Ruleset.espn_ppr())
-    keep = ["gsis_id", "season", "week", "actual_ppr"] + [s.value for s in model.target_stats]
-    eval_df = all_preds.merge(
-        actual[keep],
-        on=["gsis_id", "season", "week"],
-        how="inner",
-        suffixes=("_pred", "_actual"),
-    )
+    if isinstance(model, BaselineModel):
+        keep = ["gsis_id", "season", "week", "actual_ppr"] + [s.value for s in model.target_stats]
+        eval_df = all_preds.merge(
+            actual[keep],
+            on=["gsis_id", "season", "week"],
+            how="inner",
+            suffixes=("_pred", "_actual"),
+        )
+    else:
+        # No per-stat predicted columns merged in for lightgbm; keep only the
+        # composite columns from `predict_distribution` plus actual_ppr.
+        eval_df = all_preds.merge(
+            actual[["gsis_id", "season", "week", "actual_ppr"]],
+            on=["gsis_id", "season", "week"],
+            how="inner",
+        )
 
     print(
         f"\n=== {position.value} {_HELD_OUT_SEASON} sanity check "
         f"(n={len(eval_df)} player-weeks) ==="
     )
 
-    # Per-stat fit.
-    print("\n-- Per-stat fit --")
-    for stat in model.target_stats:
-        pred_col = f"{stat.value}_pred"
-        actual_col = f"{stat.value}_actual"
-        rmse = float(np.sqrt(((eval_df[pred_col] - eval_df[actual_col]) ** 2).mean()))
-        mae = float((eval_df[pred_col] - eval_df[actual_col]).abs().mean())
-        print(
-            f"  {stat.value:>20s}  rmse={rmse:6.3f}  mae={mae:6.3f}  "
-            f"mean_pred={eval_df[pred_col].mean():6.3f}  "
-            f"mean_actual={eval_df[actual_col].mean():6.3f}"
-        )
+    # Per-stat fit (BaselineModel only; lightgbm has no per-stat point-pred path here).
+    if isinstance(model, BaselineModel):
+        print("\n-- Per-stat fit --")
+        for stat in model.target_stats:
+            pred_col = f"{stat.value}_pred"
+            actual_col = f"{stat.value}_actual"
+            rmse = float(np.sqrt(((eval_df[pred_col] - eval_df[actual_col]) ** 2).mean()))
+            mae = float((eval_df[pred_col] - eval_df[actual_col]).abs().mean())
+            print(
+                f"  {stat.value:>20s}  rmse={rmse:6.3f}  mae={mae:6.3f}  "
+                f"mean_pred={eval_df[pred_col].mean():6.3f}  "
+                f"mean_actual={eval_df[actual_col].mean():6.3f}"
+            )
+    else:
+        print("\n-- Per-stat fit -- (skipped for lightgbm; no per-stat point-pred helper)")
 
     # Composite -- PPR.
     print("\n-- Composite (PPR points) --")

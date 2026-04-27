@@ -247,15 +247,40 @@ class LightGBMModel:
         return self._config.position
 
     @property
+    def target_stats(self) -> tuple[Stat, ...]:
+        return self._config.target_stats
+
+    @property
+    def train_seasons(self) -> tuple[int, int] | None:
+        """(train_start, train_end) recorded at fit time, or None if unfitted.
+
+        Mirrors `BaselineModel.train_seasons` so both implementations expose
+        the same attribute for artifact naming and metadata reporting.
+        """
+        if not self._is_fitted:
+            return None
+        assert self._train_start is not None and self._train_end is not None
+        return (self._train_start, self._train_end)
+
+    @property
+    def code_hash(self) -> str:
+        """SHA-256 (first 8 chars) of the source files this model depends on.
+
+        Mirrors `BaselineModel.code_hash`. Computed on demand; callers may
+        access this on an unfitted instance to compare against an existing
+        artifact's expected hash.
+        """
+        return compute_code_hash(_code_hash_files(self._config.position))
+
+    @property
     def model_id(self) -> str:
         if not self._is_fitted:
             raise RuntimeError(
                 "model_id not available before fit() — depends on training-time state"
             )
-        code_hash = compute_code_hash(_code_hash_files(self._config.position))
         assert self._train_start is not None and self._train_end is not None
         return (
-            f"lightgbm:{self._config.position.value.lower()}:{code_hash}"
+            f"lightgbm:{self._config.position.value.lower()}:{self.code_hash}"
             f":{self._train_start}-{self._train_end}"
         )
 

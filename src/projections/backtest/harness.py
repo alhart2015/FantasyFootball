@@ -22,7 +22,7 @@ from projections.backtest.metrics import (
 )
 from projections.backtest.naive import compute_naive_predictions
 from projections.features.cache import read_features
-from projections.models import POSITION_DISPATCH
+from projections.models import POSITION_DISPATCH, BaselineModel
 from projections.schemas import Position, Ruleset, Stat
 from projections.scoring import INTEGER_STATS, score
 from projections.scoring.score import StatLine
@@ -188,8 +188,15 @@ def run_backtest(
             holdout_actuals = read_partition(raw_root, "weekly_stats", season=year)
 
             # Model: predict per-week, score weekly metrics.
+            # Plan 5 widened POSITION_DISPATCH to carry both Model A
+            # (baseline) and Model C (lightgbm) factories per position;
+            # the harness's own `--model` switch is added in Plan 5 Task
+            # 12. Until then, default to the legacy baseline factory and
+            # narrow the type so we can call BaselineModel-only helpers
+            # (build_stat_distributions has no LightGBMModel analog yet).
             dispatch = POSITION_DISPATCH[position]
-            model = dispatch.factory()
+            model = dispatch.factories["baseline"]()
+            assert isinstance(model, BaselineModel)
             model.fit(train_features, train_actuals)
             predictions = model.predict_distribution(predict_features, ruleset=ruleset)
             stat_dists_per_row = model.build_stat_distributions(predict_features)

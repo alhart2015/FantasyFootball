@@ -1,14 +1,14 @@
-"""Plan 3b -- train Model A baseline for a specified position on 2018-2023,
-persist to models/artifacts/.
+"""Plan 3b -- train Model A baseline (or Plan 5 Model C lightgbm) for a
+specified position on 2018-2023, persist to models/artifacts/.
 
 Replaces scripts/train_wr_baseline.py with a position-arg-driven version.
 Usage:
-    python scripts/train_baseline.py {qb|rb|te|wr}
+    python scripts/train_baseline.py {qb|rb|te|wr} [--model {baseline|lightgbm}]
 
 Reads ingested raw partitions from data/raw/, builds features for every
-week of 2018-2023, fits BaselineModel via POSITION_DISPATCH[pos].factory(),
-saves the joblib artifact to:
-    models/artifacts/baseline-{pos}-{train_start}-{train_end}-{hash}.joblib
+week of 2018-2023, fits the selected model via
+POSITION_DISPATCH[pos].factories[args.model](), saves the joblib artifact to:
+    models/artifacts/{model}-{pos}-{train_start}-{train_end}-{hash}.joblib
 
 Held-out: 2024 (sanity_check_baseline.py {pos} consumes the artifact).
 """
@@ -21,7 +21,7 @@ from typing import Any
 
 import pandas as pd
 
-from projections.models import POSITION_DISPATCH
+from projections.models import POSITION_DISPATCH, BaselineModel
 from projections.schemas import Position
 from projections.store import read_partition
 
@@ -76,14 +76,22 @@ def _build_training_features(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train Model A baseline for a position.")
+    parser = argparse.ArgumentParser(
+        description="Train Model A baseline or Model C lightgbm for a position."
+    )
     parser.add_argument("position", choices=["qb", "rb", "te", "wr"], help="Target position.")
+    parser.add_argument(
+        "--model",
+        choices=["baseline", "lightgbm"],
+        default="baseline",
+        help="Which model class to train (Model A or Model C). Default baseline.",
+    )
     parser.add_argument("--raw-root", type=Path, default=Path("data/raw"))
     parser.add_argument("--artifacts-root", type=Path, default=Path("models/artifacts"))
     args = parser.parse_args()
 
     position = Position(args.position.upper())
-    print(f"Training {position.value} baseline; reading raw partitions from {args.raw_root}")
+    print(f"Training {position.value} {args.model}; reading raw partitions from {args.raw_root}")
 
     features, weekly_stats = _build_training_features(args.raw_root, position)
     print(
@@ -91,16 +99,20 @@ def main() -> None:
         f"weekly_stats rows: {len(weekly_stats)}"
     )
 
-    model = POSITION_DISPATCH[position].factory()
+    model = POSITION_DISPATCH[position].factories[args.model]()
     model.fit(features=features, weekly_stats=weekly_stats)
     print(f"model_id: {model.model_id}")
-    for stat in model.target_stats:
-        print(f"  {stat.value}: variance_params = {model.variance_params[stat]}")
+    if isinstance(model, BaselineModel):
+        # variance_params is BaselineModel-specific (per-stat parametric residual
+        # variance); LightGBMModel quantile regressors don't expose an analogue.
+        for stat in model.target_stats:
+            print(f"  {stat.value}: variance_params = {model.variance_params[stat]}")
 
     train_start, train_end = model.train_seasons or (0, 0)
+    pos_lower = position.value.lower()
     artifact = (
         args.artifacts_root
-        / f"baseline-{position.value.lower()}-{train_start}-{train_end}-{model.code_hash}.joblib"
+        / f"{args.model}-{pos_lower}-{train_start}-{train_end}-{model.code_hash}.joblib"
     )
     model.save(artifact)
     print(f"Saved artifact: {artifact}")

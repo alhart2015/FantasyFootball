@@ -4,9 +4,9 @@ data/projections/weekly/.
 Replaces scripts/predict_2024_wr.py.
 
 Usage:
-    python scripts/predict_2024.py {qb|rb|te|wr}
+    python scripts/predict_2024.py {qb|rb|te|wr} [--model {baseline|lightgbm}]
 
-Loads the trained artifact (baseline-{pos}-...joblib), builds features
+Loads the trained artifact ({model}-{pos}-...joblib), builds features
 for each week of 2024, predicts, and writes one parquet partition per
 (season, week) using store.write_partition. Validated against
 ProjectionWeeklySchema.
@@ -20,20 +20,21 @@ from typing import Any
 
 import pandas as pd
 
-from projections.models import POSITION_DISPATCH, BaselineModel
+from projections.models import POSITION_DISPATCH, BaselineModel, LightGBMModel
 from projections.schemas import Position, ProjectionWeeklySchema, Ruleset
 from projections.store import read_partition, write_partition
 
 _PROJECTION_SEASON = 2024
 
 
-def _find_artifact(artifacts_root: Path, position: Position) -> Path:
-    pattern = f"baseline-{position.value.lower()}-*.joblib"
+def _find_artifact(artifacts_root: Path, position: Position, model_class: str) -> Path:
+    pattern = f"{model_class}-{position.value.lower()}-*.joblib"
     matches = sorted(artifacts_root.glob(pattern))
     if not matches:
         raise FileNotFoundError(
             f"No {pattern} in {artifacts_root}. "
-            f"Run scripts/train_baseline.py {position.value.lower()} first."
+            f"Run scripts/train_baseline.py {position.value.lower()} "
+            f"--model {model_class} first."
         )
     return matches[-1]
 
@@ -41,6 +42,12 @@ def _find_artifact(artifacts_root: Path, position: Position) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Predict 2024 weekly projections for a position.")
     parser.add_argument("position", choices=["qb", "rb", "te", "wr"], help="Target position.")
+    parser.add_argument(
+        "--model",
+        choices=["baseline", "lightgbm"],
+        default="baseline",
+        help="Which model class artifact to load (Model A or Model C). Default baseline.",
+    )
     parser.add_argument("--raw-root", type=Path, default=Path("data/raw"))
     parser.add_argument("--projections-root", type=Path, default=Path("data/projections"))
     parser.add_argument("--artifacts-root", type=Path, default=Path("models/artifacts"))
@@ -57,9 +64,13 @@ def main() -> None:
     }[dispatch.ngs_stat_type]
     ngs_table = f"ngs_{dispatch.ngs_stat_type}"
 
-    artifact = _find_artifact(args.artifacts_root, position)
+    artifact = _find_artifact(args.artifacts_root, position, args.model)
     print(f"Loading artifact: {artifact}")
-    model = BaselineModel.load(artifact)
+    model: BaselineModel | LightGBMModel
+    if args.model == "baseline":
+        model = BaselineModel.load(artifact)
+    else:
+        model = LightGBMModel.load(artifact)
 
     ruleset_map = {
         "espn_ppr": Ruleset.espn_ppr(),
