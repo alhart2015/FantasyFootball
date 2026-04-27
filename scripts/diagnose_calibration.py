@@ -14,6 +14,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 
 def find_latest_run_dir(backtest_root: Path) -> Path:
     """Return the most recent data/backtest/run_<ts>/ directory.
@@ -32,6 +34,25 @@ def find_latest_run_dir(backtest_root: Path) -> Path:
     if not candidates:
         raise FileNotFoundError(f"No run_<ts>/ subdirectories under {backtest_root}")
     return candidates[-1]
+
+
+def load_per_row_results(run_dir: Path) -> pd.DataFrame:
+    """Load `<run_dir>/results.parquet` produced by scripts/backtest.py.
+
+    Returns the frame as-is (columns include identifiers, family, params,
+    plus per-stat <stat>_pred / <stat>_actual columns whose names depend on
+    which positions ran).
+
+    Raises:
+        FileNotFoundError: results.parquet missing under run_dir.
+    """
+    results_path = run_dir / "results.parquet"
+    if not results_path.is_file():
+        raise FileNotFoundError(
+            f"results.parquet missing under {run_dir}; run "
+            f"`python scripts/backtest.py --report` to generate one."
+        )
+    return pd.read_parquet(results_path)
 
 
 def main(argv: list[str] | None = None) -> int:
