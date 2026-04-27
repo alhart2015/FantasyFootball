@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import msgpack
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -128,3 +129,85 @@ def test_extract_per_stat_residuals_long_form() -> None:
     assert out["assumed_family"].iloc[0] == "NORMAL"
     assert out["assumed_param_a"].iloc[0] == 70.0  # std for NORMAL
     assert pd.isna(out["assumed_param_b"].iloc[0])  # NORMAL has only one param
+
+
+def _build_params_blob_gamma(stat_name: str, shape: float, scale: float) -> bytes:
+    """Hand-rolled msgpack matching the Plan 3d codec's GAMMA family schema.
+    Mirrors _build_params_blob_normal's pattern; the diagnostic only needs to
+    decode, not encode."""
+    payload = {
+        "schema_version": 1,
+        "stats": {stat_name: {"family": "GAMMA", "shape": shape, "scale": scale}},
+    }
+    return bytes(msgpack.packb(payload, use_bin_type=True))
+
+
+def test_extract_per_stat_residuals_gamma_family() -> None:
+    """Cover the GAMMA branch of _classify_family + _extract_assumed_params.
+    WR:receptions is GAMMA-family per src/projections/models/baseline.py."""
+    from diagnose_calibration import extract_per_stat_residuals
+
+    per_row = pd.DataFrame(
+        {
+            "gsis_id": ["00-1"],
+            "season": [2024],
+            "week": [1],
+            "position": ["WR"],
+            "params": [_build_params_blob_gamma("receptions", 4.0, 1.25)],
+            "receptions_pred": [5.0],
+            "receptions_actual": [6.0],
+        }
+    )
+    out = extract_per_stat_residuals(per_row)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["position"] == "WR"
+    assert row["stat"] == "receptions"
+    assert row["assumed_family"] == "GAMMA"
+    assert row["assumed_param_a"] == 4.0  # shape for GAMMA
+    assert row["assumed_param_b"] == 1.25  # scale for GAMMA
+
+
+def test_compute_summary_stats_normal_family() -> None:
+    from diagnose_calibration import compute_summary_stats
+
+    # Build a synthetic per-stat residuals frame: one (QB, passing_yards) cell,
+    # 300 rows, residuals drawn from N(0, 70). With std=70 in assumed_param_a,
+    # the assumed [p10, p90] should cover ~80% of standardized residuals.
+    rng = np.random.default_rng(42)
+    n = 300
+    pred = rng.normal(250, 30, n)
+    residual = rng.normal(0, 70, n)
+    # actual = pred + residual so that (actual - pred) ~ N(0, 70) matches the
+    # assumed family params; otherwise coverage_p10p90 measures noise, not fit.
+    actual = pred + residual
+    residuals = pd.DataFrame(
+        {
+            "position": ["QB"] * n,
+            "stat": ["passing_yards"] * n,
+            "gsis_id": [f"00-{i}" for i in range(n)],
+            "season": [2024] * n,
+            "week": list(range(1, n + 1)),
+            "pred": pred,
+            "actual": actual,
+            "residual": residual,
+            "assumed_family": ["NORMAL"] * n,
+            "assumed_param_a": [70.0] * n,
+            "assumed_param_b": [float("nan")] * n,
+        }
+    )
+    out = compute_summary_stats(residuals)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["position"] == "QB"
+    assert row["stat"] == "passing_yards"
+    assert row["n"] == n
+    assert abs(row["residual_mean"]) < 10  # near-zero
+    assert 60 < row["residual_std"] < 80  # near 70
+    # Coverage of assumed [p10, p90] under N(0, 70) for residuals drawn from
+    # N(0, 70) should be approximately 0.80.
+    assert 0.70 < row["coverage_p10p90"] < 0.90
+    # Heteroscedasticity ratio: residuals are homoscedastic, so ratio ~= 1.
+    assert 0.5 < row["heteroscedasticity_ratio"] < 2.0
+    # KS p-value should be high (residuals match assumed family).
+    assert row["ks_assumed_pvalue"] > 0.05

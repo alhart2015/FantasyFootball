@@ -13,8 +13,11 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Final
 
+import numpy as np
 import pandas as pd
+from scipy import stats as scipy_stats
 
 from projections.distributions import (
     Distribution,
@@ -75,6 +78,11 @@ def _resolve_target_stats() -> dict[str, tuple[str, ...]]:
     return out
 
 
+# Computed once at import time so extract_per_stat_residuals doesn't pay
+# the POSITION_DISPATCH walk + 4 factory constructions on every call.
+_TARGET_STATS_BY_POSITION: Final[dict[str, tuple[str, ...]]] = _resolve_target_stats()
+
+
 def _classify_family(dist: Distribution) -> str:
     """Return the Plan 3d DistributionFamily.value matching the concrete class."""
     if isinstance(dist, ParametricNormal):
@@ -112,15 +120,23 @@ def extract_per_stat_residuals(per_row: pd.DataFrame) -> pd.DataFrame:
         assumed_family (str: NORMAL or GAMMA),
         assumed_param_a (float: std for NORMAL, shape for GAMMA),
         assumed_param_b (float: NaN for NORMAL, scale for GAMMA)
+
+    Notes:
+        Silently skips rows where:
+        - the row's position is not in POSITION_DISPATCH (e.g., K, DST)
+        - the per-stat <stat>_pred or <stat>_actual column is missing
+        - the per-stat <stat>_pred or <stat>_actual is NaN
+        - the unpacked params blob has no entry for the position's stat
+        `len(out)` may therefore be less than `len(per_row) * len(target_stats)`
+        by design.
     """
-    target_stats = _resolve_target_stats()
     rows: list[dict[str, object]] = []
     for _idx, row in per_row.iterrows():
         position = str(row["position"])
-        if position not in target_stats:
+        if position not in _TARGET_STATS_BY_POSITION:
             continue  # K / DST / unknown — skip silently, not in scope
         per_stat_dists = unpack_per_stat_params(bytes(row["params"]))
-        for stat_value in target_stats[position]:
+        for stat_value in _TARGET_STATS_BY_POSITION[position]:
             pred_col = f"{stat_value}_pred"
             actual_col = f"{stat_value}_actual"
             if pred_col not in per_row.columns or actual_col not in per_row.columns:
@@ -151,6 +167,111 @@ def extract_per_stat_residuals(per_row: pd.DataFrame) -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows)
+
+
+def compute_summary_stats(residuals: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-(position, stat) aggregate diagnostics over the long-form
+    residuals frame produced by extract_per_stat_residuals.
+
+    Returns one row per (position, stat) cell with columns:
+        position, stat, n, mean_pred, mean_actual,
+        residual_mean, residual_std, residual_skew, residual_excess_kurtosis,
+        std_tertile_low, std_tertile_mid, std_tertile_high,
+        heteroscedasticity_ratio (= std_tertile_high / std_tertile_low,
+            clamped denominator at 1e-9),
+        coverage_p10p90, coverage_le_p90,
+        ks_assumed_stat, ks_assumed_pvalue,
+        assumed_family
+    """
+    rows: list[dict[str, object]] = []
+    for (position, stat), group in residuals.groupby(["position", "stat"], sort=True):
+        rows.append(_summarize_cell(position=str(position), stat=str(stat), group=group))
+    return pd.DataFrame(rows)
+
+
+def _summarize_cell(*, position: str, stat: str, group: pd.DataFrame) -> dict[str, object]:
+    n = len(group)
+    pred = group["pred"].to_numpy(dtype=np.float64)
+    actual = group["actual"].to_numpy(dtype=np.float64)
+    resid = group["residual"].to_numpy(dtype=np.float64)
+    assumed_family = str(group["assumed_family"].iloc[0])
+    param_a = group["assumed_param_a"].to_numpy(dtype=np.float64)
+    param_b = group["assumed_param_b"].to_numpy(dtype=np.float64)
+
+    # Tertile std (heteroscedasticity).
+    order = np.argsort(pred)
+    resid_sorted = resid[order]
+    cuts = np.array_split(np.arange(n), 3)
+    if len(cuts) >= 3 and all(len(c) > 1 for c in cuts):
+        std_low = float(np.std(resid_sorted[cuts[0]], ddof=0))
+        std_mid = float(np.std(resid_sorted[cuts[1]], ddof=0))
+        std_high = float(np.std(resid_sorted[cuts[2]], ddof=0))
+    else:
+        std_low = std_mid = std_high = float("nan")
+    hetero_ratio = std_high / max(std_low, 1e-9) if not np.isnan(std_low) else float("nan")
+
+    # Per-row coverage of the assumed family's [p10, p90].
+    coverage_p10p90, coverage_le_p90, ks_stat, ks_p = _coverage_and_ks(
+        actual=actual,
+        pred=pred,
+        assumed_family=assumed_family,
+        param_a=param_a,
+        param_b=param_b,
+    )
+
+    return {
+        "position": position,
+        "stat": stat,
+        "n": n,
+        "mean_pred": float(np.mean(pred)),
+        "mean_actual": float(np.mean(actual)),
+        "residual_mean": float(np.mean(resid)),
+        "residual_std": float(np.std(resid, ddof=0)),
+        "residual_skew": float(scipy_stats.skew(resid)),
+        "residual_excess_kurtosis": float(scipy_stats.kurtosis(resid, fisher=True)),
+        "std_tertile_low": std_low,
+        "std_tertile_mid": std_mid,
+        "std_tertile_high": std_high,
+        "heteroscedasticity_ratio": hetero_ratio,
+        "coverage_p10p90": coverage_p10p90,
+        "coverage_le_p90": coverage_le_p90,
+        "ks_assumed_stat": ks_stat,
+        "ks_assumed_pvalue": ks_p,
+        "assumed_family": assumed_family,
+    }
+
+
+def _coverage_and_ks(
+    *,
+    actual: np.ndarray,
+    pred: np.ndarray,
+    assumed_family: str,
+    param_a: np.ndarray,
+    param_b: np.ndarray,
+) -> tuple[float, float, float, float]:
+    """Per-row CDF-transform under the assumed family. Coverage = fraction
+    of `actual` within the row's per-row [p10, p90]. KS = test of u_i vs
+    Uniform(0, 1) where u_i = F(actual_i; row_params); under H0 (assumed
+    family is correct) u_i ~ Uniform(0, 1)."""
+    if assumed_family == DistributionFamily.NORMAL.value:
+        # NORMAL: row params = (loc=pred_i, scale=param_a_i = std).
+        u = scipy_stats.norm.cdf(actual, loc=pred, scale=param_a)
+        p10 = scipy_stats.norm.ppf(0.10, loc=pred, scale=param_a)
+        p90 = scipy_stats.norm.ppf(0.90, loc=pred, scale=param_a)
+    elif assumed_family == DistributionFamily.GAMMA.value:
+        # GAMMA: row params = (shape=param_a, scale=param_b). Skip rows where
+        # actual is non-positive (gamma support is (0, inf)).
+        # We still compute u; gamma.cdf at 0 is 0, which is a valid uniform draw.
+        u = scipy_stats.gamma.cdf(actual, a=param_a, scale=param_b)
+        p10 = scipy_stats.gamma.ppf(0.10, a=param_a, scale=param_b)
+        p90 = scipy_stats.gamma.ppf(0.90, a=param_a, scale=param_b)
+    else:
+        return float("nan"), float("nan"), float("nan"), float("nan")
+
+    coverage_p10p90 = float(np.mean((actual >= p10) & (actual <= p90)))
+    coverage_le_p90 = float(np.mean(actual <= p90))
+    ks_result = scipy_stats.kstest(u, "uniform")
+    return coverage_p10p90, coverage_le_p90, float(ks_result.statistic), float(ks_result.pvalue)
 
 
 def main(argv: list[str] | None = None) -> int:
