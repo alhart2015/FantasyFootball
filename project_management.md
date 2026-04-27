@@ -4,6 +4,55 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 3e Phase 1 — Negative Binomial for count stats (run 2026-04-27, on branch `feat/plan-3e-calibration-tightening`)
+
+**Closes:** TODO #22 progress; Phase 0 complete; Phases 2-3 in progress on this branch.
+
+Phase 1 routes the 10 zero-inflated count stats (every `*_tds` + `interceptions` + `fumbles_lost` across QB/RB/TE/WR) from GAMMA to NEGATIVE_BINOMIAL via the new `ParametricNegativeBinomial` family. Conditional MLE estimator (`_negative_binomial_dispersion_from_residuals`) fits dispersion per stat, addressing Phase 0's marginal-vs-conditional AIC asymmetry caveat in production.
+
+**Phase 1 delivered:**
+- `ParametricNegativeBinomial(mean, dispersion)` distribution class implementing the Distribution Protocol; standard NB-2 parameterization (var = mean + mean²/dispersion).
+- `DistributionFamily.NEGATIVE_BINOMIAL` enum value + codec branches in `pack_per_stat_params` / `unpack_per_stat_params`.
+- `_negative_binomial_dispersion_from_residuals` conditional-MLE estimator (`scipy.optimize.minimize_scalar` bounded; `_NB_DISPERSION_CLIP = (0.01, 1000.0)`).
+- `BaselineModel.fit` and `BaselineModel.build_stat_distributions` route NB stats correctly.
+- All 4 per-position factories (_WR/QB/RB/TE_DIST_FAMILIES) updated.
+- Standalone artifacts retrained (4 `models/artifacts/baseline-{pos}-...joblib` files; new `model_id` per position because `code_hash` rotates).
+- Snapshot regenerated; gate passes.
+- Bug fix landed mid-phase (commit `865ccfb`): inverted `_scipy_n_p()` conversion was producing wrong NB variance; fixed to standard NB-2.
+
+### Coverage delta vs Phase 0 baseline
+
+Pre-Phase-1 baseline = Plan 3d's snapshot at merge commit `fe55d5b`.
+
+| Metric | Pre-Phase-1 | Post-Phase-1 | Delta |
+|---|---|---|---|
+| Weekly mean `calibration_p10p90` | 0.726 | 0.733 | +0.007 |
+| Weekly min `calibration_p10p90` | 0.675 (QB/2021) | 0.695 (QB/2021) | +0.020 |
+| Season mean `season_calibration_p10p90` | 0.461 | 0.428 | -0.033 |
+| Season min `season_calibration_p10p90` | 0.313 (QB/2022) | 0.293 (QB/2021) | -0.020 |
+
+**Weekly coverage improved modestly across all positions, with the largest gains on QB and TE:**
+- QB cells: 2021 +0.020, 2023 +0.022 (the Phase 0 diagnostic flagged QB as the worst-calibrated position).
+- TE cells: 2022 +0.015, 2023 +0.021, 2024 +0.018.
+- WR/RB cells: small mixed deltas in `[-0.009, +0.004]`, all within tolerance.
+
+**Season coverage regressed across most cells.** This is an expected secondary effect: Phase 0's GAMMA fits had inflated variance on count stats, so when independent weekly distributions were summed for the season Monte Carlo, the over-wide weekly tails partially compensated for the missing inter-week covariance. Replacing GAMMA with NB-2 (which correctly tightens count-stat variance per the conditional MLE fit) removes that compensating slack, exposing the true season-aggregation under-dispersion. Worst-affected cells: WR/2022 -0.074, WR/2023 -0.075, RB/2024 -0.073, RB/2022 -0.059. Phase 2 (Student-t for yards) and Phase 3 (variance bucketing) should not directly address this, but season-level inter-week correlation (a Plan-3e follow-up or post-3e item) will.
+
+**Per-stat MAE/RMSE shifts on NB-routed stats are below the 0.01 noise floor across all 16 cells** — NB-2 and GAMMA agree on the conditional mean by construction; only the variance/shape changes, which feeds into calibration metrics, not point-prediction metrics.
+
+### Per-position model_ids
+
+| Position | model_id |
+|---|---|
+| WR | `baseline:wr:6964f45a:2018-2023` |
+| QB | `baseline:qb:178a0438:2018-2023` |
+| RB | `baseline:rb:0d8180b1:2018-2023` |
+| TE | `baseline:te:ae33da15:2018-2023` |
+
+### Next: Phase 2 (Student-t for yards stats) on this same branch.
+
+---
+
 ## Plan 3e Phase 0 — Calibration diagnostic (run 2026-04-26, on branch `feat/plan-3e-calibration-tightening`)
 
 **Closes:** None. TODO #22 (Plan 3e calibration tightening) stays open — Phase 0
@@ -363,9 +412,11 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ---
 
-## Current status (as of 2026-04-26)
+## Current status (as of 2026-04-27)
 
-**Projections Core — Plan 3e Phase 0 (calibration diagnostic) complete on branch `feat/plan-3e-calibration-tightening`.** Diagnostic CLI + research report committed; no model code changes yet. Spec amendment (Phase 1+) is the next gate per the spec's section 3 decision gate.
+**Projections Core — Plan 3e Phase 1 (NB for count stats) complete on branch `feat/plan-3e-calibration-tightening`; Phases 2-3 in progress on this branch.** Phase 1 swapped the 10 zero-inflated count stats from GAMMA to NEGATIVE_BINOMIAL with conditional MLE dispersion fitting; standalone artifacts retrained; gated snapshot regenerated. Weekly mean coverage 0.726 → 0.733 (+0.007); season mean coverage 0.461 → 0.428 (-0.033, expected secondary effect from removing GAMMA's compensating over-dispersion).
+
+**Plan 3e Phase 0 (calibration diagnostic) complete on same branch.** Diagnostic CLI + research report committed.
 
 **Plan 3d (real Monte Carlo season aggregation) merged to `main` at commit `fe55d5b` (PR #9).**
 
