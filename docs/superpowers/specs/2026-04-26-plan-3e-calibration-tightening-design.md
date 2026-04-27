@@ -150,6 +150,7 @@ data/diagnostics/calibration_<ts>/     # gitignored; <ts> = run timestamp
 | assumed_aic | float | AIC of the assumed family fit on residuals |
 | aic_delta | float | `assumed_aic - best_alt_aic`; positive = alternative fits better |
 | recommended_fix | str | `variance_bucket` / `family_swap` / `combined` / `no_change` (family name lives in `best_alt_family`) |
+| assumed_family | str | informational — the family the per-row params blob assumed (`NORMAL` / `GAMMA`); useful for the report writer to know which `assumed_aic` was computed against which family |
 
 ### 2.4 Plots
 
@@ -227,6 +228,8 @@ The assumed-family AIC and alternative-family AIC must be computed on the same d
 - For GAMMA stats: assumed log-likelihood is `sum(scipy.stats.gamma.logpdf(actual_i, shape, scale=scale_i))`. Negative Binomial alternative fit on `actual_i` directly (integer counts). Same data, same scale.
 
 A short comment block in the script documents this; getting it wrong is a silent bug.
+
+**Caveat — marginal-vs-conditional asymmetry in the implemented fits.** The Phase 0 implementation cuts a corner that callers must be aware of: `_fit_student_t`, `_fit_log_normal`, and `_fit_neg_binomial` all fit the alternative family **marginally on `actual` alone**, discarding `pred`. The assumed-family AIC, by contrast, is **conditional** on `pred` (it uses `pred` as the per-row location). As long as `pred` carries any signal, the conditional assumed-family log-likelihood will tend to dominate the marginal alternative-family log-likelihood, biasing `aic_delta` away from `family_swap` recommendations. The diagnostic compensates by reporting `coverage_p10p90` and `ks_assumed_pvalue` as orthogonal signals that don't suffer this asymmetry, and the report-writing pass overrides the mechanical `recommended_fix` column when those signals disagree. Phase 1+ implementations that want a true apples-to-apples AIC comparison must also fit the alternative families conditionally (e.g., a Student-t with `loc = pred`) — or accept the asymmetric framing and lean on coverage / KS for the family-fit signal.
 
 ### 4.3 Tertile binning
 
