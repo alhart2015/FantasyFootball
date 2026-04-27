@@ -2,7 +2,7 @@
 
 Three modes:
   --check (default):   run harness, diff snapshot, exit 0/1.
-  --update-snapshot:   run harness, overwrite tests/backtest/baseline_metrics.json.
+  --update-snapshot:   run harness, overwrite tests/backtest/model_metrics.json.
   --report:            run harness, print model + naive metrics; no gate.
 """
 
@@ -17,7 +17,7 @@ import pandas as pd
 
 from projections.backtest import diff_snapshot, read_snapshot, run_backtest, write_snapshot
 
-_SNAPSHOT_PATH = Path("tests/backtest/baseline_metrics.json")
+_SNAPSHOT_PATH = Path("tests/backtest/model_metrics.json")
 _TOLERANCES_PATH = Path("tests/backtest/tolerances.json")
 
 

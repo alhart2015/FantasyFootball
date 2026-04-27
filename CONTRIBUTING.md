@@ -242,8 +242,8 @@ Then re-snapshot if your change intentionally alters Model A's metrics:
 
 ```bash
 python scripts/backtest.py --update-snapshot
-git diff tests/backtest/baseline_metrics.json    # review the metric deltas
-git add tests/backtest/baseline_metrics.json
+git diff tests/backtest/model_metrics.json    # review the metric deltas
+git add tests/backtest/model_metrics.json
 ```
 
 Auto-invalidation is TODO #21 (see TODO.md).
@@ -266,7 +266,7 @@ others within tolerance overrides), update the snapshot and commit:
 
 ```bash
 python scripts/backtest.py --update-snapshot
-git add tests/backtest/baseline_metrics.json
+git add tests/backtest/model_metrics.json
 ```
 
 For genuinely-noisy cells (rare-event RMSE on small samples, etc.),
