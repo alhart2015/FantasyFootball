@@ -252,3 +252,19 @@ def test_fit_alternative_families_handles_failure_gracefully() -> None:
     # log_normal must report ok=False (skipped because min(actual) <= 0).
     assert out["log_normal"]["ok"] is False
     assert np.isnan(out["log_normal"]["aic"])
+
+
+def test_fit_alternative_families_rejects_degenerate_student_t() -> None:
+    """All-zero input collapses scipy.stats.t.fit's scale toward 0; the
+    resulting t.logpdf at the mode is a huge positive number, NOT -inf, so
+    the np.isfinite guard alone wouldn't catch the degenerate fit. The
+    sample-std floor on scale is what rejects it."""
+    from diagnose_calibration import fit_alternative_families
+
+    out = fit_alternative_families(
+        actual=np.zeros(50),
+        pred=np.zeros(50),
+        stat_kind="continuous",
+    )
+    assert out["student_t"]["ok"] is False
+    assert np.isnan(out["student_t"]["aic"])

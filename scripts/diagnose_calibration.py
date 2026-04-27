@@ -315,9 +315,20 @@ def fit_alternative_families(
 
 
 def _fit_student_t(actual: np.ndarray) -> dict[str, float | bool]:
-    """MLE Student-t with location and scale; df free."""
+    """MLE Student-t with location and scale; df free.
+
+    Rejects degenerate fits where scipy collapses scale toward zero on
+    (near-)constant input data — t.logpdf at the mode of a near-zero-scale
+    distribution evaluates to a huge positive number, producing AIC values
+    that would falsely dominate the family-swap decision rule downstream.
+    """
     try:
         df, loc, scale = scipy_stats.t.fit(actual)
+        # Sample-std floor on scale: a fitted scale orders of magnitude smaller
+        # than the empirical std means scipy converged to a degenerate fit.
+        sample_std = float(np.std(actual, ddof=0))
+        if scale < max(sample_std * 1e-6, 1e-9):
+            return {"aic": float("nan"), "ok": False, "n_params": 3}
         log_lik = float(np.sum(scipy_stats.t.logpdf(actual, df=df, loc=loc, scale=scale)))
         if not np.isfinite(log_lik):
             return {"aic": float("nan"), "ok": False, "n_params": 3}
