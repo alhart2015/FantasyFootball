@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
+import joblib
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
@@ -435,8 +436,21 @@ class LightGBMModel:
         return ProjectionWeeklySchema.validate(out)
 
     def save(self, path: Path) -> None:
-        raise NotImplementedError("Plan 5 Task 8")
+        """Joblib-serialize the entire model.
+
+        lgb.Booster instances pickle cleanly (lightgbm registers reduce/setstate
+        hooks), so the whole LightGBMModel — config, sub-models, train window,
+        and fitted flag — round-trips through joblib.
+        """
+        if not self._is_fitted:
+            raise RuntimeError("Cannot save() an unfitted model")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(self, path)
 
     @classmethod
     def load(cls, path: Path) -> LightGBMModel:
-        raise NotImplementedError("Plan 5 Task 8")
+        """Inverse of save(). Returns the same instance shape as the original."""
+        loaded = joblib.load(path)
+        if not isinstance(loaded, cls):
+            raise TypeError(f"Loaded object is {type(loaded).__name__}, expected {cls.__name__}")
+        return loaded

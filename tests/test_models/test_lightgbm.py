@@ -5,6 +5,8 @@ Per-position smoke tests live in test_lightgbm_qb.py / _rb.py / _te.py.
 
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,6 +14,7 @@ from pandera.errors import SchemaError
 
 from projections.models.lightgbm import (
     QUANTILE_GRID,
+    LightGBMModel,
     qb_lightgbm,
     wr_lightgbm,
 )
@@ -313,3 +316,45 @@ def test_predict_distribution_raises_on_feature_column_mismatch() -> None:
     test_features = test_features.drop(columns=[dropped_col])
     with pytest.raises(ValueError, match=r"Feature columns differ from training"):
         model.predict_distribution(test_features, Ruleset.espn_ppr())
+
+
+# ---------------- save / load round-trip tests ----------------
+
+
+def test_save_load_round_trip(tmp_path: pathlib.Path) -> None:
+    from projections.schemas import Ruleset
+
+    features = _build_synthetic_wr_features()
+    weekly_stats = _build_synthetic_weekly_stats(features)
+    model = wr_lightgbm()
+    model.fit(features, weekly_stats)
+
+    artifact_path = tmp_path / "wr_lightgbm.joblib"
+    model.save(artifact_path)
+    loaded = LightGBMModel.load(artifact_path)
+
+    test_features = features[features["season"] == 2021].head(5).copy()
+    out_a = model.predict_distribution(test_features, Ruleset.espn_ppr())
+    out_b = loaded.predict_distribution(test_features, Ruleset.espn_ppr())
+
+    # Identical predictions modulo generated_at timestamp:
+    cols_to_check = ["gsis_id", "season", "week", "mean", "p10", "p50", "p90", "model_id"]
+    pd.testing.assert_frame_equal(
+        out_a[cols_to_check].reset_index(drop=True),
+        out_b[cols_to_check].reset_index(drop=True),
+    )
+
+
+def test_load_returns_lightgbm_model_instance(tmp_path: pathlib.Path) -> None:
+    from projections.schemas import Position
+
+    features = _build_synthetic_wr_features()
+    weekly_stats = _build_synthetic_weekly_stats(features)
+    model = wr_lightgbm()
+    model.fit(features, weekly_stats)
+
+    artifact_path = tmp_path / "wr_lightgbm.joblib"
+    model.save(artifact_path)
+    loaded = LightGBMModel.load(artifact_path)
+    assert isinstance(loaded, LightGBMModel)
+    assert loaded.position == Position.WR
