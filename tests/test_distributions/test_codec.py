@@ -118,3 +118,22 @@ def test_unknown_stat_name_raises() -> None:
     )
     with pytest.raises(ValueError, match="this_is_not_a_stat"):
         unpack_per_stat_params(bytes(bad))
+
+
+def test_codec_round_trip_neg_binomial() -> None:
+    """NB packed via pack_per_stat_params and round-tripped."""
+    from projections.distributions import (
+        ParametricNegativeBinomial,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    dist = ParametricNegativeBinomial(mean=0.3, dispersion=2.0)
+    blob = pack_per_stat_params({Stat.RECEIVING_TDS: dist})
+    decoded = unpack_per_stat_params(blob)
+    assert Stat.RECEIVING_TDS in decoded
+    decoded_dist = decoded[Stat.RECEIVING_TDS]
+    assert isinstance(decoded_dist, ParametricNegativeBinomial)
+    assert decoded_dist.mean() == pytest.approx(0.3)
+    # Round-trip preserves (mean, dispersion) directly via persisted entries.

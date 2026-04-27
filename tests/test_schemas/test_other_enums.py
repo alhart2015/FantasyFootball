@@ -22,6 +22,7 @@ def test_distribution_family_options() -> None:
     assert {f.value for f in DistributionFamily} == {
         "NORMAL",
         "GAMMA",
+        "NEGATIVE_BINOMIAL",
         "EMPIRICAL_QUANTILE",
         "SAMPLED",
         "SAMPLED_SUMMARY",
