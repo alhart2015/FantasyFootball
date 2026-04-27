@@ -83,8 +83,10 @@ def _negative_binomial_dispersion_from_residuals(
 ) -> float:
     """Conditional MLE for NB dispersion given per-row mean = mu_hat.
 
-    Maximizes sum(nbinom.logpmf(actual_i; n_i, p_i)) over a single global
-    `dispersion` where n_i = mu_hat_i^2 / dispersion and p_i = n_i / (n_i + mu_hat_i).
+    Maximizes sum(nbinom.logpmf(actual_i; n=dispersion, p_i)) over a single
+    global ``dispersion`` (the standard NB-2 / "size" parameter), where
+    p_i = dispersion / (dispersion + mu_hat_i). Yields per-row var =
+    mu_hat_i + mu_hat_i^2 / dispersion -- matches ParametricNegativeBinomial.
 
     Coerces actual to non-negative integers (counts upstream may carry float
     dtype). Returns the dispersion clipped to ``_NB_DISPERSION_CLIP``.
@@ -98,9 +100,10 @@ def _negative_binomial_dispersion_from_residuals(
     def neg_log_lik(dispersion: float) -> float:
         if dispersion <= 0:
             return float("inf")
-        n_size = mu_clipped * mu_clipped / dispersion
-        p = n_size / (n_size + mu_clipped)
-        return -float(np.sum(scipy_stats.nbinom.logpmf(counts, n=n_size, p=p)))
+        # Standard NB-2: n = dispersion (size param, scalar), p per-row.
+        # scipy broadcasts the scalar n across the per-row p.
+        p = dispersion / (dispersion + mu_clipped)
+        return -float(np.sum(scipy_stats.nbinom.logpmf(counts, n=dispersion, p=p)))
 
     result = minimize_scalar(
         neg_log_lik,

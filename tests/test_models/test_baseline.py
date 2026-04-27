@@ -429,17 +429,23 @@ def test_negative_binomial_dispersion_recovers_known_param() -> None:
     n = 500
     mu_hat = rng.uniform(0.1, 1.5, n)
     true_dispersion = 3.0
-    n_size = mu_hat * mu_hat / true_dispersion
-    p = n_size / (n_size + mu_hat)
-    actual = scipy_stats.nbinom.rvs(n=n_size, p=p, size=n, random_state=rng).astype(np.float64)
+    # Standard NB-2 synthesis: n_size = dispersion (scalar), p = dispersion / (dispersion + mu_hat).
+    p = true_dispersion / (true_dispersion + mu_hat)
+    actual = scipy_stats.nbinom.rvs(n=true_dispersion, p=p, size=n, random_state=rng).astype(
+        np.float64
+    )
 
     fitted = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
     assert fitted == pytest.approx(true_dispersion, rel=0.30)
 
 
 def test_negative_binomial_dispersion_clipped_for_degenerate_input() -> None:
-    """All-zero actual gives no overdispersion signal; estimator should
-    return the high clip so the fitted distribution stays usable."""
+    """All-zero actual at mu_hat > 0 is maximally overdispersed: under the
+    NB-2 ``size`` parameterization (where dispersion -> inf recovers Poisson,
+    and dispersion -> 0 puts all mass at zero), the MLE is driven to the LOW
+    clip. The estimator should snap there rather than returning a near-zero
+    interior value -- snapping is the contract that keeps the fitted
+    distribution from drifting on degenerate inputs."""
     from projections.models.baseline import (
         _NB_DISPERSION_CLIP,
         _negative_binomial_dispersion_from_residuals,
@@ -448,7 +454,7 @@ def test_negative_binomial_dispersion_clipped_for_degenerate_input() -> None:
     mu_hat = np.full(50, 0.1)
     actual = np.zeros(50)
     fitted = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
-    assert fitted == _NB_DISPERSION_CLIP[1]
+    assert fitted == _NB_DISPERSION_CLIP[0]
 
 
 def test_baseline_model_fit_stores_nb_dispersion_for_nb_stat(

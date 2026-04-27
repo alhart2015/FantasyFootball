@@ -73,9 +73,9 @@ class ParametricGamma:
 class ParametricNegativeBinomial:
     """Negative Binomial parameterized as (mean, dispersion).
 
-    Internally uses scipy's (n, p) parameterization:
-        n = mean^2 / dispersion
-        p = n / (n + mean)
+    Standard NB-2 / "size" parameterization. Internally uses scipy's (n, p):
+        n = dispersion                        (the "size" / shape parameter)
+        p = dispersion / (dispersion + mean)
     Variance: var = mean + mean^2 / dispersion (overdispersed vs Poisson when
     dispersion is finite; recovers Poisson as dispersion -> inf).
 
@@ -95,8 +95,11 @@ class ParametricNegativeBinomial:
         object.__setattr__(self, "dispersion_", float(dispersion))
 
     def _scipy_n_p(self) -> tuple[float, float]:
-        n = self.mean_ * self.mean_ / self.dispersion_
-        p = n / (n + self.mean_)
+        # Standard NB-2: n = dispersion (the "size" parameter), p such that
+        # mean = n*(1-p)/p ⟹ p = dispersion / (dispersion + mean).
+        # Yields var = n*(1-p)/p² = mean + mean²/dispersion (matches std()).
+        n = self.dispersion_
+        p = self.dispersion_ / (self.dispersion_ + self.mean_)
         return n, p
 
     def mean(self) -> float:
