@@ -82,7 +82,9 @@ def test_baseline_fit_populates_normal_variance_params(
     for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
         params = model.variance_params[stat]
         assert "std" in params
-        assert params["std"] > 0
+        std = params["std"]
+        assert isinstance(std, float)
+        assert std > 0
 
 
 def test_baseline_fit_populates_gamma_variance_params(
@@ -95,7 +97,9 @@ def test_baseline_fit_populates_gamma_variance_params(
     for stat in (Stat.RECEPTIONS,):
         params = model.variance_params[stat]
         assert "shape" in params
-        assert 0.01 <= params["shape"] <= 100.0
+        shape = params["shape"]
+        assert isinstance(shape, float)
+        assert 0.01 <= shape <= 100.0
 
 
 def test_baseline_fit_populates_nb_variance_params(
@@ -110,7 +114,9 @@ def test_baseline_fit_populates_nb_variance_params(
     for stat in (Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
         params = model.variance_params[stat]
         assert "dispersion" in params
-        assert _NB_DISPERSION_CLIP[0] <= params["dispersion"] <= _NB_DISPERSION_CLIP[1]
+        dispersion = params["dispersion"]
+        assert isinstance(dispersion, float)
+        assert _NB_DISPERSION_CLIP[0] <= dispersion <= _NB_DISPERSION_CLIP[1]
 
 
 def test_method_of_moments_alpha_matches_hand_computed_value() -> None:
@@ -509,4 +515,46 @@ def test_baseline_model_fit_stores_nb_dispersion_for_nb_stat(
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     assert "dispersion" in model.variance_params[Stat.RECEIVING_TDS]
     dispersion = model.variance_params[Stat.RECEIVING_TDS]["dispersion"]
+    assert isinstance(dispersion, float)
     assert _NB_DISPERSION_CLIP[0] <= dispersion <= _NB_DISPERSION_CLIP[1]
+
+
+def test_compute_tertile_cuts_returns_two_cuts_in_order() -> None:
+    from projections.models.baseline import _compute_tertile_cuts
+
+    mu_hat = np.linspace(0, 100, 300)
+    cuts = _compute_tertile_cuts(mu_hat)
+    assert len(cuts) == 2
+    assert cuts[0] < cuts[1]
+    # 33rd percentile of linspace(0, 100, 300) is ~33.0; 67th is ~66.7.
+    assert cuts[0] == pytest.approx(33.0, abs=1.5)
+    assert cuts[1] == pytest.approx(66.7, abs=1.5)
+
+
+def test_assign_bucket_indices_returns_zero_one_two() -> None:
+    from projections.models.baseline import _assign_bucket_indices
+
+    cuts = [33.0, 67.0]
+    mu_hat = np.array([10.0, 33.0, 50.0, 67.0, 80.0])
+    indices = _assign_bucket_indices(mu_hat=mu_hat, cuts=cuts)
+    # np.searchsorted([33, 67], [10, 33, 50, 67, 80]) returns [0, 0, 1, 1, 2].
+    np.testing.assert_array_equal(indices, [0, 0, 1, 1, 2])
+
+
+def test_per_bucket_normal_std_returns_three_values() -> None:
+    from projections.models.baseline import _per_bucket_normal_std_from_residuals
+
+    rng = np.random.default_rng(0)
+    n = 600
+    mu_hat = np.linspace(0, 100, n)
+    cuts = [33.0, 67.0]
+    # Synthesize heteroscedastic residuals: low-mu has small std, high-mu large.
+    bucket_idx = np.searchsorted(cuts, mu_hat).clip(0, 2)
+    stds = np.array([5.0, 15.0, 40.0])
+    residuals = rng.normal(0, stds[bucket_idx], n)
+
+    fitted = _per_bucket_normal_std_from_residuals(mu_hat=mu_hat, residuals=residuals, cuts=cuts)
+    assert len(fitted) == 3
+    assert fitted[0] == pytest.approx(5.0, rel=0.20)
+    assert fitted[1] == pytest.approx(15.0, rel=0.20)
+    assert fitted[2] == pytest.approx(40.0, rel=0.20)

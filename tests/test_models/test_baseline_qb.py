@@ -74,7 +74,9 @@ def test_qb_baseline_fit_populates_normal_variance_params(
     for stat in (Stat.PASSING_YARDS, Stat.RUSHING_YARDS):
         params = model.variance_params[stat]
         assert "std" in params
-        assert params["std"] > 0
+        std = params["std"]
+        assert isinstance(std, float)
+        assert std > 0
 
 
 def test_qb_baseline_fit_populates_nb_variance_params(
@@ -88,7 +90,9 @@ def test_qb_baseline_fit_populates_nb_variance_params(
     for stat in (Stat.PASSING_TDS, Stat.INTERCEPTIONS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
         params = model.variance_params[stat]
         assert "dispersion" in params
-        assert _NB_DISPERSION_CLIP[0] <= params["dispersion"] <= _NB_DISPERSION_CLIP[1]
+        dispersion = params["dispersion"]
+        assert isinstance(dispersion, float)
+        assert _NB_DISPERSION_CLIP[0] <= dispersion <= _NB_DISPERSION_CLIP[1]
 
 
 def test_qb_predict_distribution_returns_projection_weekly_schema_valid_frame(

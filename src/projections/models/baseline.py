@@ -25,7 +25,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import numpy as np
 import pandas as pd
@@ -167,6 +167,115 @@ def _student_t_params_from_residuals(*, residuals: np.ndarray) -> tuple[float, f
     if df <= 2.0 or not np.isfinite(df):
         df = _STUDENT_T_DF_FLOOR
     return float(scale), float(df)
+
+
+# ----------------------------------------------------------------------------
+# Per-tertile-bucket variance estimators (Plan 3e Phase 3 prep).
+# ----------------------------------------------------------------------------
+#
+# Phase 3 splits each per-stat residual fit into three mu_hat-tertile buckets
+# (low / mid / high predicted mean), so we can capture heteroscedasticity that
+# a single global std/dispersion smears out. The helpers below are pure: they
+# take an array of residuals (or actuals) plus the tertile cuts and return one
+# parameter per bucket. Wiring into ``BaselineModel.fit`` and the predict path
+# follows in subsequent commits.
+
+
+def _compute_tertile_cuts(mu_hat: np.ndarray) -> list[float]:
+    """Return [33rd-percentile, 67th-percentile] cuts on mu_hat."""
+    return [
+        float(np.percentile(mu_hat, 33.333)),
+        float(np.percentile(mu_hat, 66.667)),
+    ]
+
+
+def _assign_bucket_indices(*, mu_hat: np.ndarray, cuts: list[float]) -> np.ndarray:
+    """Return per-row bucket indices in {0, 1, 2} based on cuts.
+
+    Uses np.searchsorted: rows where mu_hat <= cuts[0] go to bucket 0;
+    cuts[0] < mu_hat <= cuts[1] goes to bucket 1; mu_hat > cuts[1] goes
+    to bucket 2.
+    """
+    return np.searchsorted(np.asarray(cuts), mu_hat, side="left").clip(0, 2).astype(np.int64)
+
+
+def _per_bucket_normal_std_from_residuals(
+    *, mu_hat: np.ndarray, residuals: np.ndarray, cuts: list[float]
+) -> list[float]:
+    """Per-bucket residual std for the NORMAL family. Returns 3 values
+    (one per tertile bucket). Falls back to the global residual std for
+    any bucket with < 2 rows."""
+    indices = _assign_bucket_indices(mu_hat=mu_hat, cuts=cuts)
+    global_std = _normal_std_from_residuals(residuals)
+    out: list[float] = []
+    for b in range(3):
+        mask = indices == b
+        if mask.sum() < 2:
+            out.append(global_std)
+        else:
+            out.append(_normal_std_from_residuals(residuals[mask]))
+    return out
+
+
+def _per_bucket_gamma_alpha_from_residuals(
+    *, mu_hat: np.ndarray, residuals: np.ndarray, cuts: list[float]
+) -> list[float]:
+    """Per-bucket gamma alpha. Falls back to the global alpha for any
+    bucket with < 2 rows."""
+    indices = _assign_bucket_indices(mu_hat=mu_hat, cuts=cuts)
+    global_alpha = _gamma_alpha_from_residuals(mu_hat=mu_hat, residuals=residuals)
+    out: list[float] = []
+    for b in range(3):
+        mask = indices == b
+        if mask.sum() < 2:
+            out.append(global_alpha)
+        else:
+            out.append(_gamma_alpha_from_residuals(mu_hat=mu_hat[mask], residuals=residuals[mask]))
+    return out
+
+
+def _per_bucket_nb_dispersion_from_residuals(
+    *, mu_hat: np.ndarray, actual: np.ndarray, cuts: list[float]
+) -> list[float]:
+    """Per-bucket NB dispersion. Falls back to global for any bucket with < 2 rows."""
+    indices = _assign_bucket_indices(mu_hat=mu_hat, cuts=cuts)
+    global_d = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
+    out: list[float] = []
+    for b in range(3):
+        mask = indices == b
+        if mask.sum() < 2:
+            out.append(global_d)
+        else:
+            out.append(
+                _negative_binomial_dispersion_from_residuals(
+                    mu_hat=mu_hat[mask], actual=actual[mask]
+                )
+            )
+    return out
+
+
+def _per_bucket_student_t_params_from_residuals(
+    *, residuals: np.ndarray, indices: np.ndarray
+) -> tuple[list[float], list[float]]:
+    """Per-bucket Student-t (scale, df). Returns (scale_per_bucket, df_per_bucket).
+    Falls back to the global fit for any bucket with < 2 rows.
+
+    Takes pre-computed ``indices`` rather than (mu_hat, cuts) because Student-t
+    fitting is on the residual array, not the (mu_hat, residual) pair.
+    """
+    global_scale, global_df = _student_t_params_from_residuals(residuals=residuals)
+    scales: list[float] = []
+    dfs: list[float] = []
+    for b in range(3):
+        mask = indices == b
+        if mask.sum() < 2:
+            scales.append(global_scale)
+            dfs.append(global_df)
+        else:
+            s, d = _student_t_params_from_residuals(residuals=residuals[mask])
+            scales.append(s)
+            dfs.append(d)
+    return scales, dfs
 
 
 _WR_TARGET_STATS: Final[tuple[Stat, ...]] = (
@@ -379,7 +488,7 @@ class BaselineModel:
     # Populated by .fit() — None on an unfitted instance.
     feature_means: pd.Series | None = field(default=None)
     ridges: dict[Stat, RidgeCV] = field(default_factory=dict)
-    variance_params: dict[Stat, dict[str, float]] = field(default_factory=dict)
+    variance_params: dict[Stat, dict[str, float | list[float]]] = field(default_factory=dict)
     train_seasons: tuple[int, int] | None = field(default=None)
     code_hash: str | None = field(default=None)
 
@@ -524,21 +633,26 @@ class BaselineModel:
                 mu_i = float(per_stat_mu[stat][i])
                 family = self.dist_families[stat]
                 params = self.variance_params[stat]
+                # Phase 3 prep (Plan 3e): variance_params values are widened to
+                # ``float | list[float]`` for upcoming per-bucket entries. This
+                # commit only widens the type; reads still expect scalars (the
+                # bucket-aware read path lands in a subsequent commit). The
+                # ``cast``s narrow back to ``float`` for mypy while we transition.
                 if family is DistributionFamily.NORMAL:
-                    row[stat] = ParametricNormal(mean=mu_i, std=params["std"])
+                    row[stat] = ParametricNormal(mean=mu_i, std=cast(float, params["std"]))
                 elif family is DistributionFamily.GAMMA:
-                    shape = params["shape"]
+                    shape = cast(float, params["shape"])
                     # rate = alpha / mu; scale = 1/rate = mu / alpha
                     scale = mu_i / shape
                     row[stat] = ParametricGamma(shape=shape, scale=scale)
                 elif family is DistributionFamily.NEGATIVE_BINOMIAL:
-                    dispersion = params["dispersion"]
+                    dispersion = cast(float, params["dispersion"])
                     # Floor mu to keep the (n, p) parameterization defined.
                     mu_safe = max(mu_i, _NB_MU_FLOOR)
                     row[stat] = ParametricNegativeBinomial(mean=mu_safe, dispersion=dispersion)
                 elif family is DistributionFamily.STUDENT_T:
-                    scale = params["scale"]
-                    df = params["df"]
+                    scale = cast(float, params["scale"])
+                    df = cast(float, params["df"])
                     row[stat] = ParametricStudentT(loc=mu_i, scale=scale, df=df)
                 else:  # pragma: no cover
                     raise ValueError(f"Unsupported family {family}")
