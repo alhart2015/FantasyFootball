@@ -18,6 +18,8 @@ from typing import Final
 import numpy as np
 import pandas as pd
 import pandera.pandas as pa
+from scipy import stats as scipy_stats
+from scipy.optimize import minimize_scalar
 from sklearn.linear_model import RidgeCV
 
 from projections.distributions import (
@@ -67,6 +69,54 @@ def _normal_std_from_residuals(residuals: np.ndarray) -> float:
     tiny positive epsilon so ParametricNormal's std>0 invariant always holds."""
     s = float(residuals.std())
     return max(s, 1e-6)
+
+
+_NB_DISPERSION_CLIP: Final[tuple[float, float]] = (0.01, 1000.0)
+
+
+def _negative_binomial_dispersion_from_residuals(
+    *, mu_hat: np.ndarray, actual: np.ndarray
+) -> float:
+    """Conditional MLE for NB dispersion given per-row mean = mu_hat.
+
+    Maximizes sum(nbinom.logpmf(actual_i; n_i, p_i)) over a single global
+    `dispersion` where n_i = mu_hat_i^2 / dispersion and p_i = n_i / (n_i + mu_hat_i).
+
+    Coerces actual to non-negative integers (counts upstream may carry float
+    dtype). Returns the dispersion clipped to ``_NB_DISPERSION_CLIP``.
+    """
+    counts = np.clip(np.round(actual), 0, None).astype(np.int64)
+    mu_clipped = np.maximum(mu_hat, 1e-3)
+
+    if counts.size < 2:
+        return _NB_DISPERSION_CLIP[1]
+
+    def neg_log_lik(dispersion: float) -> float:
+        if dispersion <= 0:
+            return float("inf")
+        n_size = mu_clipped * mu_clipped / dispersion
+        p = n_size / (n_size + mu_clipped)
+        return -float(np.sum(scipy_stats.nbinom.logpmf(counts, n=n_size, p=p)))
+
+    result = minimize_scalar(
+        neg_log_lik,
+        bounds=_NB_DISPERSION_CLIP,
+        method="bounded",
+        options={"xatol": 1e-3},
+    )
+    if not result.success or not np.isfinite(result.fun):
+        return _NB_DISPERSION_CLIP[1]
+    fitted = float(np.clip(result.x, *_NB_DISPERSION_CLIP))
+    # Snap to a clip endpoint when the bounded minimizer stops within its xatol
+    # of the boundary: degenerate inputs (e.g. all-zero actuals) drive the
+    # likelihood monotonically toward an endpoint, but `minimize_scalar` returns
+    # a value just inside the bound rather than the bound itself.
+    snap_tol = 2e-3
+    if fitted - _NB_DISPERSION_CLIP[0] <= snap_tol:
+        return _NB_DISPERSION_CLIP[0]
+    if _NB_DISPERSION_CLIP[1] - fitted <= snap_tol:
+        return _NB_DISPERSION_CLIP[1]
+    return fitted
 
 
 _WR_TARGET_STATS: Final[tuple[Stat, ...]] = (

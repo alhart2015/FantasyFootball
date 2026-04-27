@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats as scipy_stats
 from sklearn.linear_model import RidgeCV
 
 from projections.distributions.parametric import ParametricGamma, ParametricNormal
@@ -401,3 +402,34 @@ def test_predict_distribution_is_deterministic_across_calls(
         assert (out_a[col].to_numpy() == out_b[col].to_numpy()).all(), (
             f"Determinism violated on column {col}"
         )
+
+
+def test_negative_binomial_dispersion_recovers_known_param() -> None:
+    """Synthesize NB-distributed `actual` from known dispersion + per-row mean,
+    fit the dispersion, expect recovery within tolerance."""
+    from projections.models.baseline import _negative_binomial_dispersion_from_residuals
+
+    rng = np.random.default_rng(42)
+    n = 500
+    mu_hat = rng.uniform(0.1, 1.5, n)
+    true_dispersion = 3.0
+    n_size = mu_hat * mu_hat / true_dispersion
+    p = n_size / (n_size + mu_hat)
+    actual = scipy_stats.nbinom.rvs(n=n_size, p=p, size=n, random_state=rng).astype(np.float64)
+
+    fitted = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
+    assert fitted == pytest.approx(true_dispersion, rel=0.30)
+
+
+def test_negative_binomial_dispersion_clipped_for_degenerate_input() -> None:
+    """All-zero actual gives no overdispersion signal; estimator should
+    return the high clip so the fitted distribution stays usable."""
+    from projections.models.baseline import (
+        _NB_DISPERSION_CLIP,
+        _negative_binomial_dispersion_from_residuals,
+    )
+
+    mu_hat = np.full(50, 0.1)
+    actual = np.zeros(50)
+    fitted = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
+    assert fitted == _NB_DISPERSION_CLIP[1]
