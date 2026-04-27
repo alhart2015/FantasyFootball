@@ -24,11 +24,16 @@ from numpy.typing import NDArray
 _INTEGRATION_GRID: Final[NDArray[np.float64]] = np.linspace(0.01, 0.99, 100)
 
 
-@dataclass(slots=True, frozen=True, init=False)
+@dataclass(slots=True, frozen=True, init=False, eq=False)
 class QuantileDistribution:
     """Distribution backed by a sorted set of (quantile, value) knots.
 
     Implements the Distribution Protocol structurally (mean, std, quantile, sample).
+
+    ``eq=False`` is required because the auto-generated ``__eq__`` from
+    ``@dataclass`` does field-by-field ``==``, which on ``NDArray`` returns an
+    array (not bool) and raises ``ValueError``. We override ``__eq__`` and
+    ``__hash__`` explicitly below.
     """
 
     quantiles_: NDArray[np.float64]
@@ -55,6 +60,18 @@ class QuantileDistribution:
             raise ValueError(f"values must be non-decreasing, got {v}")
         object.__setattr__(self, "quantiles_", q)
         object.__setattr__(self, "values_", v)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, QuantileDistribution):
+            return NotImplemented
+        return np.array_equal(self.quantiles_, other.quantiles_) and np.array_equal(
+            self.values_, other.values_
+        )
+
+    def __hash__(self) -> int:
+        # tobytes() of an immutable numpy array gives a stable hash; the arrays
+        # are the value identity since they back quantile/sample/mean/std.
+        return hash((self.quantiles_.tobytes(), self.values_.tobytes()))
 
     def quantile(self, q: float) -> float:
         """Return the value at quantile q.

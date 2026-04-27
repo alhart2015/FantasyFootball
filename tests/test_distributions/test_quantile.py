@@ -143,3 +143,38 @@ def test_constant_quantile_repeats_value() -> None:
     assert dist.quantile(0.10) == pytest.approx(0.0)
     assert dist.quantile(0.50) == pytest.approx(0.0)
     assert dist.quantile(0.90) == pytest.approx(1.0)
+
+
+def test_eq_identical_quantile_distributions() -> None:
+    qd1 = QuantileDistribution(
+        quantiles=np.array([0.10, 0.50, 0.90]),
+        values=np.array([0.0, 5.0, 10.0]),
+    )
+    qd2 = QuantileDistribution(
+        quantiles=np.array([0.10, 0.50, 0.90]),
+        values=np.array([0.0, 5.0, 10.0]),
+    )
+    assert qd1 == qd2
+    assert hash(qd1) == hash(qd2)
+
+
+def test_eq_different_values_not_equal() -> None:
+    qd1 = QuantileDistribution(
+        quantiles=np.array([0.10, 0.50, 0.90]),
+        values=np.array([0.0, 5.0, 10.0]),
+    )
+    qd2 = QuantileDistribution(
+        quantiles=np.array([0.10, 0.50, 0.90]),
+        values=np.array([0.0, 6.0, 10.0]),
+    )
+    assert qd1 != qd2
+    assert hash(qd1) != hash(qd2)
+
+
+def test_eq_against_non_quantile_distribution_returns_false() -> None:
+    qd = QuantileDistribution(
+        quantiles=np.array([0.10, 0.50, 0.90]),
+        values=np.array([0.0, 5.0, 10.0]),
+    )
+    assert (qd == "not a distribution") is False
+    assert (qd == 42) is False
