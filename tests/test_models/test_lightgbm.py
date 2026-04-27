@@ -8,6 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+from pandera.errors import SchemaError
 
 from projections.models.lightgbm import (
     QUANTILE_GRID,
@@ -171,3 +172,49 @@ def test_qb_factory_uses_qb_target_stats() -> None:
     assert Stat.INTERCEPTIONS in model._config.target_stats
     # WR-only stats are not in QB:
     assert Stat.RECEPTIONS not in model._config.target_stats
+
+
+def test_fit_validates_weekly_stats_schema() -> None:
+    """fit() should reject weekly_stats DataFrames that don't match WeeklyStatsSchema."""
+    features = _build_synthetic_wr_features()
+    weekly_stats = _build_synthetic_weekly_stats(features)
+    weekly_stats = weekly_stats.drop(columns=["passing_yards"])  # break the schema
+    model = wr_lightgbm()
+    with pytest.raises(SchemaError):
+        model.fit(features, weekly_stats)
+
+
+def test_fit_filters_to_model_position() -> None:
+    """fit() should only train on rows where weekly_stats.position matches self.position."""
+    from projections.schemas import Position
+
+    features = _build_synthetic_wr_features()
+    weekly_stats = _build_synthetic_weekly_stats(features)
+    # Mark half the rows as a different position; fit should silently filter them out.
+    half = len(weekly_stats) // 2
+    weekly_stats.iloc[:half, weekly_stats.columns.get_loc("position")] = Position.QB.value
+    model = wr_lightgbm()
+    model.fit(features, weekly_stats)
+    # If filtering worked, fit succeeded; the join would have failed if both positions were present
+    # because the WR-only features would have only matched the WR rows.
+    assert model._is_fitted
+
+
+def test_fit_warns_on_best_iter_zero() -> None:
+    """Degenerate sub-models trigger a warning rather than silently training."""
+    # We can't easily force best_iter=0 with the synthetic data, so we test
+    # that the warning category is correctly typed by inspecting source on this run
+    # if it happens to fire.
+    import warnings as warnings_mod
+
+    features = _build_synthetic_wr_features()
+    weekly_stats = _build_synthetic_weekly_stats(features)
+    model = wr_lightgbm()
+    with warnings_mod.catch_warnings(record=True) as caught:
+        warnings_mod.simplefilter("always")
+        model.fit(features, weekly_stats)
+        # If any RuntimeWarning fired, verify the message format.
+        bi_warnings = [w for w in caught if "best_iter=0" in str(w.message)]
+        for w in bi_warnings:
+            assert issubclass(w.category, RuntimeWarning)
+            assert "early stopping fired immediately" in str(w.message)

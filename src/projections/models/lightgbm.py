@@ -15,6 +15,7 @@ QuantileDistribution satisfies the Distribution Protocol structurally.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -38,6 +39,7 @@ from projections.schemas import (
     Ruleset,
     Stat,
     TeFeaturesSchema,
+    WeeklyStatsSchema,
     WrFeaturesSchema,
 )
 from projections.scoring.score_distribution import (
@@ -265,6 +267,9 @@ class LightGBMModel:
         """
         # Validate features against the position schema.
         features = self._config.feature_schema.validate(features)
+        weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
+        # Filter to only this position's truth (matches BaselineModel pattern).
+        weekly_stats = weekly_stats[weekly_stats["position"] == self._config.position.value].copy()
 
         # Inner-join on (gsis_id, season, week).
         target_cols = [s.value for s in self._config.target_stats]
@@ -309,8 +314,18 @@ class LightGBMModel:
                     callbacks=[lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False)],
                 )
                 # `regressor.booster_` exposes the trained Booster after fit.
+                best_iter = int(regressor.best_iteration_ or 0)
+                if best_iter == 0:
+                    warnings.warn(
+                        f"LightGBMModel.fit: best_iter=0 for "
+                        f"{self._config.position.value}/{stat.value}/q={q}; "
+                        "early stopping fired immediately. "
+                        "Sub-model will predict at constant baseline.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
                 self._sub_models[stat][q] = regressor.booster_
-                self._best_iters[(stat, q)] = int(regressor.best_iteration_ or 0)
+                self._best_iters[(stat, q)] = best_iter
 
         self._train_start = int(seasons[0])
         self._train_end = int(seasons[-1])
