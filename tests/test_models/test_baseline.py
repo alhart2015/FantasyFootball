@@ -78,20 +78,16 @@ def test_baseline_fit_populates_normal_variance_params(
     """WR yards stats stay NORMAL (Plan 3e Phase 2 attempted STUDENT_T but was
     reverted because heavy tails structurally narrow [p10, p90] coverage).
 
-    Plan 3e Phase 3 wires per-tertile bucketing: variance_params now carries
-    ``bucket_cuts`` (2 cuts) + ``std_per_bucket`` (3 stds, one per bucket)."""
+    Plan 3e Phase 3 attempted per-tertile bucketing and was reverted; the
+    variance_params shape is back to a scalar ``std`` per stat."""
     model = wr_baseline()
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
         params = model.variance_params[stat]
-        assert "bucket_cuts" in params
-        assert "std_per_bucket" in params
-        cuts = params["bucket_cuts"]
-        stds = params["std_per_bucket"]
-        assert isinstance(cuts, list) and len(cuts) == 2
-        assert all(isinstance(c, float) for c in cuts)
-        assert isinstance(stds, list) and len(stds) == 3
-        assert all(s > 0 for s in stds)
+        assert "std" in params
+        std = params["std"]
+        assert isinstance(std, float)
+        assert std > 0
 
 
 def test_baseline_fit_populates_gamma_variance_params(
@@ -99,39 +95,31 @@ def test_baseline_fit_populates_gamma_variance_params(
 ) -> None:
     model = wr_baseline()
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
-    # Gamma stats: variance_params now carries per-bucket shape values (Plan 3e Phase 3).
     # RECEPTIONS stays Gamma; count stats moved to NEGATIVE_BINOMIAL in Plan 3e Phase 1.
+    # Phase 3 bucketing was reverted; variance_params shape is scalar ``shape``.
     for stat in (Stat.RECEPTIONS,):
         params = model.variance_params[stat]
-        assert "bucket_cuts" in params
-        assert "shape_per_bucket" in params
-        cuts = params["bucket_cuts"]
-        shapes = params["shape_per_bucket"]
-        assert isinstance(cuts, list) and len(cuts) == 2
-        assert all(isinstance(c, float) for c in cuts)
-        assert isinstance(shapes, list) and len(shapes) == 3
-        assert all(0.01 <= s <= 100.0 for s in shapes)
+        assert "shape" in params
+        shape = params["shape"]
+        assert isinstance(shape, float)
+        assert 0.01 <= shape <= 100.0
 
 
 def test_baseline_fit_populates_nb_variance_params(
     baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     """Plan 3e Phase 1: count stats (TDs, fumbles_lost) route to NEGATIVE_BINOMIAL.
-    Plan 3e Phase 3: variance_params carries per-bucket dispersion values."""
+    Phase 3 bucketing was reverted; variance_params carries a scalar ``dispersion``."""
     from projections.models.baseline import _NB_DISPERSION_CLIP
 
     model = wr_baseline()
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     for stat in (Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
         params = model.variance_params[stat]
-        assert "bucket_cuts" in params
-        assert "dispersion_per_bucket" in params
-        cuts = params["bucket_cuts"]
-        dispersions = params["dispersion_per_bucket"]
-        assert isinstance(cuts, list) and len(cuts) == 2
-        assert all(isinstance(c, float) for c in cuts)
-        assert isinstance(dispersions, list) and len(dispersions) == 3
-        assert all(_NB_DISPERSION_CLIP[0] <= d <= _NB_DISPERSION_CLIP[1] for d in dispersions)
+        assert "dispersion" in params
+        dispersion = params["dispersion"]
+        assert isinstance(dispersion, float)
+        assert _NB_DISPERSION_CLIP[0] <= dispersion <= _NB_DISPERSION_CLIP[1]
 
 
 def test_method_of_moments_alpha_matches_hand_computed_value() -> None:
@@ -199,9 +187,7 @@ def test_build_stat_distributions_clamps_gamma_mu() -> None:
     model.dist_families = {Stat.RECEPTIONS: DistributionFamily.GAMMA}
     model.feature_columns = ("dummy_feat",)
     model.feature_means = pd.Series({"dummy_feat": 0.0}, dtype=float)
-    model.variance_params = {
-        Stat.RECEPTIONS: {"bucket_cuts": [0.0, 0.0], "shape_per_bucket": [2.0, 2.0, 2.0]}
-    }
+    model.variance_params = {Stat.RECEPTIONS: {"shape": 2.0}}
 
     class _FakeRidge:
         def predict(self, x: np.ndarray) -> np.ndarray:
@@ -516,8 +502,9 @@ def test_baseline_model_fit_stores_nb_dispersion_for_nb_stat(
     baseline_features_wr: pd.DataFrame,
     baseline_weekly_stats_wr: pd.DataFrame,
 ) -> None:
-    """A BaselineModel configured with a NEGATIVE_BINOMIAL stat must store
-    per-bucket dispersion entries in variance_params after fit() (Plan 3e Phase 3)."""
+    """A BaselineModel configured with a NEGATIVE_BINOMIAL stat must store a
+    scalar dispersion in variance_params after fit() (Plan 3e Phase 1; Phase 3
+    bucketing was reverted)."""
     from projections.models.baseline import _NB_DISPERSION_CLIP, wr_baseline
     from projections.schemas import DistributionFamily, Stat
 
@@ -531,13 +518,10 @@ def test_baseline_model_fit_stores_nb_dispersion_for_nb_stat(
     )
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
     params = model.variance_params[Stat.RECEIVING_TDS]
-    assert "bucket_cuts" in params
-    assert "dispersion_per_bucket" in params
-    cuts = params["bucket_cuts"]
-    dispersions = params["dispersion_per_bucket"]
-    assert isinstance(cuts, list) and len(cuts) == 2
-    assert isinstance(dispersions, list) and len(dispersions) == 3
-    assert all(_NB_DISPERSION_CLIP[0] <= d <= _NB_DISPERSION_CLIP[1] for d in dispersions)
+    assert "dispersion" in params
+    dispersion = params["dispersion"]
+    assert isinstance(dispersion, float)
+    assert _NB_DISPERSION_CLIP[0] <= dispersion <= _NB_DISPERSION_CLIP[1]
 
 
 def test_compute_tertile_cuts_returns_two_cuts_in_order() -> None:

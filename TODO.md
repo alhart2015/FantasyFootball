@@ -162,7 +162,7 @@ same set `BaselineModel.code_hash_files` already tracks) and refuses
 to read stale cache. Deferred until manual invalidation produces a
 real-world bug.
 
-### 22. Plan 3e — calibration tightening — closed in Plan 3e Phase 3
+### 22. Plan 3e — calibration tightening — closed in Plan 3e Phase 3 (Phase 3 routing subsequently reverted)
 
 Closed 2026-04-27. Phase 0 diagnostic identified 3 root causes; Phases 1-3 implemented:
 - Phase 1: ParametricNegativeBinomial for `*_tds` / interceptions / fumbles_lost (10 cells; weekly mean coverage 0.726 → 0.733; season mean 0.461 → 0.428).
@@ -176,3 +176,5 @@ Follow-up plan candidates (pick one in post-merge brainstorming):
 2. ZIP (zero-inflated Poisson) for count cells if NB still undercovers — handles zero mass directly rather than via dispersion.
 3. Cross-week residual correlation modeling for season under-dispersion — independent weekly draws understate season variance.
 4. Calibration-aware fitting — fit variance to minimize p10/p90 quantile loss directly rather than maximize residual likelihood.
+
+**Update 2026-04-27 (post-Phase-3 revert):** Took option (1) above. Phase 3 routing reverted in `BaselineModel.fit` + `build_stat_distributions`; bucketing helpers, widened `variance_params` type signature (`float | list[float]`), and unit tests preserved as future infrastructure for quantile-based fitting. Snapshot returns to Phase 1 baseline (commit `0078223`) bit-for-bit. **Final shipped state for Plan 3e: Phase 0 (diagnostic CLI) + Phase 1 (NB for count stats).** Phase 2 + Phase 3 are both attempted-and-reverted with infrastructure preserved. Spec calibration targets remain unmet by the shipped state; the canonical follow-up plans (ZIP, cross-week correlation, calibration-aware fitting) stay open for post-merge brainstorming.

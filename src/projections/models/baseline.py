@@ -17,6 +17,22 @@ full-distribution fit rather than central-coverage alignment. The
 ``ParametricStudentT`` class, codec branches, and
 ``_student_t_params_from_residuals`` estimator remain in-tree as
 infrastructure for future plans; no factory routes to ``STUDENT_T`` today.
+
+Plan 3e Phase 3 attempted to route every (NORMAL/GAMMA/NEGATIVE_BINOMIAL)
+cell through per-tertile variance bucketing on ``mu_hat``. Empirically the
+per-bucket variance estimator regressed weekly mean coverage by 0.016 and
+season mean coverage by 0.062 vs the Plan 1 baseline. QB cells improved
+modestly (their residuals are more homoscedastic, so bucketing was
+harmless), but RB/WR/TE cells regressed substantially because the
+per-bucket variance estimator does not capture within-bucket residual
+asymmetry on positions whose low-pred buckets mix mostly-zero actuals
+with occasional big-game actuals. The bucketing helpers
+(``_compute_tertile_cuts``, ``_assign_bucket_indices``,
+``_per_bucket_*_from_residuals``) and the widened ``variance_params`` value
+type (``float | list[float]``) are preserved as future infrastructure for
+quantile-based fitting (Plan 5 / quantile regression territory). The
+shipped state for Plan 3e is Phase 0 (diagnostic CLI) + Phase 1 (NB for
+count stats); Phase 2 + Phase 3 were attempted-and-reverted.
 """
 
 from __future__ import annotations
@@ -170,15 +186,18 @@ def _student_t_params_from_residuals(*, residuals: np.ndarray) -> tuple[float, f
 
 
 # ----------------------------------------------------------------------------
-# Per-tertile-bucket variance estimators (Plan 3e Phase 3 prep).
+# Per-tertile-bucket variance estimators (Plan 3e Phase 3 — UNUSED INFRASTRUCTURE).
 # ----------------------------------------------------------------------------
 #
-# Phase 3 splits each per-stat residual fit into three mu_hat-tertile buckets
-# (low / mid / high predicted mean), so we can capture heteroscedasticity that
-# a single global std/dispersion smears out. The helpers below are pure: they
-# take an array of residuals (or actuals) plus the tertile cuts and return one
-# parameter per bucket. Wiring into ``BaselineModel.fit`` and the predict path
-# follows in subsequent commits.
+# Phase 3 split each per-stat residual fit into three mu_hat-tertile buckets
+# (low / mid / high predicted mean), aiming to capture heteroscedasticity that
+# a single global std/dispersion smears out. The wiring into ``BaselineModel.fit``
+# and ``build_stat_distributions`` was empirically reverted (the per-bucket
+# variance estimator regressed RB/WR/TE coverage; see module docstring). The
+# helpers below remain as infrastructure for future plans (e.g., quantile-based
+# fitting that combines bucketing with a non-symmetric within-bucket estimator).
+# They are pure: each takes an array of residuals (or actuals) plus the tertile
+# cuts and returns one parameter per bucket.
 
 
 def _compute_tertile_cuts(mu_hat: np.ndarray) -> list[float]:
@@ -276,15 +295,6 @@ def _per_bucket_student_t_params_from_residuals(
             scales.append(s)
             dfs.append(d)
     return scales, dfs
-
-
-def _list_param(params: dict[str, float | list[float]], key: str) -> list[float]:
-    """Narrow a variance_params entry to its list[float] value (per-bucket
-    parameter). Used by build_stat_distributions to satisfy mypy's union type
-    on the values."""
-    val = params[key]
-    assert isinstance(val, list)
-    return val
 
 
 _WR_TARGET_STATS: Final[tuple[Stat, ...]] = (
@@ -577,48 +587,33 @@ class BaselineModel:
             ridge.fit(x, y)
             self.ridges[stat] = ridge
 
-        # Variance estimation with per-tertile bucketing (Plan 3e Phase 3).
+        # Variance estimation: global per-stat parameter (Plan 3e Phase 1 final
+        # state — Phase 3 bucketing was attempted and reverted; helpers and
+        # type widening preserved as infrastructure for future plans).
         for stat in self.target_stats:
             ridge = self.ridges[stat]
             mu_hat = ridge.predict(x).astype(np.float64)
             y = truth_frame[stat.value].to_numpy(dtype=np.float64)
             residuals = y - mu_hat
             family = self.dist_families[stat]
-            cuts = _compute_tertile_cuts(mu_hat)
-            indices = _assign_bucket_indices(mu_hat=mu_hat, cuts=cuts)
             if family is DistributionFamily.NORMAL:
-                self.variance_params[stat] = {
-                    "bucket_cuts": cuts,
-                    "std_per_bucket": _per_bucket_normal_std_from_residuals(
-                        mu_hat=mu_hat, residuals=residuals, cuts=cuts
-                    ),
-                }
+                self.variance_params[stat] = {"std": _normal_std_from_residuals(residuals)}
             elif family is DistributionFamily.GAMMA:
                 self.variance_params[stat] = {
-                    "bucket_cuts": cuts,
-                    "shape_per_bucket": _per_bucket_gamma_alpha_from_residuals(
-                        mu_hat=mu_hat, residuals=residuals, cuts=cuts
-                    ),
+                    "shape": _gamma_alpha_from_residuals(mu_hat=mu_hat, residuals=residuals)
                 }
             elif family is DistributionFamily.NEGATIVE_BINOMIAL:
-                # NB MLE is conditional on mu_hat, so it consumes (mu_hat, actual) directly,
-                # not residuals.
+                # NB MLE is conditional on mu_hat, so it consumes (mu_hat, actual)
+                # directly, not residuals.
                 self.variance_params[stat] = {
-                    "bucket_cuts": cuts,
-                    "dispersion_per_bucket": _per_bucket_nb_dispersion_from_residuals(
-                        mu_hat=mu_hat, actual=y, cuts=cuts
-                    ),
+                    "dispersion": _negative_binomial_dispersion_from_residuals(
+                        mu_hat=mu_hat, actual=y
+                    )
                 }
             elif family is DistributionFamily.STUDENT_T:
-                scales, dfs = _per_bucket_student_t_params_from_residuals(
-                    residuals=residuals, indices=indices
-                )
-                self.variance_params[stat] = {
-                    "bucket_cuts": cuts,
-                    "scale_per_bucket": scales,
-                    "df_per_bucket": dfs,
-                }
-            else:  # pragma: no cover -- only NORMAL/GAMMA/NB/STUDENT_T configured today
+                scale, df = _student_t_params_from_residuals(residuals=residuals)
+                self.variance_params[stat] = {"scale": scale, "df": df}
+            else:  # pragma: no cover
                 raise ValueError(f"Unsupported family {family} for stat {stat}")
 
         # Record the season range we trained on (post-dropna training set).
@@ -653,36 +648,33 @@ class BaselineModel:
             per_stat_mu[stat] = mu
 
         out: list[dict[Stat, Distribution]] = []
-        # Pre-compute per-row bucket indices for every stat.
-        per_stat_indices: dict[Stat, np.ndarray] = {}
-        for stat in self.target_stats:
-            cuts_val = self.variance_params[stat]["bucket_cuts"]
-            assert isinstance(cuts_val, list)
-            per_stat_indices[stat] = _assign_bucket_indices(mu_hat=per_stat_mu[stat], cuts=cuts_val)
-
         for i in range(len(x)):
             row: dict[Stat, Distribution] = {}
             for stat in self.target_stats:
                 mu_i = float(per_stat_mu[stat][i])
                 family = self.dist_families[stat]
                 params = self.variance_params[stat]
-                bucket = int(per_stat_indices[stat][i])
                 if family is DistributionFamily.NORMAL:
-                    std = _list_param(params, "std_per_bucket")[bucket]
-                    row[stat] = ParametricNormal(mean=mu_i, std=std)
+                    std_val = params["std"]
+                    assert isinstance(std_val, float)
+                    row[stat] = ParametricNormal(mean=mu_i, std=std_val)
                 elif family is DistributionFamily.GAMMA:
-                    shape = _list_param(params, "shape_per_bucket")[bucket]
+                    shape_val = params["shape"]
+                    assert isinstance(shape_val, float)
                     mu_safe = max(mu_i, self._GAMMA_MU_FLOOR)
-                    scale = mu_safe / shape
-                    row[stat] = ParametricGamma(shape=shape, scale=scale)
+                    scale = mu_safe / shape_val
+                    row[stat] = ParametricGamma(shape=shape_val, scale=scale)
                 elif family is DistributionFamily.NEGATIVE_BINOMIAL:
-                    dispersion = _list_param(params, "dispersion_per_bucket")[bucket]
+                    dispersion_val = params["dispersion"]
+                    assert isinstance(dispersion_val, float)
                     mu_safe = max(mu_i, _NB_MU_FLOOR)
-                    row[stat] = ParametricNegativeBinomial(mean=mu_safe, dispersion=dispersion)
+                    row[stat] = ParametricNegativeBinomial(mean=mu_safe, dispersion=dispersion_val)
                 elif family is DistributionFamily.STUDENT_T:
-                    scale = _list_param(params, "scale_per_bucket")[bucket]
-                    df = _list_param(params, "df_per_bucket")[bucket]
-                    row[stat] = ParametricStudentT(loc=mu_i, scale=scale, df=df)
+                    scale_val = params["scale"]
+                    df_val = params["df"]
+                    assert isinstance(scale_val, float)
+                    assert isinstance(df_val, float)
+                    row[stat] = ParametricStudentT(loc=mu_i, scale=scale_val, df=df_val)
                 else:  # pragma: no cover
                     raise ValueError(f"Unsupported family {family}")
             out.append(row)

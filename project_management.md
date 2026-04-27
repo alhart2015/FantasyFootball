@@ -4,6 +4,41 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 3e Phase 3 — Per-tertile bucketing — REVERTED (run 2026-04-27)
+
+**Closes:** Nothing new — the routing change did not survive validation. TODO #22 stays closed against Plan 3e overall, but the shipped Plan 3e state is now Phase 0 (diagnostic CLI) + Phase 1 (NB for count stats); Phase 2 + Phase 3 are both attempted-and-reverted (infrastructure preserved).
+
+After Phase 3 merged on-branch, the empirical signal was unambiguous: per-tertile variance bucketing regressed weekly mean coverage by **0.016** (0.726 → 0.710) and season mean coverage by **0.062** (0.461 → 0.399) vs the Plan 3d baseline. QB cells gained ~+0.02 weekly across all 4 years (their residuals are more uniformly homoscedastic across `mu_hat` tertiles, so bucketing produced near-equal per-bucket params and was harmless). RB/WR/TE cells regressed substantially (-0.025 to -0.037 weekly per cell, and as much as -0.135 on the worst season cell).
+
+### Mechanism
+
+The per-bucket variance estimator does not capture within-bucket residual asymmetry on positions whose low-pred buckets mix mostly-zero actuals with occasional big-game actuals. The bottom bucket gets a tighter std/shape/dispersion, which narrows the [p10, p90] interval on rows with the smallest predicted means — exactly where residuals are heteroscedastic *upward* (zero-inflated tails on count stats; right-skew on small-yards rows). Result: the central interval shrinks where actuals don't, and coverage drops. The right answer is quantile-based fitting (Plan 5 / quantile regression territory) — fit variance to minimize p10/p90 quantile loss directly rather than maximize residual likelihood.
+
+### Decision
+
+Revert Phase 3's routing in `BaselineModel.fit` and `BaselineModel.build_stat_distributions`. **Keep** the bucketing helpers (`_compute_tertile_cuts`, `_assign_bucket_indices`, `_per_bucket_normal_std_from_residuals`, `_per_bucket_gamma_alpha_from_residuals`, `_per_bucket_nb_dispersion_from_residuals`, `_per_bucket_student_t_params_from_residuals`), the widened `variance_params` value type (`float | list[float]`), and their unit tests as future infrastructure for plans that combine bucketing with non-symmetric within-bucket estimators or quantile-based fits.
+
+### Verification
+
+After revert + retrain + re-snapshot, the snapshot returns to Phase 1's baseline (commit `0078223`) **bit-for-bit**: weekly mean 0.733 → 0.733; season mean 0.428 → 0.428; max abs delta across all 400 metrics is 0.00000. Variance_params reverts to scalar shape (`{"std": X}` / `{"shape": X}` / `{"dispersion": X}`); per-position model_ids change because the source-file hash changes, but the underlying numbers don't.
+
+### Final shipped state for Plan 3e
+
+- Phase 0: diagnostic CLI (`scripts/diagnose_calibration.py`) + research report.
+- Phase 1: `ParametricNegativeBinomial` for the 10 zero-inflated count stats (`*_tds`, `interceptions`, `fumbles_lost`); conditional MLE dispersion estimator with NB-2 / "size" parameterization; codec branch for the new family.
+- Phase 2: Student-t routing for `*_yards` — attempted, reverted. `ParametricStudentT` class, codec branch, and `_student_t_params_from_residuals` estimator preserved as infrastructure.
+- Phase 3: per-tertile variance bucketing across all routed families — attempted, reverted. Bucketing helpers + widened `variance_params` type preserved as infrastructure.
+
+Spec calibration targets (min cell coverage ≥ 0.65; mean delta ≥ +0.10) still **not met** by the shipped state. Follow-up plans below.
+
+### Follow-up plan candidates (post-merge brainstorming)
+
+1. **ZIP (zero-inflated Poisson) for count cells** if NB still undercovers — handles the zero mass directly rather than via dispersion.
+2. **Cross-week residual correlation modeling for season under-dispersion.** Season aggregation currently sums independent weekly draws; in reality, a player's good/bad weeks correlate (matchup quality, role, health). Modeling that correlation would widen season-total variance directly without touching weekly distributions. This is the canonical fix for the 0.30–0.50 season under-dispersion that has persisted through every Plan 3e attempt.
+3. **Calibration-aware fitting.** Plan 3e fitted variance via residual MLE / method-of-moments; the empirical signal then says coverage missed. Direct fits that minimize a calibration loss (e.g., quantile loss at p10/p90) rather than a likelihood would close the loop. This is a structural shift in the fitting paradigm and worth its own spec — the bucketing infrastructure preserved on-branch is a natural building block here.
+
+---
+
 ## Plan 3e Phase 3 — Per-tertile variance bucketing (run 2026-04-27, on branch `feat/plan-3e-calibration-tightening`)
 
 **Closes:** Plan 3e overall (Phases 0 + 1 + 2-attempted-and-reverted + 3); TODO #22 closed.
@@ -587,7 +622,7 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Current status (as of 2026-04-27)
 
-**Projections Core — Plan 3e Phase 1+ complete on branch; ready for PR.** Phase 1 swapped 10 zero-inflated count stats from GAMMA to NB with conditional MLE dispersion fitting; Phase 2 attempted Student-t for `*_yards` and was reverted after empirical coverage regressed (infrastructure preserved in-tree); Phase 3 wired per-tertile variance bucketing (33rd/67th-percentile cuts on `mu_hat` + per-bucket variance params) across all routed families. Final coverage targets MISSED: weekly mean 0.726 → 0.710, season mean 0.461 → 0.399, all-32-cells mean delta -0.039 (spec target ≥ +0.10), min cell coverage 0.293 (spec target ≥ 0.65). QB cells are the only ones that gained from bucketing (~+0.02 weekly across all 4 years); RB/WR/TE regressed because their residuals are sharply heteroscedastic and bucketing narrows the central interval where the actuals don't tighten. TODO #22 closed against Plan 3e overall; follow-up plans documented under Phase 3 (revert, ZIP for count cells, cross-week correlation, calibration-aware fitting).
+**Projections Core — Plan 3e shipped state = Phase 0 + Phase 1; Phase 2 + Phase 3 attempted-and-reverted (infrastructure preserved). Branch ready for PR.** Phase 1 swapped 10 zero-inflated count stats from GAMMA to NB with conditional MLE dispersion fitting (weekly mean coverage 0.726 → 0.733; season mean 0.461 → 0.428). Phase 2 attempted Student-t for `*_yards` and was reverted after empirical coverage regressed (`ParametricStudentT` + codec branch + estimator preserved in-tree). Phase 3 wired per-tertile variance bucketing across all routed families and was reverted after empirical coverage regressed (-0.016 weekly mean / -0.062 season mean vs Plan 3d; bucketing helpers + widened `variance_params` type preserved as future infrastructure for quantile-based fitting). Snapshot returns bit-for-bit to Phase 1 baseline (commit `0078223`). TODO #22 closed against Plan 3e overall; follow-up plans documented under the Phase 3 revert block (ZIP for count cells, cross-week correlation, calibration-aware fitting).
 
 **Plan 3e Phase 0 (calibration diagnostic) complete on same branch.** Diagnostic CLI + research report committed.
 
@@ -622,9 +657,9 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Open PR for Plan 3e (Phases 0 + 1+); after merge, brainstorm follow-up plans for any remaining coverage shortfalls.**
+**Open PR for Plan 3e (Phases 0 + 1; Phases 2 + 3 attempted-and-reverted, infrastructure preserved); after merge, brainstorm follow-up plans for the remaining coverage shortfalls.**
 
-Plan 3e shipped Phases 0 + 1 + 2-attempted-and-reverted + 3 on branch `feat/plan-3e-calibration-tightening` and closed TODO #22. The two spec calibration targets (min cell coverage ≥ 0.65; mean delta ≥ +0.10) were not met — Phase 3 bucketing regressed RB/WR/TE coverage even as it modestly improved QB. The Phase 3 PM block enumerates 4 candidate follow-up plans (revert-to-Phase-1, ZIP for count cells, cross-week residual correlation, calibration-aware fitting); pick + scope one in the next brainstorming session post-merge.
+Plan 3e shipped Phase 0 + Phase 1 on branch `feat/plan-3e-calibration-tightening` and closed TODO #22. Phase 2 (Student-t) and Phase 3 (per-tertile bucketing) were both attempted and reverted; their infrastructure (`ParametricStudentT` + codec branch + Student-t estimator + bucketing helpers + widened `variance_params` type) remains in-tree as future building blocks. The two spec calibration targets (min cell coverage ≥ 0.65; mean delta ≥ +0.10) were not met by the shipped state. Three candidate follow-up plans documented under the Phase 3 revert block (ZIP for count cells, cross-week residual correlation, calibration-aware fitting); pick + scope one in the next brainstorming session post-merge.
 
 After 3e: Plan 4 (public Python API + CLI verbs + free-tier web hosting).
 
