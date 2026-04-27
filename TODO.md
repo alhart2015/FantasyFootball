@@ -236,21 +236,16 @@ Wind especially tanks passing efficiency (rule of thumb: >20mph wind drops passi
 
 Small feature add; likely small but real win on a subset of games. Same plan slot as TODO #24 (player-trajectory) — both are quick adds inside existing builders.
 
-### 26. Plan 5 — LightGBM with quantile regression (Model C)
+### 26. Plan 5 — LightGBM with quantile regression (Model C) — closed in Plan 5
 
-Already in the project_management.md backlog as Plan 5; tracked here so it sits alongside the other model-improvement TODOs. One of the three tracks identified in the post-Plan-3e brainstorm (2026-04-27).
+Closed 2026-04-27. Per-stat sub-models trained at quantiles [0.05, 0.10, 0.50, 0.90, 0.95];
+new QuantileDistribution + codec branch; POSITION_DISPATCH.factories dict;
+backtest snapshot extended (400 → 768 rows). Model A unchanged; both coexist.
 
-**Why:** Ridge is linear; LightGBM (gradient-boosted trees) captures non-linearities and feature interactions for free, typically beating linear models by 5-15% on RMSE on similar-shape problems. Quantile regression (`objective='quantile'`, `alpha=0.1/0.5/0.9`) trains the predicted quantiles directly via pinball loss — calibration becomes a training objective rather than a post-hoc fit, sidestepping the entire Plan 3e issue.
-
-**Scope:**
-- New `models/lightgbm.py` implementing the `Model` Protocol; per-stat sub-models with quantile heads at p10/p50/p90
-- New `QuantileDistribution` (or extension of `SAMPLED_SUMMARY`) backed by interpolation between the predicted quantiles
-- Backtest harness extension: same gate, side-by-side comparison vs Model A
-- Per-position hyperparameter selection (n_estimators, max_depth, learning_rate, num_leaves, min_child_samples) via the existing CV harness
-
-**Adoption gate:** must beat Model A on the backtest snapshot before replacing it. Per the A → C → D modeling roadmap.
-
-**Estimated win:** 5-15% RMSE on top of current features; calibration improves as a side-effect of the quantile loss. Single biggest expected single-step gain among the three tracks.
+**Adoption verdict: Model C failed all three Plan 5 §1.3 adoption-gate criteria.**
+Model A stays the default. Model C infrastructure preserved for Plan 5b
+(hyperparameter tuning) or Plan 6 (ensemble) follow-ups. See project_management.md
+for the per-cell comparison table and detailed analysis.
 
 ### 27. Revisit Model Protocol shape (Fitted vs base separation)
 
@@ -270,3 +265,16 @@ The clean long-term shape is probably a `Fitted[Model]` Protocol split:
 Revisit when Plan 6 (EnsembleModel) lands — that's the natural moment to redesign
 the Protocol surface as more model classes need to share the contract. Until then,
 the `cast()` pattern in CLI scripts is the trade-off accepted.
+
+### 28. Widen aggregate_to_season to accept QUANTILE family
+
+Surfaced in Plan 5 Task 12. The harness gates season-aggregation on
+`(predictions["family"] == SAMPLED_SUMMARY).all()`, so LightGBM cells skip
+`season_calibration_p10p90` and `season_calibration_le_p90` rows.
+`aggregate_to_season` could accept `QuantileDistribution` instances —
+inverse-CDF sampling already works (Monte Carlo via `score_distribution`
+uses the Distribution Protocol's `.sample()`). Only the explicit
+family-restriction guard at the top of `aggregate_to_season` blocks reuse.
+
+Land alongside Plan 5b or Plan 6 to give Model C complete metric coverage
+(would add 32 rows to model_metrics.json).

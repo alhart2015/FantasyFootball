@@ -4,6 +4,91 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 5 — LightGBM with Quantile Regression (Model C) — shipped (run 2026-04-27)
+
+**Closes:** TODO #26.
+
+`LightGBMModel` (Model C) lands as a peer of `BaselineModel` (Model A) under
+the existing `Model` Protocol. Per-stat sub-models trained at quantiles
+[0.05, 0.10, 0.50, 0.90, 0.95]; per-row prediction sorts to enforce
+non-crossing, clips to [0, inf) for non-negative stats, wraps in
+`QuantileDistribution`, and runs through the unchanged `score_distribution`
+scoring layer. New `DistributionFamily.QUANTILE` + codec branch.
+`POSITION_DISPATCH` extended with `factories: dict[str, Callable]` keyed by
+model class name. Backtest harness gains `--model {baseline,lightgbm,both}`;
+snapshot file renamed `baseline_metrics.json` → `model_metrics.json` and
+rows keyed by `(position, year, metric, model_class)` (400 → 768 rows; LightGBM
+skips 32 season_calibration_* rows per the harness gate that limits
+season-aggregation to SAMPLED_SUMMARY family — see Task 18 follow-up).
+
+### Per-position model_ids
+
+| Position | Model A model_id (current) | Model C model_id (this plan) |
+|---|---|---|
+| WR | (Plan 3e Phase 1: `baseline:wr:6d955427:2018-2023`) | `lightgbm:wr:a4dd5a82:2018-2023` |
+| QB | (Plan 3e Phase 1: `baseline:qb:c98738f3:2018-2023`) | `lightgbm:qb:06fadb3f:2018-2023` |
+| RB | (Plan 3e Phase 1: `baseline:rb:5a86c8ee:2018-2023`) | `lightgbm:rb:fb169c0e:2018-2023` |
+| TE | (Plan 3e Phase 1: `baseline:te:9c00025b:2018-2023`) | `lightgbm:te:bd4c2a5b:2018-2023` |
+
+### Adoption-gate verdict — DO NOT ADOPT Model C as default
+
+Spec §1.3 required Model C to beat Model A on three criteria. **All three failed.**
+
+| Criterion | Threshold | Actual | Pass? |
+|---|---|---|---|
+| Composite RMSE strictly lower on >=12 of 16 cells; not worse by >1% on any cell | C <= A on 12+ cells; max +1% worse | C strictly lower on 1/16; max +3.85% worse (TE 2023); 11/16 cells exceed 1% | **FAIL** |
+| Spearman top-N within +-0.005 of A on every cell | All 16 within +-0.005 | 4/16 within tolerance; 12 fail; worst -0.0135 (RB 2021) | **FAIL** |
+| Weekly mean [p10,p90] coverage no worse on any cell; mean improvement >= +0.02 | No regressions; mean delta >= +0.02 | C no worse on 1/16 (QB 2022 +0.0137); mean delta -0.0857 | **FAIL** |
+
+### Side-by-side metric comparison (16 cells)
+
+Per-cell deltas (Model C - Model A) and the cell winner. `tie` indicates the absolute pct-delta is within the tolerance band (0-1% on RMSE/MAE; ±0.005 on Spearman; ±0.005 on calibration). `A` / `C` indicate a strict winner.
+
+| Cell | composite_rmse (A) | composite_rmse (C) | RMSE pct delta | composite_mae A | composite_mae C | spearman A | spearman C | spearman delta | calib_p10p90 A | calib_p10p90 C | calib delta | RMSE winner | MAE winner | Spearman winner | Calib winner |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| QB 2021 | 7.8342 | 7.8386 | +0.06% | 6.3606 | 6.4652 | 0.9342 | 0.9501 | +0.0159 | 0.6947 | 0.6857 | -0.0090 | tie | A | C | A |
+| QB 2022 | 7.2261 | 7.2718 | +0.63% | 5.7093 | 5.7649 | 0.9669 | 0.9655 | -0.0014 | 0.7458 | 0.7595 | +0.0137 | tie | tie | tie | C |
+| QB 2023 | 7.3092 | 7.3213 | +0.17% | 5.8796 | 5.9636 | 0.9454 | 0.9560 | +0.0106 | 0.7313 | 0.6955 | -0.0358 | tie | A | C | A |
+| QB 2024 | 7.6995 | 7.5523 | -1.91% | 6.0788 | 6.1338 | 0.9383 | 0.9450 | +0.0067 | 0.7018 | 0.6944 | -0.0073 | C | tie | C | A |
+| RB 2021 | 6.8486 | 7.0688 | +3.22% | 5.2108 | 5.6643 | 0.9700 | 0.9565 | -0.0135 | 0.7475 | 0.6008 | -0.1468 | A | A | A | A |
+| RB 2022 | 6.6359 | 6.8370 | +3.03% | 5.0383 | 5.4613 | 0.9658 | 0.9603 | -0.0055 | 0.7415 | 0.6221 | -0.1195 | A | A | A | A |
+| RB 2023 | 6.3143 | 6.5069 | +3.05% | 4.7179 | 5.0392 | 0.9665 | 0.9600 | -0.0065 | 0.7872 | 0.6354 | -0.1518 | A | A | A | A |
+| RB 2024 | 6.4860 | 6.6370 | +2.33% | 4.9290 | 5.1591 | 0.9753 | 0.9746 | -0.0007 | 0.7568 | 0.6231 | -0.1337 | A | A | tie | A |
+| TE 2021 | 5.3365 | 5.4636 | +2.38% | 3.8932 | 4.1989 | 0.9655 | 0.9598 | -0.0057 | 0.7350 | 0.6398 | -0.0951 | A | A | A | A |
+| TE 2022 | 5.2498 | 5.3710 | +2.31% | 3.6970 | 4.1489 | 0.9615 | 0.9606 | -0.0009 | 0.7647 | 0.6415 | -0.1232 | A | A | tie | A |
+| TE 2023 | 4.9422 | 5.1324 | +3.85% | 3.5439 | 4.0228 | 0.9704 | 0.9709 | +0.0005 | 0.7561 | 0.6711 | -0.0851 | A | A | tie | A |
+| TE 2024 | 5.0804 | 5.2661 | +3.66% | 3.7446 | 4.1408 | 0.9620 | 0.9568 | -0.0052 | 0.7345 | 0.6401 | -0.0944 | A | A | A | A |
+| WR 2021 | 6.7333 | 6.8837 | +2.23% | 5.0891 | 5.4583 | 0.9699 | 0.9624 | -0.0076 | 0.6956 | 0.6107 | -0.0849 | A | A | A | A |
+| WR 2022 | 6.6255 | 6.7479 | +1.85% | 5.0221 | 5.3711 | 0.9767 | 0.9670 | -0.0096 | 0.6970 | 0.6004 | -0.0966 | A | A | A | A |
+| WR 2023 | 6.5159 | 6.7129 | +3.02% | 4.7814 | 5.2292 | 0.9680 | 0.9590 | -0.0090 | 0.7256 | 0.6220 | -0.1036 | A | A | A | A |
+| WR 2024 | 6.6728 | 6.7339 | +0.92% | 4.9437 | 5.1907 | 0.9739 | 0.9669 | -0.0070 | 0.7109 | 0.6128 | -0.0981 | tie | A | A | A |
+
+### Why Model C lost — initial analysis
+
+LightGBM-with-defaults systematically under-covers and underperforms Ridge on RB/TE/WR; only QBs see meaningful improvement. Plausible causes (none investigated in Plan 5; deferred):
+
+1. **Quantile-loss training does not regularize against under-confidence.** The per-stat sub-models train independently at p5 / p10 / p50 / p90 / p95, with no shared prior. With ~6-15K rows per (position, stat), each sub-model fits noise that pushes the predicted interval inward. Ridge's L2 prior + post-hoc parametric variance (Plan 3e NB-2 for counts; Normal/Gamma for the rest) is more conservative.
+2. **Hand-set hyperparameters, not tuned.** Plan 5 §1.3 explicitly deferred hyperparameter tuning to a focused follow-up "if results justify." `n_estimators=2000` + `learning_rate=0.05` + `num_leaves=31` is a reasonable starting point but not optimal for any specific stat.
+3. **5-quantile interpolation is too coarse.** Tail accuracy depends on knot density; 5 knots over [0.05, 0.95] interpolates linearly between p10 and p50 (40% mass) and between p50 and p90 (40% mass) — coarse enough to lose structure where the underlying distribution has skew.
+4. **Per-stat independent training discards shared signal across stats.** A multi-output model trained jointly across the 6 stats per position would let it borrow strength.
+
+### Next steps
+
+**Default model selection**: keep Model A as the production default. Model C ships as a peer for future iteration but is not adopted today.
+
+**Followup plans (none in scope for Plan 5):**
+1. **Plan 5b — Hyperparameter tuning for Model C.** Optuna-based search per (position, stat, quantile) sub-model. If tuning closes the gap, revisit adoption.
+2. **Plan 6 — Model D (ensemble of Model A + Model C).** Even though Model C lost head-to-head, a stacked predictor (e.g., per-cell weighted average with weights fit on a held-out year) could still beat A alone, particularly on QB where C has a real edge. Worth trying once the adoption-gate infra is in place.
+3. **TODO #28 (filed below)** — widen `aggregate_to_season` to accept `QUANTILE` family so LightGBM cells get season_calibration_* metrics.
+
+After Plan 5 + (5b? 6?): Plan 4 (public Python API + CLI verbs + free-tier hosting), then Draft Hub.
+
+### Per-position model_ids on disk
+
+Standalone artifacts at `models/artifacts/lightgbm-{pos}-2018-2023-{hash}.joblib`. Backtest harness regenerates per-fold artifacts via the feature cache; standalone artifacts are for ad-hoc prediction / sanity checks.
+
+---
+
 ## Plan 3e Phase 3 — Per-tertile bucketing — REVERTED (run 2026-04-27)
 
 **Closes:** Nothing new — the routing change did not survive validation. TODO #22 stays closed against Plan 3e overall, but the shipped Plan 3e state is now Phase 0 (diagnostic CLI) + Phase 1 (NB for count stats); Phase 2 + Phase 3 are both attempted-and-reverted (infrastructure preserved).
@@ -657,24 +742,25 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Pivot from calibration tightening to mean-prediction improvements.** Plan 3e merged to `main` at `b541e5b` (PR #10). Post-merge brainstorm (2026-04-27) reached two conclusions:
+**Plan 5 (Model C — LightGBM with quantile regression) shipped, but Model C
+failed the adoption gate.** Model A stays the production default. Three
+documented follow-ups:
 
-1. The remaining calibration shortfall (weekly mean 0.733 vs 0.80 target; season mean 0.428 vs 0.80) does not block any of the planned downstream tools — none of Draft Hub / start-sit / DFS GPP actually consume a calibrated season `[p10, p90]`.
-2. The next high-leverage work is improving the *mean* projections (RMSE / MAE / Spearman are what season-long and DFS-cash decisions actually consume). Three documented model-improvement tracks:
+1. **Plan 5b — hyperparameter tuning for Model C.** Optuna-based search per
+   (position, stat, quantile). The fastest experiment that could justify
+   adopting C; QB cells already favor C, so even a partial tune may flip
+   the verdict on more cells.
+2. **Plan 6 — Model D (ensemble of Model A + Model C).** Stack the two
+   predictors per (position, stat). Could beat A alone even if C loses
+   head-to-head, because where the two models disagree their consensus is
+   often closer to truth than either alone — particularly on QB where C
+   has a real edge.
+3. **TODO #3 (PBP / EPA features)** — feature track. Independent of model
+   class; would benefit both A and C if pursued.
+4. **TODO #23 (target decomposition)** — also independent of model class.
 
-| Track | TODO / backlog | Expected RMSE win | Notes |
-|-------|----------------|-------------------|-------|
-| **LightGBM with quantile regression** (Model C / Plan 5) | TODO #26 + backlog | 5-15% | Single-step biggest gain; quantile loss handles calibration as a training side-effect. |
-| **PBP / EPA features + downstream derived features** | TODO #3 (expanded) | 5-15% cumulative | Replaces `opp_allowed_fppg_l4` proxy; unlocks family of features (PROE, pace, aDOT, pressure-allowed). |
-| **Target decomposition (volume × efficiency)** | TODO #23 | 3-10% | Structural change to the prediction target; tightens TD modeling specifically. |
-
-Adjacent smaller adds: TODO #24 (player-trajectory features — age curves, trend gradients), TODO #25 (weather feature plumbing).
-
-Empirical backing for the pivot decision: lag-k autocorrelation of standardized residuals showed week-to-week persistence is weak (lag-1 ρ in [+0.02, +0.10]; lag-2+ ≈ noise) and AR(1) only explains 5-10% of the season variance gap, so cross-week correlation modeling is not a high-leverage track. Calibration-aware fitting risks distorting the upper tail (load-bearing for DFS GPP) while fixing the central interval. See the Phase 3 revert block above for the structural reasons within-week family swaps and bucketing hit walls.
-
-**Recommended sequence:** Plan 5 (LightGBM) → PBP features (TODO #3) → target decomposition (TODO #23). All three are independent and can be reordered. Pick + brainstorm + spec one in the next session.
-
-After model-improvement work: Plan 4 (public Python API + CLI verbs + free-tier web hosting), then Draft Hub.
+Pick one in the next session. After model-improvement work: Plan 4 (public
+API + CLI verbs + free-tier hosting), then Draft Hub.
 
 ---
 
