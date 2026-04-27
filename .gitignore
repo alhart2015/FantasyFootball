@@ -215,6 +215,7 @@ data/features/
 data/projections/
 data/backtest/
 data/backtests/
+data/diagnostics/
 data/manifests/
 data/sanity_checks/
 *.duckdb

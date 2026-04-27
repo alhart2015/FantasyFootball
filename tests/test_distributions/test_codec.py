@@ -118,3 +118,68 @@ def test_unknown_stat_name_raises() -> None:
     )
     with pytest.raises(ValueError, match="this_is_not_a_stat"):
         unpack_per_stat_params(bytes(bad))
+
+
+def test_codec_round_trip_neg_binomial() -> None:
+    """NB packed via pack_per_stat_params and round-tripped."""
+    from projections.distributions import (
+        ParametricNegativeBinomial,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    dist = ParametricNegativeBinomial(mean=0.3, dispersion=2.0)
+    blob = pack_per_stat_params({Stat.RECEIVING_TDS: dist})
+    decoded = unpack_per_stat_params(blob)
+    assert Stat.RECEIVING_TDS in decoded
+    decoded_dist = decoded[Stat.RECEIVING_TDS]
+    assert isinstance(decoded_dist, ParametricNegativeBinomial)
+    assert decoded_dist.mean() == pytest.approx(0.3)
+    # Round-trip preserves (mean, dispersion) directly via persisted entries.
+
+
+def test_codec_round_trip_student_t() -> None:
+    from projections.distributions import (
+        ParametricStudentT,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    dist = ParametricStudentT(loc=250.0, scale=70.0, df=8.0)
+    blob = pack_per_stat_params({Stat.PASSING_YARDS: dist})
+    decoded = unpack_per_stat_params(blob)
+    decoded_dist = decoded[Stat.PASSING_YARDS]
+    assert isinstance(decoded_dist, ParametricStudentT)
+    assert decoded_dist.mean() == pytest.approx(250.0)
+    assert decoded_dist.std() == pytest.approx(dist.std())
+
+
+def test_codec_round_trip_after_bucketed_fit() -> None:
+    """End-to-end: emit per-row distributions for the 4 family types currently
+    in use after Plan 3e (NORMAL, GAMMA, NB; STUDENT_T preserved as
+    infrastructure). Confirm pack + unpack round-trips correctly for each."""
+    from projections.distributions import (
+        ParametricGamma,
+        ParametricNegativeBinomial,
+        ParametricNormal,
+        ParametricStudentT,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    blob = pack_per_stat_params(
+        {
+            Stat.PASSING_YARDS: ParametricNormal(mean=250.0, std=70.0),
+            Stat.RECEPTIONS: ParametricGamma(shape=2.5, scale=1.0),
+            Stat.PASSING_TDS: ParametricNegativeBinomial(mean=1.5, dispersion=4.0),
+            Stat.RUSHING_YARDS: ParametricStudentT(loc=20.0, scale=15.0, df=4.0),
+        }
+    )
+    decoded = unpack_per_stat_params(blob)
+    assert isinstance(decoded[Stat.PASSING_YARDS], ParametricNormal)
+    assert isinstance(decoded[Stat.RECEPTIONS], ParametricGamma)
+    assert isinstance(decoded[Stat.PASSING_TDS], ParametricNegativeBinomial)
+    assert isinstance(decoded[Stat.RUSHING_YARDS], ParametricStudentT)

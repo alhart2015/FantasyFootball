@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats as scipy_stats
 from sklearn.linear_model import RidgeCV
 
 from projections.distributions.parametric import ParametricGamma, ParametricNormal
@@ -29,11 +30,13 @@ def test_wr_baseline_factory_returns_unfitted_model() -> None:
     }
     assert set(model.target_stats) == expected_targets
     assert model.dist_families[Stat.RECEPTIONS] is DistributionFamily.GAMMA
+    # Plan 3e Phase 2 attempted Student-t for *_yards stats; reverted because
+    # heavy tails narrowed [p10, p90] coverage. Yards stats stay NORMAL.
     assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.NORMAL
-    assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.GAMMA
+    assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.NORMAL
-    assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.GAMMA
-    assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.GAMMA
+    assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
+    assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.feature_columns  # non-empty; specific list verified in Task 6
 
 
@@ -72,13 +75,19 @@ def test_baseline_fit_records_train_seasons(
 def test_baseline_fit_populates_normal_variance_params(
     baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
+    """WR yards stats stay NORMAL (Plan 3e Phase 2 attempted STUDENT_T but was
+    reverted because heavy tails structurally narrow [p10, p90] coverage).
+
+    Plan 3e Phase 3 attempted per-tertile bucketing and was reverted; the
+    variance_params shape is back to a scalar ``std`` per stat."""
     model = wr_baseline()
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
-    # Normal stats: variance_params should have a positive 'std'.
     for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
         params = model.variance_params[stat]
         assert "std" in params
-        assert params["std"] > 0
+        std = params["std"]
+        assert isinstance(std, float)
+        assert std > 0
 
 
 def test_baseline_fit_populates_gamma_variance_params(
@@ -86,11 +95,31 @@ def test_baseline_fit_populates_gamma_variance_params(
 ) -> None:
     model = wr_baseline()
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
-    # Gamma stats: variance_params should have a 'shape' in [0.01, 100].
-    for stat in (Stat.RECEPTIONS, Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
+    # RECEPTIONS stays Gamma; count stats moved to NEGATIVE_BINOMIAL in Plan 3e Phase 1.
+    # Phase 3 bucketing was reverted; variance_params shape is scalar ``shape``.
+    for stat in (Stat.RECEPTIONS,):
         params = model.variance_params[stat]
         assert "shape" in params
-        assert 0.01 <= params["shape"] <= 100.0
+        shape = params["shape"]
+        assert isinstance(shape, float)
+        assert 0.01 <= shape <= 100.0
+
+
+def test_baseline_fit_populates_nb_variance_params(
+    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
+) -> None:
+    """Plan 3e Phase 1: count stats (TDs, fumbles_lost) route to NEGATIVE_BINOMIAL.
+    Phase 3 bucketing was reverted; variance_params carries a scalar ``dispersion``."""
+    from projections.models.baseline import _NB_DISPERSION_CLIP
+
+    model = wr_baseline()
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    for stat in (Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
+        params = model.variance_params[stat]
+        assert "dispersion" in params
+        dispersion = params["dispersion"]
+        assert isinstance(dispersion, float)
+        assert _NB_DISPERSION_CLIP[0] <= dispersion <= _NB_DISPERSION_CLIP[1]
 
 
 def test_method_of_moments_alpha_matches_hand_computed_value() -> None:
@@ -401,3 +430,136 @@ def test_predict_distribution_is_deterministic_across_calls(
         assert (out_a[col].to_numpy() == out_b[col].to_numpy()).all(), (
             f"Determinism violated on column {col}"
         )
+
+
+def test_negative_binomial_dispersion_recovers_known_param() -> None:
+    """Synthesize NB-distributed `actual` from known dispersion + per-row mean,
+    fit the dispersion, expect recovery within tolerance."""
+    from projections.models.baseline import _negative_binomial_dispersion_from_residuals
+
+    rng = np.random.default_rng(42)
+    n = 500
+    mu_hat = rng.uniform(0.1, 1.5, n)
+    true_dispersion = 3.0
+    # Standard NB-2 synthesis: n_size = dispersion (scalar), p = dispersion / (dispersion + mu_hat).
+    p = true_dispersion / (true_dispersion + mu_hat)
+    actual = scipy_stats.nbinom.rvs(n=true_dispersion, p=p, size=n, random_state=rng).astype(
+        np.float64
+    )
+
+    fitted = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
+    assert fitted == pytest.approx(true_dispersion, rel=0.30)
+
+
+def test_negative_binomial_dispersion_clipped_for_degenerate_input() -> None:
+    """All-zero actual at mu_hat > 0 is maximally overdispersed: under the
+    NB-2 ``size`` parameterization (where dispersion -> inf recovers Poisson,
+    and dispersion -> 0 puts all mass at zero), the MLE is driven to the LOW
+    clip. The estimator should snap there rather than returning a near-zero
+    interior value -- snapping is the contract that keeps the fitted
+    distribution from drifting on degenerate inputs."""
+    from projections.models.baseline import (
+        _NB_DISPERSION_CLIP,
+        _negative_binomial_dispersion_from_residuals,
+    )
+
+    mu_hat = np.full(50, 0.1)
+    actual = np.zeros(50)
+    fitted = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
+    assert fitted == _NB_DISPERSION_CLIP[0]
+
+
+def test_student_t_params_recovers_known_params() -> None:
+    """Synthesize Student-t-distributed residuals from known (scale, df),
+    fit, expect recovery within tolerance."""
+    from projections.models.baseline import _student_t_params_from_residuals
+
+    rng = np.random.default_rng(42)
+    n = 1000
+    true_scale = 50.0
+    true_df = 6.0
+    residuals = scipy_stats.t.rvs(df=true_df, loc=0.0, scale=true_scale, size=n, random_state=rng)
+
+    fitted_scale, fitted_df = _student_t_params_from_residuals(residuals=residuals)
+    assert fitted_scale == pytest.approx(true_scale, rel=0.20)
+    assert fitted_df == pytest.approx(true_df, rel=0.50)
+
+
+def test_student_t_params_rejects_degenerate_input() -> None:
+    """All-zero residuals collapse scipy's scale to ~0 — guard returns floor."""
+    from projections.models.baseline import (
+        _STUDENT_T_DF_FLOOR,
+        _STUDENT_T_SCALE_FLOOR,
+        _student_t_params_from_residuals,
+    )
+
+    fitted_scale, fitted_df = _student_t_params_from_residuals(residuals=np.zeros(50))
+    assert fitted_scale >= _STUDENT_T_SCALE_FLOOR
+    assert fitted_df >= _STUDENT_T_DF_FLOOR
+
+
+def test_baseline_model_fit_stores_nb_dispersion_for_nb_stat(
+    baseline_features_wr: pd.DataFrame,
+    baseline_weekly_stats_wr: pd.DataFrame,
+) -> None:
+    """A BaselineModel configured with a NEGATIVE_BINOMIAL stat must store a
+    scalar dispersion in variance_params after fit() (Plan 3e Phase 1; Phase 3
+    bucketing was reverted)."""
+    from projections.models.baseline import _NB_DISPERSION_CLIP, wr_baseline
+    from projections.schemas import DistributionFamily, Stat
+
+    model = wr_baseline()
+    # Rewire RECEIVING_TDS to NB locally for this test (production factory
+    # rewire happens in Task 1.5).
+    object.__setattr__(
+        model,
+        "dist_families",
+        {**dict(model.dist_families), Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL},
+    )
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    params = model.variance_params[Stat.RECEIVING_TDS]
+    assert "dispersion" in params
+    dispersion = params["dispersion"]
+    assert isinstance(dispersion, float)
+    assert _NB_DISPERSION_CLIP[0] <= dispersion <= _NB_DISPERSION_CLIP[1]
+
+
+def test_compute_tertile_cuts_returns_two_cuts_in_order() -> None:
+    from projections.models.baseline import _compute_tertile_cuts
+
+    mu_hat = np.linspace(0, 100, 300)
+    cuts = _compute_tertile_cuts(mu_hat)
+    assert len(cuts) == 2
+    assert cuts[0] < cuts[1]
+    # 33rd percentile of linspace(0, 100, 300) is ~33.0; 67th is ~66.7.
+    assert cuts[0] == pytest.approx(33.0, abs=1.5)
+    assert cuts[1] == pytest.approx(66.7, abs=1.5)
+
+
+def test_assign_bucket_indices_returns_zero_one_two() -> None:
+    from projections.models.baseline import _assign_bucket_indices
+
+    cuts = [33.0, 67.0]
+    mu_hat = np.array([10.0, 33.0, 50.0, 67.0, 80.0])
+    indices = _assign_bucket_indices(mu_hat=mu_hat, cuts=cuts)
+    # np.searchsorted([33, 67], [10, 33, 50, 67, 80]) returns [0, 0, 1, 1, 2].
+    np.testing.assert_array_equal(indices, [0, 0, 1, 1, 2])
+
+
+def test_per_bucket_normal_std_returns_three_values() -> None:
+    from projections.models.baseline import _per_bucket_normal_std_from_residuals
+
+    rng = np.random.default_rng(0)
+    n = 600
+    mu_hat = np.linspace(0, 100, n)
+    cuts = [33.0, 67.0]
+    # Synthesize heteroscedastic residuals: low-mu has small std, high-mu large.
+    bucket_idx = np.searchsorted(cuts, mu_hat).clip(0, 2)
+    stds = np.array([5.0, 15.0, 40.0])
+    residuals = rng.normal(0, stds[bucket_idx], n)
+
+    fitted = _per_bucket_normal_std_from_residuals(mu_hat=mu_hat, residuals=residuals, cuts=cuts)
+    assert len(fitted) == 3
+    assert fitted[0] == pytest.approx(5.0, rel=0.20)
+    assert fitted[1] == pytest.approx(15.0, rel=0.20)
+    assert fitted[2] == pytest.approx(40.0, rel=0.20)

@@ -26,11 +26,13 @@ def test_te_baseline_factory_returns_unfitted_model() -> None:
     }
     assert set(model.target_stats) == expected_targets
     assert model.dist_families[Stat.RECEPTIONS] is DistributionFamily.GAMMA
+    # Plan 3e Phase 2 attempted Student-t for *_yards stats; reverted because
+    # heavy tails narrowed [p10, p90] coverage. Yards stats stay NORMAL.
     assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.NORMAL
-    assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.GAMMA
+    assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.NORMAL
-    assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.GAMMA
-    assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.GAMMA
+    assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
+    assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.feature_columns
 
 
@@ -73,12 +75,18 @@ def test_te_baseline_fit_records_train_seasons(
 def test_te_baseline_fit_populates_normal_variance_params(
     baseline_features_te: pd.DataFrame, baseline_weekly_stats_te: pd.DataFrame
 ) -> None:
+    """TE yards stats stay NORMAL. Plan 3e Phase 2 attempted STUDENT_T for
+    *_yards but was reverted because heavy tails structurally narrow
+    [p10, p90] coverage. Plan 3e Phase 3 attempted per-tertile bucketing and
+    was also reverted; variance_params shape is back to a scalar ``std``."""
     model = te_baseline()
     model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
     for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
         params = model.variance_params[stat]
         assert "std" in params
-        assert params["std"] > 0
+        std = params["std"]
+        assert isinstance(std, float)
+        assert std > 0
 
 
 def test_te_baseline_fit_populates_gamma_variance_params(
@@ -86,10 +94,31 @@ def test_te_baseline_fit_populates_gamma_variance_params(
 ) -> None:
     model = te_baseline()
     model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
-    for stat in (Stat.RECEPTIONS, Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
+    # RECEPTIONS stays Gamma; count stats moved to NEGATIVE_BINOMIAL in Plan 3e Phase 1.
+    # Phase 3 bucketing was reverted; variance_params shape is scalar ``shape``.
+    for stat in (Stat.RECEPTIONS,):
         params = model.variance_params[stat]
         assert "shape" in params
-        assert 0.01 <= params["shape"] <= 100.0
+        shape = params["shape"]
+        assert isinstance(shape, float)
+        assert 0.01 <= shape <= 100.0
+
+
+def test_te_baseline_fit_populates_nb_variance_params(
+    baseline_features_te: pd.DataFrame, baseline_weekly_stats_te: pd.DataFrame
+) -> None:
+    """Plan 3e Phase 1: TE count stats route to NEGATIVE_BINOMIAL.
+    Phase 3 bucketing was reverted; variance_params carries a scalar ``dispersion``."""
+    from projections.models.baseline import _NB_DISPERSION_CLIP
+
+    model = te_baseline()
+    model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
+    for stat in (Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
+        params = model.variance_params[stat]
+        assert "dispersion" in params
+        dispersion = params["dispersion"]
+        assert isinstance(dispersion, float)
+        assert _NB_DISPERSION_CLIP[0] <= dispersion <= _NB_DISPERSION_CLIP[1]
 
 
 def test_te_predict_distribution_returns_projection_weekly_schema_valid_frame(

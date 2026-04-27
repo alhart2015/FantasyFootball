@@ -29,6 +29,7 @@ dev = [
     "ruff>=0.5",
     "types-setuptools",
     "pre-commit>=3.6",
+    "matplotlib>=3.8",
 ]
 
 [tool.setuptools.packages.find]
@@ -45,10 +46,12 @@ markers = [
 [tool.mypy]
 strict = true
 python_version = "3.11"
-mypy_path = "src"
+# scripts/ is on the path so test_scripts/ tests (which import script modules
+# directly via tests/test_scripts/conftest.py) type-check cleanly.
+mypy_path = ["src", "scripts"]
 
 [[tool.mypy.overrides]]
-module = ["nfl_data_py.*", "pandera.*", "scipy.*", "joblib.*", "pandas.*", "sklearn.*", "msgpack.*"]
+module = ["nfl_data_py.*", "pandera.*", "scipy.*", "joblib.*", "pandas.*", "sklearn.*", "msgpack.*", "matplotlib.*"]
 ignore_missing_imports = true
 
 [tool.ruff]

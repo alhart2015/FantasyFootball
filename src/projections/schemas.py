@@ -147,6 +147,8 @@ class DistributionFamily(StrEnum):
 
     NORMAL = "NORMAL"
     GAMMA = "GAMMA"
+    NEGATIVE_BINOMIAL = "NEGATIVE_BINOMIAL"  # NEW (Plan 3e Phase 1)
+    STUDENT_T = "STUDENT_T"  # NEW (Plan 3e Phase 2) — heavy-tailed continuous
     EMPIRICAL_QUANTILE = "EMPIRICAL_QUANTILE"  # quantile-regression output
     SAMPLED = "SAMPLED"  # explicit sample array
     SAMPLED_SUMMARY = "SAMPLED_SUMMARY"  # per-stat dist params + summary in mean/p10/p50/p90

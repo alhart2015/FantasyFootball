@@ -7,7 +7,7 @@ The encoded blob is msgpack-packed with shape:
         "schema_version": 1,
         "stats": {
             "<stat_value>": {
-                "family": "NORMAL"|"GAMMA",
+                "family": "NORMAL"|"GAMMA"|"NEGATIVE_BINOMIAL"|"STUDENT_T",
                 ... family-specific params ...
             },
             ...
@@ -15,8 +15,10 @@ The encoded blob is msgpack-packed with shape:
     }
 
 Currently registered families:
-    NORMAL: {"family": "NORMAL", "mean": float, "std": float}
-    GAMMA:  {"family": "GAMMA",  "shape": float, "scale": float}
+    NORMAL:            {"family": "NORMAL",            "mean": float, "std": float}
+    GAMMA:             {"family": "GAMMA",             "shape": float, "scale": float}
+    NEGATIVE_BINOMIAL: {"family": "NEGATIVE_BINOMIAL", "mean": float, "dispersion": float}
+    STUDENT_T:         {"family": "STUDENT_T",         "loc": float, "scale": float, "df": float}
 
 Adding a new family means adding one branch each to pack_per_stat_params and
 unpack_per_stat_params. schema_version=1 is the only supported version today.
@@ -30,7 +32,12 @@ from typing import Final
 import msgpack
 
 from projections.distributions.base import Distribution
-from projections.distributions.parametric import ParametricGamma, ParametricNormal
+from projections.distributions.parametric import (
+    ParametricGamma,
+    ParametricNegativeBinomial,
+    ParametricNormal,
+    ParametricStudentT,
+)
 from projections.schemas import DistributionFamily, Stat
 
 _SCHEMA_VERSION: Final[int] = 1
@@ -55,6 +62,19 @@ def pack_per_stat_params(per_stat_dists: Mapping[Stat, Distribution]) -> bytes:
                 "family": DistributionFamily.GAMMA.value,
                 "shape": dist.shape,
                 "scale": dist.scale,
+            }
+        elif isinstance(dist, ParametricNegativeBinomial):
+            stats_blob[stat.value] = {
+                "family": DistributionFamily.NEGATIVE_BINOMIAL.value,
+                "mean": dist.mean(),
+                "dispersion": dist.dispersion_,
+            }
+        elif isinstance(dist, ParametricStudentT):
+            stats_blob[stat.value] = {
+                "family": DistributionFamily.STUDENT_T.value,
+                "loc": dist.mean(),
+                "scale": dist.scale_,
+                "df": dist.df_,
             }
         else:
             raise ValueError(
@@ -89,6 +109,17 @@ def unpack_per_stat_params(blob: bytes) -> dict[Stat, Distribution]:
             out[stat] = ParametricNormal(mean=float(entry["mean"]), std=float(entry["std"]))
         elif family_value == DistributionFamily.GAMMA.value:
             out[stat] = ParametricGamma(shape=float(entry["shape"]), scale=float(entry["scale"]))
+        elif family_value == DistributionFamily.NEGATIVE_BINOMIAL.value:
+            out[stat] = ParametricNegativeBinomial(
+                mean=float(entry["mean"]),
+                dispersion=float(entry["dispersion"]),
+            )
+        elif family_value == DistributionFamily.STUDENT_T.value:
+            out[stat] = ParametricStudentT(
+                loc=float(entry["loc"]),
+                scale=float(entry["scale"]),
+                df=float(entry["df"]),
+            )
         else:
             raise ValueError(
                 f"Unknown family in params blob: {family_value!r}; "

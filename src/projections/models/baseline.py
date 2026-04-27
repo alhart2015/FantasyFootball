@@ -5,6 +5,34 @@ One BaselineModel class parameterized by (position, target_stats,
 feature_columns, dist_families); per-position factories (wr_baseline,
 qb_baseline, rb_baseline, te_baseline) construct correctly-configured
 instances.
+
+Plan 3e Phase 2 attempted to route ``*_yards`` stats to ``STUDENT_T`` based
+on Phase 0's per-cell AIC signal favoring heavy tails. The routing was
+reverted because Student-t with the data's empirical tail shape narrows
+the [p10, p90] shoulder vs ``NORMAL`` at similar total std — empirically,
+~1.5-2 pts of weekly coverage was lost uniformly across RB/WR/TE cells.
+The mechanism is structural (heavy tails pull mass into the extremes,
+leaving less in the central [p10, p90] band), and AIC measures
+full-distribution fit rather than central-coverage alignment. The
+``ParametricStudentT`` class, codec branches, and
+``_student_t_params_from_residuals`` estimator remain in-tree as
+infrastructure for future plans; no factory routes to ``STUDENT_T`` today.
+
+Plan 3e Phase 3 attempted to route every (NORMAL/GAMMA/NEGATIVE_BINOMIAL)
+cell through per-tertile variance bucketing on ``mu_hat``. Empirically the
+per-bucket variance estimator regressed weekly mean coverage by 0.016 and
+season mean coverage by 0.062 vs the Plan 1 baseline. QB cells improved
+modestly (their residuals are more homoscedastic, so bucketing was
+harmless), but RB/WR/TE cells regressed substantially because the
+per-bucket variance estimator does not capture within-bucket residual
+asymmetry on positions whose low-pred buckets mix mostly-zero actuals
+with occasional big-game actuals. The bucketing helpers
+(``_compute_tertile_cuts``, ``_assign_bucket_indices``,
+``_per_bucket_*_from_residuals``) and the widened ``variance_params`` value
+type (``float | list[float]``) are preserved as future infrastructure for
+quantile-based fitting (Plan 5 / quantile regression territory). The
+shipped state for Plan 3e is Phase 0 (diagnostic CLI) + Phase 1 (NB for
+count stats); Phase 2 + Phase 3 were attempted-and-reverted.
 """
 
 from __future__ import annotations
@@ -18,12 +46,16 @@ from typing import Final
 import numpy as np
 import pandas as pd
 import pandera.pandas as pa
+from scipy import stats as scipy_stats
+from scipy.optimize import minimize_scalar
 from sklearn.linear_model import RidgeCV
 
 from projections.distributions import (
     Distribution,
     ParametricGamma,
+    ParametricNegativeBinomial,
     ParametricNormal,
+    ParametricStudentT,
     pack_per_stat_params,
 )
 from projections.models.base import compute_code_hash
@@ -69,6 +101,202 @@ def _normal_std_from_residuals(residuals: np.ndarray) -> float:
     return max(s, 1e-6)
 
 
+_NB_DISPERSION_CLIP: Final[tuple[float, float]] = (0.01, 1000.0)
+# Floor for the NB rate parameter mu. Mirrors ``BaselineModel._GAMMA_MU_FLOOR``;
+# kept module-scope so estimator + predict-time consumer share one definition.
+_NB_MU_FLOOR: Final[float] = 1e-3
+
+
+def _negative_binomial_dispersion_from_residuals(
+    *, mu_hat: np.ndarray, actual: np.ndarray
+) -> float:
+    """Conditional MLE for NB dispersion given per-row mean = mu_hat.
+
+    Maximizes sum(nbinom.logpmf(actual_i; n=dispersion, p_i)) over a single
+    global ``dispersion`` (the standard NB-2 / "size" parameter), where
+    p_i = dispersion / (dispersion + mu_hat_i). Yields per-row var =
+    mu_hat_i + mu_hat_i^2 / dispersion -- matches ParametricNegativeBinomial.
+
+    Coerces actual to non-negative integers (counts upstream may carry float
+    dtype). Returns the dispersion clipped to ``_NB_DISPERSION_CLIP``.
+    """
+    counts = np.clip(np.round(actual), 0, None).astype(np.int64)
+    mu_clipped = np.maximum(mu_hat, _NB_MU_FLOOR)
+
+    if counts.size < 2:
+        return _NB_DISPERSION_CLIP[1]
+
+    def neg_log_lik(dispersion: float) -> float:
+        if dispersion <= 0:
+            return float("inf")
+        # Standard NB-2: n = dispersion (size param, scalar), p per-row.
+        # scipy broadcasts the scalar n across the per-row p.
+        p = dispersion / (dispersion + mu_clipped)
+        return -float(np.sum(scipy_stats.nbinom.logpmf(counts, n=dispersion, p=p)))
+
+    result = minimize_scalar(
+        neg_log_lik,
+        bounds=_NB_DISPERSION_CLIP,
+        method="bounded",
+        options={"xatol": 1e-3},
+    )
+    if not result.success or not np.isfinite(result.fun):
+        return _NB_DISPERSION_CLIP[1]
+    fitted = float(np.clip(result.x, *_NB_DISPERSION_CLIP))
+    # Snap to a clip endpoint when the bounded minimizer stops within its xatol
+    # of the boundary: degenerate inputs (e.g. all-zero actuals) drive the
+    # likelihood monotonically toward an endpoint, but `minimize_scalar` returns
+    # a value just inside the bound rather than the bound itself.
+    snap_tol = 2e-3
+    if fitted - _NB_DISPERSION_CLIP[0] <= snap_tol:
+        return _NB_DISPERSION_CLIP[0]
+    if _NB_DISPERSION_CLIP[1] - fitted <= snap_tol:
+        return _NB_DISPERSION_CLIP[1]
+    return fitted
+
+
+_STUDENT_T_SCALE_FLOOR: Final[float] = 1e-3
+_STUDENT_T_DF_FLOOR: Final[float] = 2.5  # > 2 for finite variance
+
+
+def _student_t_params_from_residuals(*, residuals: np.ndarray) -> tuple[float, float]:
+    """MLE Student-t scale + df fit on the residual array.
+
+    Returns (scale, df). Discards the fitted loc — residuals are mean-zero
+    by construction (`actual - pred`); the scale and df are the per-stat
+    global parameters used at predict time.
+
+    Guards against degenerate fits: if scipy's fitted scale is dramatically
+    smaller than the empirical sample std, returns the floor to keep
+    ParametricStudentT's std() finite.
+    """
+    if residuals.size < 2:
+        return _STUDENT_T_SCALE_FLOOR, _STUDENT_T_DF_FLOOR
+    try:
+        df, _loc, scale = scipy_stats.t.fit(residuals)
+    except Exception:  # diagnostic must not abort on per-cell fit failure
+        return _STUDENT_T_SCALE_FLOOR, _STUDENT_T_DF_FLOOR
+
+    sample_std = float(np.std(residuals, ddof=0))
+    if scale < max(sample_std * 1e-6, _STUDENT_T_SCALE_FLOOR):
+        scale = _STUDENT_T_SCALE_FLOOR
+    if df <= 2.0 or not np.isfinite(df):
+        df = _STUDENT_T_DF_FLOOR
+    return float(scale), float(df)
+
+
+# ----------------------------------------------------------------------------
+# Per-tertile-bucket variance estimators (Plan 3e Phase 3 — UNUSED INFRASTRUCTURE).
+# ----------------------------------------------------------------------------
+#
+# Phase 3 split each per-stat residual fit into three mu_hat-tertile buckets
+# (low / mid / high predicted mean), aiming to capture heteroscedasticity that
+# a single global std/dispersion smears out. The wiring into ``BaselineModel.fit``
+# and ``build_stat_distributions`` was empirically reverted (the per-bucket
+# variance estimator regressed RB/WR/TE coverage; see module docstring). The
+# helpers below remain as infrastructure for future plans (e.g., quantile-based
+# fitting that combines bucketing with a non-symmetric within-bucket estimator).
+# They are pure: each takes an array of residuals (or actuals) plus the tertile
+# cuts and returns one parameter per bucket.
+
+
+def _compute_tertile_cuts(mu_hat: np.ndarray) -> list[float]:
+    """Return [33rd-percentile, 67th-percentile] cuts on mu_hat."""
+    return [
+        float(np.percentile(mu_hat, 33.333)),
+        float(np.percentile(mu_hat, 66.667)),
+    ]
+
+
+def _assign_bucket_indices(*, mu_hat: np.ndarray, cuts: list[float]) -> np.ndarray:
+    """Return per-row bucket indices in {0, 1, 2} based on cuts.
+
+    Uses np.searchsorted: rows where mu_hat <= cuts[0] go to bucket 0;
+    cuts[0] < mu_hat <= cuts[1] goes to bucket 1; mu_hat > cuts[1] goes
+    to bucket 2.
+    """
+    return np.searchsorted(np.asarray(cuts), mu_hat, side="left").clip(0, 2).astype(np.int64)
+
+
+def _per_bucket_normal_std_from_residuals(
+    *, mu_hat: np.ndarray, residuals: np.ndarray, cuts: list[float]
+) -> list[float]:
+    """Per-bucket residual std for the NORMAL family. Returns 3 values
+    (one per tertile bucket). Falls back to the global residual std for
+    any bucket with < 2 rows."""
+    indices = _assign_bucket_indices(mu_hat=mu_hat, cuts=cuts)
+    global_std = _normal_std_from_residuals(residuals)
+    out: list[float] = []
+    for b in range(3):
+        mask = indices == b
+        if mask.sum() < 2:
+            out.append(global_std)
+        else:
+            out.append(_normal_std_from_residuals(residuals[mask]))
+    return out
+
+
+def _per_bucket_gamma_alpha_from_residuals(
+    *, mu_hat: np.ndarray, residuals: np.ndarray, cuts: list[float]
+) -> list[float]:
+    """Per-bucket gamma alpha. Falls back to the global alpha for any
+    bucket with < 2 rows."""
+    indices = _assign_bucket_indices(mu_hat=mu_hat, cuts=cuts)
+    global_alpha = _gamma_alpha_from_residuals(mu_hat=mu_hat, residuals=residuals)
+    out: list[float] = []
+    for b in range(3):
+        mask = indices == b
+        if mask.sum() < 2:
+            out.append(global_alpha)
+        else:
+            out.append(_gamma_alpha_from_residuals(mu_hat=mu_hat[mask], residuals=residuals[mask]))
+    return out
+
+
+def _per_bucket_nb_dispersion_from_residuals(
+    *, mu_hat: np.ndarray, actual: np.ndarray, cuts: list[float]
+) -> list[float]:
+    """Per-bucket NB dispersion. Falls back to global for any bucket with < 2 rows."""
+    indices = _assign_bucket_indices(mu_hat=mu_hat, cuts=cuts)
+    global_d = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
+    out: list[float] = []
+    for b in range(3):
+        mask = indices == b
+        if mask.sum() < 2:
+            out.append(global_d)
+        else:
+            out.append(
+                _negative_binomial_dispersion_from_residuals(
+                    mu_hat=mu_hat[mask], actual=actual[mask]
+                )
+            )
+    return out
+
+
+def _per_bucket_student_t_params_from_residuals(
+    *, residuals: np.ndarray, indices: np.ndarray
+) -> tuple[list[float], list[float]]:
+    """Per-bucket Student-t (scale, df). Returns (scale_per_bucket, df_per_bucket).
+    Falls back to the global fit for any bucket with < 2 rows.
+
+    Takes pre-computed ``indices`` rather than (mu_hat, cuts) because Student-t
+    fitting is on the residual array, not the (mu_hat, residual) pair.
+    """
+    global_scale, global_df = _student_t_params_from_residuals(residuals=residuals)
+    scales: list[float] = []
+    dfs: list[float] = []
+    for b in range(3):
+        mask = indices == b
+        if mask.sum() < 2:
+            scales.append(global_scale)
+            dfs.append(global_df)
+        else:
+            s, d = _student_t_params_from_residuals(residuals=residuals[mask])
+            scales.append(s)
+            dfs.append(d)
+    return scales, dfs
+
+
 _WR_TARGET_STATS: Final[tuple[Stat, ...]] = (
     Stat.RECEPTIONS,
     Stat.RECEIVING_YARDS,
@@ -81,10 +309,10 @@ _WR_TARGET_STATS: Final[tuple[Stat, ...]] = (
 _WR_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
     Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
-    Stat.RECEIVING_TDS: DistributionFamily.GAMMA,
+    Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
-    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
-    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+    Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
 
 # Feature columns from WrFeaturesSchema, minus identity columns
@@ -126,11 +354,11 @@ _QB_TARGET_STATS: Final[tuple[Stat, ...]] = (
 
 _QB_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.PASSING_YARDS: DistributionFamily.NORMAL,
-    Stat.PASSING_TDS: DistributionFamily.GAMMA,
-    Stat.INTERCEPTIONS: DistributionFamily.GAMMA,
+    Stat.PASSING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.INTERCEPTIONS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
-    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
-    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+    Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
 
 # Feature columns from QbFeaturesSchema, minus identity (gsis_id/season/week/team/opponent).
@@ -170,11 +398,11 @@ _RB_TARGET_STATS: Final[tuple[Stat, ...]] = (
 
 _RB_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
-    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
+    Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
     Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
-    Stat.RECEIVING_TDS: DistributionFamily.GAMMA,
-    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+    Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
 
 _RB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
@@ -213,10 +441,10 @@ _TE_TARGET_STATS: Final[tuple[Stat, ...]] = (
 _TE_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
     Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
-    Stat.RECEIVING_TDS: DistributionFamily.GAMMA,
+    Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
-    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
-    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+    Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
 
 # Feature columns include rushing_*_per_game_l4 (added to TeFeaturesSchema in Plan 3b Phase 1).
@@ -279,7 +507,7 @@ class BaselineModel:
     # Populated by .fit() — None on an unfitted instance.
     feature_means: pd.Series | None = field(default=None)
     ridges: dict[Stat, RidgeCV] = field(default_factory=dict)
-    variance_params: dict[Stat, dict[str, float]] = field(default_factory=dict)
+    variance_params: dict[Stat, dict[str, float | list[float]]] = field(default_factory=dict)
     train_seasons: tuple[int, int] | None = field(default=None)
     code_hash: str | None = field(default=None)
 
@@ -359,7 +587,9 @@ class BaselineModel:
             ridge.fit(x, y)
             self.ridges[stat] = ridge
 
-        # Variance estimation (spec section 3.4).
+        # Variance estimation: global per-stat parameter (Plan 3e Phase 1 final
+        # state — Phase 3 bucketing was attempted and reverted; helpers and
+        # type widening preserved as infrastructure for future plans).
         for stat in self.target_stats:
             ridge = self.ridges[stat]
             mu_hat = ridge.predict(x).astype(np.float64)
@@ -372,7 +602,18 @@ class BaselineModel:
                 self.variance_params[stat] = {
                     "shape": _gamma_alpha_from_residuals(mu_hat=mu_hat, residuals=residuals)
                 }
-            else:  # pragma: no cover -- only NORMAL/GAMMA configured today
+            elif family is DistributionFamily.NEGATIVE_BINOMIAL:
+                # NB MLE is conditional on mu_hat, so it consumes (mu_hat, actual)
+                # directly, not residuals.
+                self.variance_params[stat] = {
+                    "dispersion": _negative_binomial_dispersion_from_residuals(
+                        mu_hat=mu_hat, actual=y
+                    )
+                }
+            elif family is DistributionFamily.STUDENT_T:
+                scale, df = _student_t_params_from_residuals(residuals=residuals)
+                self.variance_params[stat] = {"scale": scale, "df": df}
+            else:  # pragma: no cover
                 raise ValueError(f"Unsupported family {family} for stat {stat}")
 
         # Record the season range we trained on (post-dropna training set).
@@ -414,12 +655,26 @@ class BaselineModel:
                 family = self.dist_families[stat]
                 params = self.variance_params[stat]
                 if family is DistributionFamily.NORMAL:
-                    row[stat] = ParametricNormal(mean=mu_i, std=params["std"])
+                    std_val = params["std"]
+                    assert isinstance(std_val, float)
+                    row[stat] = ParametricNormal(mean=mu_i, std=std_val)
                 elif family is DistributionFamily.GAMMA:
-                    shape = params["shape"]
-                    # rate = alpha / mu; scale = 1/rate = mu / alpha
-                    scale = mu_i / shape
-                    row[stat] = ParametricGamma(shape=shape, scale=scale)
+                    shape_val = params["shape"]
+                    assert isinstance(shape_val, float)
+                    mu_safe = max(mu_i, self._GAMMA_MU_FLOOR)
+                    scale = mu_safe / shape_val
+                    row[stat] = ParametricGamma(shape=shape_val, scale=scale)
+                elif family is DistributionFamily.NEGATIVE_BINOMIAL:
+                    dispersion_val = params["dispersion"]
+                    assert isinstance(dispersion_val, float)
+                    mu_safe = max(mu_i, _NB_MU_FLOOR)
+                    row[stat] = ParametricNegativeBinomial(mean=mu_safe, dispersion=dispersion_val)
+                elif family is DistributionFamily.STUDENT_T:
+                    scale_val = params["scale"]
+                    df_val = params["df"]
+                    assert isinstance(scale_val, float)
+                    assert isinstance(df_val, float)
+                    row[stat] = ParametricStudentT(loc=mu_i, scale=scale_val, df=df_val)
                 else:  # pragma: no cover
                     raise ValueError(f"Unsupported family {family}")
             out.append(row)
