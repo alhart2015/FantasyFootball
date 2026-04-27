@@ -4,6 +4,89 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 3e Phase 3 — Per-tertile variance bucketing (run 2026-04-27, on branch `feat/plan-3e-calibration-tightening`)
+
+**Closes:** Plan 3e overall (Phases 0 + 1 + 2-attempted-and-reverted + 3); TODO #22 closed.
+
+Phase 3 is the cross-cutting fix: every (position, stat) cell now persists 33rd/67th-percentile cuts on `mu_hat` from the training set + a 3-element list of variance parameters (one per tertile bucket). At predict time, each row is routed to its bucket via `np.searchsorted` and the corresponding parameter is selected. Applies to all families currently in use (NORMAL, GAMMA, NEGATIVE_BINOMIAL).
+
+**Phase 3 delivered:**
+- `BaselineModel.variance_params` shape generalized from `dict[Stat, dict[str, float]]` to `dict[Stat, dict[str, float | list[float]]]`.
+- 5 new helpers: `_compute_tertile_cuts`, `_assign_bucket_indices`, `_per_bucket_normal_std_from_residuals`, `_per_bucket_gamma_alpha_from_residuals`, `_per_bucket_nb_dispersion_from_residuals` (and `_per_bucket_student_t_params_from_residuals` as future infrastructure).
+- `BaselineModel.fit` rewritten to compute tertile cuts + per-bucket parameters per family.
+- `BaselineModel.build_stat_distributions` rewritten to look up bucket per row + select per-bucket parameter.
+- Codec unchanged (per-row distributions still emit concrete scalar params); mixed-family regression test added.
+- Standalone artifacts retrained.
+- Snapshot regenerated.
+
+### Coverage delta vs Plan 3d baseline (pre-Plan-3e at commit `fe55d5b`)
+
+| Metric | Pre-Plan-3e (3d at `fe55d5b`) | Post-Phase-3 | Delta |
+|---|---|---|---|
+| Weekly mean `calibration_p10p90` | 0.726 | 0.710 | **-0.016** |
+| Weekly min `calibration_p10p90` | 0.675 (QB/2021) | 0.663 (WR/2022) | -0.012 |
+| Season mean `season_calibration_p10p90` | 0.461 | 0.399 | **-0.062** |
+| Season min `season_calibration_p10p90` | 0.313 (QB/2022) | 0.293 (QB/2021) | -0.020 |
+| ALL-32-cells mean `[p10, p90]` coverage delta | — | — | **-0.039** |
+| ALL-32-cells min coverage | 0.313 | 0.293 | -0.020 |
+
+**Compared to Phase 1 alone** (snapshot at `0078223`, pre-bucketing): weekly mean 0.733 → 0.710 (-0.023); season mean 0.428 → 0.399 (-0.030); all-32-cells mean delta -0.026.
+
+**Per-cell weekly highlights:**
+- QB cells gained on bucketing: 2021 +0.020, 2022 +0.024, 2023 +0.025, 2024 +0.019 (QB cells are now the only weekly cells with positive deltas vs Plan 3d).
+- RB cells regressed -0.025 to -0.033 across all 4 years.
+- TE cells regressed -0.017 to -0.032 across all 4 years.
+- WR cells regressed -0.030 to -0.037 across all 4 years (WR/2024 is the worst weekly miss).
+
+**Per-cell season highlights:**
+- Worst season-coverage regressions: WR/2022 -0.135, RB/2024 -0.121, WR/2023 -0.119, RB/2021 -0.090, WR/2021 -0.096.
+- Only QB/2023 (+0.013) and QB/2022 (0.000) season cells held or improved.
+
+### Per-position model_ids
+
+| Position | model_id |
+|---|---|
+| WR | `baseline:wr:a1fe2727:2018-2023` |
+| QB | `baseline:qb:5333a44e:2018-2023` |
+| RB | `baseline:rb:078c171c:2018-2023` |
+| TE | `baseline:te:f460c50f:2018-2023` |
+
+### Sample variance_params shape (one stat per family per position)
+
+- WR receiving_yards (NORMAL): `{'bucket_cuts': [38.288, 55.137], 'std_per_bucket': [25.599, 33.781, 41.593]}`
+- WR receptions (GAMMA): `{'bucket_cuts': [2.984, 4.253], 'shape_per_bucket': [1.752, 2.787, 3.822]}`
+- WR receiving_tds (NEGATIVE_BINOMIAL): `{'bucket_cuts': [0.226, 0.334], 'dispersion_per_bucket': [4.828, 1000.0, 1000.0]}`
+- QB passing_yards (NORMAL): `{'bucket_cuts': [220.099, 250.908], 'std_per_bucket': [87.075, 75.772, 76.945]}`
+- QB passing_tds (NEGATIVE_BINOMIAL): `{'bucket_cuts': [1.294, 1.650], 'dispersion_per_bucket': [1000.0, 1000.0, 1000.0]}`
+- RB rushing_yards (NORMAL): `{'bucket_cuts': [40.814, 57.406], 'std_per_bucket': [28.511, 33.948, 37.936]}`
+- TE receiving_yards (NORMAL): `{'bucket_cuts': [27.605, 40.259], 'std_per_bucket': [19.853, 24.328, 33.730]}`
+
+### Spec target verification
+
+**Both spec targets MISSED — and Phase 3 regressed coverage rather than improving it.**
+
+- Min cell coverage across all 32 cells: 0.293 (target ≥ 0.65). **Not met.** No appreciable movement from Plan 3d (0.313).
+- Mean coverage delta across all 32 cells: -0.039 (target ≥ +0.10). **Not met; regressed.**
+
+### Mechanism of the regression
+
+Per-tertile bucketing reduces variance in the bottom + middle buckets relative to the unbucketed pooled estimate. The bottom bucket now uses a tighter std/shape/dispersion, which narrows the [p10, p90] interval on the half of the dataset with the smallest predicted means — exactly the half where residuals are heteroscedastic *upward* (zero-inflated tails on count stats; right-skew on small-yards rows). Result: the central interval shrinks where the actuals don't, and coverage drops.
+
+QB cells are the exception (uniform +0.02 weekly gains): QB residual variance is more uniformly homoscedastic across mu_hat tertiles than RB/WR/TE, so bucketing produces ~equal per-bucket params and avoids the asymmetric narrowing effect. RB/WR/TE — where heteroscedasticity is sharpest — are exactly where bucketing hurts most.
+
+### Known shortfalls / follow-up plans
+
+Recommended follow-up plans (none of these is in scope for Plan 3e — they are post-merge work):
+
+1. **Revert Phase 3 if RB/WR/TE coverage matters more than QB.** The Phase-1 snapshot (`0078223`) had better mean coverage than Phase 3 (0.733 vs 0.710 weekly; 0.428 vs 0.399 season). A clean revert to Phase 1 is a reasonable call. Plan 3e Phase 3 ships the per-tertile mechanism + tests; reversing the routing is a one-commit follow-up.
+2. **Asymmetric residual modeling.** Bucketing collapses the residual distribution to a single std/shape per bucket, which still assumes symmetric tails within each bucket. The data has zero-inflation (count stats) and right-skew (small-yards rows) that bucketing on its own can't capture. Follow-up plans:
+   - **ZIP (zero-inflated Poisson) for count cells** if NB still undercovers — handles the zero mass directly rather than via dispersion.
+   - **Per-bucket family choice** rather than per-cell — e.g., use NORMAL on the high-mean bucket of receiving_yards but Student-t on the low-mean bucket where the long right tail dominates.
+3. **Cross-week residual correlation modeling for season under-dispersion.** Season aggregation currently sums independent weekly draws; in reality, a player's good/bad weeks correlate (matchup quality, role, health). Modeling that correlation would widen season-total variance directly without touching weekly distributions. This is the canonical fix for the 0.30–0.50 season under-dispersion that has persisted through every Phase 3e attempt.
+4. **Calibration-aware fitting.** Plan 3e fitted variance via residual MLE / method-of-moments; the empirical signal then says coverage missed. Direct fits that minimize a calibration loss (e.g., quantile loss at p10/p90) rather than a likelihood would close the loop. This is a structural shift in the fitting paradigm and worth its own spec.
+
+---
+
 ## Plan 3e Phase 2 — Student-t for yards stats — ATTEMPTED + REVERTED (run 2026-04-27)
 
 **Closes:** Nothing — the routing change did not survive validation. TODO #22
@@ -504,7 +587,7 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Current status (as of 2026-04-27)
 
-**Projections Core — Plan 3e Phase 1 (NB for count stats) complete; Phase 2 (Student-t for yards) attempted + reverted; Phase 3 (variance bucketing) in progress** on branch `feat/plan-3e-calibration-tightening`. Phase 1 swapped the 10 zero-inflated count stats from GAMMA to NEGATIVE_BINOMIAL with conditional MLE dispersion fitting (weekly mean coverage 0.726 → 0.733; season mean 0.461 → 0.428). Phase 2 attempted Student-t for `*_yards` stats per Phase 0's AIC signal but lost ~1.5–2 pts of weekly coverage uniformly because Student-t's heavier tails structurally narrow the [p10, p90] shoulder; routing was reverted (snapshot back at the Phase 1 baseline bit-exact). `ParametricStudentT` infrastructure stays in-tree for future use.
+**Projections Core — Plan 3e Phase 1+ complete on branch; ready for PR.** Phase 1 swapped 10 zero-inflated count stats from GAMMA to NB with conditional MLE dispersion fitting; Phase 2 attempted Student-t for `*_yards` and was reverted after empirical coverage regressed (infrastructure preserved in-tree); Phase 3 wired per-tertile variance bucketing (33rd/67th-percentile cuts on `mu_hat` + per-bucket variance params) across all routed families. Final coverage targets MISSED: weekly mean 0.726 → 0.710, season mean 0.461 → 0.399, all-32-cells mean delta -0.039 (spec target ≥ +0.10), min cell coverage 0.293 (spec target ≥ 0.65). QB cells are the only ones that gained from bucketing (~+0.02 weekly across all 4 years); RB/WR/TE regressed because their residuals are sharply heteroscedastic and bucketing narrows the central interval where the actuals don't tighten. TODO #22 closed against Plan 3e overall; follow-up plans documented under Phase 3 (revert, ZIP for count cells, cross-week correlation, calibration-aware fitting).
 
 **Plan 3e Phase 0 (calibration diagnostic) complete on same branch.** Diagnostic CLI + research report committed.
 
@@ -539,20 +622,9 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Recommended: Plan 3e Phase 1+ — locked in by spec amendment after Phase 0 evidence; brainstorming session to follow.**
+**Open PR for Plan 3e (Phases 0 + 1+); after merge, brainstorm follow-up plans for any remaining coverage shortfalls.**
 
-Phase 0 produced a research report
-(`docs/superpowers/research/2026-04-26-calibration-diagnosis.md`) identifying 3
-root causes for the 0.30–0.55 weekly + season `[p10, p90]` under-dispersion:
-zero-inflated count stats catastrophically miscalibrated under GAMMA,
-heavy-tailed continuous yards stats (Student-t beats Normal by AIC delta
-`-2160 to -317`), and pervasive heteroscedasticity (18 of 24 cells with
-variance-ratio > 1.5). Per the spec section 3 decision gate, the next gate is a
-spec amendment to
-`docs/superpowers/specs/2026-04-26-plan-3e-calibration-tightening-design.md`
-adding Phase 1+ implementation phases (family swaps, variance bucketing,
-regression gate against the 3d snapshot). Re-invoke `superpowers:brainstorming`
-for that scoping in the next user-driven session.
+Plan 3e shipped Phases 0 + 1 + 2-attempted-and-reverted + 3 on branch `feat/plan-3e-calibration-tightening` and closed TODO #22. The two spec calibration targets (min cell coverage ≥ 0.65; mean delta ≥ +0.10) were not met — Phase 3 bucketing regressed RB/WR/TE coverage even as it modestly improved QB. The Phase 3 PM block enumerates 4 candidate follow-up plans (revert-to-Phase-1, ZIP for count cells, cross-week residual correlation, calibration-aware fitting); pick + scope one in the next brainstorming session post-merge.
 
 After 3e: Plan 4 (public Python API + CLI verbs + free-tier web hosting).
 

@@ -162,13 +162,17 @@ same set `BaselineModel.code_hash_files` already tracks) and refuses
 to read stale cache. Deferred until manual invalidation produces a
 real-world bug.
 
-### 22. Plan 3e — calibration tightening
+### 22. Plan 3e — calibration tightening — closed in Plan 3e Phase 3
 
-Plan 3c's snapshot showed weekly calibration coverage at 0.67–0.80 across
-all 16 cells (target 0.80). Plan 3d's season-calibration metrics inherit
-the same under-dispersion. Plan 3e replaces method-of-moments gamma alpha
-with an MLE fit (likely scipy.optimize.minimize on the residual log-likelihood)
-and/or adds per-stat residual-variance bucketing by predicted-mean tertile
-to capture heteroscedasticity. Validation surface: weekly calibration metrics
-move toward 0.80; season-calibration metrics widen accordingly. Re-snapshot
-required after Plan 3e ships.
+Closed 2026-04-27. Phase 0 diagnostic identified 3 root causes; Phases 1-3 implemented:
+- Phase 1: ParametricNegativeBinomial for `*_tds` / interceptions / fumbles_lost (10 cells; weekly mean coverage 0.726 → 0.733; season mean 0.461 → 0.428).
+- Phase 2: ParametricStudentT for `*_yards` — ATTEMPTED + REVERTED. Student-t with the data's tail shape narrows [p10, p90] coverage vs NORMAL despite Phase 0's AIC preference (AIC measures full-distribution fit, not p10/p90 coverage). Infrastructure preserved for future use.
+- Phase 3: per-tertile variance bucketing (cross-cutting; applies to NORMAL/GAMMA/NB).
+
+Final coverage (Phase 3 vs Plan 3d at `fe55d5b`): weekly mean 0.726 → 0.710 (-0.016); season mean 0.461 → 0.399 (-0.062); all-32-cells mean delta -0.039; min cell coverage 0.293 (was 0.313). Spec targets (min ≥ 0.65, mean delta ≥ +0.10): **NOT met**. QB cells gained ~+0.02 weekly across all 4 years (only positive movers); RB/WR/TE regressed because their residuals are sharply heteroscedastic and bucketing narrows the central interval where the actuals don't tighten.
+
+Follow-up plan candidates (pick one in post-merge brainstorming):
+1. Revert Phase 3 routing (keep mechanism + tests) — Phase 1 snapshot had better mean coverage than Phase 3.
+2. ZIP (zero-inflated Poisson) for count cells if NB still undercovers — handles zero mass directly rather than via dispersion.
+3. Cross-week residual correlation modeling for season under-dispersion — independent weekly draws understate season variance.
+4. Calibration-aware fitting — fit variance to minimize p10/p90 quantile loss directly rather than maximize residual likelihood.
