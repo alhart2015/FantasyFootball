@@ -433,3 +433,26 @@ def test_negative_binomial_dispersion_clipped_for_degenerate_input() -> None:
     actual = np.zeros(50)
     fitted = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
     assert fitted == _NB_DISPERSION_CLIP[1]
+
+
+def test_baseline_model_fit_stores_nb_dispersion_for_nb_stat(
+    baseline_features_wr: pd.DataFrame,
+    baseline_weekly_stats_wr: pd.DataFrame,
+) -> None:
+    """A BaselineModel configured with a NEGATIVE_BINOMIAL stat must store
+    a "dispersion" entry in variance_params after fit()."""
+    from projections.models.baseline import _NB_DISPERSION_CLIP, wr_baseline
+    from projections.schemas import DistributionFamily, Stat
+
+    model = wr_baseline()
+    # Rewire RECEIVING_TDS to NB locally for this test (production factory
+    # rewire happens in Task 1.5).
+    object.__setattr__(
+        model,
+        "dist_families",
+        {**dict(model.dist_families), Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL},
+    )
+    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
+    assert "dispersion" in model.variance_params[Stat.RECEIVING_TDS]
+    dispersion = model.variance_params[Stat.RECEIVING_TDS]["dispersion"]
+    assert _NB_DISPERSION_CLIP[0] <= dispersion <= _NB_DISPERSION_CLIP[1]

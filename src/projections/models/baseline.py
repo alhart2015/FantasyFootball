@@ -25,6 +25,7 @@ from sklearn.linear_model import RidgeCV
 from projections.distributions import (
     Distribution,
     ParametricGamma,
+    ParametricNegativeBinomial,
     ParametricNormal,
     pack_per_stat_params,
 )
@@ -422,7 +423,13 @@ class BaselineModel:
                 self.variance_params[stat] = {
                     "shape": _gamma_alpha_from_residuals(mu_hat=mu_hat, residuals=residuals)
                 }
-            else:  # pragma: no cover -- only NORMAL/GAMMA configured today
+            elif family is DistributionFamily.NEGATIVE_BINOMIAL:
+                self.variance_params[stat] = {
+                    "dispersion": _negative_binomial_dispersion_from_residuals(
+                        mu_hat=mu_hat, actual=y
+                    )
+                }
+            else:  # pragma: no cover -- only NORMAL/GAMMA/NB configured today
                 raise ValueError(f"Unsupported family {family} for stat {stat}")
 
         # Record the season range we trained on (post-dropna training set).
@@ -470,6 +477,11 @@ class BaselineModel:
                     # rate = alpha / mu; scale = 1/rate = mu / alpha
                     scale = mu_i / shape
                     row[stat] = ParametricGamma(shape=shape, scale=scale)
+                elif family is DistributionFamily.NEGATIVE_BINOMIAL:
+                    dispersion = params["dispersion"]
+                    # Floor mu to keep the (n, p) parameterization defined.
+                    mu_safe = max(mu_i, 1e-3)
+                    row[stat] = ParametricNegativeBinomial(mean=mu_safe, dispersion=dispersion)
                 else:  # pragma: no cover
                     raise ValueError(f"Unsupported family {family}")
             out.append(row)
