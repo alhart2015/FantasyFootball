@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import lightgbm as lgb
+import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 
@@ -254,7 +255,66 @@ class LightGBMModel:
         )
 
     def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:
-        raise NotImplementedError("Plan 5 Task 6")
+        """Train per-stat per-quantile sub-models with early stopping on the last
+        training season. Stores boosters in self._sub_models and best iterations
+        in self._best_iters.
+
+        Raises:
+            ValueError: empty join, or fewer than 2 training seasons (needed to carve
+                the validation slice).
+        """
+        # Validate features against the position schema.
+        features = self._config.feature_schema.validate(features)
+
+        # Inner-join on (gsis_id, season, week).
+        target_cols = [s.value for s in self._config.target_stats]
+        joined = features.merge(
+            weekly_stats[["gsis_id", "season", "week", *target_cols]],
+            on=["gsis_id", "season", "week"],
+            how="inner",
+            validate="one_to_one",
+        )
+        if joined.empty:
+            raise ValueError("Empty training set after feature/weekly_stats join")
+
+        # Need >=2 seasons to carve a last-season validation slice.
+        seasons = sorted(joined["season"].unique())
+        if len(seasons) < 2:
+            raise ValueError(
+                f"Need >=2 training seasons for early-stopping validation slice; got {len(seasons)}"
+            )
+
+        val_season = seasons[-1]
+        train_mask = joined["season"] != val_season
+        val_mask = joined["season"] == val_season
+
+        feat_cols = list(self._config.feature_columns)
+        x_train = joined.loc[train_mask, feat_cols].to_numpy(dtype=np.float64)
+        x_val = joined.loc[val_mask, feat_cols].to_numpy(dtype=np.float64)
+
+        for stat in self._config.target_stats:
+            self._sub_models[stat] = {}
+            y_train = joined.loc[train_mask, stat.value].to_numpy(dtype=np.float64)
+            y_val = joined.loc[val_mask, stat.value].to_numpy(dtype=np.float64)
+            for q in QUANTILE_GRID:
+                regressor = lgb.LGBMRegressor(
+                    objective="quantile",
+                    alpha=q,
+                    **LGBM_DEFAULTS,
+                )
+                regressor.fit(
+                    x_train,
+                    y_train,
+                    eval_set=[(x_val, y_val)],
+                    callbacks=[lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False)],
+                )
+                # `regressor.booster_` exposes the trained Booster after fit.
+                self._sub_models[stat][q] = regressor.booster_
+                self._best_iters[(stat, q)] = int(regressor.best_iteration_ or 0)
+
+        self._train_start = int(seasons[0])
+        self._train_end = int(seasons[-1])
+        self._is_fitted = True
 
     def predict_distribution(self, features: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
         raise NotImplementedError("Plan 5 Task 7")
