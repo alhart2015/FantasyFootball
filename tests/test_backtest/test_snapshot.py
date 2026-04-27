@@ -19,27 +19,51 @@ from projections.backtest.snapshot import (
 
 def test_write_then_read_roundtrips_a_metrics_df(tmp_path: Path) -> None:
     """write_snapshot serializes a long-form metrics DataFrame; read_snapshot
-    returns the same columns + values, sorted by (metric, position, year)."""
+    returns the same columns + values, sorted by
+    (metric, position, year, model_class)."""
     df = pd.DataFrame(
         [
-            {"position": "WR", "year": 2024, "metric": "composite_rmse", "value": 6.78},
-            {"position": "QB", "year": 2021, "metric": "spearman_topN", "value": 0.928},
+            {
+                "position": "WR",
+                "year": 2024,
+                "metric": "composite_rmse",
+                "model_class": "baseline",
+                "value": 6.78,
+            },
+            {
+                "position": "QB",
+                "year": 2021,
+                "metric": "spearman_topN",
+                "model_class": "baseline",
+                "value": 0.928,
+            },
         ]
     )
     path = tmp_path / "snap.json"
     write_snapshot(df, path)
 
     out = read_snapshot(path)
-    assert set(out.columns) == {"position", "year", "metric", "value"}
+    assert set(out.columns) == {"position", "year", "metric", "model_class", "value"}
     assert len(out) == 2
-    # Sorted by (metric, position, year): composite_rmse-WR-2024 then spearman_topN-QB-2021
+    # Sorted by (metric, position, year, model_class):
+    # composite_rmse-WR-2024-baseline then spearman_topN-QB-2021-baseline
     assert out["metric"].tolist() == ["composite_rmse", "spearman_topN"]
 
 
 def test_write_snapshot_emits_human_readable_json(tmp_path: Path) -> None:
     """The on-disk JSON is a list of objects (not pandas-serialized) with
     a 2-space indent so PR diffs stay clean."""
-    df = pd.DataFrame([{"position": "WR", "year": 2024, "metric": "composite_rmse", "value": 6.78}])
+    df = pd.DataFrame(
+        [
+            {
+                "position": "WR",
+                "year": 2024,
+                "metric": "composite_rmse",
+                "model_class": "baseline",
+                "value": 6.78,
+            }
+        ]
+    )
     path = tmp_path / "snap.json"
     write_snapshot(df, path)
 
@@ -50,14 +74,34 @@ def test_write_snapshot_emits_human_readable_json(tmp_path: Path) -> None:
         "position": "WR",
         "year": 2024,
         "metric": "composite_rmse",
+        "model_class": "baseline",
         "value": 6.78,
     }
     # Indented for readability.
     assert "\n  " in raw
 
 
-def _baseline_row(metric: str, value: float) -> dict[str, Any]:
-    return {"position": "WR", "year": 2024, "metric": metric, "value": value}
+def test_read_snapshot_defaults_model_class_to_baseline_for_legacy_rows(
+    tmp_path: Path,
+) -> None:
+    """Defensive: a pre-Plan-5 row (no model_class) loads with model_class=baseline."""
+    legacy = [
+        {"position": "WR", "year": 2024, "metric": "composite_rmse", "value": 6.78},
+    ]
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    out = read_snapshot(path)
+    assert out.loc[0, "model_class"] == "baseline"
+
+
+def _baseline_row(metric: str, value: float, *, model_class: str = "baseline") -> dict[str, Any]:
+    return {
+        "position": "WR",
+        "year": 2024,
+        "metric": metric,
+        "model_class": model_class,
+        "value": value,
+    }
 
 
 _DEFAULT_TOLS = {
@@ -200,7 +244,7 @@ def test_diff_missing_baseline_row_fails() -> None:
     """A current-run row with no baseline row to compare against fails the
     gate (the snapshot must be re-generated to add new metrics
     intentionally)."""
-    baseline = pd.DataFrame(columns=["position", "year", "metric", "value"])
+    baseline = pd.DataFrame(columns=["position", "year", "metric", "model_class", "value"])
     current = pd.DataFrame([_baseline_row("composite_rmse", 6.0)])
 
     out = diff_snapshot(
@@ -212,6 +256,121 @@ def test_diff_missing_baseline_row_fails() -> None:
     assert out.passed is False
     assert any("missing from baseline" in r.message for r in out.regressions)
     assert any(r.direction == "missing" for r in out.regressions)
+
+
+def test_diff_keys_by_model_class_so_same_metric_under_different_class_is_distinct() -> None:
+    """A baseline row tagged ``baseline`` does not satisfy a ``lightgbm`` current
+    row — the gate must fail with a "missing" regression. Plan 5 Task 13."""
+    baseline = pd.DataFrame([_baseline_row("composite_rmse", 6.0, model_class="baseline")])
+    current = pd.DataFrame([_baseline_row("composite_rmse", 5.5, model_class="lightgbm")])
+
+    out = diff_snapshot(
+        current=current,
+        baseline=baseline,
+        defaults=_DEFAULT_TOLS,
+        overrides=[],
+    )
+    assert out.passed is False
+    assert len(out.regressions) == 1
+    assert out.regressions[0].direction == "missing"
+    assert out.regressions[0].model_class == "lightgbm"
+
+
+def test_diff_tolerates_baseline_only_rows_when_current_lacks_them() -> None:
+    """If baseline has rows the current run did not produce (e.g. baseline-only
+    season_calibration_* rows when current ran only lightgbm), the gate still
+    passes — we only check rows the current run emitted. Plan 5 Task 13."""
+    baseline = pd.DataFrame(
+        [
+            _baseline_row("composite_rmse", 6.0, model_class="baseline"),
+            _baseline_row("season_calibration_p10p90", 0.80, model_class="baseline"),
+        ]
+    )
+    # Current run emitted only the lightgbm composite_rmse row; the baseline-
+    # only season_calibration_* row is silently skipped.
+    current = pd.DataFrame(
+        [_baseline_row("composite_rmse", 5.5, model_class="baseline")],
+    )
+
+    out = diff_snapshot(
+        current=current,
+        baseline=baseline,
+        defaults=_DEFAULT_TOLS,
+        overrides=[],
+    )
+    assert out.passed is True
+
+
+def test_diff_override_with_model_class_targets_only_that_class() -> None:
+    """An override that specifies model_class applies only to that class.
+    Plan 5 Task 13."""
+    baseline = pd.DataFrame(
+        [
+            _baseline_row("composite_rmse", 6.0, model_class="baseline"),
+            _baseline_row("composite_rmse", 6.0, model_class="lightgbm"),
+        ]
+    )
+    current = pd.DataFrame(
+        [
+            _baseline_row("composite_rmse", 6.5, model_class="baseline"),  # +8.3%
+            _baseline_row("composite_rmse", 6.5, model_class="lightgbm"),  # +8.3%
+        ]
+    )
+
+    out = diff_snapshot(
+        current=current,
+        baseline=baseline,
+        defaults=_DEFAULT_TOLS,
+        overrides=[
+            {
+                "position": "WR",
+                "year": 2024,
+                "metric": "composite_rmse",
+                "model_class": "lightgbm",
+                "tolerance_kind": "rmse_relative",
+                "tolerance_value": 0.10,
+                "rationale": "lightgbm noise floor",
+            }
+        ],
+    )
+    # baseline regresses (default 5%); lightgbm passes (override 10%).
+    assert out.passed is False
+    assert len(out.regressions) == 1
+    assert out.regressions[0].model_class == "baseline"
+
+
+def test_diff_override_without_model_class_applies_to_every_class() -> None:
+    """An override that omits model_class is back-compat: it loosens every
+    model_class for that (position, year, metric) cell. Plan 5 Task 13."""
+    baseline = pd.DataFrame(
+        [
+            _baseline_row("composite_rmse", 6.0, model_class="baseline"),
+            _baseline_row("composite_rmse", 6.0, model_class="lightgbm"),
+        ]
+    )
+    current = pd.DataFrame(
+        [
+            _baseline_row("composite_rmse", 6.5, model_class="baseline"),
+            _baseline_row("composite_rmse", 6.5, model_class="lightgbm"),
+        ]
+    )
+
+    out = diff_snapshot(
+        current=current,
+        baseline=baseline,
+        defaults=_DEFAULT_TOLS,
+        overrides=[
+            {
+                "position": "WR",
+                "year": 2024,
+                "metric": "composite_rmse",
+                "tolerance_kind": "rmse_relative",
+                "tolerance_value": 0.10,
+                "rationale": "fixture noise (any class)",
+            }
+        ],
+    )
+    assert out.passed is True
 
 
 def test_classify_metric_routes_season_calibration_to_calibration_absolute() -> None:

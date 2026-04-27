@@ -183,3 +183,64 @@ def test_codec_round_trip_after_bucketed_fit() -> None:
     assert isinstance(decoded[Stat.RECEPTIONS], ParametricGamma)
     assert isinstance(decoded[Stat.PASSING_TDS], ParametricNegativeBinomial)
     assert isinstance(decoded[Stat.RUSHING_YARDS], ParametricStudentT)
+
+
+def test_codec_round_trip_quantile() -> None:
+    """Plan 5 — QUANTILE family round-trips through msgpack codec."""
+    import numpy as np
+
+    from projections.distributions import (
+        QuantileDistribution,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    qs = np.array([0.05, 0.10, 0.50, 0.90, 0.95])
+    vs = np.array([1.0, 2.5, 5.0, 8.5, 12.0])
+    original: dict[Stat, Distribution] = {
+        Stat.RECEIVING_YARDS: QuantileDistribution(quantiles=qs, values=vs)
+    }
+
+    blob = pack_per_stat_params(original)
+    decoded = unpack_per_stat_params(blob)
+
+    assert set(decoded.keys()) == {Stat.RECEIVING_YARDS}
+    decoded_dist = decoded[Stat.RECEIVING_YARDS]
+    assert isinstance(decoded_dist, QuantileDistribution)
+    np.testing.assert_array_equal(decoded_dist.quantiles_, qs)
+    np.testing.assert_array_equal(decoded_dist.values_, vs)
+
+
+def test_codec_round_trip_mixed_with_quantile() -> None:
+    """Plan 5 — QUANTILE coexists with NORMAL / GAMMA / NB in a single per-row blob."""
+    import numpy as np
+
+    from projections.distributions import (
+        ParametricGamma,
+        ParametricNegativeBinomial,
+        ParametricNormal,
+        QuantileDistribution,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    original: dict[Stat, Distribution] = {
+        Stat.RECEIVING_YARDS: QuantileDistribution(
+            quantiles=np.array([0.05, 0.10, 0.50, 0.90, 0.95]),
+            values=np.array([1.0, 2.5, 5.0, 8.5, 12.0]),
+        ),
+        Stat.RECEPTIONS: ParametricNormal(mean=3.0, std=1.5),
+        Stat.RUSHING_YARDS: ParametricGamma(shape=2.0, scale=4.0),
+        Stat.RECEIVING_TDS: ParametricNegativeBinomial(mean=0.3, dispersion=2.0),
+    }
+
+    blob = pack_per_stat_params(original)
+    decoded = unpack_per_stat_params(blob)
+
+    assert set(decoded.keys()) == set(original.keys())
+    assert isinstance(decoded[Stat.RECEIVING_YARDS], QuantileDistribution)
+    assert isinstance(decoded[Stat.RECEPTIONS], ParametricNormal)
+    assert isinstance(decoded[Stat.RUSHING_YARDS], ParametricGamma)
+    assert isinstance(decoded[Stat.RECEIVING_TDS], ParametricNegativeBinomial)

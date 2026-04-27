@@ -230,7 +230,8 @@ def test_smoke_baseline_fit_predict_write_round_trip(
     features = request.getfixturevalue(fixture_features)
     weekly_stats = request.getfixturevalue(fixture_weekly_stats)
 
-    model = dispatch.factory()
+    # Plan 5: factories is keyed by model class; smoke covers Model A baseline.
+    model = dispatch.factories["baseline"]()
     model.fit(features=features, weekly_stats=weekly_stats)
 
     week_features = features[(features["season"] == 2025) & (features["week"] == 4)]

@@ -10,6 +10,7 @@ from projections.distributions.parametric import (
     ParametricNormal,
     ParametricStudentT,
 )
+from projections.distributions.quantile import QuantileDistribution
 
 __all__ = [
     "Distribution",
@@ -17,6 +18,7 @@ __all__ = [
     "ParametricNegativeBinomial",
     "ParametricNormal",
     "ParametricStudentT",
+    "QuantileDistribution",
     "pack_per_stat_params",
     "unpack_per_stat_params",
 ]

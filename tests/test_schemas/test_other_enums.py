@@ -24,10 +24,17 @@ def test_distribution_family_options() -> None:
         "GAMMA",
         "NEGATIVE_BINOMIAL",
         "STUDENT_T",
-        "EMPIRICAL_QUANTILE",
         "SAMPLED",
         "SAMPLED_SUMMARY",
+        "QUANTILE",
     }
+
+
+def test_distribution_family_includes_quantile() -> None:
+    """Plan 5 — Model C emits QUANTILE-family per-stat distributions."""
+    from projections.schemas import DistributionFamily
+
+    assert DistributionFamily.QUANTILE.value == "QUANTILE"
 
 
 @pytest.mark.parametrize(

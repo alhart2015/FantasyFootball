@@ -41,9 +41,26 @@ A short written recommendation: pick one modeling approach (covariance / scenari
 
 **Status:** QB/RB/TE complete in Plan 2b (merged). K and DST split out into TODO #10.
 
-### 3. Play-by-play ingest (`nfl_data_py.import_pbp_data`)
+### 3. Play-by-play ingest (`nfl_data_py.import_pbp_data`) + PBP-derived features
 
-Required for true opponent-adjusted EPA features. Defer until Plan 3 backtest reveals whether the `opp_allowed_fppg_l4` proxy is good enough. If not, ingest PBP and add EPA-derived opponent features in a focused plan.
+Plan 3c backtest confirmed `opp_allowed_fppg_l4` is doing meaningful work but is a crude proxy for opponent strength. PBP unlocks a family of more discriminating signals at once and is one of the three model-improvement tracks identified in the post-Plan-3e brainstorm (2026-04-27).
+
+**Ingest scope:**
+- `nfl_data_py.import_pbp_data` partitioned per-season (large files — chunked write following the weekly_stats pattern)
+- New `PbpSchema` and ingest module mirroring `weekly_stats` shape
+- Opt-in network smoke (TODO #8 pattern) to catch column-rename drift on `nfl_data_py` upgrades
+
+**Derived features (each its own builder slice):**
+- Opponent-adjusted EPA-allowed by play type (pass / run; per route depth or direction if signal exists)
+- Team pace (plays per 60 minutes neutral)
+- PROE (pass rate over expected adjusted for game state)
+- Player-level air yards / aDOT / target depth distributions
+- Pressure rate allowed by O-line (proxy for QB sack risk and rushing-yardage-on-scramble)
+- Red-zone usage shares (separate from full-field share)
+
+Each derived feature is its own (position, builder) extension; can land incrementally rather than as one big plan. Brainstorm in a focused session before scoping.
+
+Estimated cumulative win: 5-15% RMSE on top of current Model A; replaces the weakest input the model has today.
 
 ### 4. Feature parquet storage — closed in Plan 3c
 
@@ -178,3 +195,86 @@ Follow-up plan candidates (pick one in post-merge brainstorming):
 4. Calibration-aware fitting — fit variance to minimize p10/p90 quantile loss directly rather than maximize residual likelihood.
 
 **Update 2026-04-27 (post-Phase-3 revert):** Took option (1) above. Phase 3 routing reverted in `BaselineModel.fit` + `build_stat_distributions`; bucketing helpers, widened `variance_params` type signature (`float | list[float]`), and unit tests preserved as future infrastructure for quantile-based fitting. Snapshot returns to Phase 1 baseline (commit `0078223`) bit-for-bit. **Final shipped state for Plan 3e: Phase 0 (diagnostic CLI) + Phase 1 (NB for count stats).** Phase 2 + Phase 3 are both attempted-and-reverted with infrastructure preserved. Spec calibration targets remain unmet by the shipped state; the canonical follow-up plans (ZIP, cross-week correlation, calibration-aware fitting) stay open for post-merge brainstorming.
+
+**Update 2026-04-27 (post-merge brainstorm):** TODO #22 stays closed. Post-Plan-3e empirical investigation (lag-k autocorrelation of standardized residuals) showed week-to-week persistence is weak (lag-1 ρ in [+0.02, +0.10]; lag-2+ ≈ noise) and AR(1) only explains 5-10% of the season variance gap. Cross-week correlation modeling is therefore not the high-leverage next step. Calibration-aware fitting risks distorting the upper tail (load-bearing for DFS GPP) while fixing the central interval. **Decision: stop calibration tightening; pivot to mean-prediction improvements via the three model-improvement tracks documented in TODOs #3 / #23 / #26 and Plan 5 in the project_management.md backlog.** The remaining season-coverage shortfall is acknowledged as a known limitation — none of the planned downstream tools (Draft Hub, start/sit, DFS) actually consume a calibrated season `[p10, p90]`.
+
+### 23. Target decomposition (volume × efficiency)
+
+Currently each fantasy-relevant stat is predicted directly (e.g., `receiving_yards` is one regression target). Decompose into volume × efficiency components and predict the factors separately, then multiply for the composed prediction:
+
+- **WR / TE**: `targets × catch_rate × yards_per_reception` for yards; `targets × td_rate_per_target` for TDs
+- **RB**: `carries × yards_per_carry` + `receptions × yards_per_reception`; per-touch TD rate
+- **QB**: `dropbacks × completion_rate × yards_per_completion` + sack/scramble adjustments; per-attempt TD/INT rate
+
+Each factor has different drivers (volume is team-driven; efficiency is player-driven), so smaller specialized sub-models on each factor often beat one combined model. Notable secondary win: TD modeling becomes much better — currently a noisy 0/1/2 prediction with low signal; decomposed it becomes (red-zone touches) × (RZ TD rate), each with more identifiable signal.
+
+**Refactor scope:** feature builders gain decomposed targets; `BaselineModel` (or its successor) trains per-factor sub-models and multiplies. Distribution composition (product of independent distributions) needs to be re-derived at the scoring layer; calibration metrics still apply to the composed prediction. `ProjectionWeeklySchema` may need optional per-factor params for diagnostics.
+
+**Estimated win:** 3-10% RMSE independent of model class. Best evaluated alongside a stable model class (either current Ridge or Plan 5 LightGBM) so the win is attributable. One of the three model-improvement tracks identified in the post-Plan-3e brainstorm (2026-04-27).
+
+### 24. Player-trajectory features (age curves, career arc, trend gradients)
+
+Current model sees only trailing-N levels (e.g., `targets_per_game_l4`). It doesn't see *trajectories* — is the player rising or declining, and where in their career arc are they?
+
+Candidate additions:
+- Age (years since draft year + offset for late-bloomers)
+- Position-specific aging-curve features (RBs decline ~age 28; WRs peak 25-29; TEs peak later)
+- Trend signals: `targets_per_game_l4 - targets_per_game_l8` (rising vs declining usage)
+- Year-over-year change indicators: 2nd-year breakout flag, 3rd-year-leap flag for QBs
+- Snap-count gradient: % change in snaps over last 4 vs prior 4
+- Rookie indicator (no prior season for trailing-N to use)
+
+Several derivable from existing ingest (weekly_stats, depth_charts). Draft year needs new ingest — `nfl_data_py.import_draft_picks` returns it.
+
+Likely modest individual feature wins; cumulative impact comes from adding several. Lands inside the current per-position feature builders. Best paired with PBP work (TODO #3) — both are pure feature-expansion adds that compose with whatever model class is in use.
+
+### 25. Weather features in per-position builders
+
+`import_schedules` already returns wind, temperature, and precipitation columns (verified during 2a ingest). Confirm whether these reach the per-position feature builders today; if not, plumb through.
+
+Wind especially tanks passing efficiency (rule of thumb: >20mph wind drops passing yards ~10-15%). Today's model doesn't see this and over-projects passing-heavy lines in dome-vs-Buffalo-November mismatches.
+
+Small feature add; likely small but real win on a subset of games. Same plan slot as TODO #24 (player-trajectory) — both are quick adds inside existing builders.
+
+### 26. Plan 5 — LightGBM with quantile regression (Model C) — closed in Plan 5
+
+Closed 2026-04-27. Per-stat sub-models trained at quantiles [0.05, 0.10, 0.50, 0.90, 0.95];
+new QuantileDistribution + codec branch; POSITION_DISPATCH.factories dict;
+backtest snapshot extended (400 → 768 rows). Model A unchanged; both coexist.
+
+**Adoption verdict: Model C failed all three Plan 5 §1.3 adoption-gate criteria.**
+Model A stays the default. Model C infrastructure preserved for Plan 5b
+(hyperparameter tuning) or Plan 6 (ensemble) follow-ups. See project_management.md
+for the per-cell comparison table and detailed analysis.
+
+### 27. Revisit Model Protocol shape (Fitted vs base separation)
+
+Surfaced in Plan 5 Task 11 review (2026-04-27). Task 11 initially widened the
+`Model` Protocol with `target_stats`, `train_seasons`, `code_hash` so consumers
+could type against `Model` generically, but this leaked `BaselineModel`'s
+set-at-fit semantics (`code_hash: str | None`, `train_seasons: tuple[int, int] | None`)
+into the contract. The widening was reverted; consumers now use `cast(BaselineModel | LightGBMModel, ...)`
+narrowing.
+
+The clean long-term shape is probably a `Fitted[Model]` Protocol split:
+- Base `Model` exposes `position`, `fit`, `predict_distribution`, `save`, `load`.
+- `FittedModel(Model)` adds `model_id`, `train_seasons: tuple[int, int]` (no None),
+  `code_hash: str` (no None) — guaranteed populated post-fit.
+- `Model.fit()` returns `FittedModel`-typed self; consumers post-fit type against `FittedModel`.
+
+Revisit when Plan 6 (EnsembleModel) lands — that's the natural moment to redesign
+the Protocol surface as more model classes need to share the contract. Until then,
+the `cast()` pattern in CLI scripts is the trade-off accepted.
+
+### 28. Widen aggregate_to_season to accept QUANTILE family
+
+Surfaced in Plan 5 Task 12. The harness gates season-aggregation on
+`(predictions["family"] == SAMPLED_SUMMARY).all()`, so LightGBM cells skip
+`season_calibration_p10p90` and `season_calibration_le_p90` rows.
+`aggregate_to_season` could accept `QuantileDistribution` instances —
+inverse-CDF sampling already works (Monte Carlo via `score_distribution`
+uses the Distribution Protocol's `.sample()`). Only the explicit
+family-restriction guard at the top of `aggregate_to_season` blocks reuse.
+
+Land alongside Plan 5b or Plan 6 to give Model C complete metric coverage
+(would add 32 rows to model_metrics.json).

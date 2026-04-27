@@ -18,7 +18,7 @@ import pytest
 
 from projections.backtest import diff_snapshot, read_snapshot, run_backtest
 
-_SNAPSHOT_PATH = Path("tests/backtest/baseline_metrics.json")
+_SNAPSHOT_PATH = Path("tests/backtest/model_metrics.json")
 _TOLERANCES_PATH = Path("tests/backtest/tolerances.json")
 
 

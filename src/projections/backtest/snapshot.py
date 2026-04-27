@@ -1,8 +1,17 @@
 """Snapshot file IO + diff for the walk-forward gate.
 
 Plan 3c Phase 4. Snapshot is a JSON list of
-{"position", "year", "metric", "value"} entries, sorted lexicographically
-by (metric, position, year) so PR diffs stay clean.
+{"position", "year", "metric", "model_class", "value"} entries, sorted
+lexicographically by (metric, position, year, model_class) so PR diffs
+stay clean.
+
+Plan 5 Task 13: rows acquire a ``model_class`` column (e.g. ``"baseline"``
+or ``"lightgbm"``); the snapshot file is renamed
+``baseline_metrics.json`` -> ``model_metrics.json``; row identity is the
+4-tuple ``(position, year, metric, model_class)``. Cells may be present
+for one model class but not another (e.g. ``season_calibration_*``
+currently only emitted by the SAMPLED_SUMMARY-based baseline) — the diff
+logic must tolerate that asymmetry.
 
 Tolerance application is direction-aware. Spec section 2.4 lists the
 mapping; this module owns the suffix-based metric -> tolerance-kind
@@ -18,7 +27,9 @@ from typing import Any
 
 import pandas as pd
 
-_SCHEMA_COLUMNS: tuple[str, ...] = ("position", "year", "metric", "value")
+# Plan 5 Task 13: snapshot rows now carry ``model_class`` so a single
+# snapshot can hold metrics from multiple model classes side by side.
+_SCHEMA_COLUMNS: tuple[str, ...] = ("position", "year", "metric", "model_class", "value")
 
 
 # Suffix-based metric -> tolerance-kind mapping. Rules are tried in
@@ -50,11 +61,12 @@ def _classify_metric(metric: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Regression:
-    """A single (position, year, metric) cell that failed the gate."""
+    """A single (position, year, metric, model_class) cell that failed the gate."""
 
     position: str
     year: int
     metric: str
+    model_class: str
     baseline_value: float
     current_value: float
     direction: str  # "worse", "better", "missing", "unknown"
@@ -73,12 +85,14 @@ class GateResult:
 
 def write_snapshot(metrics: pd.DataFrame, path: Path) -> None:
     """Serialize a long-form metrics DataFrame to JSON, sorted by
-    (metric, position, year)."""
+    (metric, position, year, model_class)."""
     if set(metrics.columns) != set(_SCHEMA_COLUMNS):
         raise ValueError(
             f"metrics must have columns {_SCHEMA_COLUMNS}, got {tuple(metrics.columns)}"
         )
-    sorted_df = metrics.sort_values(["metric", "position", "year"]).reset_index(drop=True)
+    sorted_df = metrics.sort_values(["metric", "position", "year", "model_class"]).reset_index(
+        drop=True
+    )
     rows: list[dict[str, Any]] = []
     for _idx, row in sorted_df.iterrows():
         rows.append(
@@ -86,6 +100,7 @@ def write_snapshot(metrics: pd.DataFrame, path: Path) -> None:
                 "position": str(row["position"]),
                 "year": int(row["year"]),
                 "metric": str(row["metric"]),
+                "model_class": str(row["model_class"]),
                 "value": float(row["value"]),
             }
         )
@@ -94,8 +109,16 @@ def write_snapshot(metrics: pd.DataFrame, path: Path) -> None:
 
 
 def read_snapshot(path: Path) -> pd.DataFrame:
-    """Load a snapshot JSON file into a long-form metrics DataFrame."""
+    """Load a snapshot JSON file into a long-form metrics DataFrame.
+
+    Defensive: if a row is missing the ``model_class`` field (e.g. a
+    pre-Plan-5 snapshot snuck through), fill it with ``"baseline"`` so
+    legacy snapshots load cleanly. Post-migration there should be no such
+    rows in the committed file.
+    """
     raw = json.loads(path.read_text(encoding="utf-8"))
+    for row in raw:
+        row.setdefault("model_class", "baseline")
     return pd.DataFrame(raw, columns=list(_SCHEMA_COLUMNS))
 
 
@@ -104,6 +127,7 @@ def _check_one(
     position: str,
     year: int,
     metric: str,
+    model_class: str,
     baseline_value: float,
     current_value: float,
     tolerance_kind: str,
@@ -111,6 +135,7 @@ def _check_one(
 ) -> Regression | None:
     """Apply direction-aware tolerance to a single cell. Returns None on
     pass; a Regression on fail."""
+    cell_label = f"{position}/{year}/{metric}/{model_class}"
     if tolerance_kind in {"rmse_relative", "mae_relative"}:
         # RMSE/MAE worse = larger.
         if current_value <= baseline_value:
@@ -122,13 +147,14 @@ def _check_one(
             position=position,
             year=year,
             metric=metric,
+            model_class=model_class,
             baseline_value=baseline_value,
             current_value=current_value,
             direction="worse",
             tolerance_kind=tolerance_kind,
             tolerance_value=tolerance_value,
             message=(
-                f"{position}/{year}/{metric}: {baseline_value:.4f} -> {current_value:.4f} "
+                f"{cell_label}: {baseline_value:.4f} -> {current_value:.4f} "
                 f"({rel:+.2%} > {tolerance_value:+.2%})"
             ),
         )
@@ -144,13 +170,14 @@ def _check_one(
             position=position,
             year=year,
             metric=metric,
+            model_class=model_class,
             baseline_value=baseline_value,
             current_value=current_value,
             direction="worse",
             tolerance_kind=tolerance_kind,
             tolerance_value=tolerance_value,
             message=(
-                f"{position}/{year}/{metric}: {baseline_value:.4f} -> {current_value:.4f} "
+                f"{cell_label}: {baseline_value:.4f} -> {current_value:.4f} "
                 f"(drop {delta:.4f} > {tolerance_value:.4f})"
             ),
         )
@@ -170,13 +197,14 @@ def _check_one(
             position=position,
             year=year,
             metric=metric,
+            model_class=model_class,
             baseline_value=baseline_value,
             current_value=current_value,
             direction="worse",
             tolerance_kind=tolerance_kind,
             tolerance_value=tolerance_value,
             message=(
-                f"{position}/{year}/{metric}: {baseline_value:.4f} -> {current_value:.4f} "
+                f"{cell_label}: {baseline_value:.4f} -> {current_value:.4f} "
                 f"(drift {delta:.4f} > {tolerance_value:.4f})"
             ),
         )
@@ -194,16 +222,39 @@ def diff_snapshot(
     """Compare a current run's metrics against a baseline snapshot.
 
     For each row in ``current``, look up the matching ``baseline`` row by
-    (position, year, metric); apply the override row's tolerance if
-    present, otherwise apply the default tolerance for the metric kind.
-    Returns a GateResult; ``passed`` is True iff no regressions found.
+    (position, year, metric, model_class); apply the override row's
+    tolerance if present, otherwise apply the default tolerance for the
+    metric kind. Returns a GateResult; ``passed`` is True iff no
+    regressions found.
 
     A current-run row missing from baseline is itself a regression — the
-    snapshot must be regenerated to include it intentionally.
+    snapshot must be regenerated to include it intentionally. The reverse
+    asymmetry (a baseline row with no current-run row) is intentionally
+    permitted: e.g. ``season_calibration_*`` rows exist for the
+    SAMPLED_SUMMARY-based baseline but not for LightGBM, so a baseline-only
+    run will not produce LightGBM rows and vice versa. We only compare
+    rows the current run actually emitted.
+
+    Override rows may omit ``model_class`` for backward compatibility; an
+    override without ``model_class`` applies to every model class for that
+    (position, year, metric) cell.
     """
-    overrides_index = {(o["position"], int(o["year"]), o["metric"]): o for o in overrides}
+    overrides_with_class: dict[tuple[str, int, str, str], dict[str, Any]] = {}
+    overrides_any_class: dict[tuple[str, int, str], dict[str, Any]] = {}
+    for o in overrides:
+        if "model_class" in o:
+            overrides_with_class[
+                (str(o["position"]), int(o["year"]), str(o["metric"]), str(o["model_class"]))
+            ] = o
+        else:
+            overrides_any_class[(str(o["position"]), int(o["year"]), str(o["metric"]))] = o
     baseline_index = {
-        (str(r["position"]), int(r["year"]), str(r["metric"])): float(r["value"])
+        (
+            str(r["position"]),
+            int(r["year"]),
+            str(r["metric"]),
+            str(r["model_class"]),
+        ): float(r["value"])
         for _, r in baseline.iterrows()
     }
 
@@ -212,28 +263,34 @@ def diff_snapshot(
         position = str(row["position"])
         year = int(row["year"])
         metric = str(row["metric"])
+        model_class = str(row["model_class"])
         current_value = float(row["value"])
 
-        key = (position, year, metric)
+        key = (position, year, metric, model_class)
         if key not in baseline_index:
             regressions.append(
                 Regression(
                     position=position,
                     year=year,
                     metric=metric,
+                    model_class=model_class,
                     baseline_value=float("nan"),
                     current_value=current_value,
                     direction="missing",
                     tolerance_kind="<n/a>",
                     tolerance_value=float("nan"),
-                    message=f"{position}/{year}/{metric}: missing from baseline",
+                    message=(f"{position}/{year}/{metric}/{model_class}: missing from baseline"),
                 )
             )
             continue
 
         baseline_value = baseline_index[key]
-        if key in overrides_index:
-            ov = overrides_index[key]
+        if key in overrides_with_class:
+            ov = overrides_with_class[key]
+            tol_kind = str(ov["tolerance_kind"])
+            tol_value = float(ov["tolerance_value"])
+        elif (position, year, metric) in overrides_any_class:
+            ov = overrides_any_class[(position, year, metric)]
             tol_kind = str(ov["tolerance_kind"])
             tol_value = float(ov["tolerance_value"])
         else:
@@ -244,6 +301,7 @@ def diff_snapshot(
             position=position,
             year=year,
             metric=metric,
+            model_class=model_class,
             baseline_value=baseline_value,
             current_value=current_value,
             tolerance_kind=tol_kind,

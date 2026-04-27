@@ -5,6 +5,10 @@ harness) can dispatch by Position to the correct factory + feature builder
 + feature schema + NGS source. Adding a new position is one new line in
 this registry plus a corresponding factory in baseline.py and a feature
 builder in features/{pos}.py.
+
+Plan 5 generalizes the registry: each position now carries a `factories`
+mapping keyed by model class ("baseline" -> Model A, "lightgbm" -> Model C)
+so the same dispatch tables drive both training pipelines.
 """
 
 from __future__ import annotations
@@ -28,6 +32,13 @@ from projections.models.baseline import (
     te_baseline,
     wr_baseline,
 )
+from projections.models.lightgbm import (
+    LightGBMModel,
+    qb_lightgbm,
+    rb_lightgbm,
+    te_lightgbm,
+    wr_lightgbm,
+)
 from projections.schemas import (
     Position,
     QbFeaturesSchema,
@@ -39,12 +50,17 @@ from projections.schemas import (
 __all__ = [
     "POSITION_DISPATCH",
     "BaselineModel",
+    "LightGBMModel",
     "Model",
     "compute_code_hash",
     "qb_baseline",
+    "qb_lightgbm",
     "rb_baseline",
+    "rb_lightgbm",
     "te_baseline",
+    "te_lightgbm",
     "wr_baseline",
+    "wr_lightgbm",
 ]
 
 
@@ -52,45 +68,71 @@ __all__ = [
 class _PositionDispatch:
     """Per-position bundle of "what's needed to train and predict" entries.
 
-    Consumed by the CLI scripts (scripts/train_baseline.py etc.) and
-    intended to back Plan 3c's backtest harness. Frozen so callers can't
-    mutate the registry by accident.
+    Consumed by the CLI scripts (scripts/train_baseline.py etc.) and Plan
+    3c's backtest harness. Frozen so callers can't mutate the registry by
+    accident.
 
     Attributes:
-        factory: zero-arg callable returning an unfitted BaselineModel.
+        factories: mapping of model-class identifier -> zero-arg callable
+            returning an unfitted model. Keys today: "baseline" (Model A,
+            BaselineModel) and "lightgbm" (Model C, LightGBMModel).
+            Callers select via `dispatch.factories[args.model]()`.
         feature_builder: position-specific build_*_features function.
         feature_schema: pandera schema for the feature builder's output.
         ngs_stat_type: which NGS partition the feature builder consumes
             ("passing" / "rushing" / "receiving").
     """
 
-    factory: Callable[[], BaselineModel]
+    factories: Mapping[str, Callable[[], Model]]
     feature_builder: Callable[..., Any]
     feature_schema: type[pa.DataFrameModel]
     ngs_stat_type: NgsStatType
 
 
+# Explicit per-position factories dicts. Annotated as
+# `dict[str, Callable[[], Model]]` so the BaselineModel / LightGBMModel
+# return types widen to the Model Protocol — `Callable` is covariant in its
+# return type, but `dict` value types are invariant, so we declare the
+# widened dict explicitly rather than relying on inference.
+_QB_FACTORIES: dict[str, Callable[[], Model]] = {
+    "baseline": qb_baseline,
+    "lightgbm": qb_lightgbm,
+}
+_RB_FACTORIES: dict[str, Callable[[], Model]] = {
+    "baseline": rb_baseline,
+    "lightgbm": rb_lightgbm,
+}
+_TE_FACTORIES: dict[str, Callable[[], Model]] = {
+    "baseline": te_baseline,
+    "lightgbm": te_lightgbm,
+}
+_WR_FACTORIES: dict[str, Callable[[], Model]] = {
+    "baseline": wr_baseline,
+    "lightgbm": wr_lightgbm,
+}
+
+
 POSITION_DISPATCH: Mapping[Position, _PositionDispatch] = {
     Position.QB: _PositionDispatch(
-        factory=qb_baseline,
+        factories=_QB_FACTORIES,
         feature_builder=build_qb_features,
         feature_schema=QbFeaturesSchema,
         ngs_stat_type="passing",
     ),
     Position.RB: _PositionDispatch(
-        factory=rb_baseline,
+        factories=_RB_FACTORIES,
         feature_builder=build_rb_features,
         feature_schema=RbFeaturesSchema,
         ngs_stat_type="rushing",
     ),
     Position.TE: _PositionDispatch(
-        factory=te_baseline,
+        factories=_TE_FACTORIES,
         feature_builder=build_te_features,
         feature_schema=TeFeaturesSchema,
         ngs_stat_type="receiving",
     ),
     Position.WR: _PositionDispatch(
-        factory=wr_baseline,
+        factories=_WR_FACTORIES,
         feature_builder=build_wr_features,
         feature_schema=WrFeaturesSchema,
         ngs_stat_type="receiving",

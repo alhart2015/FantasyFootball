@@ -2,7 +2,7 @@
 
 Three modes:
   --check (default):   run harness, diff snapshot, exit 0/1.
-  --update-snapshot:   run harness, overwrite tests/backtest/baseline_metrics.json.
+  --update-snapshot:   run harness, overwrite tests/backtest/model_metrics.json.
   --report:            run harness, print model + naive metrics; no gate.
 """
 
@@ -17,7 +17,7 @@ import pandas as pd
 
 from projections.backtest import diff_snapshot, read_snapshot, run_backtest, write_snapshot
 
-_SNAPSHOT_PATH = Path("tests/backtest/baseline_metrics.json")
+_SNAPSHOT_PATH = Path("tests/backtest/model_metrics.json")
 _TOLERANCES_PATH = Path("tests/backtest/tolerances.json")
 
 
@@ -114,10 +114,21 @@ def main() -> None:
     mode.add_argument(
         "--report", action="store_true", help="Run + print model + naive metrics; no gate."
     )
+    parser.add_argument(
+        "--model",
+        choices=["baseline", "lightgbm", "both"],
+        default="both",
+        help="Which model class(es) to run. 'both' runs Model A and Model C side-by-side.",
+    )
     args = parser.parse_args()
 
+    if args.model == "both":
+        model_classes: tuple[str, ...] = ("baseline", "lightgbm")
+    else:
+        model_classes = (args.model,)
+
     tolerances = json.loads(_TOLERANCES_PATH.read_text(encoding="utf-8"))
-    run = run_backtest()
+    run = run_backtest(model_classes=model_classes)
 
     if args.update_snapshot:
         _write_diagnostic_outputs(run)

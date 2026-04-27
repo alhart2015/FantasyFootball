@@ -7,7 +7,7 @@ The encoded blob is msgpack-packed with shape:
         "schema_version": 1,
         "stats": {
             "<stat_value>": {
-                "family": "NORMAL"|"GAMMA"|"NEGATIVE_BINOMIAL"|"STUDENT_T",
+                "family": "NORMAL"|"GAMMA"|"NEGATIVE_BINOMIAL"|"STUDENT_T"|"QUANTILE",
                 ... family-specific params ...
             },
             ...
@@ -19,6 +19,8 @@ Currently registered families:
     GAMMA:             {"family": "GAMMA",             "shape": float, "scale": float}
     NEGATIVE_BINOMIAL: {"family": "NEGATIVE_BINOMIAL", "mean": float, "dispersion": float}
     STUDENT_T:         {"family": "STUDENT_T",         "loc": float, "scale": float, "df": float}
+    QUANTILE:          {"family": "QUANTILE",          "quantiles": list[float],
+                                                       "values":    list[float]}
 
 Adding a new family means adding one branch each to pack_per_stat_params and
 unpack_per_stat_params. schema_version=1 is the only supported version today.
@@ -30,6 +32,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import msgpack
+import numpy as np
 
 from projections.distributions.base import Distribution
 from projections.distributions.parametric import (
@@ -38,6 +41,7 @@ from projections.distributions.parametric import (
     ParametricNormal,
     ParametricStudentT,
 )
+from projections.distributions.quantile import QuantileDistribution
 from projections.schemas import DistributionFamily, Stat
 
 _SCHEMA_VERSION: Final[int] = 1
@@ -75,6 +79,12 @@ def pack_per_stat_params(per_stat_dists: Mapping[Stat, Distribution]) -> bytes:
                 "loc": dist.mean(),
                 "scale": dist.scale_,
                 "df": dist.df_,
+            }
+        elif isinstance(dist, QuantileDistribution):
+            stats_blob[stat.value] = {
+                "family": DistributionFamily.QUANTILE.value,
+                "quantiles": dist.quantiles_.tolist(),
+                "values": dist.values_.tolist(),
             }
         else:
             raise ValueError(
@@ -119,6 +129,11 @@ def unpack_per_stat_params(blob: bytes) -> dict[Stat, Distribution]:
                 loc=float(entry["loc"]),
                 scale=float(entry["scale"]),
                 df=float(entry["df"]),
+            )
+        elif family_value == DistributionFamily.QUANTILE.value:
+            out[stat] = QuantileDistribution(
+                quantiles=np.asarray(entry["quantiles"], dtype=np.float64),
+                values=np.asarray(entry["values"], dtype=np.float64),
             )
         else:
             raise ValueError(
