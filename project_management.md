@@ -4,6 +4,51 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 3e Phase 0 — Calibration diagnostic (run 2026-04-26, on branch `feat/plan-3e-calibration-tightening`)
+
+**Closes:** None. TODO #22 (Plan 3e calibration tightening) stays open — Phase 0
+delivers the diagnostic only; the full Plan 3e tightening closes #22. Phase 0
+surfaced 3 root causes that the spec amendment (next gate) will translate into
+Phase 1+ implementation work.
+
+Phase 0 = a `scripts/diagnose_calibration.py` CLI plus a research report
+(`docs/superpowers/research/2026-04-26-calibration-diagnosis.md`) that fits
+alternative distribution families against per-row residuals from the latest
+backtest run and identifies why weekly + season `[p10, p90]` coverage
+under-disperses to 0.30–0.55 vs the 0.80 target. The spec amendment that adds
+Phase 1+ implementation phases to
+`docs/superpowers/specs/2026-04-26-plan-3e-calibration-tightening-design.md` is
+the next gate before any model code changes (per spec section 3 decision gate).
+
+### Diagnostic findings (3 root causes)
+
+1. **Zero-inflated count stats are catastrophically miscalibrated under
+   GAMMA.** `coverage_p10p90 = 0.0` across every (position, stat) cell for
+   `*_tds`, `interceptions`, and `fumbles_lost` — the fitted GAMMA's p10 sits
+   above zero while the modal residual is exactly zero. Root cause is family
+   choice; the recommendation is a family swap to negative-binomial / zero-
+   inflated negative binomial.
+2. **Continuous yards stats are heavy-tailed.** Student-t fits beat Normal on
+   AIC by `delta in [-2160, -317]` across 5 yards-stat cells (passing/rushing/
+   receiving × position). Recommendation is a family swap to Student-t for the
+   `*_yards` stats.
+3. **Heteroscedasticity is pervasive.** 18 of 24 (position, stat) cells have
+   variance-bucket ratio > 1.5 (top vs bottom predicted-mean tertile).
+   Variance bucketing is needed independent of family choice and combines with
+   the family swaps above.
+
+See `docs/superpowers/research/2026-04-26-calibration-diagnosis.md` for the full
+per-cell table, recommended fixes, and selection methodology.
+
+### Next gate
+
+The spec amendment (Plan 3e Phase 1+) is the next gate before any model code
+changes. Re-invocation of `superpowers:brainstorming` happens in the next
+user-driven session to scope Phase 1 (family-family swaps), Phase 2 (variance
+bucketing), and a final regression-gate phase against the 3d snapshot.
+
+---
+
 ## Plan 3d — Real Monte Carlo season aggregation (run 2026-04-26, on branch `feat/plan-3d-monte-carlo-season`)
 
 **Closes:** TODO #13 (per-row seeds), TODO #14 (SAMPLED_SUMMARY family), TODO #19 (gate non-determinism by demonstration).
@@ -320,7 +365,9 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Current status (as of 2026-04-26)
 
-**Projections Core — Plan 3d (real Monte Carlo season aggregation) merged to `main` at commit `fe55d5b` (PR #9).**
+**Projections Core — Plan 3e Phase 0 (calibration diagnostic) complete on branch `feat/plan-3e-calibration-tightening`.** Diagnostic CLI + research report committed; no model code changes yet. Spec amendment (Phase 1+) is the next gate per the spec's section 3 decision gate.
+
+**Plan 3d (real Monte Carlo season aggregation) merged to `main` at commit `fe55d5b` (PR #9).**
 
 **Predecessors:**
 - Plan 1 (Foundations) merged at `8f02a6c`.
@@ -328,6 +375,12 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 - Plan 3a (WR Model A baseline) merged at `598ab9c`.
 - Plan 3b (QB / RB / TE Model A baselines) merged at `c4a0401`.
 - Plan 3c (walk-forward backtest gate) merged at `3db71a6` (PR #8).
+
+**Plan 3e Phase 0 delivered (current branch, not yet merged):**
+- New `scripts/diagnose_calibration.py` CLI: loads the latest `data/backtest/run_<ts>/` per-row results, fits alternative distribution families (Student-t, lognormal, negative-binomial) against per-stat residuals, and emits a per-cell summary CSV + per-cell QQ/residual plots + a recommendation column.
+- New `tests/test_scripts/test_diagnose_calibration.py` (21 tests) covering the loader, residual extraction, summary stats, alternative-family fits (including the degenerate Student-t guardrail), recommendation logic, and a smoke test of `main()`.
+- Research report committed at `docs/superpowers/research/2026-04-26-calibration-diagnosis.md` identifying 3 root causes (zero-inflation under GAMMA, heavy tails on `*_yards`, pervasive heteroscedasticity).
+- TODO #22 (Plan 3e — calibration tightening) stays open; the diagnostic surfaces root causes but does not implement fixes.
 
 **Plan 3d delivered:**
 - New `src/projections/aggregation/season.py`: `aggregate_to_season` real Monte Carlo season aggregator (regenerates per-week samples from the per-row seed; modal-position resolution for traded players).
@@ -345,9 +398,20 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Recommended: Plan 3e — calibration tightening.**
+**Recommended: Plan 3e Phase 1+ — locked in by spec amendment after Phase 0 evidence; brainstorming session to follow.**
 
-Replace `_gamma_alpha_from_residuals`'s method-of-moments with an MLE fit, and/or add per-stat residual-variance bucketing by predicted-mean tertile, to move weekly + season calibration coverage toward 0.80. The under-dispersion shows up most acutely on QB season totals (`season_calibration_p10p90` 0.31–0.39); expect the largest tightening to come from QB-stat MLE fits.
+Phase 0 produced a research report
+(`docs/superpowers/research/2026-04-26-calibration-diagnosis.md`) identifying 3
+root causes for the 0.30–0.55 weekly + season `[p10, p90]` under-dispersion:
+zero-inflated count stats catastrophically miscalibrated under GAMMA,
+heavy-tailed continuous yards stats (Student-t beats Normal by AIC delta
+`-2160 to -317`), and pervasive heteroscedasticity (18 of 24 cells with
+variance-ratio > 1.5). Per the spec section 3 decision gate, the next gate is a
+spec amendment to
+`docs/superpowers/specs/2026-04-26-plan-3e-calibration-tightening-design.md`
+adding Phase 1+ implementation phases (family swaps, variance bucketing,
+regression gate against the 3d snapshot). Re-invoke `superpowers:brainstorming`
+for that scoping in the next user-driven session.
 
 After 3e: Plan 4 (public Python API + CLI verbs + free-tier web hosting).
 
