@@ -268,3 +268,67 @@ def test_fit_alternative_families_rejects_degenerate_student_t() -> None:
     )
     assert out["student_t"]["ok"] is False
     assert np.isnan(out["student_t"]["aic"])
+
+
+def test_compute_recommended_fix_variance_bucket() -> None:
+    from diagnose_calibration import compute_recommended_fix
+
+    out = compute_recommended_fix(
+        heteroscedasticity_ratio=2.0,
+        assumed_aic=1000.0,
+        alt_fits={"student_t": {"aic": 998.0, "ok": True, "n_params": 3}},
+    )
+    # aic_delta = assumed_aic - best_alt_aic = 1000 - 998 = +2.0 (positive = alt
+    # fits better since AIC is lower-is-better). The plan's test asserted -2.0,
+    # which contradicts the documented formula and AIC convention; corrected here.
+    assert out == ("variance_bucket", "student_t", 2.0)
+
+
+def test_compute_recommended_fix_family_swap() -> None:
+    from diagnose_calibration import compute_recommended_fix
+
+    out = compute_recommended_fix(
+        heteroscedasticity_ratio=1.1,
+        assumed_aic=1000.0,
+        alt_fits={"student_t": {"aic": 980.0, "ok": True, "n_params": 3}},
+    )
+    assert out[0] == "family_swap=student_t"
+
+
+def test_compute_recommended_fix_combined() -> None:
+    from diagnose_calibration import compute_recommended_fix
+
+    out = compute_recommended_fix(
+        heteroscedasticity_ratio=2.0,
+        assumed_aic=1000.0,
+        alt_fits={"student_t": {"aic": 980.0, "ok": True, "n_params": 3}},
+    )
+    assert out[0] == "combined"
+    assert out[1] == "student_t"
+
+
+def test_compute_recommended_fix_no_change() -> None:
+    from diagnose_calibration import compute_recommended_fix
+
+    out = compute_recommended_fix(
+        heteroscedasticity_ratio=1.1,
+        assumed_aic=1000.0,
+        alt_fits={"student_t": {"aic": 999.0, "ok": True, "n_params": 3}},
+    )
+    assert out[0] == "no_change"
+
+
+def test_compute_recommended_fix_handles_no_successful_alt() -> None:
+    from diagnose_calibration import compute_recommended_fix
+
+    out = compute_recommended_fix(
+        heteroscedasticity_ratio=1.1,
+        assumed_aic=1000.0,
+        alt_fits={"student_t": {"aic": float("nan"), "ok": False, "n_params": 3}},
+    )
+    # Element-wise comparison: tuple `==` with NaN fails because two distinct
+    # `float("nan")` instances compare unequal (the plan's `out == (..., nan)`
+    # assertion is unsatisfiable). Assert structurally instead.
+    assert out[0] == "no_change"
+    assert out[1] == "none"
+    assert np.isnan(out[2])

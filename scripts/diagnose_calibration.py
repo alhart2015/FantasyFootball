@@ -410,6 +410,50 @@ def _fit_neg_binomial(actual: np.ndarray) -> dict[str, float | bool]:
         return {"aic": float("nan"), "ok": False, "n_params": 2}
 
 
+_HETERO_RATIO_THRESHOLD = 1.5
+_AIC_DELTA_THRESHOLD = 5.0
+
+
+def compute_recommended_fix(
+    *,
+    heteroscedasticity_ratio: float,
+    assumed_aic: float,
+    alt_fits: dict[str, dict[str, float | bool]],
+) -> tuple[str, str, float]:
+    """Apply spec section 2.5's decision rule.
+
+    Returns (recommended_fix, best_alt_family, aic_delta) where:
+        recommended_fix  in {"variance_bucket", "family_swap=<name>",
+                             "combined", "no_change"}
+        best_alt_family  is the name of the lowest-AIC family whose fit ok=True,
+                         or "none" if no alternative fit succeeded.
+        aic_delta        = assumed_aic - best_alt_aic (positive = alt fits better,
+                          since AIC is lower-is-better).
+                          NaN if no alternative fit succeeded.
+    """
+    # Pick the best successful alternative.
+    successful = {name: f for name, f in alt_fits.items() if f.get("ok") is True}
+    if not successful:
+        return "no_change", "none", float("nan")
+    best_alt_family = min(successful, key=lambda n: float(successful[n]["aic"]))
+    best_alt_aic = float(successful[best_alt_family]["aic"])
+    aic_delta = assumed_aic - best_alt_aic
+
+    has_hetero = (
+        not np.isnan(heteroscedasticity_ratio)
+        and heteroscedasticity_ratio > _HETERO_RATIO_THRESHOLD
+    )
+    has_better_family = aic_delta >= _AIC_DELTA_THRESHOLD
+
+    if has_hetero and has_better_family:
+        return "combined", best_alt_family, aic_delta
+    if has_hetero:
+        return "variance_bucket", best_alt_family, aic_delta
+    if has_better_family:
+        return f"family_swap={best_alt_family}", best_alt_family, aic_delta
+    return "no_change", best_alt_family, aic_delta
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
