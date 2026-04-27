@@ -421,3 +421,55 @@ def test_make_qq_plot_writes_png(tmp_path: Path) -> None:
     )
     assert out_path.is_file()
     assert out_path.stat().st_size > 0
+
+
+def test_main_smoke_writes_all_artifacts(tmp_path: Path) -> None:
+    """End-to-end smoke: synthetic results.parquet -> script writes
+    residuals.parquet, summary.parquet, and at least one PNG."""
+    from diagnose_calibration import main
+
+    # Build a synthetic results.parquet with one QB row that has both a valid
+    # NORMAL params blob (passing_yards) and a *_pred / *_actual pair.
+    backtest_root = tmp_path / "backtest"
+    run_dir = backtest_root / "run_20260101T000000Z"
+    run_dir.mkdir(parents=True)
+    rng = np.random.default_rng(0)
+    n = 60  # small but >> 3 so tertile binning works
+    df = pd.DataFrame(
+        {
+            "gsis_id": [f"00-{i}" for i in range(n)],
+            "season": [2024] * n,
+            "week": list(range(1, n + 1)),
+            "position": ["QB"] * n,
+            "team": ["KC"] * n,
+            "opponent": ["MIN"] * n,
+            "ruleset": ["PPR_DEFAULT"] * n,
+            "family": ["SAMPLED_SUMMARY"] * n,
+            "params": [_build_params_blob_normal("passing_yards", 250.0, 70.0)] * n,
+            "passing_yards_pred": rng.normal(250, 30, n),
+            "passing_yards_actual": rng.normal(250, 70, n),
+            "passing_tds_pred": np.zeros(n),
+            "passing_tds_actual": np.zeros(n),
+            "interceptions_pred": np.zeros(n),
+            "interceptions_actual": np.zeros(n),
+            "rushing_yards_pred": np.zeros(n),
+            "rushing_yards_actual": np.zeros(n),
+            "rushing_tds_pred": np.zeros(n),
+            "rushing_tds_actual": np.zeros(n),
+            "fumbles_lost_pred": np.zeros(n),
+            "fumbles_lost_actual": np.zeros(n),
+        }
+    )
+    df.to_parquet(run_dir / "results.parquet")
+
+    out_dir = tmp_path / "diag_out"
+    exit_code = main(["--run-dir", str(run_dir), "--out-dir", str(out_dir)])
+    assert exit_code == 0
+    assert (out_dir / "residuals.parquet").is_file()
+    assert (out_dir / "summary.parquet").is_file()
+    plots = list((out_dir / "plots").glob("*.png"))
+    assert len(plots) >= 1
+    # summary parquet has a row per (position, stat) and a recommended_fix per row.
+    summary = pd.read_parquet(out_dir / "summary.parquet")
+    assert len(summary) >= 1
+    assert summary["recommended_fix"].notna().all()

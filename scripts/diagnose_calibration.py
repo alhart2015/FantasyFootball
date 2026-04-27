@@ -489,10 +489,10 @@ def _assumed_aic_for_cell(
     converted to AIC. NORMAL: 1 free param (sigma fit globally). GAMMA:
     1 free param (alpha fit globally; scale = mu / alpha is row-derived).
     """
-    if assumed_family == "NORMAL":
+    if assumed_family == DistributionFamily.NORMAL.value:
         log_lik = float(np.sum(scipy_stats.norm.logpdf(actual, loc=pred, scale=param_a)))
         n_params = 1
-    elif assumed_family == "GAMMA":
+    elif assumed_family == DistributionFamily.GAMMA.value:
         log_lik = float(np.sum(scipy_stats.gamma.logpdf(actual, a=param_a, scale=param_b)))
         n_params = 1
     else:
@@ -568,7 +568,7 @@ def make_residual_plot(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.hist(residuals, bins=40, density=True, alpha=0.6, color="steelblue", edgecolor="black")
-    if assumed_family == "NORMAL" and assumed_scale > 0:
+    if assumed_family == DistributionFamily.NORMAL.value and assumed_scale > 0:
         x = np.linspace(np.min(residuals), np.max(residuals), 200)
         ax.plot(
             x,
@@ -601,9 +601,9 @@ def make_qq_plot(
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(6, 6))
-    if assumed_family == "NORMAL":
+    if assumed_family == DistributionFamily.NORMAL.value:
         scipy_stats.probplot(standardized_residuals, dist="norm", plot=ax)
-    elif assumed_family == "GAMMA":
+    elif assumed_family == DistributionFamily.GAMMA.value:
         scipy_stats.probplot(standardized_residuals, dist="uniform", plot=ax)
     else:
         ax.text(0.5, 0.5, f"Q-Q not defined for {assumed_family}", ha="center", va="center")
@@ -630,8 +630,94 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Path to write diagnostic artifacts. Defaults to data/diagnostics/calibration_<ts>/.",
     )
-    parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    run_dir: Path = args.run_dir or find_latest_run_dir(Path("data/backtest"))
+    out_dir: Path = args.out_dir or _default_out_dir(run_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "plots").mkdir(parents=True, exist_ok=True)
+
+    print(f"Reading {run_dir / 'results.parquet'}")
+    per_row = load_per_row_results(run_dir)
+    residuals = extract_per_stat_residuals(per_row)
+    if residuals.empty:
+        print("No per-stat residuals extracted; nothing to do.", file=sys.stderr)
+        return 1
+
+    residuals.to_parquet(out_dir / "residuals.parquet")
+    summary = assemble_full_summary(residuals)
+    summary.to_parquet(out_dir / "summary.parquet")
+
+    # Plots — one histogram + one Q-Q per (position, stat).
+    for (position, stat), group in residuals.groupby(["position", "stat"]):
+        title = f"{position} {stat}"
+        assumed_family = str(group["assumed_family"].iloc[0])
+        # NORMAL: cell-mean assumed loc/scale; OK for the histogram overlay
+        # because the assumed sigma is constant across rows under the current
+        # estimator. GAMMA params are per-row, so the histogram is unannotated.
+        if assumed_family == DistributionFamily.NORMAL.value:
+            assumed_loc = float(np.mean(group["pred"]))
+            assumed_scale = float(group["assumed_param_a"].iloc[0])
+        else:
+            assumed_loc = 0.0
+            assumed_scale = 0.0
+        make_residual_plot(
+            residuals=group["residual"].to_numpy(dtype=np.float64),
+            title=f"{title} — residuals",
+            assumed_family=assumed_family,
+            assumed_loc=assumed_loc,
+            assumed_scale=assumed_scale,
+            out_path=out_dir / "plots" / f"{position}_{stat}_hist.png",
+        )
+        # Q-Q: standardize per family (NORMAL → z; GAMMA → CDF-uniform).
+        std_resid = _standardized_residuals(group)
+        make_qq_plot(
+            standardized_residuals=std_resid,
+            title=f"{title} — Q-Q",
+            assumed_family=assumed_family,
+            out_path=out_dir / "plots" / f"{position}_{stat}_qq.png",
+        )
+
+    print(f"\nWrote {out_dir}/residuals.parquet  ({len(residuals)} rows)")
+    print(f"Wrote {out_dir}/summary.parquet    ({len(summary)} cells)")
+    print(f"Wrote {len(list((out_dir / 'plots').glob('*.png')))} plots")
+    print("\n=== summary ===")
+    print(
+        summary[
+            [
+                "position",
+                "stat",
+                "n",
+                "coverage_p10p90",
+                "heteroscedasticity_ratio",
+                "aic_delta",
+                "recommended_fix",
+            ]
+        ].to_string(index=False)
+    )
     return 0
+
+
+def _default_out_dir(run_dir: Path) -> Path:
+    """Mirror the run_dir's timestamp tag under data/diagnostics/."""
+    tag = run_dir.name.removeprefix("run_")
+    return Path("data/diagnostics") / f"calibration_{tag}"
+
+
+def _standardized_residuals(group: pd.DataFrame) -> np.ndarray:
+    """For NORMAL: z = residual / std. For GAMMA: u = F_gamma(actual; per-row params)."""
+    assumed_family = str(group["assumed_family"].iloc[0])
+    if assumed_family == DistributionFamily.NORMAL.value:
+        std = group["assumed_param_a"].to_numpy(dtype=np.float64)
+        z = group["residual"].to_numpy(dtype=np.float64) / np.where(std > 0, std, np.nan)
+        return np.asarray(z, dtype=np.float64)
+    if assumed_family == DistributionFamily.GAMMA.value:
+        actual = group["actual"].to_numpy(dtype=np.float64)
+        shape = group["assumed_param_a"].to_numpy(dtype=np.float64)
+        scale = group["assumed_param_b"].to_numpy(dtype=np.float64)
+        u = scipy_stats.gamma.cdf(actual, a=shape, scale=scale)
+        return np.asarray(u, dtype=np.float64)
+    return np.full(len(group), np.nan)
 
 
 if __name__ == "__main__":
