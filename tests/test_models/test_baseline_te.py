@@ -26,9 +26,9 @@ def test_te_baseline_factory_returns_unfitted_model() -> None:
     }
     assert set(model.target_stats) == expected_targets
     assert model.dist_families[Stat.RECEPTIONS] is DistributionFamily.GAMMA
-    assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.NORMAL
+    assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.STUDENT_T
     assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
-    assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.NORMAL
+    assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.STUDENT_T
     assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.feature_columns
@@ -70,15 +70,18 @@ def test_te_baseline_fit_records_train_seasons(
     assert model.train_seasons == (2024, 2025)
 
 
-def test_te_baseline_fit_populates_normal_variance_params(
+def test_te_baseline_fit_populates_student_t_variance_params(
     baseline_features_te: pd.DataFrame, baseline_weekly_stats_te: pd.DataFrame
 ) -> None:
+    """Plan 3e Phase 2: TE yards stats route to STUDENT_T with (scale, df) params."""
     model = te_baseline()
     model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
     for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
         params = model.variance_params[stat]
-        assert "std" in params
-        assert params["std"] > 0
+        assert "scale" in params
+        assert "df" in params
+        assert params["scale"] > 0
+        assert params["df"] > 2.0
 
 
 def test_te_baseline_fit_populates_gamma_variance_params(

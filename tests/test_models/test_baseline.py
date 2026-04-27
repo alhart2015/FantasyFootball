@@ -10,7 +10,7 @@ import pytest
 from scipy import stats as scipy_stats
 from sklearn.linear_model import RidgeCV
 
-from projections.distributions.parametric import ParametricGamma, ParametricNormal
+from projections.distributions.parametric import ParametricGamma, ParametricStudentT
 from projections.models import wr_baseline
 from projections.schemas import DistributionFamily, Position, ProjectionWeeklySchema, Ruleset, Stat
 
@@ -30,9 +30,9 @@ def test_wr_baseline_factory_returns_unfitted_model() -> None:
     }
     assert set(model.target_stats) == expected_targets
     assert model.dist_families[Stat.RECEPTIONS] is DistributionFamily.GAMMA
-    assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.NORMAL
+    assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.STUDENT_T
     assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
-    assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.NORMAL
+    assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.STUDENT_T
     assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.feature_columns  # non-empty; specific list verified in Task 6
@@ -70,16 +70,18 @@ def test_baseline_fit_records_train_seasons(
     assert model.train_seasons == (2024, 2025)
 
 
-def test_baseline_fit_populates_normal_variance_params(
+def test_baseline_fit_populates_student_t_variance_params(
     baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
     model = wr_baseline()
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
-    # Normal stats: variance_params should have a positive 'std'.
+    # Plan 3e Phase 2: yards stats route to STUDENT_T with (scale, df) params.
     for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
         params = model.variance_params[stat]
-        assert "std" in params
-        assert params["std"] > 0
+        assert "scale" in params
+        assert "df" in params
+        assert params["scale"] > 0
+        assert params["df"] > 2.0
 
 
 def test_baseline_fit_populates_gamma_variance_params(
@@ -162,7 +164,7 @@ def test_build_stat_distributions_returns_one_per_row(
     for row_dists in stat_dists_per_row:
         assert set(row_dists.keys()) == set(model.target_stats)
         # Family-specific concrete types.
-        assert isinstance(row_dists[Stat.RECEIVING_YARDS], ParametricNormal)
+        assert isinstance(row_dists[Stat.RECEIVING_YARDS], ParametricStudentT)
         assert isinstance(row_dists[Stat.RECEPTIONS], ParametricGamma)
 
 
@@ -455,6 +457,35 @@ def test_negative_binomial_dispersion_clipped_for_degenerate_input() -> None:
     actual = np.zeros(50)
     fitted = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
     assert fitted == _NB_DISPERSION_CLIP[0]
+
+
+def test_student_t_params_recovers_known_params() -> None:
+    """Synthesize Student-t-distributed residuals from known (scale, df),
+    fit, expect recovery within tolerance."""
+    from projections.models.baseline import _student_t_params_from_residuals
+
+    rng = np.random.default_rng(42)
+    n = 1000
+    true_scale = 50.0
+    true_df = 6.0
+    residuals = scipy_stats.t.rvs(df=true_df, loc=0.0, scale=true_scale, size=n, random_state=rng)
+
+    fitted_scale, fitted_df = _student_t_params_from_residuals(residuals=residuals)
+    assert fitted_scale == pytest.approx(true_scale, rel=0.20)
+    assert fitted_df == pytest.approx(true_df, rel=0.50)
+
+
+def test_student_t_params_rejects_degenerate_input() -> None:
+    """All-zero residuals collapse scipy's scale to ~0 — guard returns floor."""
+    from projections.models.baseline import (
+        _STUDENT_T_DF_FLOOR,
+        _STUDENT_T_SCALE_FLOOR,
+        _student_t_params_from_residuals,
+    )
+
+    fitted_scale, fitted_df = _student_t_params_from_residuals(residuals=np.zeros(50))
+    assert fitted_scale >= _STUDENT_T_SCALE_FLOOR
+    assert fitted_df >= _STUDENT_T_DF_FLOOR
 
 
 def test_baseline_model_fit_stores_nb_dispersion_for_nb_stat(

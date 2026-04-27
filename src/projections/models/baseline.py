@@ -27,6 +27,7 @@ from projections.distributions import (
     ParametricGamma,
     ParametricNegativeBinomial,
     ParametricNormal,
+    ParametricStudentT,
     pack_per_stat_params,
 )
 from projections.models.base import compute_code_hash
@@ -126,6 +127,36 @@ def _negative_binomial_dispersion_from_residuals(
     return fitted
 
 
+_STUDENT_T_SCALE_FLOOR: Final[float] = 1e-3
+_STUDENT_T_DF_FLOOR: Final[float] = 2.5  # > 2 for finite variance
+
+
+def _student_t_params_from_residuals(*, residuals: np.ndarray) -> tuple[float, float]:
+    """MLE Student-t scale + df fit on the residual array.
+
+    Returns (scale, df). Discards the fitted loc — residuals are mean-zero
+    by construction (`actual - pred`); the scale and df are the per-stat
+    global parameters used at predict time.
+
+    Guards against degenerate fits: if scipy's fitted scale is dramatically
+    smaller than the empirical sample std, returns the floor to keep
+    ParametricStudentT's std() finite.
+    """
+    if residuals.size < 2:
+        return _STUDENT_T_SCALE_FLOOR, _STUDENT_T_DF_FLOOR
+    try:
+        df, _loc, scale = scipy_stats.t.fit(residuals)
+    except Exception:  # diagnostic must not abort on per-cell fit failure
+        return _STUDENT_T_SCALE_FLOOR, _STUDENT_T_DF_FLOOR
+
+    sample_std = float(np.std(residuals, ddof=0))
+    if scale < max(sample_std * 1e-6, _STUDENT_T_SCALE_FLOOR):
+        scale = _STUDENT_T_SCALE_FLOOR
+    if df <= 2.0 or not np.isfinite(df):
+        df = _STUDENT_T_DF_FLOOR
+    return float(scale), float(df)
+
+
 _WR_TARGET_STATS: Final[tuple[Stat, ...]] = (
     Stat.RECEPTIONS,
     Stat.RECEIVING_YARDS,
@@ -137,9 +168,9 @@ _WR_TARGET_STATS: Final[tuple[Stat, ...]] = (
 
 _WR_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
-    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RECEIVING_YARDS: DistributionFamily.STUDENT_T,
     Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
-    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RUSHING_YARDS: DistributionFamily.STUDENT_T,  # soft pick — Task 2.6 reviews
     Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
@@ -182,10 +213,10 @@ _QB_TARGET_STATS: Final[tuple[Stat, ...]] = (
 )
 
 _QB_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
-    Stat.PASSING_YARDS: DistributionFamily.NORMAL,  # regression reference
+    Stat.PASSING_YARDS: DistributionFamily.NORMAL,  # regression reference; stays NORMAL
     Stat.PASSING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.INTERCEPTIONS: DistributionFamily.NEGATIVE_BINOMIAL,
-    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RUSHING_YARDS: DistributionFamily.STUDENT_T,
     Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
@@ -226,10 +257,10 @@ _RB_TARGET_STATS: Final[tuple[Stat, ...]] = (
 )
 
 _RB_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
-    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RUSHING_YARDS: DistributionFamily.STUDENT_T,
     Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
-    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RECEIVING_YARDS: DistributionFamily.STUDENT_T,
     Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
@@ -269,9 +300,9 @@ _TE_TARGET_STATS: Final[tuple[Stat, ...]] = (
 
 _TE_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
-    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RECEIVING_YARDS: DistributionFamily.STUDENT_T,
     Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
-    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RUSHING_YARDS: DistributionFamily.STUDENT_T,  # soft pick — Task 2.6 reviews
     Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
@@ -437,7 +468,10 @@ class BaselineModel:
                         mu_hat=mu_hat, actual=y
                     )
                 }
-            else:  # pragma: no cover -- only NORMAL/GAMMA/NB configured today
+            elif family is DistributionFamily.STUDENT_T:
+                scale, df = _student_t_params_from_residuals(residuals=residuals)
+                self.variance_params[stat] = {"scale": scale, "df": df}
+            else:  # pragma: no cover -- only NORMAL/GAMMA/NB/STUDENT_T configured today
                 raise ValueError(f"Unsupported family {family} for stat {stat}")
 
         # Record the season range we trained on (post-dropna training set).
@@ -490,6 +524,10 @@ class BaselineModel:
                     # Floor mu to keep the (n, p) parameterization defined.
                     mu_safe = max(mu_i, _NB_MU_FLOOR)
                     row[stat] = ParametricNegativeBinomial(mean=mu_safe, dispersion=dispersion)
+                elif family is DistributionFamily.STUDENT_T:
+                    scale = params["scale"]
+                    df = params["df"]
+                    row[stat] = ParametricStudentT(loc=mu_i, scale=scale, df=df)
                 else:  # pragma: no cover
                     raise ValueError(f"Unsupported family {family}")
             out.append(row)
