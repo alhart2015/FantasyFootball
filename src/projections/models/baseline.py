@@ -73,6 +73,9 @@ def _normal_std_from_residuals(residuals: np.ndarray) -> float:
 
 
 _NB_DISPERSION_CLIP: Final[tuple[float, float]] = (0.01, 1000.0)
+# Floor for the NB rate parameter mu. Mirrors ``BaselineModel._GAMMA_MU_FLOOR``;
+# kept module-scope so estimator + predict-time consumer share one definition.
+_NB_MU_FLOOR: Final[float] = 1e-3
 
 
 def _negative_binomial_dispersion_from_residuals(
@@ -87,7 +90,7 @@ def _negative_binomial_dispersion_from_residuals(
     dtype). Returns the dispersion clipped to ``_NB_DISPERSION_CLIP``.
     """
     counts = np.clip(np.round(actual), 0, None).astype(np.int64)
-    mu_clipped = np.maximum(mu_hat, 1e-3)
+    mu_clipped = np.maximum(mu_hat, _NB_MU_FLOOR)
 
     if counts.size < 2:
         return _NB_DISPERSION_CLIP[1]
@@ -131,11 +134,11 @@ _WR_TARGET_STATS: Final[tuple[Stat, ...]] = (
 
 _WR_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
-    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
-    Stat.RECEIVING_TDS: DistributionFamily.GAMMA,
-    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
-    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
-    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
 
 # Feature columns from WrFeaturesSchema, minus identity columns
@@ -176,12 +179,12 @@ _QB_TARGET_STATS: Final[tuple[Stat, ...]] = (
 )
 
 _QB_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
-    Stat.PASSING_YARDS: DistributionFamily.NORMAL,
-    Stat.PASSING_TDS: DistributionFamily.GAMMA,
-    Stat.INTERCEPTIONS: DistributionFamily.GAMMA,
-    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
-    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
-    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+    Stat.PASSING_YARDS: DistributionFamily.NORMAL,  # regression reference
+    Stat.PASSING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.INTERCEPTIONS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
 
 # Feature columns from QbFeaturesSchema, minus identity (gsis_id/season/week/team/opponent).
@@ -220,12 +223,12 @@ _RB_TARGET_STATS: Final[tuple[Stat, ...]] = (
 )
 
 _RB_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
-    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
-    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
-    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
-    Stat.RECEIVING_TDS: DistributionFamily.GAMMA,
-    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
 
 _RB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
@@ -263,11 +266,11 @@ _TE_TARGET_STATS: Final[tuple[Stat, ...]] = (
 
 _TE_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
-    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
-    Stat.RECEIVING_TDS: DistributionFamily.GAMMA,
-    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
-    Stat.RUSHING_TDS: DistributionFamily.GAMMA,
-    Stat.FUMBLES_LOST: DistributionFamily.GAMMA,
+    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,  # → STUDENT_T in Phase 2
+    Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
+    Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
 
 # Feature columns include rushing_*_per_game_l4 (added to TeFeaturesSchema in Plan 3b Phase 1).
@@ -424,6 +427,8 @@ class BaselineModel:
                     "shape": _gamma_alpha_from_residuals(mu_hat=mu_hat, residuals=residuals)
                 }
             elif family is DistributionFamily.NEGATIVE_BINOMIAL:
+                # NB MLE is conditional on mu_hat, so it consumes (mu_hat, actual) directly,
+                # not residuals.
                 self.variance_params[stat] = {
                     "dispersion": _negative_binomial_dispersion_from_residuals(
                         mu_hat=mu_hat, actual=y
@@ -480,7 +485,7 @@ class BaselineModel:
                 elif family is DistributionFamily.NEGATIVE_BINOMIAL:
                     dispersion = params["dispersion"]
                     # Floor mu to keep the (n, p) parameterization defined.
-                    mu_safe = max(mu_i, 1e-3)
+                    mu_safe = max(mu_i, _NB_MU_FLOOR)
                     row[stat] = ParametricNegativeBinomial(mean=mu_safe, dispersion=dispersion)
                 else:  # pragma: no cover
                     raise ValueError(f"Unsupported family {family}")

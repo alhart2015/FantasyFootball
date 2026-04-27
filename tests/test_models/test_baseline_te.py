@@ -27,10 +27,10 @@ def test_te_baseline_factory_returns_unfitted_model() -> None:
     assert set(model.target_stats) == expected_targets
     assert model.dist_families[Stat.RECEPTIONS] is DistributionFamily.GAMMA
     assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.NORMAL
-    assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.GAMMA
+    assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.NORMAL
-    assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.GAMMA
-    assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.GAMMA
+    assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
+    assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.feature_columns
 
 
@@ -86,10 +86,25 @@ def test_te_baseline_fit_populates_gamma_variance_params(
 ) -> None:
     model = te_baseline()
     model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
-    for stat in (Stat.RECEPTIONS, Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
+    # RECEPTIONS stays Gamma; count stats moved to NEGATIVE_BINOMIAL in Plan 3e Phase 1.
+    for stat in (Stat.RECEPTIONS,):
         params = model.variance_params[stat]
         assert "shape" in params
         assert 0.01 <= params["shape"] <= 100.0
+
+
+def test_te_baseline_fit_populates_nb_variance_params(
+    baseline_features_te: pd.DataFrame, baseline_weekly_stats_te: pd.DataFrame
+) -> None:
+    """Plan 3e Phase 1: TE count stats route to NEGATIVE_BINOMIAL."""
+    from projections.models.baseline import _NB_DISPERSION_CLIP
+
+    model = te_baseline()
+    model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
+    for stat in (Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
+        params = model.variance_params[stat]
+        assert "dispersion" in params
+        assert _NB_DISPERSION_CLIP[0] <= params["dispersion"] <= _NB_DISPERSION_CLIP[1]
 
 
 def test_te_predict_distribution_returns_projection_weekly_schema_valid_frame(

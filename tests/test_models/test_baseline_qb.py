@@ -25,11 +25,11 @@ def test_qb_baseline_factory_returns_unfitted_model() -> None:
     }
     assert set(model.target_stats) == expected_targets
     assert model.dist_families[Stat.PASSING_YARDS] is DistributionFamily.NORMAL
-    assert model.dist_families[Stat.PASSING_TDS] is DistributionFamily.GAMMA
-    assert model.dist_families[Stat.INTERCEPTIONS] is DistributionFamily.GAMMA
+    assert model.dist_families[Stat.PASSING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
+    assert model.dist_families[Stat.INTERCEPTIONS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.NORMAL
-    assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.GAMMA
-    assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.GAMMA
+    assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
+    assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.feature_columns
 
 
@@ -72,15 +72,18 @@ def test_qb_baseline_fit_populates_normal_variance_params(
         assert params["std"] > 0
 
 
-def test_qb_baseline_fit_populates_gamma_variance_params(
+def test_qb_baseline_fit_populates_nb_variance_params(
     baseline_features_qb: pd.DataFrame, baseline_weekly_stats_qb: pd.DataFrame
 ) -> None:
+    """Plan 3e Phase 1: QB count stats route to NEGATIVE_BINOMIAL."""
+    from projections.models.baseline import _NB_DISPERSION_CLIP
+
     model = qb_baseline()
     model.fit(features=baseline_features_qb, weekly_stats=baseline_weekly_stats_qb)
     for stat in (Stat.PASSING_TDS, Stat.INTERCEPTIONS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
         params = model.variance_params[stat]
-        assert "shape" in params
-        assert 0.01 <= params["shape"] <= 100.0
+        assert "dispersion" in params
+        assert _NB_DISPERSION_CLIP[0] <= params["dispersion"] <= _NB_DISPERSION_CLIP[1]
 
 
 def test_qb_predict_distribution_returns_projection_weekly_schema_valid_frame(
