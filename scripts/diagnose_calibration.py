@@ -13,11 +13,12 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import numpy as np
 import pandas as pd
 from scipy import stats as scipy_stats
+from scipy.optimize import minimize
 
 from projections.distributions import (
     Distribution,
@@ -27,6 +28,8 @@ from projections.distributions import (
 )
 from projections.models import POSITION_DISPATCH
 from projections.schemas import DistributionFamily, Stat
+
+StatKind = Literal["continuous", "low_count", "high_count"]
 
 
 def find_latest_run_dir(backtest_root: Path) -> Path:
@@ -272,6 +275,128 @@ def _coverage_and_ks(
     coverage_le_p90 = float(np.mean(actual <= p90))
     ks_result = scipy_stats.kstest(u, "uniform")
     return coverage_p10p90, coverage_le_p90, float(ks_result.statistic), float(ks_result.pvalue)
+
+
+def fit_alternative_families(
+    *,
+    actual: np.ndarray,
+    pred: np.ndarray,
+    stat_kind: StatKind,
+) -> dict[str, dict[str, float | bool]]:
+    """MLE-fit the candidate alternative families for a (position, stat) cell.
+
+    Returns {family_name: {"aic": float | nan, "ok": bool, "n_params": int}}.
+    Failures (singular fits, non-finite log-likelihood, missing support)
+    are recorded as ok=False with aic=nan; this function never raises.
+
+    Candidate menus by stat_kind:
+        "continuous":  student_t, log_normal
+        "low_count":   neg_binomial
+        "high_count":  neg_binomial
+
+    Args:
+        actual: Observed values for the (position, stat) cell.
+        pred: Per-row point predictions for the same cell. Currently unused
+            inside the helpers (alternatives are fit on `actual` directly);
+            accepted in the signature so that Task 8's assemble_full_summary
+            can pass both, leaving room for joint (actual, pred) fits later.
+        stat_kind: Selects the candidate menu.
+    """
+    del pred  # reserved for future joint fits; see docstring.
+    out: dict[str, dict[str, float | bool]] = {}
+    if stat_kind == "continuous":
+        out["student_t"] = _fit_student_t(actual)
+        out["log_normal"] = _fit_log_normal(actual)
+    elif stat_kind in ("low_count", "high_count"):
+        out["neg_binomial"] = _fit_neg_binomial(actual)
+    else:
+        raise ValueError(f"Unknown stat_kind: {stat_kind!r}")
+    return out
+
+
+def _fit_student_t(actual: np.ndarray) -> dict[str, float | bool]:
+    """MLE Student-t with location and scale; df free."""
+    try:
+        df, loc, scale = scipy_stats.t.fit(actual)
+        log_lik = float(np.sum(scipy_stats.t.logpdf(actual, df=df, loc=loc, scale=scale)))
+        if not np.isfinite(log_lik):
+            return {"aic": float("nan"), "ok": False, "n_params": 3}
+        n_params = 3
+        aic = 2 * n_params - 2 * log_lik
+        return {"aic": float(aic), "ok": True, "n_params": n_params}
+    except Exception:  # diagnostic must not abort on per-cell fit failure
+        return {"aic": float("nan"), "ok": False, "n_params": 3}
+
+
+def _fit_log_normal(actual: np.ndarray) -> dict[str, float | bool]:
+    """MLE log-normal. Requires actual > 0; otherwise ok=False."""
+    if actual.size == 0 or float(np.min(actual)) <= 0.0:
+        return {"aic": float("nan"), "ok": False, "n_params": 2}
+    try:
+        # Fix loc=0 so we get the standard 2-param log-normal (s, scale).
+        s, _loc, scale = scipy_stats.lognorm.fit(actual, floc=0)
+        log_lik = float(np.sum(scipy_stats.lognorm.logpdf(actual, s, loc=0, scale=scale)))
+        if not np.isfinite(log_lik):
+            return {"aic": float("nan"), "ok": False, "n_params": 2}
+        n_params = 2
+        aic = 2 * n_params - 2 * log_lik
+        return {"aic": float(aic), "ok": True, "n_params": n_params}
+    except Exception:  # diagnostic must not abort on per-cell fit failure
+        return {"aic": float("nan"), "ok": False, "n_params": 2}
+
+
+def _fit_neg_binomial(actual: np.ndarray) -> dict[str, float | bool]:
+    """MLE Negative Binomial via scipy.optimize on (n, p) parameters.
+
+    scipy.stats.nbinom does not have a `.fit` method; we minimize the
+    negative log-likelihood directly. Coerces actual to non-negative
+    integers (counts); rounds and clips negatives to 0 so the helper is
+    robust to noise upstream.
+    """
+    counts = np.clip(np.round(actual), 0, None).astype(np.int64)
+    if counts.size < 2:
+        return {"aic": float("nan"), "ok": False, "n_params": 2}
+    mean = float(np.mean(counts))
+    var = float(np.var(counts, ddof=0))
+    if mean == 0.0:
+        # All-zero counts: NB MLE is degenerate (any large n with p->1 explains it).
+        return {"aic": float("nan"), "ok": False, "n_params": 2}
+    # Method-of-moments init: var = mean + mean^2 / n  =>  n = mean^2 / (var - mean).
+    # When var <= mean (NB degenerates to Poisson), the MoM is undefined; seed with a
+    # large n so the NB approximates a Poisson and let the optimizer refine. We do NOT
+    # short-circuit here: a NB fit on near-Poisson data is still a valid (if uninformative)
+    # alternative, and downstream AIC ranking is what decides whether NB is preferred.
+    if var > mean:
+        n_init = mean * mean / (var - mean)
+    else:
+        n_init = max(mean * 100.0, 10.0)  # large n -> NB approximates Poisson(mean)
+    p_init = n_init / (n_init + mean)
+
+    def neg_log_lik(params: np.ndarray) -> float:
+        n, p = params
+        if n <= 0 or not 0 < p < 1:
+            return float("inf")
+        return -float(np.sum(scipy_stats.nbinom.logpmf(counts, n=n, p=p)))
+
+    try:
+        result = minimize(
+            neg_log_lik,
+            x0=np.array([n_init, p_init]),
+            method="Nelder-Mead",
+            options={"xatol": 1e-4, "fatol": 1e-4, "maxiter": 2000},
+        )
+        # Nelder-Mead returns success=False on near-boundary fits (e.g., NB->Poisson
+        # with n->inf, p->1) even when result.fun is a sensible likelihood. We treat
+        # any finite, non-inf result.fun as a usable fit; only non-finite values
+        # (which indicate the optimizer wandered into infeasible territory) are rejected.
+        if not np.isfinite(result.fun):
+            return {"aic": float("nan"), "ok": False, "n_params": 2}
+        log_lik = -float(result.fun)
+        n_params = 2
+        aic = 2 * n_params - 2 * log_lik
+        return {"aic": float(aic), "ok": True, "n_params": n_params}
+    except Exception:  # diagnostic must not abort on per-cell fit failure
+        return {"aic": float("nan"), "ok": False, "n_params": 2}
 
 
 def main(argv: list[str] | None = None) -> int:

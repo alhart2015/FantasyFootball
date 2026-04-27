@@ -211,3 +211,44 @@ def test_compute_summary_stats_normal_family() -> None:
     assert 0.5 < row["heteroscedasticity_ratio"] < 2.0
     # KS p-value should be high (residuals match assumed family).
     assert row["ks_assumed_pvalue"] > 0.05
+
+
+def test_fit_alternative_families_continuous_returns_student_t_and_lognormal() -> None:
+    from diagnose_calibration import fit_alternative_families
+
+    rng = np.random.default_rng(0)
+    actual = rng.normal(250, 70, 500)
+    pred = np.full(500, 250.0)
+    out = fit_alternative_families(actual=actual, pred=pred, stat_kind="continuous")
+    # Both alternatives attempted.
+    assert "student_t" in out
+    assert "log_normal" in out  # may have ok=False if min(actual) <= 0
+    # Student-t fit succeeded and produced finite AIC.
+    assert out["student_t"]["ok"] is True
+    assert np.isfinite(out["student_t"]["aic"])
+
+
+def test_fit_alternative_families_low_mean_count_returns_neg_binom() -> None:
+    from diagnose_calibration import fit_alternative_families
+
+    rng = np.random.default_rng(1)
+    # Low-mean integer counts (e.g., receiving_tds-shaped).
+    actual = rng.poisson(0.3, 500).astype(np.float64)
+    pred = np.full(500, 0.3)
+    out = fit_alternative_families(actual=actual, pred=pred, stat_kind="low_count")
+    assert "neg_binomial" in out
+    assert out["neg_binomial"]["ok"] is True
+    assert np.isfinite(out["neg_binomial"]["aic"])
+
+
+def test_fit_alternative_families_handles_failure_gracefully() -> None:
+    from diagnose_calibration import fit_alternative_families
+
+    # Degenerate input: all zeros. Log-normal MLE undefined; Student-t
+    # may fit with degenerate scale. Either way: no exceptions.
+    actual = np.zeros(50)
+    pred = np.zeros(50)
+    out = fit_alternative_families(actual=actual, pred=pred, stat_kind="continuous")
+    # log_normal must report ok=False (skipped because min(actual) <= 0).
+    assert out["log_normal"]["ok"] is False
+    assert np.isnan(out["log_normal"]["aic"])
