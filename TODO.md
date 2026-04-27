@@ -251,3 +251,22 @@ Already in the project_management.md backlog as Plan 5; tracked here so it sits 
 **Adoption gate:** must beat Model A on the backtest snapshot before replacing it. Per the A → C → D modeling roadmap.
 
 **Estimated win:** 5-15% RMSE on top of current features; calibration improves as a side-effect of the quantile loss. Single biggest expected single-step gain among the three tracks.
+
+### 27. Revisit Model Protocol shape (Fitted vs base separation)
+
+Surfaced in Plan 5 Task 11 review (2026-04-27). Task 11 initially widened the
+`Model` Protocol with `target_stats`, `train_seasons`, `code_hash` so consumers
+could type against `Model` generically, but this leaked `BaselineModel`'s
+set-at-fit semantics (`code_hash: str | None`, `train_seasons: tuple[int, int] | None`)
+into the contract. The widening was reverted; consumers now use `cast(BaselineModel | LightGBMModel, ...)`
+narrowing.
+
+The clean long-term shape is probably a `Fitted[Model]` Protocol split:
+- Base `Model` exposes `position`, `fit`, `predict_distribution`, `save`, `load`.
+- `FittedModel(Model)` adds `model_id`, `train_seasons: tuple[int, int]` (no None),
+  `code_hash: str` (no None) — guaranteed populated post-fit.
+- `Model.fit()` returns `FittedModel`-typed self; consumers post-fit type against `FittedModel`.
+
+Revisit when Plan 6 (EnsembleModel) lands — that's the natural moment to redesign
+the Protocol surface as more model classes need to share the contract. Until then,
+the `cast()` pattern in CLI scripts is the trade-off accepted.

@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
-from projections.models import POSITION_DISPATCH, BaselineModel
+from projections.models import POSITION_DISPATCH, BaselineModel, LightGBMModel
 from projections.schemas import Position
 from projections.store import read_partition
 
@@ -99,7 +99,12 @@ def main() -> None:
         f"weekly_stats rows: {len(weekly_stats)}"
     )
 
-    model = POSITION_DISPATCH[position].factories[args.model]()
+    # Dispatch returns the Model Protocol; cast to the concrete-class union so
+    # we can read BaselineModel-/LightGBMModel-specific properties
+    # (target_stats, train_seasons, code_hash) that aren't part of the Protocol.
+    # Both concrete classes are exhaustively listed in factories above, so the
+    # cast is sound by construction.
+    model = cast(BaselineModel | LightGBMModel, POSITION_DISPATCH[position].factories[args.model]())
     model.fit(features=features, weekly_stats=weekly_stats)
     print(f"model_id: {model.model_id}")
     if isinstance(model, BaselineModel):

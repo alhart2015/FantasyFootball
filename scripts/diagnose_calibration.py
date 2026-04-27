@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,7 +27,7 @@ from projections.distributions import (
     ParametricNormal,
     unpack_per_stat_params,
 )
-from projections.models import POSITION_DISPATCH
+from projections.models import POSITION_DISPATCH, BaselineModel
 from projections.schemas import DistributionFamily, Stat
 
 # Force a non-interactive backend so this script runs in headless environments
@@ -86,10 +86,12 @@ def _resolve_target_stats() -> dict[str, tuple[str, ...]]:
     target_stats are identical across Model A (baseline) and Model C
     (lightgbm) by construction (Plan 5 LightGBMModel reuses each
     position's BaselineModel target stats), so the baseline factory is a
-    fine source of truth here."""
+    fine source of truth here. The dispatch returns the Model Protocol
+    (which intentionally does not advertise target_stats — that's a
+    BaselineModel/LightGBMModel concrete-class API); cast() to read it."""
     out: dict[str, tuple[str, ...]] = {}
     for position, dispatch in POSITION_DISPATCH.items():
-        model = dispatch.factories["baseline"]()
+        model = cast(BaselineModel, dispatch.factories["baseline"]())
         out[position.value] = tuple(s.value for s in model.target_stats)
     return out
 
