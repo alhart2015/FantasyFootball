@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from typing import Final, Literal
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import stats as scipy_stats
@@ -28,6 +29,12 @@ from projections.distributions import (
 )
 from projections.models import POSITION_DISPATCH
 from projections.schemas import DistributionFamily, Stat
+
+# Force a non-interactive backend so this script runs in headless environments
+# (CI, cron). Calling switch_backend after all imports keeps ruff E402 happy
+# without noqa and avoids importing matplotlib twice (vs. the pre-pyplot
+# `matplotlib.use("Agg")` pattern).
+plt.switch_backend("Agg")
 
 StatKind = Literal["continuous", "low_count", "high_count"]
 RecommendationTag = Literal["variance_bucket", "family_swap", "combined", "no_change"]
@@ -542,6 +549,68 @@ def assemble_full_summary(residuals: pd.DataFrame) -> pd.DataFrame:
         )
         enriched_rows.append(enriched)
     return pd.DataFrame(enriched_rows)
+
+
+def make_residual_plot(
+    *,
+    residuals: np.ndarray,
+    title: str,
+    assumed_family: str,
+    assumed_loc: float,
+    assumed_scale: float,
+    out_path: Path,
+) -> None:
+    """Histogram of residuals with the assumed-family density overlaid.
+
+    For NORMAL: density at N(assumed_loc, assumed_scale).
+    For GAMMA: density skipped (assumed params are per-row, not per-cell).
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.hist(residuals, bins=40, density=True, alpha=0.6, color="steelblue", edgecolor="black")
+    if assumed_family == "NORMAL" and assumed_scale > 0:
+        x = np.linspace(np.min(residuals), np.max(residuals), 200)
+        ax.plot(
+            x,
+            scipy_stats.norm.pdf(x, loc=assumed_loc, scale=assumed_scale),
+            color="darkred",
+            linewidth=2,
+            label=f"N({assumed_loc:.1f}, {assumed_scale:.1f})",
+        )
+        ax.legend()
+    ax.set_title(title)
+    ax.set_xlabel("residual (actual - pred)")
+    ax.set_ylabel("density")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=100)
+    plt.close(fig)
+
+
+def make_qq_plot(
+    *,
+    standardized_residuals: np.ndarray,
+    title: str,
+    assumed_family: str,
+    out_path: Path,
+) -> None:
+    """Q-Q plot of standardized residuals vs the assumed-family quantiles.
+
+    NORMAL: vs scipy.stats.norm. GAMMA: under the per-row CDF transform,
+    standardized_residuals are uniform on [0, 1], so the comparison is vs
+    Uniform(0, 1).
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6, 6))
+    if assumed_family == "NORMAL":
+        scipy_stats.probplot(standardized_residuals, dist="norm", plot=ax)
+    elif assumed_family == "GAMMA":
+        scipy_stats.probplot(standardized_residuals, dist="uniform", plot=ax)
+    else:
+        ax.text(0.5, 0.5, f"Q-Q not defined for {assumed_family}", ha="center", va="center")
+    ax.set_title(title)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=100)
+    plt.close(fig)
 
 
 def main(argv: list[str] | None = None) -> int:

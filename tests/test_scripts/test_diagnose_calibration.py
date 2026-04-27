@@ -389,3 +389,35 @@ def test_assemble_full_summary_columns_and_one_row_per_cell() -> None:
     # Recommended fix must be one of the four well-formed values.
     rec = out["recommended_fix"].iloc[0]
     assert rec in {"variance_bucket", "no_change", "combined", "family_swap"}
+
+
+def test_make_residual_plot_writes_png(tmp_path: Path) -> None:
+    from diagnose_calibration import make_residual_plot
+
+    rng = np.random.default_rng(0)
+    out_path = tmp_path / "qb_passing_yards_hist.png"
+    make_residual_plot(
+        residuals=rng.normal(0, 70, 200),
+        title="QB passing_yards",
+        assumed_family="NORMAL",
+        assumed_loc=0.0,
+        assumed_scale=70.0,
+        out_path=out_path,
+    )
+    assert out_path.is_file()
+    assert out_path.stat().st_size > 0
+
+
+def test_make_qq_plot_writes_png(tmp_path: Path) -> None:
+    from diagnose_calibration import make_qq_plot
+
+    rng = np.random.default_rng(0)
+    out_path = tmp_path / "qb_passing_yards_qq.png"
+    make_qq_plot(
+        standardized_residuals=rng.normal(0, 1, 200),
+        title="QB passing_yards",
+        assumed_family="NORMAL",
+        out_path=out_path,
+    )
+    assert out_path.is_file()
+    assert out_path.stat().st_size > 0
