@@ -1,6 +1,6 @@
 # Plan 3e — Calibration tightening — Design
 
-**Status:** approved (brainstorming) — Phase 0 only. Phase 1+ deferred to spec amendment after Phase 0 evidence.
+**Status:** approved (brainstorming). Phase 0 complete; Phase 1+ amendment landed 2026-04-26 after Phase 0 evidence (see `docs/superpowers/research/2026-04-26-calibration-diagnosis.md`).
 **Date:** 2026-04-26
 **Author:** alden + claude
 **Builds on:** `2026-04-26-plan-3d-monte-carlo-season-design.md` (the per-row seeds + per-stat params blob + season aggregator this plan tightens). Closes TODO #22.
@@ -44,15 +44,20 @@ This document specifies Phase 0 in full. The amendment will land in this same br
 - Update `.gitignore` so `data/diagnostics/` is gitignored (mirrors `data/backtest/`).
 - Decision-gate the spec on the diagnostic report: after Phase 0 lands, the brainstorming skill is re-invoked in this branch to amend the spec with Phase 1+ implementation phases.
 
-### 1.2 Goals (Phase 1+, deferred — illustrative only)
+### 1.2 Goals (Phase 1+, locked in by 2026-04-26 amendment)
 
-The amendment will lock in concrete phases after Phase 0. Likely shape:
+Phase 0's diagnostic identified three distinct root causes ([report](../research/2026-04-26-calibration-diagnosis.md)). Phase 1+ addresses them in three sequential phases, biggest-bang-first:
 
-- New `DistributionFamily` enum value(s) + new `Parametric*` implementations under `src/projections/distributions/` (e.g., `ParametricStudentT`, `ParametricNegativeBinomial`).
-- Extend `BaselineModel.variance_params` schema to support per-tertile bucketing and/or new family parameters.
-- Update `pack_per_stat_params` codec for new families.
-- Retrain `models/artifacts/*.joblib` standalone artifacts (mechanical; old artifacts unloadable, same pattern as 3b → 3a).
-- Re-snapshot `tests/backtest/baseline_metrics.json`. Existing 0.03 absolute calibration tolerance becomes the no-backsliding gate from the new floor.
+- **Phase 1 — `ParametricNegativeBinomial` for zero-inflated counts.** Closes the 10 cells (`*_tds`, `interceptions`, `fumbles_lost` across all four positions) where coverage is currently 0.0 because GAMMA can't represent a point mass at zero.
+- **Phase 2 — `ParametricStudentT` for heavy-tailed yards.** Closes the 5 cells where Phase 0's AIC strongly preferred Student-t over Normal (`*_yards` for QB rushing, RB rushing, TE receiving, WR receiving, marginally QB passing).
+- **Phase 3 — Per-tertile variance bucketing.** Cross-cutting; applies to all families. Addresses the 18-of-24 cells with `heteroscedasticity_ratio > 1.5` — high-pred tertiles carry 1.5–2.7× the residual std of low-pred tertiles, indicating constant per-stat sigma is the wrong scale model.
+
+Each phase ends with a wholesale re-snapshot of `tests/backtest/baseline_metrics.json` and a PM-doc update reporting the per-cell coverage delta. The existing 0.03 absolute calibration tolerance carries forward as the no-backsliding floor at each new step.
+
+After all three phases land:
+
+- Update `pack_per_stat_params` codec for the two new families.
+- Retrain `models/artifacts/*.joblib` standalone artifacts (same pattern as 3b → 3a — old artifacts unloadable; the backtest harness regenerates fold artifacts from the feature cache, so the gate is unaffected).
 - Update `project_management.md`; close TODO #22.
 
 ### 1.3 Non-goals (deferred)
@@ -323,5 +328,148 @@ After the amendment + Phase 1+ implementation:
 | 2026-04-26 | Standalone artifact retraining: same pattern as 3b → 3a. Saved `models/artifacts/*.joblib` become unloadable after `BaselineModel.variance_params` shape changes; mechanical retrain in a Phase N task. | Backtest harness is unaffected (regenerates fold artifacts from the feature cache). Standalone artifacts are only consumed by `scripts/sanity_check_baseline.py` and `scripts/predict_2024.py`; retraining is one CLI invocation. Maintaining backward compat for an internal-only artifact format is not worth the surface area. |
 | 2026-04-26 | Alternative-family menu: Student-t + log-normal for continuous, Negative Binomial for low-mean integer counts. | Three families cover the three most plausible alternatives to NORMAL/GAMMA: heavy-tailed symmetric (Student-t), heavy-tailed positive-skewed (log-normal), heavy-tailed integer (NB). Adding more (Tweedie, generalized Pareto, mixture) is overfitting the menu before evidence demands it. |
 | 2026-04-26 | `matplotlib` added to `[project.optional-dependencies].dev`, not main `dependencies`. | Plots are diagnostic-only; production runtime never imports `scripts/`. Dev-only keeps the install footprint clean for the eventual web-hosting plan. |
+| 2026-04-26 | Phase ordering: NegBinomial first, Student-t second, variance bucketing third. | Biggest-bang-first. NB closes 10 cells where coverage is 0.0 (highest absolute coverage gain). Student-t closes 5 cells where heavy tails are confirmed. Bucketing is cross-cutting and operates on whatever families ended up after Phases 1-2; doing bucketing first would mean re-bucketing after the family swap. |
+| 2026-04-26 | Skip Zero-Inflated Negative Binomial at v1; use plain NB. | NB with low mean already produces high mass at zero; adding a separate zero-component (ZIP) is a strict generalization but adds a parameter. If Phase 1 doesn't reach the 0.65 floor on any count cell, revisit ZIP in a follow-up plan. |
+| 2026-04-26 | `receptions` stays on GAMMA at Phase 1; revisit only if it remains under-calibrated. | Phase 0 showed `receptions` cells at coverage 0.60-0.70 (under-calibrated but not catastrophic). Continuous-ish stat with mean ~1-3; GAMMA is borderline appropriate. Avoids over-scoping Phase 1; revisit empirically. |
+| 2026-04-26 | NegativeBinomial parameterization: `(mean, dispersion)` with mean = per-row Ridge prediction (clamped) and dispersion fit globally per stat from training residuals. | Mirrors the existing per-row-conditional shape used by NORMAL (loc=pred, scale fit) and GAMMA (scale=pred/alpha, alpha fit). Keeps the row-level prediction → distribution mapping consistent across families. Conditional formulation also fixes Phase 0's marginal-vs-conditional AIC asymmetry caveat. |
+| 2026-04-26 | Student-t parameterization: `(loc=pred, scale, df)` with scale + df fit globally per stat via `scipy.stats.t.fit` on residuals. | `loc = pred` matches the conditional NORMAL framing. Fitting df allows the family to flex toward Normal (df → ∞) where residuals are well-described as Normal, or toward heavy tails (df ≈ 4-10) where they aren't. Per-stat global df is the simplest sufficient statistic; per-bucket df is a Phase 4 concern if needed. |
+| 2026-04-26 | Variance bucketing: 3 quantile-based buckets per (position, stat) on `mu_hat`; bucket boundaries persisted in the model artifact. | 3 buckets is the minimum that captures monotonic heteroscedasticity (Phase 0 reported `std_tertile_low/mid/high`). 5+ buckets adds parameter count without strong empirical justification. Quantile-based avoids degenerate buckets on long-tailed predictor distributions. Persisting boundaries is necessary for predict-time bucket lookup. |
+| 2026-04-26 | Single family per (position, stat); buckets share the family. | Bucketing varies the variance parameter; family swaps vary the distribution shape. Allowing per-bucket family would explode configuration surface and complicate the codec for marginal gain. |
+
+---
+
+## 8. Architecture (Phase 1+)
+
+### 8.1 Distribution layer additions
+
+Two new parametric families added to `src/projections/distributions/parametric.py`, mirroring the existing `ParametricNormal` / `ParametricGamma` shape:
+
+```python
+@dataclass(slots=True, frozen=True, init=False)
+class ParametricNegativeBinomial:
+    """Negative Binomial parameterized as (mean, dispersion).
+
+    n = mean^2 / max(dispersion, eps)
+    p = n / (n + mean)
+    var = mean + mean^2 / dispersion (overdispersion vs Poisson when dispersion < inf)
+    """
+    mean_: float
+    dispersion_: float
+    # ... mean(), std(), quantile(q), sample(n, rng) per Distribution Protocol
+
+
+@dataclass(slots=True, frozen=True, init=False)
+class ParametricStudentT:
+    """Student-t parameterized as (loc, scale, df).
+
+    var = scale^2 * df / (df - 2)  for df > 2
+    """
+    loc_: float
+    scale_: float
+    df_: float
+    # ... mean(), std(), quantile(q), sample(n, rng) per Distribution Protocol
+```
+
+Both new classes implement the `Distribution` Protocol (`mean`, `std`, `quantile`, `sample`). Existing scoring layer (`scoring/score_distribution.py`) and aggregation layer (`aggregation/season.py`) consume the protocol; no changes needed in those modules.
+
+### 8.2 `DistributionFamily` enum + codec
+
+Add two enum values to `src/projections/schemas.py`:
+
+```python
+class DistributionFamily(StrEnum):
+    NORMAL = "NORMAL"
+    GAMMA = "GAMMA"
+    NEGATIVE_BINOMIAL = "NEGATIVE_BINOMIAL"   # NEW (Phase 1)
+    STUDENT_T = "STUDENT_T"                   # NEW (Phase 2)
+    SAMPLED = "SAMPLED"
+    SAMPLED_SUMMARY = "SAMPLED_SUMMARY"
+```
+
+Update `pack_per_stat_params` / `unpack_per_stat_params` in `src/projections/distributions/codec.py` with branches for each new family. Schema version bumps from 1 to 2 (codec rejects old blobs with a clear "unsupported schema_version" error so any old persisted projections fail loudly).
+
+### 8.3 `BaselineModel` per-position factory updates
+
+`src/projections/models/baseline.py` per-position factories rewire `dist_families`:
+
+- **WR**: `RECEPTIONS` → GAMMA (unchanged, Phase 0 evidence borderline OK), `RECEIVING_YARDS` → STUDENT_T, `RECEIVING_TDS` → NEGATIVE_BINOMIAL, `RUSHING_YARDS` → STUDENT_T, `RUSHING_TDS` → NEGATIVE_BINOMIAL, `FUMBLES_LOST` → NEGATIVE_BINOMIAL.
+- **QB**: `PASSING_YARDS` → keep NORMAL (Phase 0 essentially calibrated; use as regression reference), `PASSING_TDS` → NEGATIVE_BINOMIAL, `INTERCEPTIONS` → NEGATIVE_BINOMIAL, `RUSHING_YARDS` → STUDENT_T, `RUSHING_TDS` → NEGATIVE_BINOMIAL, `FUMBLES_LOST` → NEGATIVE_BINOMIAL.
+- **RB**: `RUSHING_YARDS` → STUDENT_T, `RUSHING_TDS` → NEGATIVE_BINOMIAL, `RECEPTIONS` → GAMMA (unchanged), `RECEIVING_YARDS` → STUDENT_T, `RECEIVING_TDS` → NEGATIVE_BINOMIAL, `FUMBLES_LOST` → NEGATIVE_BINOMIAL.
+- **TE**: `RECEPTIONS` → GAMMA (unchanged), `RECEIVING_YARDS` → STUDENT_T, `RECEIVING_TDS` → NEGATIVE_BINOMIAL, `RUSHING_YARDS` → STUDENT_T, `RUSHING_TDS` → NEGATIVE_BINOMIAL, `FUMBLES_LOST` → NEGATIVE_BINOMIAL.
+
+Two cells are "soft" picks the per-phase review must reconfirm: (1) `WR rushing_yards` is rare (mean ~1 yard) and the Phase 0 alt-fitter returned `none`; if Phase 2's Student-t fit is degenerate, revert this cell to NORMAL in the Phase 2 wrap. (2) `TE rushing_yards` is degenerate (mean ~0.10 yards, kurtosis ~2618 per Phase 0); Phase 2 attempts STUDENT_T, but if the fit is degenerate or the post-Phase-2 coverage on this cell drops below its Phase 1 baseline, revert to NORMAL in the Phase 2 wrap. Document the choice in the per-phase PM doc update.
+
+### 8.4 `BaselineModel.variance_params` generalization
+
+Current shape: `dict[Stat, dict[str, float]]` — one parameter (`std` or `shape`) per stat.
+
+Phase 1-2 shape: `dict[Stat, dict[str, float]]` extends to support new family parameters:
+- NORMAL: `{"std": float}` (unchanged)
+- GAMMA: `{"shape": float}` (unchanged)
+- NEGATIVE_BINOMIAL: `{"dispersion": float}`
+- STUDENT_T: `{"scale": float, "df": float}`
+
+Phase 3 shape: `dict[Stat, dict[str, float | list[float]]]` — bucket boundaries + per-bucket parameter:
+- e.g. NORMAL with bucketing: `{"bucket_cuts": [low_pred, high_pred], "std_per_bucket": [std_low, std_mid, std_high]}`
+- GAMMA with bucketing: `{"bucket_cuts": [...], "shape_per_bucket": [a_low, a_mid, a_high]}`
+- NB with bucketing: `{"bucket_cuts": [...], "dispersion_per_bucket": [d_low, d_mid, d_high]}`
+- Student-t with bucketing: `{"bucket_cuts": [...], "scale_per_bucket": [...], "df_per_bucket": [...]}`
+
+Codec extended in lockstep. `BaselineModel.predict_distribution` looks up which bucket each row falls into via `np.searchsorted(bucket_cuts, mu_hat)` and selects the corresponding parameter value.
+
+---
+
+## 9. Implementation notes (Phase 1+)
+
+### 9.1 NegativeBinomial dispersion estimator
+
+Per stat, fit dispersion by maximizing the log-likelihood `sum(nbinom.logpmf(actual_i, n_i, p_i))` over a single global dispersion parameter, where `n_i = mean_i^2 / dispersion` and `p_i = n_i / (n_i + mean_i)`, and `mean_i = max(pred_i, eps)` is the per-row Ridge prediction. `scipy.optimize.minimize_scalar` on a 1-D dispersion parameter; bracket `[1e-3, 1e3]`.
+
+This is a CONDITIONAL fit (per-row mean from `pred`), unlike Phase 0's marginal `_fit_neg_binomial`. The conditional formulation directly fixes the marginal-vs-conditional AIC asymmetry caveat from Phase 0.
+
+### 9.2 Student-t (scale, df) estimator
+
+Per stat, fit scale + df by `scipy.stats.t.fit` on the residual array `actual - pred`. Returns `(df, loc, scale)`; we discard the fitted `loc` (always near zero on residuals) and persist `(scale, df)`. Apply the same sample-std floor guard from Phase 0's `_fit_student_t` to reject degenerate fits.
+
+### 9.3 Per-tertile bucketing
+
+Per (position, stat), compute the 33rd and 67th percentile of `mu_hat` from the training set. Persist these two cuts as `bucket_cuts: [c33, c67]`. Within each bucket (rows where `c33 < mu_hat <= c67` etc.), refit the variance parameter using the cell's existing single-parameter estimator (e.g., `_normal_std_from_residuals` for NORMAL, the dispersion fitter from §9.1 for NB). Persist as `*_per_bucket: [low_value, mid_value, high_value]`.
+
+At predict time: `bucket_idx = np.searchsorted(bucket_cuts, mu_hat).clip(0, 2)`. Pick parameter value from `params_per_bucket[bucket_idx]`. Construct the per-row distribution with that parameter.
+
+### 9.4 Phase boundaries
+
+- **Phase 1 ends** with all `*_tds` / `*_interceptions` / `*_fumbles_lost` cells routed to NB, codec updated, models retrained, snapshot regenerated, PM doc updated. Stop here, run gate, verify min-cell coverage moved from 0.0 to something positive (target: ≥ 0.50 for the affected cells; final ≥ 0.65 awaits Phase 3).
+- **Phase 2 ends** with all `*_yards` cells (except `QB passing_yards`) routed to Student-t, snapshot regenerated. Verify Student-t cells improved without regressing the NB cells from Phase 1.
+- **Phase 3 ends** with bucketing applied to every (position, stat) cell whose `heteroscedasticity_ratio > 1.5` per Phase 0 (18 cells). Final snapshot. PM doc reports the cumulative coverage delta vs the Phase 0 baseline.
+
+### 9.5 Backwards compatibility
+
+- **Codec schema_version bump (1 → 2):** old blobs (Plan 3d artifacts) decode with a clear `ValueError("Unknown per-stat params schema_version: 1")`. There are no production consumers of those blobs other than the diagnostic CLI (which reads `data/backtest/run_<ts>/results.parquet` from a recent harness run, and the post-Phase-1+ harness writes v=2). No migration path.
+- **`BaselineModel.variance_params` shape change:** `dict[Stat, dict[str, float]]` → `dict[Stat, dict[str, float | list[float]]]`. Saved `models/artifacts/*.joblib` from 3b/3c/3d become unloadable on the structural change. Same pattern as 3b → 3a; mechanical retrain in a Phase N task.
+- **No backwards-compat shims.** Same posture as previous plans.
+
+---
+
+## 10. Validation surface (Phase 1+)
+
+### 10.1 Per-phase
+
+- **After each phase:** `pytest -v` clean; `mypy src tests scripts` clean; `ruff check` + `ruff format --check` clean.
+- **Per-phase gate:** `python scripts/backtest.py --check` passes after re-snapshot. `pytest -m backtest --run-backtest` passes.
+- **PM doc update per phase:** report the cells affected, the coverage delta vs the previous phase, the snapshot drift summary (max abs drift on calibration metrics, max rel drift on RMSE).
+
+### 10.2 Plan 3e overall
+
+(Unchanged from § 5.2.) Min-cell coverage ≥ 0.65; mean coverage improves by ≥ 0.10; no regression on RMSE/MAE/Spearman beyond existing tolerances; TODO #22 closed.
+
+### 10.3 Out of scope (deferred to follow-up plans)
+
+- Cross-week residual correlation (joint/copula territory) → follow-up plan if season coverage stays bad after Phase 3.
+- Inflation-factor calibration → only if parametric tightening doesn't reach floor.
+- Per-bucket family selection (single family per cell stays).
+- Conditional alt-family AIC in the Phase 0 diagnostic (caveat documented in §4.2; not load-bearing for Phases 1-3).
+- ZIP / Zero-Inflated NB → revisit if NB alone leaves count cells under-calibrated.
+- More than 3 buckets → revisit if Phase 3's coverage gain is short of target.
 
 ---
