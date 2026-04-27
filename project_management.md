@@ -4,6 +4,96 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 3e Phase 2 — Student-t for yards stats — ATTEMPTED + REVERTED (run 2026-04-27)
+
+**Closes:** Nothing — the routing change did not survive validation. TODO #22
+remains in progress; Phase 3 (variance bucketing) is the next attempt.
+
+Phase 2 attempted to route every `*_yards` stat (passing/rushing/receiving
+yards across QB/RB/TE/WR) from `NORMAL` to `STUDENT_T` based on Phase 0's
+per-cell AIC signal favoring heavy tails (delta `[-2160, -317]` across the 5
+yards-stat cells). The new `ParametricStudentT(loc, scale, df)` distribution
+class, `DistributionFamily.STUDENT_T` enum value, codec branches, and
+`_student_t_params_from_residuals` MLE estimator were all built and wired
+through `BaselineModel.fit` and `build_stat_distributions`.
+
+### Empirical finding: weekly coverage regressed by ~1.5–2 pts uniformly
+
+After retraining the standalone artifacts and regenerating the snapshot,
+weekly `calibration_p10p90` dropped roughly 1.5–2 pts uniformly across
+RB/WR/TE cells with no offsetting season-coverage gain. The regression was
+not noise: it appeared on every position-year cell that contained a `*_yards`
+stat in the points decomposition.
+
+### Root cause: heavy tails narrow the [p10, p90] shoulder
+
+The mechanism is structural, not a bug. Student-t with the data's empirical
+tail shape (df ~5–8 across the yards stats) puts more probability mass in
+the extreme outer tails and *less* in the central shoulder of the
+distribution than `NORMAL` at similar total std. Since our success metric
+is `[p10, p90]` coverage — i.e. the share of actuals that land in the
+central 80% interval — Student-t's heavier extremes shrink that interval
+and lose coverage even when its full-distribution likelihood is better.
+
+Phase 0's AIC signal was correct on its own terms (Student-t is a closer
+fit to the full residual distribution), but **AIC is not a calibration
+metric for the central interval.** The two objectives can diverge structurally
+when the underlying data has heavy tails — preferring the heavier-tailed family
+on AIC simultaneously deprefers it on `[p10, p90]` coverage.
+
+### Decision: revert Phase 2 routing; keep the infrastructure
+
+Per user decision, the factory routing was reverted in this commit. After
+revert, **zero stats route to `STUDENT_T`** across all 4 positions. Yards
+stats are back to `NORMAL` everywhere; the snapshot returns bit-exactly to
+the Phase 1 baseline at commit `0078223` (verified via Step 7 coverage
+delta = 0.000 on weekly mean / season mean / weekly min / season min).
+
+The `ParametricStudentT` class, `DistributionFamily.STUDENT_T` enum value,
+codec round-trip, `_student_t_params_from_residuals` estimator, and the
+`STUDENT_T` branches in `BaselineModel.fit` / `build_stat_distributions`
+all remain in-tree as future infrastructure. Their dedicated unit tests
+(`tests/test_distributions/test_student_t.py`,
+`tests/test_distributions/test_codec.py::test_codec_round_trip_student_t`,
+and the two estimator tests in `tests/test_models/test_baseline.py`) are
+unchanged. Any future plan can wire them up; the current code is correct
+and validated.
+
+### Lesson learned
+
+Phase 0's family-fit AIC signal preferred Student-t for yards stats, and
+that signal was technically correct: Student-t *is* a better full-
+distribution fit than Normal on these residuals. But AIC measures full-
+distribution agreement, not central `[p10, p90]` coverage — and Plan 3e's
+success metric is calibration of the central interval. When the underlying
+data is heavy-tailed, the two objectives can diverge structurally: the
+heavier-tailed family wins on AIC and loses on central coverage. **For
+Plan 3e and any future calibration-tightening phase, the family choice
+must be evaluated against the calibration metric directly, not via AIC
+proxy.**
+
+### Forward pointer
+
+Phase 3 (per-tertile variance bucketing) is the next attempt at improving
+weekly coverage. It addresses a different Phase 0 root cause (pervasive
+heteroscedasticity, 18 of 24 cells with variance-bucket ratio > 1.5) and
+operates orthogonally to family choice — it can be wired on top of any
+future family swap.
+
+### Per-position model_ids (after revert)
+
+| Position | model_id |
+|---|---|
+| WR | `baseline:wr:6d955427:2018-2023` |
+| QB | `baseline:qb:c98738f3:2018-2023` |
+| RB | `baseline:rb:5a86c8ee:2018-2023` |
+| TE | `baseline:te:9c00025b:2018-2023` |
+
+(Code hashes rotate from Phase 1's because the `baseline.py` module docstring
++ `_*_DIST_FAMILIES` dicts changed.)
+
+---
+
 ## Plan 3e Phase 1 — Negative Binomial for count stats (run 2026-04-27, on branch `feat/plan-3e-calibration-tightening`)
 
 **Closes:** TODO #22 progress; Phase 0 complete; Phases 2-3 in progress on this branch.
@@ -414,7 +504,7 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Current status (as of 2026-04-27)
 
-**Projections Core — Plan 3e Phase 1 (NB for count stats) complete on branch `feat/plan-3e-calibration-tightening`; Phases 2-3 in progress on this branch.** Phase 1 swapped the 10 zero-inflated count stats from GAMMA to NEGATIVE_BINOMIAL with conditional MLE dispersion fitting; standalone artifacts retrained; gated snapshot regenerated. Weekly mean coverage 0.726 → 0.733 (+0.007); season mean coverage 0.461 → 0.428 (-0.033, expected secondary effect from removing GAMMA's compensating over-dispersion).
+**Projections Core — Plan 3e Phase 1 (NB for count stats) complete; Phase 2 (Student-t for yards) attempted + reverted; Phase 3 (variance bucketing) in progress** on branch `feat/plan-3e-calibration-tightening`. Phase 1 swapped the 10 zero-inflated count stats from GAMMA to NEGATIVE_BINOMIAL with conditional MLE dispersion fitting (weekly mean coverage 0.726 → 0.733; season mean 0.461 → 0.428). Phase 2 attempted Student-t for `*_yards` stats per Phase 0's AIC signal but lost ~1.5–2 pts of weekly coverage uniformly because Student-t's heavier tails structurally narrow the [p10, p90] shoulder; routing was reverted (snapshot back at the Phase 1 baseline bit-exact). `ParametricStudentT` infrastructure stays in-tree for future use.
 
 **Plan 3e Phase 0 (calibration diagnostic) complete on same branch.** Diagnostic CLI + research report committed.
 

@@ -26,11 +26,10 @@ def test_te_baseline_factory_returns_unfitted_model() -> None:
     }
     assert set(model.target_stats) == expected_targets
     assert model.dist_families[Stat.RECEPTIONS] is DistributionFamily.GAMMA
-    assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.STUDENT_T
+    # Plan 3e Phase 2 attempted Student-t for *_yards stats; reverted because
+    # heavy tails narrowed [p10, p90] coverage. Yards stats stay NORMAL.
+    assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.NORMAL
     assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
-    # Plan 3e Phase 1+ Task 2.6: TE RUSHING_YARDS reverted from STUDENT_T to
-    # NORMAL after Phase 2 retrain produced a degenerate Student-t fit
-    # (mean ~0.10 yard, df snapped to floor).
     assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.NORMAL
     assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.NEGATIVE_BINOMIAL
@@ -73,30 +72,18 @@ def test_te_baseline_fit_records_train_seasons(
     assert model.train_seasons == (2024, 2025)
 
 
-def test_te_baseline_fit_populates_student_t_variance_params(
-    baseline_features_te: pd.DataFrame, baseline_weekly_stats_te: pd.DataFrame
-) -> None:
-    """Plan 3e Phase 2: TE RECEIVING_YARDS routes to STUDENT_T with (scale, df).
-    TE RUSHING_YARDS was reverted to NORMAL in Task 2.6 (degenerate fit)."""
-    model = te_baseline()
-    model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
-    params = model.variance_params[Stat.RECEIVING_YARDS]
-    assert "scale" in params
-    assert "df" in params
-    assert params["scale"] > 0
-    assert params["df"] > 2.0
-
-
 def test_te_baseline_fit_populates_normal_variance_params(
     baseline_features_te: pd.DataFrame, baseline_weekly_stats_te: pd.DataFrame
 ) -> None:
-    """Plan 3e Phase 1+ Task 2.6: TE RUSHING_YARDS reverted from STUDENT_T to
-    NORMAL after Phase 2 retrain produced a degenerate Student-t fit."""
+    """TE yards stats stay NORMAL. Plan 3e Phase 2 attempted STUDENT_T for
+    *_yards but was reverted because heavy tails structurally narrow
+    [p10, p90] coverage."""
     model = te_baseline()
     model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
-    params = model.variance_params[Stat.RUSHING_YARDS]
-    assert "std" in params
-    assert params["std"] > 0
+    for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
+        params = model.variance_params[stat]
+        assert "std" in params
+        assert params["std"] > 0
 
 
 def test_te_baseline_fit_populates_gamma_variance_params(

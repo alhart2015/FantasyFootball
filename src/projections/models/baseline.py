@@ -5,6 +5,18 @@ One BaselineModel class parameterized by (position, target_stats,
 feature_columns, dist_families); per-position factories (wr_baseline,
 qb_baseline, rb_baseline, te_baseline) construct correctly-configured
 instances.
+
+Plan 3e Phase 2 attempted to route ``*_yards`` stats to ``STUDENT_T`` based
+on Phase 0's per-cell AIC signal favoring heavy tails. The routing was
+reverted because Student-t with the data's empirical tail shape narrows
+the [p10, p90] shoulder vs ``NORMAL`` at similar total std — empirically,
+~1.5-2 pts of weekly coverage was lost uniformly across RB/WR/TE cells.
+The mechanism is structural (heavy tails pull mass into the extremes,
+leaving less in the central [p10, p90] band), and AIC measures
+full-distribution fit rather than central-coverage alignment. The
+``ParametricStudentT`` class, codec branches, and
+``_student_t_params_from_residuals`` estimator remain in-tree as
+infrastructure for future plans; no factory routes to ``STUDENT_T`` today.
 """
 
 from __future__ import annotations
@@ -168,11 +180,8 @@ _WR_TARGET_STATS: Final[tuple[Stat, ...]] = (
 
 _WR_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
-    Stat.RECEIVING_YARDS: DistributionFamily.STUDENT_T,
+    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
     Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
-    # Reverted from STUDENT_T in Task 2.6: Phase 2 retrain produced a
-    # degenerate fit (df snapped to floor 2.5; mean ~1 yard, mostly zero
-    # rushing for WRs leaves too little signal for a meaningful Student-t).
     Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
     Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
@@ -216,10 +225,10 @@ _QB_TARGET_STATS: Final[tuple[Stat, ...]] = (
 )
 
 _QB_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
-    Stat.PASSING_YARDS: DistributionFamily.NORMAL,  # regression reference; stays NORMAL
+    Stat.PASSING_YARDS: DistributionFamily.NORMAL,
     Stat.PASSING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.INTERCEPTIONS: DistributionFamily.NEGATIVE_BINOMIAL,
-    Stat.RUSHING_YARDS: DistributionFamily.STUDENT_T,
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
     Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
@@ -260,10 +269,10 @@ _RB_TARGET_STATS: Final[tuple[Stat, ...]] = (
 )
 
 _RB_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
-    Stat.RUSHING_YARDS: DistributionFamily.STUDENT_T,
+    Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
     Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
-    Stat.RECEIVING_YARDS: DistributionFamily.STUDENT_T,
+    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
     Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,
 }
@@ -303,11 +312,8 @@ _TE_TARGET_STATS: Final[tuple[Stat, ...]] = (
 
 _TE_DIST_FAMILIES: Final[Mapping[Stat, DistributionFamily]] = {
     Stat.RECEPTIONS: DistributionFamily.GAMMA,
-    Stat.RECEIVING_YARDS: DistributionFamily.STUDENT_T,
+    Stat.RECEIVING_YARDS: DistributionFamily.NORMAL,
     Stat.RECEIVING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
-    # Reverted from STUDENT_T in Task 2.6: Phase 2 retrain produced a
-    # degenerate fit (df snapped to floor 2.5; mean ~0.10 yard, virtually no
-    # rushing signal for TEs leaves too little signal for a meaningful Student-t).
     Stat.RUSHING_YARDS: DistributionFamily.NORMAL,
     Stat.RUSHING_TDS: DistributionFamily.NEGATIVE_BINOMIAL,
     Stat.FUMBLES_LOST: DistributionFamily.NEGATIVE_BINOMIAL,

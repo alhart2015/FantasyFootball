@@ -27,7 +27,9 @@ def test_qb_baseline_factory_returns_unfitted_model() -> None:
     assert model.dist_families[Stat.PASSING_YARDS] is DistributionFamily.NORMAL
     assert model.dist_families[Stat.PASSING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.INTERCEPTIONS] is DistributionFamily.NEGATIVE_BINOMIAL
-    assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.STUDENT_T
+    # Plan 3e Phase 2 attempted Student-t for *_yards stats; reverted because
+    # heavy tails narrowed [p10, p90] coverage. Yards stats stay NORMAL.
+    assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.NORMAL
     assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.feature_columns
@@ -64,25 +66,15 @@ def test_qb_baseline_fit_records_train_seasons(
 def test_qb_baseline_fit_populates_normal_variance_params(
     baseline_features_qb: pd.DataFrame, baseline_weekly_stats_qb: pd.DataFrame
 ) -> None:
-    """PASSING_YARDS stays NORMAL as the regression reference."""
+    """QB yards stats (PASSING_YARDS, RUSHING_YARDS) stay NORMAL. Plan 3e
+    Phase 2 attempted STUDENT_T for *_yards but was reverted because heavy
+    tails structurally narrow [p10, p90] coverage."""
     model = qb_baseline()
     model.fit(features=baseline_features_qb, weekly_stats=baseline_weekly_stats_qb)
-    params = model.variance_params[Stat.PASSING_YARDS]
-    assert "std" in params
-    assert params["std"] > 0
-
-
-def test_qb_baseline_fit_populates_student_t_variance_params(
-    baseline_features_qb: pd.DataFrame, baseline_weekly_stats_qb: pd.DataFrame
-) -> None:
-    """Plan 3e Phase 2: QB RUSHING_YARDS routes to STUDENT_T with (scale, df) params."""
-    model = qb_baseline()
-    model.fit(features=baseline_features_qb, weekly_stats=baseline_weekly_stats_qb)
-    params = model.variance_params[Stat.RUSHING_YARDS]
-    assert "scale" in params
-    assert "df" in params
-    assert params["scale"] > 0
-    assert params["df"] > 2.0
+    for stat in (Stat.PASSING_YARDS, Stat.RUSHING_YARDS):
+        params = model.variance_params[stat]
+        assert "std" in params
+        assert params["std"] > 0
 
 
 def test_qb_baseline_fit_populates_nb_variance_params(

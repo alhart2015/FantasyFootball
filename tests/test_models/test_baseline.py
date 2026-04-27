@@ -10,7 +10,7 @@ import pytest
 from scipy import stats as scipy_stats
 from sklearn.linear_model import RidgeCV
 
-from projections.distributions.parametric import ParametricGamma, ParametricStudentT
+from projections.distributions.parametric import ParametricGamma, ParametricNormal
 from projections.models import wr_baseline
 from projections.schemas import DistributionFamily, Position, ProjectionWeeklySchema, Ruleset, Stat
 
@@ -30,11 +30,10 @@ def test_wr_baseline_factory_returns_unfitted_model() -> None:
     }
     assert set(model.target_stats) == expected_targets
     assert model.dist_families[Stat.RECEPTIONS] is DistributionFamily.GAMMA
-    assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.STUDENT_T
+    # Plan 3e Phase 2 attempted Student-t for *_yards stats; reverted because
+    # heavy tails narrowed [p10, p90] coverage. Yards stats stay NORMAL.
+    assert model.dist_families[Stat.RECEIVING_YARDS] is DistributionFamily.NORMAL
     assert model.dist_families[Stat.RECEIVING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
-    # Plan 3e Phase 1+ Task 2.6: WR RUSHING_YARDS reverted from STUDENT_T to
-    # NORMAL after Phase 2 retrain produced a degenerate Student-t fit
-    # (mean ~1 yard, df snapped to floor).
     assert model.dist_families[Stat.RUSHING_YARDS] is DistributionFamily.NORMAL
     assert model.dist_families[Stat.RUSHING_TDS] is DistributionFamily.NEGATIVE_BINOMIAL
     assert model.dist_families[Stat.FUMBLES_LOST] is DistributionFamily.NEGATIVE_BINOMIAL
@@ -73,30 +72,17 @@ def test_baseline_fit_records_train_seasons(
     assert model.train_seasons == (2024, 2025)
 
 
-def test_baseline_fit_populates_student_t_variance_params(
-    baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
-) -> None:
-    model = wr_baseline()
-    model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
-    # Plan 3e Phase 2: WR RECEIVING_YARDS routes to STUDENT_T with (scale, df).
-    # WR RUSHING_YARDS was reverted to NORMAL in Task 2.6 (degenerate fit).
-    params = model.variance_params[Stat.RECEIVING_YARDS]
-    assert "scale" in params
-    assert "df" in params
-    assert params["scale"] > 0
-    assert params["df"] > 2.0
-
-
 def test_baseline_fit_populates_normal_variance_params(
     baseline_features_wr: pd.DataFrame, baseline_weekly_stats_wr: pd.DataFrame
 ) -> None:
-    """Plan 3e Phase 1+ Task 2.6: WR RUSHING_YARDS reverted from STUDENT_T to
-    NORMAL after Phase 2 retrain produced a degenerate Student-t fit."""
+    """WR yards stats stay NORMAL (Plan 3e Phase 2 attempted STUDENT_T but was
+    reverted because heavy tails structurally narrow [p10, p90] coverage)."""
     model = wr_baseline()
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
-    params = model.variance_params[Stat.RUSHING_YARDS]
-    assert "std" in params
-    assert params["std"] > 0
+    for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
+        params = model.variance_params[stat]
+        assert "std" in params
+        assert params["std"] > 0
 
 
 def test_baseline_fit_populates_gamma_variance_params(
@@ -179,7 +165,7 @@ def test_build_stat_distributions_returns_one_per_row(
     for row_dists in stat_dists_per_row:
         assert set(row_dists.keys()) == set(model.target_stats)
         # Family-specific concrete types.
-        assert isinstance(row_dists[Stat.RECEIVING_YARDS], ParametricStudentT)
+        assert isinstance(row_dists[Stat.RECEIVING_YARDS], ParametricNormal)
         assert isinstance(row_dists[Stat.RECEPTIONS], ParametricGamma)
 
 
