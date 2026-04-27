@@ -24,7 +24,6 @@ def test_distribution_family_options() -> None:
         "GAMMA",
         "NEGATIVE_BINOMIAL",
         "STUDENT_T",
-        "EMPIRICAL_QUANTILE",
         "SAMPLED",
         "SAMPLED_SUMMARY",
         "QUANTILE",
