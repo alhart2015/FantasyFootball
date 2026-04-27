@@ -154,3 +154,32 @@ def test_codec_round_trip_student_t() -> None:
     assert isinstance(decoded_dist, ParametricStudentT)
     assert decoded_dist.mean() == pytest.approx(250.0)
     assert decoded_dist.std() == pytest.approx(dist.std())
+
+
+def test_codec_round_trip_after_bucketed_fit() -> None:
+    """End-to-end: emit per-row distributions for the 4 family types currently
+    in use after Plan 3e (NORMAL, GAMMA, NB; STUDENT_T preserved as
+    infrastructure). Confirm pack + unpack round-trips correctly for each."""
+    from projections.distributions import (
+        ParametricGamma,
+        ParametricNegativeBinomial,
+        ParametricNormal,
+        ParametricStudentT,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    blob = pack_per_stat_params(
+        {
+            Stat.PASSING_YARDS: ParametricNormal(mean=250.0, std=70.0),
+            Stat.RECEPTIONS: ParametricGamma(shape=2.5, scale=1.0),
+            Stat.PASSING_TDS: ParametricNegativeBinomial(mean=1.5, dispersion=4.0),
+            Stat.RUSHING_YARDS: ParametricStudentT(loc=20.0, scale=15.0, df=4.0),
+        }
+    )
+    decoded = unpack_per_stat_params(blob)
+    assert isinstance(decoded[Stat.PASSING_YARDS], ParametricNormal)
+    assert isinstance(decoded[Stat.RECEPTIONS], ParametricGamma)
+    assert isinstance(decoded[Stat.PASSING_TDS], ParametricNegativeBinomial)
+    assert isinstance(decoded[Stat.RUSHING_YARDS], ParametricStudentT)
