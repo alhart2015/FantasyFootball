@@ -27,10 +27,6 @@ from projections.distributions import (
     QuantileDistribution,  # noqa: F401  -- consumed by Task 7's predict_distribution
     pack_per_stat_params,  # noqa: F401  -- consumed by Task 7's predict_distribution
 )
-from projections.features.qb import build_qb_features
-from projections.features.rb import build_rb_features
-from projections.features.te import build_te_features
-from projections.features.wr import build_wr_features
 from projections.models.base import compute_code_hash
 from projections.schemas import (
     DistributionFamily,  # noqa: F401  -- consumed by Task 7's predict_distribution
@@ -79,7 +75,6 @@ class _LightGBMConfig:
         feature_columns: ordered list of feature columns the model consumes.
         feature_schema: pandera schema validated on input to fit/predict.
         non_negative_stats: stats whose predicted quantiles are clipped to [0, inf).
-        feature_builder: position-specific build_*_features for code-hash purposes.
     """
 
     position: Position
@@ -87,7 +82,6 @@ class _LightGBMConfig:
     feature_columns: tuple[str, ...]
     feature_schema: type[pa.DataFrameModel]
     non_negative_stats: frozenset[Stat]
-    feature_builder: Any  # callable; signature varies per position
 
 
 def _code_hash_files(position: Position) -> tuple[Path, ...]:
@@ -187,7 +181,6 @@ def qb_lightgbm() -> LightGBMModel:
             feature_columns=_filter_features(_QB_FEATURE_COLUMNS),
             feature_schema=QbFeaturesSchema,
             non_negative_stats=_QB_NON_NEGATIVE,
-            feature_builder=build_qb_features,
         )
     )
 
@@ -200,7 +193,6 @@ def rb_lightgbm() -> LightGBMModel:
             feature_columns=_filter_features(_RB_FEATURE_COLUMNS),
             feature_schema=RbFeaturesSchema,
             non_negative_stats=_RB_NON_NEGATIVE,
-            feature_builder=build_rb_features,
         )
     )
 
@@ -213,7 +205,6 @@ def te_lightgbm() -> LightGBMModel:
             feature_columns=_filter_features(_TE_FEATURE_COLUMNS),
             feature_schema=TeFeaturesSchema,
             non_negative_stats=_TE_NON_NEGATIVE,
-            feature_builder=build_te_features,
         )
     )
 
@@ -226,7 +217,6 @@ def wr_lightgbm() -> LightGBMModel:
             feature_columns=_filter_features(_WR_FEATURE_COLUMNS),
             feature_schema=WrFeaturesSchema,
             non_negative_stats=_WR_NON_NEGATIVE,
-            feature_builder=build_wr_features,
         )
     )
 
