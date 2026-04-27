@@ -335,3 +335,57 @@ def test_compute_recommended_fix_handles_no_successful_alt() -> None:
     assert out[0] == "no_change"
     assert out[1] == "none"
     assert np.isnan(out[2])
+
+
+def test_assemble_full_summary_columns_and_one_row_per_cell() -> None:
+    from diagnose_calibration import assemble_full_summary
+
+    # Minimal residuals: one (QB, passing_yards) cell, ~120 rows (>> 3 to allow
+    # tertile binning). Use NORMAL family for cheap fixture construction.
+    rng = np.random.default_rng(7)
+    n = 120
+    residuals = pd.DataFrame(
+        {
+            "position": ["QB"] * n,
+            "stat": ["passing_yards"] * n,
+            "gsis_id": [f"00-{i}" for i in range(n)],
+            "season": [2024] * n,
+            "week": list(range(1, n + 1)),
+            "pred": rng.normal(250, 30, n),
+            "actual": rng.normal(250, 70, n),
+            "residual": rng.normal(0, 70, n),
+            "assumed_family": ["NORMAL"] * n,
+            "assumed_param_a": [70.0] * n,
+            "assumed_param_b": [float("nan")] * n,
+        }
+    )
+    out = assemble_full_summary(residuals)
+    assert len(out) == 1
+    expected_cols = {
+        "position",
+        "stat",
+        "n",
+        "mean_pred",
+        "mean_actual",
+        "residual_mean",
+        "residual_std",
+        "residual_skew",
+        "residual_excess_kurtosis",
+        "std_tertile_low",
+        "std_tertile_mid",
+        "std_tertile_high",
+        "heteroscedasticity_ratio",
+        "coverage_p10p90",
+        "coverage_le_p90",
+        "ks_assumed_stat",
+        "ks_assumed_pvalue",
+        "best_alt_family",
+        "best_alt_aic",
+        "assumed_aic",
+        "aic_delta",
+        "recommended_fix",
+    }
+    assert expected_cols <= set(out.columns)
+    # Recommended fix must be one of the four well-formed values.
+    rec = out["recommended_fix"].iloc[0]
+    assert rec in {"variance_bucket", "no_change", "combined", "family_swap"}

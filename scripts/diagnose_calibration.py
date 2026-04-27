@@ -455,6 +455,95 @@ def compute_recommended_fix(
     return "no_change", best_alt_family, aic_delta
 
 
+# Stat-kind classification per Stat enum value. Drives which alternative-family
+# menu fit_alternative_families uses for each (position, stat) cell.
+_STAT_KIND: dict[str, StatKind] = {
+    "passing_yards": "continuous",
+    "rushing_yards": "continuous",
+    "receiving_yards": "continuous",
+    "passing_tds": "low_count",
+    "interceptions": "low_count",
+    "rushing_tds": "low_count",
+    "receiving_tds": "low_count",
+    "fumbles_lost": "low_count",
+    "receptions": "high_count",
+}
+
+
+def _assumed_aic_for_cell(
+    *,
+    actual: np.ndarray,
+    pred: np.ndarray,
+    assumed_family: str,
+    param_a: np.ndarray,
+    param_b: np.ndarray,
+) -> float:
+    """Log-likelihood under the assumed (per-row-parameterized) family,
+    converted to AIC. NORMAL: 1 free param (sigma fit globally). GAMMA:
+    1 free param (alpha fit globally; scale = mu / alpha is row-derived).
+    """
+    if assumed_family == "NORMAL":
+        log_lik = float(np.sum(scipy_stats.norm.logpdf(actual, loc=pred, scale=param_a)))
+        n_params = 1
+    elif assumed_family == "GAMMA":
+        log_lik = float(np.sum(scipy_stats.gamma.logpdf(actual, a=param_a, scale=param_b)))
+        n_params = 1
+    else:
+        return float("nan")
+    if not np.isfinite(log_lik):
+        return float("nan")
+    return 2 * n_params - 2 * log_lik
+
+
+def assemble_full_summary(residuals: pd.DataFrame) -> pd.DataFrame:
+    """Combine compute_summary_stats + fit_alternative_families +
+    compute_recommended_fix into the final per-(position, stat) summary frame
+    matching spec section 2.3."""
+    base = compute_summary_stats(residuals)
+    enriched_rows: list[dict[str, object]] = []
+    for _idx, row in base.iterrows():
+        position = str(row["position"])
+        stat = str(row["stat"])
+        cell = residuals[(residuals["position"] == position) & (residuals["stat"] == stat)]
+        actual = cell["actual"].to_numpy(dtype=np.float64)
+        pred = cell["pred"].to_numpy(dtype=np.float64)
+        param_a = cell["assumed_param_a"].to_numpy(dtype=np.float64)
+        param_b = cell["assumed_param_b"].to_numpy(dtype=np.float64)
+        assumed_family = str(row["assumed_family"])
+        stat_kind = _STAT_KIND.get(stat, "continuous")
+
+        alt_fits = fit_alternative_families(actual=actual, pred=pred, stat_kind=stat_kind)
+        assumed_aic = _assumed_aic_for_cell(
+            actual=actual,
+            pred=pred,
+            assumed_family=assumed_family,
+            param_a=param_a,
+            param_b=param_b,
+        )
+        recommendation, best_alt, aic_delta = compute_recommended_fix(
+            heteroscedasticity_ratio=float(row["heteroscedasticity_ratio"]),
+            assumed_aic=assumed_aic,
+            alt_fits=alt_fits,
+        )
+        best_alt_aic = (
+            float(alt_fits[best_alt]["aic"])
+            if best_alt in alt_fits and alt_fits[best_alt]["ok"]
+            else float("nan")
+        )
+        enriched = dict(row)
+        enriched.update(
+            {
+                "best_alt_family": best_alt,
+                "best_alt_aic": best_alt_aic,
+                "assumed_aic": assumed_aic,
+                "aic_delta": aic_delta,
+                "recommended_fix": recommendation,
+            }
+        )
+        enriched_rows.append(enriched)
+    return pd.DataFrame(enriched_rows)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
