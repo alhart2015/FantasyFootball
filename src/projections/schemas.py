@@ -152,6 +152,7 @@ class DistributionFamily(StrEnum):
     EMPIRICAL_QUANTILE = "EMPIRICAL_QUANTILE"  # quantile-regression output
     SAMPLED = "SAMPLED"  # explicit sample array
     SAMPLED_SUMMARY = "SAMPLED_SUMMARY"  # per-stat dist params + summary in mean/p10/p50/p90
+    QUANTILE = "QUANTILE"  # NEW (Plan 5) — Model C (LightGBM quantile regression)
 
 
 class Stat(StrEnum):
