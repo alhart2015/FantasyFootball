@@ -292,7 +292,10 @@ def test_compute_recommended_fix_family_swap() -> None:
         assumed_aic=1000.0,
         alt_fits={"student_t": {"aic": 980.0, "ok": True, "n_params": 3}},
     )
-    assert out[0] == "family_swap=student_t"
+    assert out[0] == "family_swap"
+    # Family name is returned via best_alt_family (out[1]), not interpolated
+    # into the recommendation tag.
+    assert out[1] == "student_t"
 
 
 def test_compute_recommended_fix_combined() -> None:

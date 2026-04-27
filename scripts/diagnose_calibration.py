@@ -30,6 +30,7 @@ from projections.models import POSITION_DISPATCH
 from projections.schemas import DistributionFamily, Stat
 
 StatKind = Literal["continuous", "low_count", "high_count"]
+RecommendationTag = Literal["variance_bucket", "family_swap", "combined", "no_change"]
 
 
 def find_latest_run_dir(backtest_root: Path) -> Path:
@@ -419,11 +420,11 @@ def compute_recommended_fix(
     heteroscedasticity_ratio: float,
     assumed_aic: float,
     alt_fits: dict[str, dict[str, float | bool]],
-) -> tuple[str, str, float]:
+) -> tuple[RecommendationTag, str, float]:
     """Apply spec section 2.5's decision rule.
 
     Returns (recommended_fix, best_alt_family, aic_delta) where:
-        recommended_fix  in {"variance_bucket", "family_swap=<name>",
+        recommended_fix  in {"variance_bucket", "family_swap",
                              "combined", "no_change"}
         best_alt_family  is the name of the lowest-AIC family whose fit ok=True,
                          or "none" if no alternative fit succeeded.
@@ -450,7 +451,7 @@ def compute_recommended_fix(
     if has_hetero:
         return "variance_bucket", best_alt_family, aic_delta
     if has_better_family:
-        return f"family_swap={best_alt_family}", best_alt_family, aic_delta
+        return "family_swap", best_alt_family, aic_delta
     return "no_change", best_alt_family, aic_delta
 
 

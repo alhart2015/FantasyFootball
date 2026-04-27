@@ -149,7 +149,7 @@ data/diagnostics/calibration_<ts>/     # gitignored; <ts> = run timestamp
 | best_alt_aic | float | AIC of best-fit alternative |
 | assumed_aic | float | AIC of the assumed family fit on residuals |
 | aic_delta | float | `assumed_aic - best_alt_aic`; positive = alternative fits better |
-| recommended_fix | str | `variance_bucket` / `family_swap=<name>` / `combined` / `no_change` |
+| recommended_fix | str | `variance_bucket` / `family_swap` / `combined` / `no_change` (family name lives in `best_alt_family`) |
 
 ### 2.4 Plots
 
@@ -168,7 +168,7 @@ Per (position, stat), inside the script:
 if heteroscedasticity_ratio > 1.5 and aic_delta < 5:
     recommended_fix = "variance_bucket"
 elif heteroscedasticity_ratio <= 1.5 and aic_delta >= 5:
-    recommended_fix = f"family_swap={best_alt_family}"
+    recommended_fix = "family_swap"  # family name lives in best_alt_family
 elif heteroscedasticity_ratio > 1.5 and aic_delta >= 5:
     recommended_fix = "combined"
 else:

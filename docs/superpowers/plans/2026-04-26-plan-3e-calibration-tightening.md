@@ -931,7 +931,10 @@ def test_compute_recommended_fix_family_swap() -> None:
         assumed_aic=1000.0,
         alt_fits={"student_t": {"aic": 980.0, "ok": True, "n_params": 3}},
     )
-    assert out[0] == "family_swap=student_t"
+    assert out[0] == "family_swap"
+    # Family name is returned via best_alt_family (out[1]), not interpolated
+    # into the recommendation tag.
+    assert out[1] == "student_t"
 
 
 def test_compute_recommended_fix_combined() -> None:
@@ -982,16 +985,19 @@ _HETERO_RATIO_THRESHOLD = 1.5
 _AIC_DELTA_THRESHOLD = 5.0
 
 
+RecommendationTag = Literal["variance_bucket", "family_swap", "combined", "no_change"]
+
+
 def compute_recommended_fix(
     *,
     heteroscedasticity_ratio: float,
     assumed_aic: float,
     alt_fits: dict[str, dict[str, float | bool]],
-) -> tuple[str, str, float]:
+) -> tuple[RecommendationTag, str, float]:
     """Apply spec section 2.5's decision rule.
 
     Returns (recommended_fix, best_alt_family, aic_delta) where:
-        recommended_fix  in {"variance_bucket", "family_swap=<name>",
+        recommended_fix  in {"variance_bucket", "family_swap",
                              "combined", "no_change"}
         best_alt_family  is the name of the lowest-AIC family whose fit ok=True,
                          or "none" if no alternative fit succeeded.
@@ -1017,7 +1023,7 @@ def compute_recommended_fix(
     if has_hetero:
         return "variance_bucket", best_alt_family, aic_delta
     if has_better_family:
-        return f"family_swap={best_alt_family}", best_alt_family, aic_delta
+        return "family_swap", best_alt_family, aic_delta
     return "no_change", best_alt_family, aic_delta
 ```
 
@@ -1085,7 +1091,7 @@ def test_assemble_full_summary_columns_and_one_row_per_cell() -> None:
     assert expected_cols <= set(out.columns)
     # Recommended fix must be one of the four well-formed values.
     rec = out["recommended_fix"].iloc[0]
-    assert rec in {"variance_bucket", "no_change", "combined"} or rec.startswith("family_swap=")
+    assert rec in {"variance_bucket", "no_change", "combined", "family_swap"}
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1574,7 +1580,7 @@ Create `docs/superpowers/research/2026-04-26-calibration-diagnosis.md` with the 
 
 ## Recommended-fix matrix
 
-(Group cells by `recommended_fix` and call out any surprises — e.g., "all WR rec_yards needs family_swap=student_t; QB passing_yards is the only cell where heteroscedasticity dominates.")
+(Group cells by `recommended_fix` and call out any surprises — e.g., "all WR rec_yards needs family_swap (student_t); QB passing_yards is the only cell where heteroscedasticity dominates.")
 
 ## What this implies for Phase 1+
 
