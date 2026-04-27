@@ -77,15 +77,20 @@ def test_te_baseline_fit_populates_normal_variance_params(
 ) -> None:
     """TE yards stats stay NORMAL. Plan 3e Phase 2 attempted STUDENT_T for
     *_yards but was reverted because heavy tails structurally narrow
-    [p10, p90] coverage."""
+    [p10, p90] coverage. Plan 3e Phase 3 wires per-tertile bucketing into
+    variance_params."""
     model = te_baseline()
     model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
     for stat in (Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS):
         params = model.variance_params[stat]
-        assert "std" in params
-        std = params["std"]
-        assert isinstance(std, float)
-        assert std > 0
+        assert "bucket_cuts" in params
+        assert "std_per_bucket" in params
+        cuts = params["bucket_cuts"]
+        stds = params["std_per_bucket"]
+        assert isinstance(cuts, list) and len(cuts) == 2
+        assert all(isinstance(c, float) for c in cuts)
+        assert isinstance(stds, list) and len(stds) == 3
+        assert all(s > 0 for s in stds)
 
 
 def test_te_baseline_fit_populates_gamma_variance_params(
@@ -94,28 +99,38 @@ def test_te_baseline_fit_populates_gamma_variance_params(
     model = te_baseline()
     model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
     # RECEPTIONS stays Gamma; count stats moved to NEGATIVE_BINOMIAL in Plan 3e Phase 1.
+    # Plan 3e Phase 3: variance_params now carries per-bucket shape values.
     for stat in (Stat.RECEPTIONS,):
         params = model.variance_params[stat]
-        assert "shape" in params
-        shape = params["shape"]
-        assert isinstance(shape, float)
-        assert 0.01 <= shape <= 100.0
+        assert "bucket_cuts" in params
+        assert "shape_per_bucket" in params
+        cuts = params["bucket_cuts"]
+        shapes = params["shape_per_bucket"]
+        assert isinstance(cuts, list) and len(cuts) == 2
+        assert all(isinstance(c, float) for c in cuts)
+        assert isinstance(shapes, list) and len(shapes) == 3
+        assert all(0.01 <= s <= 100.0 for s in shapes)
 
 
 def test_te_baseline_fit_populates_nb_variance_params(
     baseline_features_te: pd.DataFrame, baseline_weekly_stats_te: pd.DataFrame
 ) -> None:
-    """Plan 3e Phase 1: TE count stats route to NEGATIVE_BINOMIAL."""
+    """Plan 3e Phase 1: TE count stats route to NEGATIVE_BINOMIAL.
+    Plan 3e Phase 3: variance_params carries per-bucket dispersion values."""
     from projections.models.baseline import _NB_DISPERSION_CLIP
 
     model = te_baseline()
     model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
     for stat in (Stat.RECEIVING_TDS, Stat.RUSHING_TDS, Stat.FUMBLES_LOST):
         params = model.variance_params[stat]
-        assert "dispersion" in params
-        dispersion = params["dispersion"]
-        assert isinstance(dispersion, float)
-        assert _NB_DISPERSION_CLIP[0] <= dispersion <= _NB_DISPERSION_CLIP[1]
+        assert "bucket_cuts" in params
+        assert "dispersion_per_bucket" in params
+        cuts = params["bucket_cuts"]
+        dispersions = params["dispersion_per_bucket"]
+        assert isinstance(cuts, list) and len(cuts) == 2
+        assert all(isinstance(c, float) for c in cuts)
+        assert isinstance(dispersions, list) and len(dispersions) == 3
+        assert all(_NB_DISPERSION_CLIP[0] <= d <= _NB_DISPERSION_CLIP[1] for d in dispersions)
 
 
 def test_te_predict_distribution_returns_projection_weekly_schema_valid_frame(
