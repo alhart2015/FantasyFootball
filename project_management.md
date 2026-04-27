@@ -657,11 +657,24 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Open PR for Plan 3e (Phases 0 + 1; Phases 2 + 3 attempted-and-reverted, infrastructure preserved); after merge, brainstorm follow-up plans for the remaining coverage shortfalls.**
+**Pivot from calibration tightening to mean-prediction improvements.** Plan 3e merged to `main` at `b541e5b` (PR #10). Post-merge brainstorm (2026-04-27) reached two conclusions:
 
-Plan 3e shipped Phase 0 + Phase 1 on branch `feat/plan-3e-calibration-tightening` and closed TODO #22. Phase 2 (Student-t) and Phase 3 (per-tertile bucketing) were both attempted and reverted; their infrastructure (`ParametricStudentT` + codec branch + Student-t estimator + bucketing helpers + widened `variance_params` type) remains in-tree as future building blocks. The two spec calibration targets (min cell coverage ≥ 0.65; mean delta ≥ +0.10) were not met by the shipped state. Three candidate follow-up plans documented under the Phase 3 revert block (ZIP for count cells, cross-week residual correlation, calibration-aware fitting); pick + scope one in the next brainstorming session post-merge.
+1. The remaining calibration shortfall (weekly mean 0.733 vs 0.80 target; season mean 0.428 vs 0.80) does not block any of the planned downstream tools — none of Draft Hub / start-sit / DFS GPP actually consume a calibrated season `[p10, p90]`.
+2. The next high-leverage work is improving the *mean* projections (RMSE / MAE / Spearman are what season-long and DFS-cash decisions actually consume). Three documented model-improvement tracks:
 
-After 3e: Plan 4 (public Python API + CLI verbs + free-tier web hosting).
+| Track | TODO / backlog | Expected RMSE win | Notes |
+|-------|----------------|-------------------|-------|
+| **LightGBM with quantile regression** (Model C / Plan 5) | TODO #26 + backlog | 5-15% | Single-step biggest gain; quantile loss handles calibration as a training side-effect. |
+| **PBP / EPA features + downstream derived features** | TODO #3 (expanded) | 5-15% cumulative | Replaces `opp_allowed_fppg_l4` proxy; unlocks family of features (PROE, pace, aDOT, pressure-allowed). |
+| **Target decomposition (volume × efficiency)** | TODO #23 | 3-10% | Structural change to the prediction target; tightens TD modeling specifically. |
+
+Adjacent smaller adds: TODO #24 (player-trajectory features — age curves, trend gradients), TODO #25 (weather feature plumbing).
+
+Empirical backing for the pivot decision: lag-k autocorrelation of standardized residuals showed week-to-week persistence is weak (lag-1 ρ in [+0.02, +0.10]; lag-2+ ≈ noise) and AR(1) only explains 5-10% of the season variance gap, so cross-week correlation modeling is not a high-leverage track. Calibration-aware fitting risks distorting the upper tail (load-bearing for DFS GPP) while fixing the central interval. See the Phase 3 revert block above for the structural reasons within-week family swaps and bucketing hit walls.
+
+**Recommended sequence:** Plan 5 (LightGBM) → PBP features (TODO #3) → target decomposition (TODO #23). All three are independent and can be reordered. Pick + brainstorm + spec one in the next session.
+
+After model-improvement work: Plan 4 (public Python API + CLI verbs + free-tier web hosting), then Draft Hub.
 
 ---
 
@@ -776,7 +789,7 @@ Roughly in order. Each is its own brainstorm → spec → plan cycle.
 - **Plan 2** — Ingest expansion (schedules, snap_counts, depth_charts, NGS) + per-position feature builders.
 - **Plan 3** — Model A baseline (per-position regressions) + season aggregation (Monte Carlo with bye + availability) + first-class backtest harness.
 - **Plan 4** — Public Python API + CLI verbs (`refresh`, `project`, `backtest`, `query`) + free-tier web hosting setup (likely Streamlit on Community Cloud).
-- **Plan 5** — Model C (LightGBM with quantile regression). Adopt only if it beats Model A on the backtest harness.
+- **Plan 5** — Model C (LightGBM with quantile regression). Adopt only if it beats Model A on the backtest harness. Detailed scope in TODO #26. One of three model-improvement tracks identified post-Plan-3e (alongside TODO #3 PBP features and TODO #23 target decomposition).
 
 ### Subsequent sub-projects
 
