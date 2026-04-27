@@ -1,4 +1,4 @@
-"""Parametric distribution backings: Normal, Gamma, and Negative Binomial."""
+"""Parametric distribution backings: Normal, Gamma, Negative Binomial, Student-t."""
 
 from __future__ import annotations
 
@@ -123,4 +123,48 @@ class ParametricNegativeBinomial:
         # scipy's rvs is typed as Any; wrap in np.asarray so the return type is
         # a properly-typed NDArray[np.float64] instead of Any.
         raw = stats.nbinom.rvs(n=n_size, p=p, size=n, random_state=rng)
+        return np.asarray(raw, dtype=np.float64)
+
+
+@dataclass(slots=True, frozen=True, init=False)
+class ParametricStudentT:
+    """Student-t parameterized as (loc, scale, df).
+
+    Mean = loc (for df > 1).
+    Variance = scale^2 * df / (df - 2) (for df > 2).
+
+    Plan 3e Phase 2 routes heavy-tailed continuous stats (yards-shaped) here,
+    using the per-row Ridge prediction as `loc` and globally-fit (scale, df)
+    from training residuals.
+    """
+
+    loc_: float
+    scale_: float
+    df_: float
+
+    def __init__(self, loc: float, scale: float, df: float) -> None:
+        if scale <= 0:
+            raise ValueError(f"scale must be positive, got {scale}")
+        if df <= 2:
+            raise ValueError(f"df must be greater than 2 for finite variance, got {df}")
+        object.__setattr__(self, "loc_", float(loc))
+        object.__setattr__(self, "scale_", float(scale))
+        object.__setattr__(self, "df_", float(df))
+
+    def mean(self) -> float:
+        return self.loc_
+
+    def std(self) -> float:
+        return float(self.scale_ * np.sqrt(self.df_ / (self.df_ - 2.0)))
+
+    def quantile(self, q: float) -> float:
+        if not 0.0 < q < 1.0:
+            raise ValueError(f"q must be in (0, 1), got {q}")
+        return float(stats.t.ppf(q, df=self.df_, loc=self.loc_, scale=self.scale_))
+
+    def sample(self, n: int, rng: np.random.Generator | None = None) -> NDArray[np.float64]:
+        rng = rng if rng is not None else np.random.default_rng()
+        # scipy's rvs is typed as Any; wrap in np.asarray so the return type is
+        # a properly-typed NDArray[np.float64] instead of Any.
+        raw = stats.t.rvs(df=self.df_, loc=self.loc_, scale=self.scale_, size=n, random_state=rng)
         return np.asarray(raw, dtype=np.float64)

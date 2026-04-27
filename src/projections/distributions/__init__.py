@@ -8,6 +8,7 @@ from projections.distributions.parametric import (
     ParametricGamma,
     ParametricNegativeBinomial,
     ParametricNormal,
+    ParametricStudentT,
 )
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "ParametricGamma",
     "ParametricNegativeBinomial",
     "ParametricNormal",
+    "ParametricStudentT",
     "pack_per_stat_params",
     "unpack_per_stat_params",
 ]
