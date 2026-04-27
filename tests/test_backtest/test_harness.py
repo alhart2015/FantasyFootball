@@ -13,10 +13,14 @@ from projections.schemas import Position
 def test_backtest_run_dataclass_shape() -> None:
     """BacktestRun is a frozen slots dataclass with the five documented
     attributes (timestamp, metrics, naive_metrics, per_row_results,
-    per_player_results)."""
+    per_player_results).
+
+    Plan 5 Task 12: metrics gain a `model_class` column; naive_metrics
+    stays 4-column (naive baseline is model-class-agnostic).
+    """
     run = BacktestRun(
         timestamp=pd.Timestamp("2026-04-26", tz="UTC"),
-        metrics=pd.DataFrame(columns=["position", "year", "metric", "value"]),
+        metrics=pd.DataFrame(columns=["position", "year", "metric", "model_class", "value"]),
         naive_metrics=pd.DataFrame(columns=["position", "year", "metric", "value"]),
         per_row_results=pd.DataFrame(),
         per_player_results=pd.DataFrame(),
@@ -32,7 +36,7 @@ def test_run_backtest_skeleton_returns_empty_metrics_when_no_positions() -> None
     wires real metrics."""
     out = run_backtest(positions=[], held_out_years=[])
     assert isinstance(out, BacktestRun)
-    assert list(out.metrics.columns) == ["position", "year", "metric", "value"]
+    assert list(out.metrics.columns) == ["position", "year", "metric", "model_class", "value"]
     assert list(out.naive_metrics.columns) == ["position", "year", "metric", "value"]
     assert out.metrics.empty
 
@@ -56,13 +60,17 @@ def test_run_backtest_populates_metrics_for_one_cell(
         raw_root=synthetic_backtest_layout["raw_root"],
     )
     assert not out.metrics.empty
-    assert set(out.metrics.columns) == {"position", "year", "metric", "value"}
+    # Plan 5 Task 12: metrics now carry `model_class`.
+    assert set(out.metrics.columns) == {"position", "year", "metric", "model_class", "value"}
+    # Default model_classes=("baseline",) so every row is tagged "baseline".
+    assert set(out.metrics["model_class"].unique()) == {"baseline"}
     # Should produce at least one composite_rmse + one spearman_topN row.
     metric_names = set(out.metrics["metric"].unique())
     assert "composite_rmse" in metric_names
     assert "spearman_topN" in metric_names
-    # naive_metrics has the same shape and is non-empty.
+    # naive_metrics keeps the 4-column shape (model-class-agnostic).
     assert not out.naive_metrics.empty
+    assert set(out.naive_metrics.columns) == {"position", "year", "metric", "value"}
 
 
 def test_backtest_run_includes_season_calibration_metrics_for_every_cell(

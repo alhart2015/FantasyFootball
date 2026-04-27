@@ -43,7 +43,10 @@ def test_backtest_smoke_one_cell() -> None:
     )
     assert isinstance(out, BacktestRun)
     assert not out.metrics.empty
-    assert set(out.metrics.columns) == {"position", "year", "metric", "value"}
+    # Plan 5 Task 12: metrics now carry `model_class`.
+    assert set(out.metrics.columns) == {"position", "year", "metric", "model_class", "value"}
+    # Default model_classes=("baseline",) so every row is tagged "baseline".
+    assert set(out.metrics["model_class"].unique()) == {"baseline"}
     # Exactly one (position, year) cell.
     assert sorted(out.metrics["position"].unique().tolist()) == ["WR"]
     assert sorted(out.metrics["year"].unique().tolist()) == [2024]
