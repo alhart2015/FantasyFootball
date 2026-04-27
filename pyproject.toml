@@ -29,6 +29,7 @@ dev = [
     "ruff>=0.5",
     "types-setuptools",
     "pre-commit>=3.6",
+    "matplotlib>=3.8",
 ]
 
 [tool.setuptools.packages.find]
