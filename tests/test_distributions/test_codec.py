@@ -137,3 +137,20 @@ def test_codec_round_trip_neg_binomial() -> None:
     assert isinstance(decoded_dist, ParametricNegativeBinomial)
     assert decoded_dist.mean() == pytest.approx(0.3)
     # Round-trip preserves (mean, dispersion) directly via persisted entries.
+
+
+def test_codec_round_trip_student_t() -> None:
+    from projections.distributions import (
+        ParametricStudentT,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    dist = ParametricStudentT(loc=250.0, scale=70.0, df=8.0)
+    blob = pack_per_stat_params({Stat.PASSING_YARDS: dist})
+    decoded = unpack_per_stat_params(blob)
+    decoded_dist = decoded[Stat.PASSING_YARDS]
+    assert isinstance(decoded_dist, ParametricStudentT)
+    assert decoded_dist.mean() == pytest.approx(250.0)
+    assert decoded_dist.std() == pytest.approx(dist.std())
