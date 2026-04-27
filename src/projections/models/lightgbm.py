@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -26,14 +27,15 @@ import pandas as pd
 import pandera.pandas as pa
 
 from projections.distributions import (
-    QuantileDistribution,  # noqa: F401  -- consumed by Task 7's predict_distribution
-    pack_per_stat_params,  # noqa: F401  -- consumed by Task 7's predict_distribution
+    QuantileDistribution,
+    pack_per_stat_params,
 )
 from projections.models.base import compute_code_hash
 from projections.schemas import (
-    DistributionFamily,  # noqa: F401  -- consumed by Task 7's predict_distribution
+    _PYARROW_STR,
+    DistributionFamily,
     Position,
-    ProjectionWeeklySchema,  # noqa: F401  -- consumed by Task 7's predict_distribution
+    ProjectionWeeklySchema,
     QbFeaturesSchema,
     RbFeaturesSchema,
     Ruleset,
@@ -43,8 +45,8 @@ from projections.schemas import (
     WrFeaturesSchema,
 )
 from projections.scoring.score_distribution import (
-    derive_row_seed,  # noqa: F401  -- consumed by Task 7's predict_distribution
-    score_distribution,  # noqa: F401  -- consumed by Task 7's predict_distribution
+    derive_row_seed,
+    score_distribution,
 )
 
 LGBM_DEFAULTS: Final[dict[str, Any]] = {
@@ -332,7 +334,105 @@ class LightGBMModel:
         self._is_fitted = True
 
     def predict_distribution(self, features: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
-        raise NotImplementedError("Plan 5 Task 7")
+        """Predict per-row composite fantasy-points distribution.
+
+        Pipeline:
+            1. Verify feature columns match training (raise ValueError on mismatch
+               BEFORE schema validation so a missing column surfaces as a model-
+               level error, not a deep pandera SchemaError).
+            2. Validate features against the position schema.
+            3. For each row, predict 5 quantiles via the 5 sub-models per stat.
+            4. Sort per-row to enforce non-crossing.
+            5. Clip to [0, inf) for stats in `non_negative_stats`.
+            6. Wrap each per-stat (quantiles, values) in a `QuantileDistribution`.
+            7. Run through `score_distribution` -> composite mean / p10 / p50 / p90.
+
+        Returns:
+            DataFrame validated against `ProjectionWeeklySchema`.
+        """
+        if not self._is_fitted:
+            raise RuntimeError("predict_distribution requires fit() first")
+
+        feat_cols = list(self._config.feature_columns)
+        actual_cols = set(features.columns)
+        missing = set(feat_cols) - actual_cols
+        if missing:
+            raise ValueError(
+                f"Feature columns differ from training: missing={sorted(missing)}; "
+                f"expected feature_columns={feat_cols}"
+            )
+
+        features = self._config.feature_schema.validate(features)
+
+        if features.empty:
+            empty_cols = list(ProjectionWeeklySchema.to_schema().columns.keys())
+            return ProjectionWeeklySchema.validate(pd.DataFrame(columns=empty_cols))
+
+        x = features[feat_cols].to_numpy(dtype=np.float64)
+        n_rows = x.shape[0]
+        quant_arr = np.array(QUANTILE_GRID, dtype=np.float64)
+
+        # Predict every (stat, quantile) into a per-stat (n_rows, n_quantiles) array.
+        per_stat_pred: dict[Stat, np.ndarray[Any, np.dtype[np.float64]]] = {}
+        for stat in self._config.target_stats:
+            preds_per_q = np.column_stack(
+                [self._sub_models[stat][q].predict(x) for q in QUANTILE_GRID]
+            ).astype(np.float64)
+            # Sort per-row to enforce non-crossing (in-place is fine — fresh array).
+            preds_per_q.sort(axis=1)
+            # Clip to >=0 for non-negative stats.
+            if stat in self._config.non_negative_stats:
+                np.maximum(preds_per_q, 0.0, out=preds_per_q)
+            per_stat_pred[stat] = preds_per_q
+
+        # Build per-row per-stat distributions and run scoring.
+        out_rows: list[dict[str, Any]] = []
+        generated_at = datetime.now(UTC)
+        gsis_id_col = features["gsis_id"].to_numpy()
+        season_col = features["season"].to_numpy()
+        week_col = features["week"].to_numpy()
+        team_col = features["team"].to_numpy()
+        opponent_col = features["opponent"].to_numpy()
+        for row_idx in range(n_rows):
+            per_stat_dists: dict[Stat, QuantileDistribution] = {}
+            for stat in self._config.target_stats:
+                per_stat_dists[stat] = QuantileDistribution(
+                    quantiles=quant_arr,
+                    values=per_stat_pred[stat][row_idx],
+                )
+
+            seed = derive_row_seed(
+                gsis_id=str(gsis_id_col[row_idx]),
+                season=int(season_col[row_idx]),
+                week=int(week_col[row_idx]),
+                ruleset_name=ruleset.name,
+            )
+            composite = score_distribution(per_stat_dists, ruleset, seed=seed)
+
+            out_rows.append(
+                {
+                    "gsis_id": str(gsis_id_col[row_idx]),
+                    "season": int(season_col[row_idx]),
+                    "week": int(week_col[row_idx]),
+                    "position": self._config.position.value,
+                    "team": str(team_col[row_idx]),
+                    "opponent": str(opponent_col[row_idx]),
+                    "ruleset": ruleset.name,
+                    "family": DistributionFamily.QUANTILE.value,
+                    "params": pack_per_stat_params(per_stat_dists),
+                    "mean": composite.mean(),
+                    "p10": composite.quantile(0.10),
+                    "p50": composite.quantile(0.50),
+                    "p90": composite.quantile(0.90),
+                    "model_id": self.model_id,
+                    "generated_at": pd.Timestamp(generated_at).as_unit("us"),
+                }
+            )
+        out = pd.DataFrame(out_rows)
+        for col in ("gsis_id", "team", "opponent", "ruleset", "family", "model_id"):
+            out[col] = out[col].astype(_PYARROW_STR)
+        out["position"] = out["position"].astype(_PYARROW_STR)
+        return ProjectionWeeklySchema.validate(out)
 
     def save(self, path: Path) -> None:
         raise NotImplementedError("Plan 5 Task 8")

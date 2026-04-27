@@ -218,3 +218,98 @@ def test_fit_warns_on_best_iter_zero() -> None:
         for w in bi_warnings:
             assert issubclass(w.category, RuntimeWarning)
             assert "early stopping fired immediately" in str(w.message)
+
+
+# ---------------- predict_distribution tests ----------------
+
+
+def test_predict_distribution_validates_against_projection_schema() -> None:
+    from projections.schemas import ProjectionWeeklySchema, Ruleset
+
+    features = _build_synthetic_wr_features()
+    weekly_stats = _build_synthetic_weekly_stats(features)
+    model = wr_lightgbm()
+    model.fit(features, weekly_stats)
+
+    test_features = features[features["season"] == 2021].copy()
+    out = model.predict_distribution(test_features, Ruleset.espn_ppr())
+
+    # ProjectionWeeklySchema.validate raises if columns/dtypes drift.
+    ProjectionWeeklySchema.validate(out)
+    assert (out["family"] == "QUANTILE").all()
+    assert (out["model_id"] == model.model_id).all()
+    assert len(out) == len(test_features)
+
+
+def test_predict_distribution_params_blob_round_trips() -> None:
+    from projections.distributions import QuantileDistribution, unpack_per_stat_params
+    from projections.schemas import Ruleset
+
+    features = _build_synthetic_wr_features()
+    weekly_stats = _build_synthetic_weekly_stats(features)
+    model = wr_lightgbm()
+    model.fit(features, weekly_stats)
+
+    test_features = features[features["season"] == 2021].head(5).copy()
+    out = model.predict_distribution(test_features, Ruleset.espn_ppr())
+
+    for blob in out["params"]:
+        decoded = unpack_per_stat_params(bytes(blob))
+        for stat in model._config.target_stats:
+            assert stat in decoded
+            assert isinstance(decoded[stat], QuantileDistribution)
+
+
+def test_predict_distribution_clips_non_negative_stats() -> None:
+    from projections.distributions import QuantileDistribution, unpack_per_stat_params
+    from projections.schemas import Ruleset
+
+    features = _build_synthetic_wr_features()
+    weekly_stats = _build_synthetic_weekly_stats(features)
+    model = wr_lightgbm()
+    model.fit(features, weekly_stats)
+
+    test_features = features[features["season"] == 2021].copy()
+    out = model.predict_distribution(test_features, Ruleset.espn_ppr())
+
+    # Every non-negative stat's stored quantile values must be >= 0 in every row.
+    for blob in out["params"]:
+        decoded = unpack_per_stat_params(bytes(blob))
+        for stat in model._config.non_negative_stats:
+            qd = decoded[stat]
+            assert isinstance(qd, QuantileDistribution)
+            assert (qd.values_ >= 0.0).all()
+
+
+def test_predict_distribution_sorts_quantile_crossing() -> None:
+    """If LightGBM produces a row where p10_pred > p50_pred, predict_distribution
+    must sort before constructing the QuantileDistribution. Constructed indirectly:
+    we assert no ValueError is raised by the QuantileDistribution constructor's
+    monotonicity check on any prediction row."""
+    from projections.schemas import Ruleset
+
+    features = _build_synthetic_wr_features()
+    weekly_stats = _build_synthetic_weekly_stats(features)
+    model = wr_lightgbm()
+    model.fit(features, weekly_stats)
+
+    test_features = features[features["season"] == 2021].copy()
+    # No exception means the sort upstream is doing its job.
+    out = model.predict_distribution(test_features, Ruleset.espn_ppr())
+    assert len(out) == len(test_features)
+
+
+def test_predict_distribution_raises_on_feature_column_mismatch() -> None:
+    from projections.schemas import Ruleset
+
+    features = _build_synthetic_wr_features()
+    weekly_stats = _build_synthetic_weekly_stats(features)
+    model = wr_lightgbm()
+    model.fit(features, weekly_stats)
+
+    test_features = features[features["season"] == 2021].copy()
+    # Drop one feature column.
+    dropped_col = next(iter(model._config.feature_columns))
+    test_features = test_features.drop(columns=[dropped_col])
+    with pytest.raises(ValueError, match=r"Feature columns differ from training"):
+        model.predict_distribution(test_features, Ruleset.espn_ppr())
