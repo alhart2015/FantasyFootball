@@ -190,7 +190,7 @@ MIXTURE: {
 
 Implementation refactors `pack_per_stat_params` and `unpack_per_stat_params` to extract per-component encoding into private helpers `_pack_single` / `_unpack_single`. The MIXTURE branch calls these recursively.
 
-`schema_version` bumps from 1 → 2. Old v1 blobs (no MIXTURE entries) decode unchanged.
+`schema_version` bumps from 1 → 2. v1 blobs are not forward-compatible — `unpack_per_stat_params` rejects them with a clear `ValueError`. Rationale: there are no v1 readers outside this codec (writers and readers ship together), so the bump is purely additive at the writer surface and there is no value in maintaining a v1-decode path. Implementation rejects v1 explicitly so a stale on-disk artifact fails fast rather than silently dispatching wrong family branches.
 
 ### 2.6 Ensemble weights persistence
 
