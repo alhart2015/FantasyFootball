@@ -236,16 +236,30 @@ Wind especially tanks passing efficiency (rule of thumb: >20mph wind drops passi
 
 Small feature add; likely small but real win on a subset of games. Same plan slot as TODO #24 (player-trajectory) — both are quick adds inside existing builders.
 
-### 26. Plan 5 — LightGBM with quantile regression (Model C) — closed in Plan 5
+### 26. Plan 5 / 5b — LightGBM with quantile regression (Model C / C-tuned) — closed in Plan 5 + Plan 5b
 
-Closed 2026-04-27. Per-stat sub-models trained at quantiles [0.05, 0.10, 0.50, 0.90, 0.95];
+Closed 2026-04-27 (Plan 5) and 2026-04-28 (Plan 5b).
+
+**Plan 5 (Model C):** Per-stat sub-models trained at quantiles [0.05, 0.10, 0.50, 0.90, 0.95];
 new QuantileDistribution + codec branch; POSITION_DISPATCH.factories dict;
 backtest snapshot extended (400 → 768 rows). Model A unchanged; both coexist.
+**Adoption verdict: failed all three §1.3 criteria.**
 
-**Adoption verdict: Model C failed all three Plan 5 §1.3 adoption-gate criteria.**
-Model A stays the default. Model C infrastructure preserved for Plan 5b
-(hyperparameter tuning) or Plan 6 (ensemble) follow-ups. See project_management.md
-for the per-cell comparison table and detailed analysis.
+**Plan 5b (Model C-tuned):** `LightGBMTunedModel` subclass overriding only
+`_hyperparams_for(stat)`, `code_hash`, `model_id`. 24 per-(position, stat)
+Optuna studies × 50 trials (TPE + median pruner; sum-of-5-pinball-losses
+on 2023 trial scorer). Tuned params in `data/tuned_params/lightgbm.json`
+(checked in). Snapshot extended (768 → 1136 rows). **Adoption verdict: also
+failed all three §1.3 criteria** — but improved on every metric vs untuned
+C: RMSE wins moved 1/16 → 4/16, calibration mean delta -0.086 → -0.063,
+QB cells now strictly dominate A. Hyperparameter tuning cannot address the
+per-stat-sub-model "no shared prior" mechanism that drives the residual gap
+on RB / TE / WR.
+
+Model A stays the production default. **No Plan 5c filed.** Model C and
+Model C-tuned infrastructure preserved for Plan 6 (ensemble) or a future
+multi-output / shared-prior plan. See project_management.md for the per-cell
+A vs C vs C-tuned comparison table and detailed analysis.
 
 ### 27. Revisit Model Protocol shape (Fitted vs base separation)
 
