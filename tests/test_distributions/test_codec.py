@@ -101,7 +101,7 @@ def test_unknown_schema_version_raises() -> None:
 
 def test_unknown_family_raises() -> None:
     bad = msgpack.packb(
-        {"schema_version": 1, "stats": {"receiving_yards": {"family": "WEIBULL", "k": 1.0}}},
+        {"schema_version": 2, "stats": {"receiving_yards": {"family": "WEIBULL", "k": 1.0}}},
         use_bin_type=True,
     )
     with pytest.raises(ValueError, match="WEIBULL"):
@@ -111,7 +111,7 @@ def test_unknown_family_raises() -> None:
 def test_unknown_stat_name_raises() -> None:
     bad = msgpack.packb(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "stats": {"this_is_not_a_stat": {"family": "NORMAL", "mean": 0.0, "std": 1.0}},
         },
         use_bin_type=True,
