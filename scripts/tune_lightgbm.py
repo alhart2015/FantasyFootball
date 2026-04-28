@@ -124,18 +124,15 @@ def _objective(
             **_FIXED_PARAMS,
             **params,
         )
-        try:
-            regressor.fit(
-                x_train,
-                y_train,
-                eval_set=[(x_val, y_val)],
-                callbacks=[
-                    lgb.early_stopping(50, verbose=False),
-                    LightGBMPruningCallback(trial, metric="quantile", valid_name="valid_0"),
-                ],
-            )
-        except optuna.TrialPruned:
-            raise
+        regressor.fit(
+            x_train,
+            y_train,
+            eval_set=[(x_val, y_val)],
+            callbacks=[
+                lgb.early_stopping(50, verbose=False),
+                LightGBMPruningCallback(trial, metric="quantile", valid_name="valid_0"),
+            ],
+        )
         y_pred_score = regressor.predict(x_score)
         total += _pinball_loss(y_score, y_pred_score, q)
     return total
@@ -200,7 +197,7 @@ def _run_one_study(
             y_score=y_score,
         ),
         n_trials=n_trials,
-        catch=(),
+        catch=(Exception,),
     )
     completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
     if not completed:
