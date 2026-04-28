@@ -71,6 +71,8 @@ The CLI loads the per-row backtest results, computes per-stat empirical [p10, p9
 
 The mechanism: each row in the per-row frame has both `<stat>_actual` and per-stat distributional information in the `params` blob. We can compute per-stat [p10, p90] coverage by unpacking the blob's per-stat distributions and asking each one for its 0.10 and 0.90 quantiles. We then compute each stat's fantasy-point variance contribution (under the row's ruleset) by sampling the per-stat distributions and computing the variance of each scoring component. The "share" attribution is variance-weighted because that's what propagates to the composite [p10, p90] coverage gap.
 
+**IMPORTANT shape note:** `data/backtest/run_<ts>/results.parquet` carries per-stat **actuals** as `<stat>_actual` columns but the per-stat **distributions** live inside the `params` column as a msgpack-encoded `bytes` blob. Decoding requires `projections.distributions.codec.unpack_per_stat_params(params: bytes) -> dict[Stat, Distribution]`. Each `Distribution` exposes `.quantile(q)` and `.mean()`. Composite p10/p50/p90 columns at the row level (`p10`, `p50`, `p90`) are the **composite fantasy-point** quantiles, not per-stat. So `compute_per_stat_coverage` must unpack `params` per row to read per-stat q=0.10 and q=0.90.
+
 - [ ] **Step 1: Write the failing test scaffold**
 
 Create `tests/test_scripts/test_diagnose_calibration_breakdown.py`:
@@ -91,6 +93,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from projections.distributions import (
+    ParametricNegativeBinomial,
+    ParametricNormal,
+    pack_per_stat_params,
+)
+from projections.schemas import Stat
 from scripts.diagnose_calibration_breakdown import (
     attribute_coverage_gap,
     compute_per_stat_coverage,
@@ -100,9 +108,16 @@ from scripts.diagnose_calibration_breakdown import (
 
 def _build_synthetic_per_row(rng: np.random.Generator) -> pd.DataFrame:
     """Build a minimal per-row frame matching scripts/backtest.py's output:
-    identifiers + per-stat <stat>_actual / <stat>_pred columns + family +
-    model_id."""
+    identifiers + per-stat <stat>_actual columns + family + model_id +
+    a `params` bytes blob carrying per-stat distributions (matches the
+    real backtest output schema)."""
     n = 500
+    # Per-stat distributions are identical across rows for simplicity.
+    yards_dist = ParametricNormal(mean=50.0, std=25.0)
+    tds_dist = ParametricNegativeBinomial(mean=0.4, dispersion=2.0)
+    params_blob = pack_per_stat_params(
+        {Stat.RECEIVING_YARDS: yards_dist, Stat.RECEIVING_TDS: tds_dist}
+    )
     rows = pd.DataFrame(
         {
             "gsis_id": [f"00-{i:07d}" for i in range(n)],
@@ -114,12 +129,10 @@ def _build_synthetic_per_row(rng: np.random.Generator) -> pd.DataFrame:
             "ruleset": np.full(n, "ESPN_PPR", dtype=object),
             "family": np.full(n, "MIXED", dtype=object),
             "model_id": np.full(n, "lightgbm-nb:wr:abc12345:2018-2023", dtype=object),
+            "model_class": np.full(n, "lightgbm-nb", dtype=object),
+            "params": [params_blob] * n,
             "receiving_yards_actual": rng.normal(50, 25, size=n),
-            "receiving_yards_p10": np.full(n, 20.0),
-            "receiving_yards_p90": np.full(n, 80.0),
             "receiving_tds_actual": rng.poisson(0.4, size=n).astype(np.float64),
-            "receiving_tds_p10": np.zeros(n),
-            "receiving_tds_p90": np.ones(n),
         }
     )
     return rows
@@ -136,17 +149,25 @@ def test_compute_per_stat_coverage_returns_one_row_per_stat() -> None:
 
 
 def test_compute_per_stat_coverage_matches_hand_computed() -> None:
-    """For a hand-built frame where all actuals fall inside [p10, p90],
-    coverage should be 1.0."""
+    """For a hand-built frame where all actuals fall well inside the
+    [p10, p90] band, coverage should be 1.0."""
     n = 100
+    # ParametricNormal(mean=50, std=25): p10 ≈ 17.96, p90 ≈ 82.04. All
+    # actuals = 50 are inside.
+    yards_dist = ParametricNormal(mean=50.0, std=25.0)
+    tds_dist = ParametricNegativeBinomial(mean=0.4, dispersion=2.0)
+    params_blob = pack_per_stat_params(
+        {Stat.RECEIVING_YARDS: yards_dist, Stat.RECEIVING_TDS: tds_dist}
+    )
     per_row = pd.DataFrame(
         {
             "season": np.full(n, 2024, dtype=np.int64),
             "position": np.full(n, "WR", dtype=object),
             "model_id": np.full(n, "lightgbm-nb:wr:x:2018-2023", dtype=object),
+            "model_class": np.full(n, "lightgbm-nb", dtype=object),
+            "params": [params_blob] * n,
             "receiving_yards_actual": np.full(n, 50.0),
-            "receiving_yards_p10": np.full(n, 20.0),
-            "receiving_yards_p90": np.full(n, 80.0),
+            "receiving_tds_actual": np.zeros(n, dtype=np.float64),
         }
     )
     out = compute_per_stat_coverage(per_row, position="WR", year=2024)
@@ -183,7 +204,15 @@ def test_attribute_coverage_gap_handles_zero_variance_safely() -> None:
 
 
 def test_main_writes_csv_and_records_decision(tmp_path: Path) -> None:
-    """Smoke: `main()` produces the expected CSV columns when given a fixture."""
+    """Smoke: `main()` produces the expected CSV columns when given a fixture.
+
+    Note: writing the params blob (bytes) round-trips through parquet
+    correctly under pyarrow when the column dtype is `object` containing
+    `bytes` values. If pandas-on-pyarrow regresses this, switch to a
+    pickle fixture instead — the production code reads
+    `data/backtest/run_*/results.parquet` which already round-trips
+    successfully (verified in scripts/backtest.py).
+    """
     rng = np.random.default_rng(0)
     per_row = _build_synthetic_per_row(rng)
     in_path = tmp_path / "results.parquet"
@@ -249,8 +278,6 @@ import pandas as pd
 from projections.distributions import unpack_per_stat_params
 from projections.models import POSITION_DISPATCH, BaselineModel
 from projections.schemas import Stat
-from projections.scoring.score_distribution import derive_row_seed, score_distribution
-from projections.schemas import Ruleset
 
 # Stats Plan 5c routes through NB-2 (count) vs QuantileDistribution (yards).
 # Match COUNT_STATS_FOR_NB in models/lightgbm_nb.py.
@@ -284,42 +311,80 @@ def compute_per_stat_coverage(
     """Compute empirical [p10, p90] coverage per stat for a single
     (position, year) cell.
 
+    Per-stat distributions are unpacked from the row's `params` blob
+    (msgpack bytes -> dict[Stat, Distribution]). Per-stat actuals come
+    from `<stat>_actual` columns. Composite p10/p90 columns at the row
+    level are NOT per-stat — those are composite fantasy-point quantiles
+    and unrelated to this decomposition.
+
     Returns a frame with columns:
       stat, stat_class, n_rows, coverage_p10p90, variance_contribution.
 
-    `variance_contribution` is computed as Var(stat_actual) * scoring_weight^2
-    aggregated across the cell's rows; this is the share-of-fantasy-point-
-    variance proxy used by attribute_coverage_gap.
+    `variance_contribution` is empirical Var(actual) per stat. Only ratios
+    matter for the share decomposition, so the scoring-weight^2
+    multiplier is folded in implicitly: count stats (low-mean integer)
+    have small Var(actual); yards stats (continuous, large variance) have
+    much larger Var(actual). The ratio is the right proxy for share-of-
+    composite-fantasy-point-variance.
     """
     cell = per_row[(per_row["position"] == position) & (per_row["season"] == year)]
     if cell.empty:
-        return pd.DataFrame(columns=["stat", "stat_class", "n_rows", "coverage_p10p90", "variance_contribution"])
+        return pd.DataFrame(
+            columns=[
+                "stat",
+                "stat_class",
+                "n_rows",
+                "coverage_p10p90",
+                "variance_contribution",
+            ]
+        )
 
     target_stats = _resolve_target_stats().get(position, ())
     if not target_stats:
         raise ValueError(f"No target stats resolved for position={position}")
 
+    # Unpack each row's params blob once. Returns dict[Stat, Distribution];
+    # we read p10 and p90 per stat per row.
+    unpacked: list[dict] = [unpack_per_stat_params(b) for b in cell["params"].tolist()]
+
     rows: list[dict[str, object]] = []
     for stat_value in target_stats:
         actual_col = f"{stat_value}_actual"
-        p10_col = f"{stat_value}_p10"
-        p90_col = f"{stat_value}_p90"
-        if not all(c in cell.columns for c in (actual_col, p10_col, p90_col)):
+        if actual_col not in cell.columns:
             continue
         actual = cell[actual_col].to_numpy(dtype=np.float64)
-        p10 = cell[p10_col].to_numpy(dtype=np.float64)
-        p90 = cell[p90_col].to_numpy(dtype=np.float64)
-        in_band = (actual >= p10) & (actual <= p90)
+
+        # Pull per-stat p10/p90 from each row's unpacked params.
+        # Skip rows where this stat isn't in the unpacked dict (shouldn't
+        # happen for cells under a single model class, but defensive).
+        p10_list: list[float] = []
+        p90_list: list[float] = []
+        kept_actual: list[float] = []
+        for i, per_stat_dists in enumerate(unpacked):
+            # Find the matching Stat enum key by string value.
+            dist = next(
+                (d for s, d in per_stat_dists.items() if s.value == stat_value), None
+            )
+            if dist is None:
+                continue
+            p10_list.append(float(dist.quantile(0.10)))
+            p90_list.append(float(dist.quantile(0.90)))
+            kept_actual.append(float(actual[i]))
+
+        if not kept_actual:
+            continue
+
+        actual_arr = np.asarray(kept_actual, dtype=np.float64)
+        p10 = np.asarray(p10_list, dtype=np.float64)
+        p90 = np.asarray(p90_list, dtype=np.float64)
+        in_band = (actual_arr >= p10) & (actual_arr <= p90)
         coverage = float(in_band.mean()) if in_band.size else 0.0
-        # Variance contribution: empirical Var(actual) — the scoring-weight^2
-        # multiplier folds in via the ruleset later if needed; for the
-        # share comparison only ratios matter so Var(actual) is enough.
-        variance_contribution = float(np.var(actual)) if actual.size else 0.0
+        variance_contribution = float(np.var(actual_arr)) if actual_arr.size else 0.0
         rows.append(
             {
                 "stat": stat_value,
                 "stat_class": _stat_class(stat_value),
-                "n_rows": int(actual.size),
+                "n_rows": int(actual_arr.size),
                 "coverage_p10p90": coverage,
                 "variance_contribution": variance_contribution,
             }
