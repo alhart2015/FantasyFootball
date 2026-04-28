@@ -122,6 +122,31 @@ def test_attribute_coverage_gap_handles_zero_variance_safely() -> None:
     assert out["count_share"] == 0.0
 
 
+def test_decision_proceeds_phase_1_when_count_gap_dominates() -> None:
+    """Counts gap meaningfully larger than yards gap => proceed_phase_1."""
+    from diagnose_calibration_breakdown import _decision
+
+    assert _decision(count_coverage_gap=0.20, yards_coverage_gap=0.00) == "proceed_phase_1"
+    assert _decision(count_coverage_gap=0.16, yards_coverage_gap=0.05) == "proceed_phase_1"
+
+
+def test_decision_stops_when_yards_gap_dominates() -> None:
+    """Yards gap meaningfully larger than counts gap => stop_file_yards_plan."""
+    from diagnose_calibration_breakdown import _decision
+
+    assert _decision(count_coverage_gap=0.00, yards_coverage_gap=0.20) == "stop_file_yards_plan"
+    assert _decision(count_coverage_gap=0.05, yards_coverage_gap=0.16) == "stop_file_yards_plan"
+
+
+def test_decision_proceeds_with_followup_when_gaps_within_tolerance() -> None:
+    """Gaps within +/-0.02 of each other => proceed_with_followup."""
+    from diagnose_calibration_breakdown import _decision
+
+    assert _decision(count_coverage_gap=0.10, yards_coverage_gap=0.10) == "proceed_with_followup"
+    assert _decision(count_coverage_gap=0.10, yards_coverage_gap=0.11) == "proceed_with_followup"
+    assert _decision(count_coverage_gap=0.00, yards_coverage_gap=0.00) == "proceed_with_followup"
+
+
 def test_main_writes_csv_and_records_decision(tmp_path: Path) -> None:
     """Smoke: `main()` produces the expected CSV columns when given a fixture."""
     rng = np.random.default_rng(0)

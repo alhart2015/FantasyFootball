@@ -7,10 +7,16 @@ share of total fantasy-point variance, and emits a CSV breakdown
 attributing the cell's coverage gap vs Model A to ``count_share`` and
 ``yards_share`` in [0, 1].
 
-Decision rule encoded in the CSV ``decision`` column:
-  - count_share >= 0.5  -> "proceed_phase_1"
-  - yards_share >= 0.5  -> "stop_file_yards_plan"
-  - else                -> "proceed_with_followup"
+Decision rule encoded in the CSV ``decision`` column (gap-based, not
+share-based — share-based would misroute every cell to yards because raw
+``Var(actual)`` is dominated by yards even when yards are perfectly
+calibrated):
+  - count_coverage_gap > yards_coverage_gap + _DECISION_TOLERANCE
+        -> "proceed_phase_1"
+  - yards_coverage_gap > count_coverage_gap + _DECISION_TOLERANCE
+        -> "stop_file_yards_plan"
+  - else (gaps within +/- _DECISION_TOLERANCE of each other)
+        -> "proceed_with_followup"
 
 Spec: docs/superpowers/specs/2026-04-28-plan-7-calibration-aware-nb-design.md
 """
@@ -179,10 +185,20 @@ def attribute_coverage_gap(per_stat: pd.DataFrame) -> dict[str, float]:
     return out
 
 
-def _decision(count_share: float, yards_share: float) -> str:
-    if count_share >= 0.5:
+_DECISION_TOLERANCE: Final[float] = 0.02
+
+
+def _decision(count_coverage_gap: float, yards_coverage_gap: float) -> str:
+    """Gap-based decision. Larger gap = more miscalibrated.
+
+    Variance shares are kept as informational columns but don't drive the
+    decision: raw Var(actual) is dominated by yards even when yards are
+    perfectly calibrated, so a share-based rule misroutes cells where the
+    miscalibration actually lives in counts.
+    """
+    if count_coverage_gap > yards_coverage_gap + _DECISION_TOLERANCE:
         return "proceed_phase_1"
-    if yards_share >= 0.5:
+    if yards_coverage_gap > count_coverage_gap + _DECISION_TOLERANCE:
         return "stop_file_yards_plan"
     return "proceed_with_followup"
 
@@ -225,7 +241,10 @@ def main(argv: list[str] | None = None) -> None:
                 "yards_share": attribution["yards_share"],
                 "count_coverage_gap": attribution["count_coverage_gap"],
                 "yards_coverage_gap": attribution["yards_coverage_gap"],
-                "decision": _decision(attribution["count_share"], attribution["yards_share"]),
+                "decision": _decision(
+                    attribution["count_coverage_gap"],
+                    attribution["yards_coverage_gap"],
+                ),
             }
         )
 
