@@ -20,6 +20,8 @@ dependencies = [
     "lightgbm>=4.0",
     "nfl_data_py>=0.3.2",
     "msgpack>=1.0",
+    "optuna>=3.0",
+    "optuna-integration[lightgbm]>=3.0",
 ]
 
 [project.optional-dependencies]

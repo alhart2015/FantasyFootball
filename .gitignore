@@ -223,3 +223,7 @@ data/sanity_checks/
 # Trained model artifacts (joblib pickles; reproducible from source + data)
 models/artifacts/
 *.joblib
+
+# Optuna study databases — artifact-of-search; tuned JSON is the artifact-of-decision
+data/tuned_params/optuna_studies.db
+data/tuned_params/optuna_studies.db-journal
