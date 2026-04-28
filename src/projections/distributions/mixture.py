@@ -1,0 +1,109 @@
+"""MixtureDistribution — weighted mixture of two child distributions.
+
+Plan 6 (Model D ensemble). For per-(position, stat) ensemble of Model A and
+Model C-NB, each row's per-stat distribution is a MixtureDistribution wrapping
+the two child distributions and a scalar weight.
+
+Mathematics:
+    mean()      = w * F_a.mean() + (1-w) * F_b.mean()
+    variance()  = w * F_a.var() + (1-w) * F_b.var()
+                  + w * (1-w) * (F_a.mean() - F_b.mean())^2
+    cdf(x)      = w * F_a.cdf(x) + (1-w) * F_b.cdf(x)
+    quantile(q) = brentq solving cdf(x) - q = 0 over a bracket spanning both
+                  components' tails.
+    sample(n)   = vectorized Bernoulli(w) mask -> per-element child sample.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+from numpy.typing import NDArray
+from scipy.optimize import brentq
+
+from projections.distributions.base import Distribution
+
+_QUANTILE_EPS = 1e-9
+_BRACKET_PADDING = 100.0
+
+
+@dataclass(slots=True, frozen=True, init=False)
+class MixtureDistribution:
+    """Weighted mixture: P(X) = w * F_a(X) + (1-w) * F_b(X)."""
+
+    component_a: Distribution
+    component_b: Distribution
+    weight: float
+
+    def __init__(
+        self,
+        *,
+        component_a: Distribution,
+        component_b: Distribution,
+        weight: float,
+    ) -> None:
+        if not (0.0 < weight < 1.0):
+            raise ValueError(f"weight must lie strictly in (0, 1), got {weight}")
+        object.__setattr__(self, "component_a", component_a)
+        object.__setattr__(self, "component_b", component_b)
+        object.__setattr__(self, "weight", float(weight))
+
+    def mean(self) -> float:
+        w = self.weight
+        return w * self.component_a.mean() + (1.0 - w) * self.component_b.mean()
+
+    def std(self) -> float:
+        w = self.weight
+        var_a = self.component_a.std() ** 2
+        var_b = self.component_b.std() ** 2
+        mean_a = self.component_a.mean()
+        mean_b = self.component_b.mean()
+        var = w * var_a + (1.0 - w) * var_b + w * (1.0 - w) * (mean_a - mean_b) ** 2
+        # Numerical guard: floating-point cancellation can produce tiny negatives.
+        return float(np.sqrt(max(var, 0.0)))
+
+    def cdf(self, x: float) -> float:
+        w = self.weight
+        return w * self.component_a.cdf(x) + (1.0 - w) * self.component_b.cdf(x)
+
+    def quantile(self, q: float) -> float:
+        if not (0.0 < q < 1.0):
+            raise ValueError(f"q must lie strictly in (0, 1), got {q}")
+
+        # Build a bracket [lo, hi] guaranteed to contain the q-quantile.
+        try:
+            a_low = self.component_a.quantile(_QUANTILE_EPS)
+            a_high = self.component_a.quantile(1.0 - _QUANTILE_EPS)
+            b_low = self.component_b.quantile(_QUANTILE_EPS)
+            b_high = self.component_b.quantile(1.0 - _QUANTILE_EPS)
+        except (ValueError, OverflowError):
+            mean = self.mean()
+            std = max(self.std(), 1e-6)
+            a_low = b_low = mean - 10.0 * std
+            a_high = b_high = mean + 10.0 * std
+
+        lo = min(a_low, b_low) - _BRACKET_PADDING
+        hi = max(a_high, b_high) + _BRACKET_PADDING
+
+        f_lo = self.cdf(lo) - q
+        f_hi = self.cdf(hi) - q
+        if f_lo > 0.0:
+            return float(lo)
+        if f_hi < 0.0:
+            return float(hi)
+
+        return float(brentq(lambda x: self.cdf(x) - q, lo, hi, xtol=1e-9, rtol=1e-9))
+
+    def sample(self, n: int, rng: np.random.Generator | None = None) -> NDArray[np.float64]:
+        rng = rng if rng is not None else np.random.default_rng()
+        # Vectorized Bernoulli draw of which component to use.
+        use_a = rng.random(size=n) < self.weight
+        n_a = int(use_a.sum())
+        n_b = n - n_a
+        out = np.empty(n, dtype=np.float64)
+        if n_a > 0:
+            out[use_a] = self.component_a.sample(n=n_a, rng=rng)
+        if n_b > 0:
+            out[~use_a] = self.component_b.sample(n=n_b, rng=rng)
+        return out

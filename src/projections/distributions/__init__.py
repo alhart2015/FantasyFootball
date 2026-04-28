@@ -1,9 +1,10 @@
-"""Distribution layer — interface + parametric implementations + codec."""
+"""Distribution layer — interface + parametric implementations + mixture + codec."""
 
 from __future__ import annotations
 
 from projections.distributions.base import Distribution
 from projections.distributions.codec import pack_per_stat_params, unpack_per_stat_params
+from projections.distributions.mixture import MixtureDistribution
 from projections.distributions.parametric import (
     ParametricGamma,
     ParametricNegativeBinomial,
@@ -14,6 +15,7 @@ from projections.distributions.quantile import QuantileDistribution
 
 __all__ = [
     "Distribution",
+    "MixtureDistribution",
     "ParametricGamma",
     "ParametricNegativeBinomial",
     "ParametricNormal",
