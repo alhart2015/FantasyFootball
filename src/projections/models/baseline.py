@@ -47,7 +47,6 @@ import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 from scipy import stats as scipy_stats
-from scipy.optimize import minimize_scalar
 from sklearn.linear_model import RidgeCV
 
 from projections.distributions import (
@@ -57,6 +56,10 @@ from projections.distributions import (
     ParametricNormal,
     ParametricStudentT,
     pack_per_stat_params,
+)
+from projections.distributions.parametric import (
+    _NB_MU_FLOOR,
+    nb_dispersion_from_residuals,
 )
 from projections.models.base import compute_code_hash
 from projections.schemas import (
@@ -99,60 +102,6 @@ def _normal_std_from_residuals(residuals: np.ndarray) -> float:
     tiny positive epsilon so ParametricNormal's std>0 invariant always holds."""
     s = float(residuals.std())
     return max(s, 1e-6)
-
-
-_NB_DISPERSION_CLIP: Final[tuple[float, float]] = (0.01, 1000.0)
-# Floor for the NB rate parameter mu. Mirrors ``BaselineModel._GAMMA_MU_FLOOR``;
-# kept module-scope so estimator + predict-time consumer share one definition.
-_NB_MU_FLOOR: Final[float] = 1e-3
-
-
-def _negative_binomial_dispersion_from_residuals(
-    *, mu_hat: np.ndarray, actual: np.ndarray
-) -> float:
-    """Conditional MLE for NB dispersion given per-row mean = mu_hat.
-
-    Maximizes sum(nbinom.logpmf(actual_i; n=dispersion, p_i)) over a single
-    global ``dispersion`` (the standard NB-2 / "size" parameter), where
-    p_i = dispersion / (dispersion + mu_hat_i). Yields per-row var =
-    mu_hat_i + mu_hat_i^2 / dispersion -- matches ParametricNegativeBinomial.
-
-    Coerces actual to non-negative integers (counts upstream may carry float
-    dtype). Returns the dispersion clipped to ``_NB_DISPERSION_CLIP``.
-    """
-    counts = np.clip(np.round(actual), 0, None).astype(np.int64)
-    mu_clipped = np.maximum(mu_hat, _NB_MU_FLOOR)
-
-    if counts.size < 2:
-        return _NB_DISPERSION_CLIP[1]
-
-    def neg_log_lik(dispersion: float) -> float:
-        if dispersion <= 0:
-            return float("inf")
-        # Standard NB-2: n = dispersion (size param, scalar), p per-row.
-        # scipy broadcasts the scalar n across the per-row p.
-        p = dispersion / (dispersion + mu_clipped)
-        return -float(np.sum(scipy_stats.nbinom.logpmf(counts, n=dispersion, p=p)))
-
-    result = minimize_scalar(
-        neg_log_lik,
-        bounds=_NB_DISPERSION_CLIP,
-        method="bounded",
-        options={"xatol": 1e-3},
-    )
-    if not result.success or not np.isfinite(result.fun):
-        return _NB_DISPERSION_CLIP[1]
-    fitted = float(np.clip(result.x, *_NB_DISPERSION_CLIP))
-    # Snap to a clip endpoint when the bounded minimizer stops within its xatol
-    # of the boundary: degenerate inputs (e.g. all-zero actuals) drive the
-    # likelihood monotonically toward an endpoint, but `minimize_scalar` returns
-    # a value just inside the bound rather than the bound itself.
-    snap_tol = 2e-3
-    if fitted - _NB_DISPERSION_CLIP[0] <= snap_tol:
-        return _NB_DISPERSION_CLIP[0]
-    if _NB_DISPERSION_CLIP[1] - fitted <= snap_tol:
-        return _NB_DISPERSION_CLIP[1]
-    return fitted
 
 
 _STUDENT_T_SCALE_FLOOR: Final[float] = 1e-3
@@ -258,18 +207,14 @@ def _per_bucket_nb_dispersion_from_residuals(
 ) -> list[float]:
     """Per-bucket NB dispersion. Falls back to global for any bucket with < 2 rows."""
     indices = _assign_bucket_indices(mu_hat=mu_hat, cuts=cuts)
-    global_d = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
+    global_d = nb_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
     out: list[float] = []
     for b in range(3):
         mask = indices == b
         if mask.sum() < 2:
             out.append(global_d)
         else:
-            out.append(
-                _negative_binomial_dispersion_from_residuals(
-                    mu_hat=mu_hat[mask], actual=actual[mask]
-                )
-            )
+            out.append(nb_dispersion_from_residuals(mu_hat=mu_hat[mask], actual=actual[mask]))
     return out
 
 
@@ -606,9 +551,7 @@ class BaselineModel:
                 # NB MLE is conditional on mu_hat, so it consumes (mu_hat, actual)
                 # directly, not residuals.
                 self.variance_params[stat] = {
-                    "dispersion": _negative_binomial_dispersion_from_residuals(
-                        mu_hat=mu_hat, actual=y
-                    )
+                    "dispersion": nb_dispersion_from_residuals(mu_hat=mu_hat, actual=y)
                 }
             elif family is DistributionFamily.STUDENT_T:
                 scale, df = _student_t_params_from_residuals(residuals=residuals)

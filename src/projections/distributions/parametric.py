@@ -3,10 +3,63 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy import stats
+from scipy.optimize import minimize_scalar
+
+_NB_DISPERSION_CLIP: Final[tuple[float, float]] = (0.01, 1000.0)
+# Floor for the NB rate parameter mu. Kept module-scope so estimator + predict-time
+# consumer share one definition.
+_NB_MU_FLOOR: Final[float] = 1e-3
+
+
+def nb_dispersion_from_residuals(*, mu_hat: np.ndarray, actual: np.ndarray) -> float:
+    """Conditional MLE for NB-2 dispersion given per-row mean = mu_hat.
+
+    Maximizes sum(nbinom.logpmf(actual_i; n=dispersion, p_i)) over a single
+    global ``dispersion`` (the standard NB-2 / "size" parameter), where
+    p_i = dispersion / (dispersion + mu_hat_i). Yields per-row var =
+    mu_hat_i + mu_hat_i^2 / dispersion -- matches ParametricNegativeBinomial.
+
+    Coerces actual to non-negative integers (counts upstream may carry float
+    dtype). Returns the dispersion clipped to ``_NB_DISPERSION_CLIP``.
+    """
+    counts = np.clip(np.round(actual), 0, None).astype(np.int64)
+    mu_clipped = np.maximum(mu_hat, _NB_MU_FLOOR)
+
+    if counts.size < 2:
+        return _NB_DISPERSION_CLIP[1]
+
+    def neg_log_lik(dispersion: float) -> float:
+        if dispersion <= 0:
+            return float("inf")
+        # Standard NB-2: n = dispersion (size param, scalar), p per-row.
+        # scipy broadcasts the scalar n across the per-row p.
+        p = dispersion / (dispersion + mu_clipped)
+        return -float(np.sum(stats.nbinom.logpmf(counts, n=dispersion, p=p)))
+
+    result = minimize_scalar(
+        neg_log_lik,
+        bounds=_NB_DISPERSION_CLIP,
+        method="bounded",
+        options={"xatol": 1e-3},
+    )
+    if not result.success or not np.isfinite(result.fun):
+        return _NB_DISPERSION_CLIP[1]
+    fitted = float(np.clip(result.x, *_NB_DISPERSION_CLIP))
+    # Snap to a clip endpoint when the bounded minimizer stops within its xatol
+    # of the boundary: degenerate inputs (e.g. all-zero actuals) drive the
+    # likelihood monotonically toward an endpoint, but `minimize_scalar` returns
+    # a value just inside the bound rather than the bound itself.
+    snap_tol = 2e-3
+    if fitted - _NB_DISPERSION_CLIP[0] <= snap_tol:
+        return _NB_DISPERSION_CLIP[0]
+    if _NB_DISPERSION_CLIP[1] - fitted <= snap_tol:
+        return _NB_DISPERSION_CLIP[1]
+    return fitted
 
 
 @dataclass(slots=True, frozen=True, init=False)

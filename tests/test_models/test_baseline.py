@@ -110,7 +110,7 @@ def test_baseline_fit_populates_nb_variance_params(
 ) -> None:
     """Plan 3e Phase 1: count stats (TDs, fumbles_lost) route to NEGATIVE_BINOMIAL.
     Phase 3 bucketing was reverted; variance_params carries a scalar ``dispersion``."""
-    from projections.models.baseline import _NB_DISPERSION_CLIP
+    from projections.distributions.parametric import _NB_DISPERSION_CLIP
 
     model = wr_baseline()
     model.fit(features=baseline_features_wr, weekly_stats=baseline_weekly_stats_wr)
@@ -435,7 +435,7 @@ def test_predict_distribution_is_deterministic_across_calls(
 def test_negative_binomial_dispersion_recovers_known_param() -> None:
     """Synthesize NB-distributed `actual` from known dispersion + per-row mean,
     fit the dispersion, expect recovery within tolerance."""
-    from projections.models.baseline import _negative_binomial_dispersion_from_residuals
+    from projections.distributions.parametric import nb_dispersion_from_residuals
 
     rng = np.random.default_rng(42)
     n = 500
@@ -447,7 +447,7 @@ def test_negative_binomial_dispersion_recovers_known_param() -> None:
         np.float64
     )
 
-    fitted = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
+    fitted = nb_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
     assert fitted == pytest.approx(true_dispersion, rel=0.30)
 
 
@@ -458,14 +458,14 @@ def test_negative_binomial_dispersion_clipped_for_degenerate_input() -> None:
     clip. The estimator should snap there rather than returning a near-zero
     interior value -- snapping is the contract that keeps the fitted
     distribution from drifting on degenerate inputs."""
-    from projections.models.baseline import (
+    from projections.distributions.parametric import (
         _NB_DISPERSION_CLIP,
-        _negative_binomial_dispersion_from_residuals,
+        nb_dispersion_from_residuals,
     )
 
     mu_hat = np.full(50, 0.1)
     actual = np.zeros(50)
-    fitted = _negative_binomial_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
+    fitted = nb_dispersion_from_residuals(mu_hat=mu_hat, actual=actual)
     assert fitted == _NB_DISPERSION_CLIP[0]
 
 
@@ -505,7 +505,8 @@ def test_baseline_model_fit_stores_nb_dispersion_for_nb_stat(
     """A BaselineModel configured with a NEGATIVE_BINOMIAL stat must store a
     scalar dispersion in variance_params after fit() (Plan 3e Phase 1; Phase 3
     bucketing was reverted)."""
-    from projections.models.baseline import _NB_DISPERSION_CLIP, wr_baseline
+    from projections.distributions.parametric import _NB_DISPERSION_CLIP
+    from projections.models.baseline import wr_baseline
     from projections.schemas import DistributionFamily, Stat
 
     model = wr_baseline()

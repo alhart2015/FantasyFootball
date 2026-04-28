@@ -109,7 +109,7 @@ def test_te_baseline_fit_populates_nb_variance_params(
 ) -> None:
     """Plan 3e Phase 1: TE count stats route to NEGATIVE_BINOMIAL.
     Phase 3 bucketing was reverted; variance_params carries a scalar ``dispersion``."""
-    from projections.models.baseline import _NB_DISPERSION_CLIP
+    from projections.distributions.parametric import _NB_DISPERSION_CLIP
 
     model = te_baseline()
     model.fit(features=baseline_features_te, weekly_stats=baseline_weekly_stats_te)
