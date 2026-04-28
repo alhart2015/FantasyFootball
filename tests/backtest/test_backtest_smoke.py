@@ -46,7 +46,7 @@ def test_backtest_smoke_one_cell() -> None:
         held_out_years=[2024],
         positions=[Position.WR],
         train_start=2018,
-        model_classes=("baseline", "lightgbm"),
+        model_classes=("baseline", "lightgbm", "lightgbm-tuned"),
         features_root=_FEATURES_ROOT,
         raw_root=_RAW_ROOT,
     )
@@ -55,7 +55,7 @@ def test_backtest_smoke_one_cell() -> None:
     # Plan 5 Task 12: metrics now carry `model_class`.
     assert set(out.metrics.columns) == {"position", "year", "metric", "model_class", "value"}
     # Plan 5 Task 14: both models ran for the cell.
-    assert set(out.metrics["model_class"].unique()) == {"baseline", "lightgbm"}
+    assert set(out.metrics["model_class"].unique()) == {"baseline", "lightgbm", "lightgbm-tuned"}
     # Exactly one (position, year) cell.
     assert sorted(out.metrics["position"].unique().tolist()) == ["WR"]
     assert sorted(out.metrics["year"].unique().tolist()) == [2024]
@@ -85,7 +85,7 @@ def test_backtest_smoke_one_cell() -> None:
         "spearman_topN",
         "calibration_p10p90",
     }
-    for model_class in ("baseline", "lightgbm"):
+    for model_class in ("baseline", "lightgbm", "lightgbm-tuned"):
         per_model = out.metrics[out.metrics["model_class"] == model_class]
         per_model_metrics = set(per_model["metric"].unique())
         missing = core_metrics - per_model_metrics
@@ -123,4 +123,15 @@ def test_backtest_smoke_one_cell() -> None:
         "LightGBM is not expected to emit season_calibration_* rows yet; "
         "if the season aggregator was widened to QUANTILE, update this test "
         f"to assert presence + finite values. Got: {lightgbm_season_rows.to_dict('records')}"
+    )
+
+    # Plan 5b: lightgbm-tuned shares the SAMPLED_SUMMARY-vs-QUANTILE
+    # asymmetry (TODO #28). Pin the same expectation.
+    tuned_metrics = out.metrics[out.metrics["model_class"] == "lightgbm-tuned"]
+    tuned_season_rows = tuned_metrics[
+        tuned_metrics["metric"].isin(["season_calibration_p10p90", "season_calibration_le_p90"])
+    ]
+    assert tuned_season_rows.empty, (
+        "lightgbm-tuned is not expected to emit season_calibration_* rows yet; "
+        f"got: {tuned_season_rows.to_dict('records')}"
     )
