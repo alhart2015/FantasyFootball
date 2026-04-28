@@ -85,6 +85,10 @@ class _EnsembleConfig:
     target_stats: tuple[Stat, ...]
     child_a_factory: Callable[[], BaselineModel]
     child_b_factory: Callable[[], LightGBMNbModel]
+    # Forward-compat: directory where the Phase 3 pinball-loss optimizer
+    # will persist per-(position, stat) weight blobs. Unused in Phase 2
+    # (static 0.5 weights); wired now to avoid a config-shape change in
+    # the next phase.
     weights_dir: Path = field(default=_DEFAULT_WEIGHTS_DIR)
 
 
@@ -107,6 +111,7 @@ class EnsembleModel:
         self._weights = {}
         self._train_start = None
         self._train_end = None
+        # unused in Phase 2; Phase 3 weight optimizer uses it as the Y-1 calibration year.
         self._calibration_year = None
         self._is_fitted = False
 
@@ -176,9 +181,23 @@ class EnsembleModel:
 
     def predict_distribution(self, features: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
         """Predict per-row composite fantasy-points distribution as the
-        weighted mixture of A and C-NB per stat."""
+        weighted mixture of A and C-NB per stat.
+
+        Per-row codec round-trip note: each row's params blob from each
+        child is unpacked back into a {Stat -> Distribution} dict, wrapped
+        in MixtureDistribution per stat, and re-packed for output. This
+        double pack/unpack is the only Distribution-Protocol-clean way to
+        consume two children that respect the Model contract; bypassing it
+        (e.g., by exposing children's internal stat-dist structures
+        directly) would require new protocol surface and isn't worth it
+        for the predict-time cost.
+        """
         if not self._is_fitted or self._child_a is None or self._child_b is None:
             raise RuntimeError("predict_distribution requires fit() first")
+
+        if features.empty:
+            empty_cols = list(ProjectionWeeklySchema.to_schema().columns.keys())
+            return ProjectionWeeklySchema.validate(pd.DataFrame(columns=empty_cols))
 
         pred_a = self._child_a.predict_distribution(features, ruleset)
         pred_b = self._child_b.predict_distribution(features, ruleset)
@@ -191,15 +210,26 @@ class EnsembleModel:
                 "child predictions misaligned — both children should predict on the same features"
             )
 
+        # Extract column arrays once outside the loop. Both children predicted
+        # on the same features, so {gsis_id, season, week, team, opponent} are
+        # identical across pred_a and pred_b — read from pred_a only. params
+        # blobs differ per child (each child's own per-stat distribution
+        # encoding) so we read both. Mirrors LightGBMNbModel.predict_distribution.
+        gsis_id_col = pred_a_idx["gsis_id"].to_numpy()
+        season_col = pred_a_idx["season"].to_numpy()
+        week_col = pred_a_idx["week"].to_numpy()
+        team_col = pred_a_idx["team"].to_numpy()
+        opponent_col = pred_a_idx["opponent"].to_numpy()
+        params_a_col = pred_a_idx["params"].to_numpy()
+        params_b_col = pred_b_idx["params"].to_numpy()
+
         out_rows: list[dict[str, Any]] = []
         generated_at = datetime.now(UTC)
+        n_rows = len(pred_a_idx)
 
-        for row_idx in range(len(pred_a_idx)):
-            row_a = pred_a_idx.iloc[row_idx]
-            row_b = pred_b_idx.iloc[row_idx]
-
-            per_stat_a = unpack_per_stat_params(bytes(row_a["params"]))
-            per_stat_b = unpack_per_stat_params(bytes(row_b["params"]))
+        for row_idx in range(n_rows):
+            per_stat_a = unpack_per_stat_params(bytes(params_a_col[row_idx]))
+            per_stat_b = unpack_per_stat_params(bytes(params_b_col[row_idx]))
 
             per_stat_dists: dict[Stat, Distribution] = {}
             for stat in self._config.target_stats:
@@ -210,21 +240,21 @@ class EnsembleModel:
                 )
 
             seed = derive_row_seed(
-                gsis_id=str(row_a["gsis_id"]),
-                season=int(row_a["season"]),
-                week=int(row_a["week"]),
+                gsis_id=str(gsis_id_col[row_idx]),
+                season=int(season_col[row_idx]),
+                week=int(week_col[row_idx]),
                 ruleset_name=ruleset.name,
             )
             composite = score_distribution(per_stat_dists, ruleset, seed=seed)
 
             out_rows.append(
                 {
-                    "gsis_id": str(row_a["gsis_id"]),
-                    "season": int(row_a["season"]),
-                    "week": int(row_a["week"]),
+                    "gsis_id": str(gsis_id_col[row_idx]),
+                    "season": int(season_col[row_idx]),
+                    "week": int(week_col[row_idx]),
                     "position": self._config.position.value,
-                    "team": str(row_a["team"]),
-                    "opponent": str(row_a["opponent"]),
+                    "team": str(team_col[row_idx]),
+                    "opponent": str(opponent_col[row_idx]),
                     "ruleset": ruleset.name,
                     "family": DistributionFamily.MIXED.value,
                     "params": pack_per_stat_params(per_stat_dists),

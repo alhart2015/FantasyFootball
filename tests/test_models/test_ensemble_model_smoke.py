@@ -164,3 +164,17 @@ def test_ensemble_save_load_round_trip(tmp_path: Path) -> None:
         pred_before.drop(columns=["generated_at"]).reset_index(drop=True),
         pred_after.drop(columns=["generated_at"]).reset_index(drop=True),
     )
+
+
+def test_ensemble_predict_handles_empty_features() -> None:
+    """Empty feature input returns an empty schema-validated frame, mirroring
+    BaselineModel and LightGBMNbModel behavior."""
+    features, weekly_stats = _build_synthetic_data(Position.QB)
+    factory = POSITION_DISPATCH[Position.QB].factories["ensemble"]
+    model = factory()
+    model.fit(features, weekly_stats)
+
+    empty_features = features.iloc[0:0].copy()
+    out = model.predict_distribution(empty_features, Ruleset.espn_ppr())
+    assert out.empty
+    ProjectionWeeklySchema.validate(out)
