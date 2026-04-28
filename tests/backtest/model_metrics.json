@@ -15,6 +15,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8887218045112782
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "calibration_le_p90",
     "model_class": "baseline",
@@ -26,6 +33,13 @@
     "metric": "calibration_le_p90",
     "model_class": "lightgbm",
     "value": 0.9117199391171994
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9041095890410958
   },
   {
     "position": "QB",
@@ -43,6 +57,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9029850746268657
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "calibration_le_p90",
     "model_class": "baseline",
@@ -54,6 +75,13 @@
     "metric": "calibration_le_p90",
     "model_class": "lightgbm",
     "value": 0.8654970760233918
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8801169590643275
   },
   {
     "position": "RB",
@@ -71,6 +99,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8517110266159695
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "calibration_le_p90",
     "model_class": "baseline",
@@ -82,6 +117,13 @@
     "metric": "calibration_le_p90",
     "model_class": "lightgbm",
     "value": 0.8692712246431255
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8767843726521413
   },
   {
     "position": "RB",
@@ -99,6 +141,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8771929824561403
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "calibration_le_p90",
     "model_class": "baseline",
@@ -110,6 +159,13 @@
     "metric": "calibration_le_p90",
     "model_class": "lightgbm",
     "value": 0.8601823708206687
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8693009118541033
   },
   {
     "position": "TE",
@@ -127,6 +183,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.883495145631068
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "calibration_le_p90",
     "model_class": "baseline",
@@ -138,6 +201,13 @@
     "metric": "calibration_le_p90",
     "model_class": "lightgbm",
     "value": 0.8869485294117647
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8952205882352942
   },
   {
     "position": "TE",
@@ -155,6 +225,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8931947069943289
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "calibration_le_p90",
     "model_class": "baseline",
@@ -166,6 +243,13 @@
     "metric": "calibration_le_p90",
     "model_class": "lightgbm",
     "value": 0.8695652173913043
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8751156336725254
   },
   {
     "position": "WR",
@@ -183,6 +267,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8549075391180654
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "calibration_le_p90",
     "model_class": "baseline",
@@ -194,6 +285,13 @@
     "metric": "calibration_le_p90",
     "model_class": "lightgbm",
     "value": 0.8587059942911512
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8653663177925784
   },
   {
     "position": "WR",
@@ -211,6 +309,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8691503861880964
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "calibration_le_p90",
     "model_class": "baseline",
@@ -222,6 +327,13 @@
     "metric": "calibration_le_p90",
     "model_class": "lightgbm",
     "value": 0.8447265625
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "calibration_le_p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.85107421875
   },
   {
     "position": "QB",
@@ -239,6 +351,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.7127819548872181
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "calibration_p10p90",
     "model_class": "baseline",
@@ -250,6 +369,13 @@
     "metric": "calibration_p10p90",
     "model_class": "lightgbm",
     "value": 0.7595129375951294
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.7853881278538812
   },
   {
     "position": "QB",
@@ -267,6 +393,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.744776119402985
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "calibration_p10p90",
     "model_class": "baseline",
@@ -278,6 +411,13 @@
     "metric": "calibration_p10p90",
     "model_class": "lightgbm",
     "value": 0.6944444444444444
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.7280701754385965
   },
   {
     "position": "RB",
@@ -295,6 +435,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6167300380228137
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "calibration_p10p90",
     "model_class": "baseline",
@@ -306,6 +453,13 @@
     "metric": "calibration_p10p90",
     "model_class": "lightgbm",
     "value": 0.6220886551465064
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6378662659654395
   },
   {
     "position": "RB",
@@ -323,6 +477,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6590389016018307
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "calibration_p10p90",
     "model_class": "baseline",
@@ -334,6 +495,13 @@
     "metric": "calibration_p10p90",
     "model_class": "lightgbm",
     "value": 0.6231003039513677
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6306990881458967
   },
   {
     "position": "TE",
@@ -351,6 +519,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6669902912621359
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "calibration_p10p90",
     "model_class": "baseline",
@@ -362,6 +537,13 @@
     "metric": "calibration_p10p90",
     "model_class": "lightgbm",
     "value": 0.6415441176470589
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6700367647058824
   },
   {
     "position": "TE",
@@ -379,6 +561,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6899810964083176
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "calibration_p10p90",
     "model_class": "baseline",
@@ -390,6 +579,13 @@
     "metric": "calibration_p10p90",
     "model_class": "lightgbm",
     "value": 0.6401480111008325
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6734505087881592
   },
   {
     "position": "WR",
@@ -407,6 +603,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6320531057373162
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "calibration_p10p90",
     "model_class": "baseline",
@@ -418,6 +621,13 @@
     "metric": "calibration_p10p90",
     "model_class": "lightgbm",
     "value": 0.6003805899143673
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.615128449096099
   },
   {
     "position": "WR",
@@ -435,6 +645,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6378918673330305
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "calibration_p10p90",
     "model_class": "baseline",
@@ -446,6 +663,13 @@
     "metric": "calibration_p10p90",
     "model_class": "lightgbm",
     "value": 0.61279296875
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "calibration_p10p90",
+    "model_class": "lightgbm-tuned",
+    "value": 0.61767578125
   },
   {
     "position": "QB",
@@ -463,6 +687,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 6.358051358465205
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "composite_mae",
     "model_class": "baseline",
@@ -474,6 +705,13 @@
     "metric": "composite_mae",
     "model_class": "lightgbm",
     "value": 5.764924316436958
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 5.619901350215471
   },
   {
     "position": "QB",
@@ -491,6 +729,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 5.888735538631004
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "composite_mae",
     "model_class": "baseline",
@@ -502,6 +747,13 @@
     "metric": "composite_mae",
     "model_class": "lightgbm",
     "value": 6.133752249069703
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 6.059414841961054
   },
   {
     "position": "RB",
@@ -519,6 +771,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 5.5521894641364895
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "composite_mae",
     "model_class": "baseline",
@@ -530,6 +789,13 @@
     "metric": "composite_mae",
     "model_class": "lightgbm",
     "value": 5.4613381452050715
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 5.313766624520528
   },
   {
     "position": "RB",
@@ -547,6 +813,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 5.003925408475759
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "composite_mae",
     "model_class": "baseline",
@@ -558,6 +831,13 @@
     "metric": "composite_mae",
     "model_class": "lightgbm",
     "value": 5.159118528476043
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 5.198229467361937
   },
   {
     "position": "TE",
@@ -575,6 +855,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 4.13899512997818
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "composite_mae",
     "model_class": "baseline",
@@ -586,6 +873,13 @@
     "metric": "composite_mae",
     "model_class": "lightgbm",
     "value": 4.148860950828758
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 4.095437210459094
   },
   {
     "position": "TE",
@@ -603,6 +897,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 3.944229154753378
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "composite_mae",
     "model_class": "baseline",
@@ -614,6 +915,13 @@
     "metric": "composite_mae",
     "model_class": "lightgbm",
     "value": 4.140778910882792
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 4.1022154684203
   },
   {
     "position": "WR",
@@ -631,6 +939,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 5.399570312654775
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "composite_mae",
     "model_class": "baseline",
@@ -642,6 +957,13 @@
     "metric": "composite_mae",
     "model_class": "lightgbm",
     "value": 5.371125031798648
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 5.357985681375991
   },
   {
     "position": "WR",
@@ -659,6 +981,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 5.086038910445787
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "composite_mae",
     "model_class": "baseline",
@@ -670,6 +999,13 @@
     "metric": "composite_mae",
     "model_class": "lightgbm",
     "value": 5.190738483185766
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "composite_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 5.206605027922182
   },
   {
     "position": "QB",
@@ -687,6 +1023,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 7.731969187161068
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "composite_rmse",
     "model_class": "baseline",
@@ -698,6 +1041,13 @@
     "metric": "composite_rmse",
     "model_class": "lightgbm",
     "value": 7.271762133322779
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 7.122018932913305
   },
   {
     "position": "QB",
@@ -715,6 +1065,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 7.260178940929792
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "composite_rmse",
     "model_class": "baseline",
@@ -726,6 +1083,13 @@
     "metric": "composite_rmse",
     "model_class": "lightgbm",
     "value": 7.55227074536177
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 7.484489223563724
   },
   {
     "position": "RB",
@@ -743,6 +1107,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 6.989482420410434
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "composite_rmse",
     "model_class": "baseline",
@@ -754,6 +1125,13 @@
     "metric": "composite_rmse",
     "model_class": "lightgbm",
     "value": 6.836967426232198
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 6.70320836723271
   },
   {
     "position": "RB",
@@ -771,6 +1149,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 6.425543703000665
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "composite_rmse",
     "model_class": "baseline",
@@ -782,6 +1167,13 @@
     "metric": "composite_rmse",
     "model_class": "lightgbm",
     "value": 6.6370203562064916
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 6.6241909820106315
   },
   {
     "position": "TE",
@@ -799,6 +1191,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 5.383513163878991
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "composite_rmse",
     "model_class": "baseline",
@@ -810,6 +1209,13 @@
     "metric": "composite_rmse",
     "model_class": "lightgbm",
     "value": 5.370997746105607
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 5.319734124355838
   },
   {
     "position": "TE",
@@ -827,6 +1233,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 5.027210245009948
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "composite_rmse",
     "model_class": "baseline",
@@ -838,6 +1251,13 @@
     "metric": "composite_rmse",
     "model_class": "lightgbm",
     "value": 5.266145640102321
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 5.230163034449541
   },
   {
     "position": "WR",
@@ -855,6 +1275,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 6.802464822826554
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "composite_rmse",
     "model_class": "baseline",
@@ -866,6 +1293,13 @@
     "metric": "composite_rmse",
     "model_class": "lightgbm",
     "value": 6.747850501672171
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 6.7149252145886615
   },
   {
     "position": "WR",
@@ -883,6 +1317,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 6.592166858914408
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "composite_rmse",
     "model_class": "baseline",
@@ -894,6 +1335,13 @@
     "metric": "composite_rmse",
     "model_class": "lightgbm",
     "value": 6.733941818367189
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "composite_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 6.721846049417217
   },
   {
     "position": "QB",
@@ -911,6 +1359,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.3718553193836948
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "fumbles_lost_mae",
     "model_class": "baseline",
@@ -922,6 +1377,13 @@
     "metric": "fumbles_lost_mae",
     "model_class": "lightgbm",
     "value": 0.3822299407447687
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.3809839109094115
   },
   {
     "position": "QB",
@@ -939,6 +1401,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.3874548739155718
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "fumbles_lost_mae",
     "model_class": "baseline",
@@ -950,6 +1419,13 @@
     "metric": "fumbles_lost_mae",
     "model_class": "lightgbm",
     "value": 0.3706178211705714
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.3696712771709846
   },
   {
     "position": "RB",
@@ -967,6 +1443,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0824393606855647
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "fumbles_lost_mae",
     "model_class": "baseline",
@@ -978,6 +1461,13 @@
     "metric": "fumbles_lost_mae",
     "model_class": "lightgbm",
     "value": 0.07152529621270888
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.07659667580177025
   },
   {
     "position": "RB",
@@ -995,6 +1485,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.07881460319639019
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "fumbles_lost_mae",
     "model_class": "baseline",
@@ -1006,6 +1503,13 @@
     "metric": "fumbles_lost_mae",
     "model_class": "lightgbm",
     "value": 0.0716198584581638
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.07511563503169334
   },
   {
     "position": "TE",
@@ -1023,6 +1527,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.015264354435342797
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "fumbles_lost_mae",
     "model_class": "baseline",
@@ -1034,6 +1545,13 @@
     "metric": "fumbles_lost_mae",
     "model_class": "lightgbm",
     "value": 0.010848303615361878
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.010288278232224553
   },
   {
     "position": "TE",
@@ -1051,6 +1569,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.01740266251705479
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "fumbles_lost_mae",
     "model_class": "baseline",
@@ -1062,6 +1587,13 @@
     "metric": "fumbles_lost_mae",
     "model_class": "lightgbm",
     "value": 0.019612805074300837
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.020771302566109318
   },
   {
     "position": "WR",
@@ -1079,6 +1611,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.01827883548331517
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "fumbles_lost_mae",
     "model_class": "baseline",
@@ -1090,6 +1629,13 @@
     "metric": "fumbles_lost_mae",
     "model_class": "lightgbm",
     "value": 0.027087014288710298
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.026744448728762103
   },
   {
     "position": "WR",
@@ -1107,6 +1653,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0195488886431087
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "fumbles_lost_mae",
     "model_class": "baseline",
@@ -1118,6 +1671,13 @@
     "metric": "fumbles_lost_mae",
     "model_class": "lightgbm",
     "value": 0.015657320799056944
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "fumbles_lost_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.01521612469875203
   },
   {
     "position": "QB",
@@ -1135,6 +1695,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2960679843214585
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "fumbles_lost_mean_pred",
     "model_class": "baseline",
@@ -1146,6 +1713,13 @@
     "metric": "fumbles_lost_mean_pred",
     "model_class": "lightgbm",
     "value": 0.2974864415167005
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2952654289132788
   },
   {
     "position": "QB",
@@ -1163,6 +1737,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2959371028093991
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "fumbles_lost_mean_pred",
     "model_class": "baseline",
@@ -1174,6 +1755,13 @@
     "metric": "fumbles_lost_mean_pred",
     "model_class": "lightgbm",
     "value": 0.2968123073043163
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.29524523247439544
   },
   {
     "position": "RB",
@@ -1191,6 +1779,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.03978715031564799
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "fumbles_lost_mean_pred",
     "model_class": "baseline",
@@ -1202,6 +1797,13 @@
     "metric": "fumbles_lost_mean_pred",
     "model_class": "lightgbm",
     "value": 0.026778103873835137
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.033685255901227444
   },
   {
     "position": "RB",
@@ -1219,6 +1821,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.03693809717982199
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "fumbles_lost_mean_pred",
     "model_class": "baseline",
@@ -1230,6 +1839,13 @@
     "metric": "fumbles_lost_mean_pred",
     "model_class": "lightgbm",
     "value": 0.02902084720504929
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.03351243869651658
   },
   {
     "position": "TE",
@@ -1247,6 +1863,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.001707853266002062
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "fumbles_lost_mean_pred",
     "model_class": "baseline",
@@ -1258,6 +1881,13 @@
     "metric": "fumbles_lost_mean_pred",
     "model_class": "lightgbm",
     "value": 0.0007524579576121153
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.00019313169879685648
   },
   {
     "position": "TE",
@@ -1275,6 +1905,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0004828932035676
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "fumbles_lost_mean_pred",
     "model_class": "baseline",
@@ -1286,6 +1923,13 @@
     "metric": "fumbles_lost_mean_pred",
     "model_class": "lightgbm",
     "value": 0.00020750007138931067
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0014162597002760652
   },
   {
     "position": "WR",
@@ -1303,6 +1947,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.00028234482024285044
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "fumbles_lost_mean_pred",
     "model_class": "baseline",
@@ -1314,6 +1965,13 @@
     "metric": "fumbles_lost_mean_pred",
     "model_class": "lightgbm",
     "value": 0.0005054574180536188
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.00011236496618300269
   },
   {
     "position": "WR",
@@ -1331,6 +1989,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.935113508824892e-05
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "fumbles_lost_mean_pred",
     "model_class": "baseline",
@@ -1342,6 +2007,13 @@
     "metric": "fumbles_lost_mean_pred",
     "model_class": "lightgbm",
     "value": 0.0005639525163243172
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "fumbles_lost_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 8.432155426407522e-05
   },
   {
     "position": "QB",
@@ -1359,6 +2031,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.42470230423922006
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "fumbles_lost_rmse",
     "model_class": "baseline",
@@ -1370,6 +2049,13 @@
     "metric": "fumbles_lost_rmse",
     "model_class": "lightgbm",
     "value": 0.45147600325388365
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.4511760656586613
   },
   {
     "position": "QB",
@@ -1387,6 +2073,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.4631206823303484
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "fumbles_lost_rmse",
     "model_class": "baseline",
@@ -1398,6 +2091,13 @@
     "metric": "fumbles_lost_rmse",
     "model_class": "lightgbm",
     "value": 0.41500669232271653
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.41466063577397794
   },
   {
     "position": "RB",
@@ -1415,6 +2115,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.22251317621144895
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "fumbles_lost_rmse",
     "model_class": "baseline",
@@ -1426,6 +2133,13 @@
     "metric": "fumbles_lost_rmse",
     "model_class": "lightgbm",
     "value": 0.22103492137805486
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.21963333701484258
   },
   {
     "position": "RB",
@@ -1443,6 +2157,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2184966969035651
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "fumbles_lost_rmse",
     "model_class": "baseline",
@@ -1454,6 +2175,13 @@
     "metric": "fumbles_lost_rmse",
     "model_class": "lightgbm",
     "value": 0.21363857732352556
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.21363971109760707
   },
   {
     "position": "TE",
@@ -1471,6 +2199,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.12460846764558571
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "fumbles_lost_rmse",
     "model_class": "baseline",
@@ -1482,6 +2217,13 @@
     "metric": "fumbles_lost_rmse",
     "model_class": "lightgbm",
     "value": 0.10050753364330008
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.10047856619014198
   },
   {
     "position": "TE",
@@ -1499,6 +2241,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.13010660137267907
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "fumbles_lost_rmse",
     "model_class": "baseline",
@@ -1510,6 +2259,13 @@
     "metric": "fumbles_lost_rmse",
     "model_class": "lightgbm",
     "value": 0.13930967423465426
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.1393029219122121
   },
   {
     "position": "WR",
@@ -1527,6 +2283,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.13415377841774329
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "fumbles_lost_rmse",
     "model_class": "baseline",
@@ -1538,6 +2301,13 @@
     "metric": "fumbles_lost_rmse",
     "model_class": "lightgbm",
     "value": 0.163056237249371
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.163194060248463
   },
   {
     "position": "WR",
@@ -1555,6 +2325,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.14296241759769715
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "fumbles_lost_rmse",
     "model_class": "baseline",
@@ -1566,6 +2343,13 @@
     "metric": "fumbles_lost_rmse",
     "model_class": "lightgbm",
     "value": 0.12288687638957749
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "fumbles_lost_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.12301202041538535
   },
   {
     "position": "QB",
@@ -1583,6 +2367,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "interceptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.7100918375551707
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "interceptions_mae",
     "model_class": "baseline",
@@ -1594,6 +2385,13 @@
     "metric": "interceptions_mae",
     "model_class": "lightgbm",
     "value": 0.7207104991968597
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "interceptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.7091655962707331
   },
   {
     "position": "QB",
@@ -1611,6 +2409,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "interceptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6850038004608363
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "interceptions_mae",
     "model_class": "baseline",
@@ -1622,6 +2427,13 @@
     "metric": "interceptions_mae",
     "model_class": "lightgbm",
     "value": 0.6920211652909365
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "interceptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6858569915389763
   },
   {
     "position": "QB",
@@ -1639,6 +2451,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "interceptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.7476983435015783
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "interceptions_mean_pred",
     "model_class": "baseline",
@@ -1650,6 +2469,13 @@
     "metric": "interceptions_mean_pred",
     "model_class": "lightgbm",
     "value": 0.7431297024525292
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "interceptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.6923102636746875
   },
   {
     "position": "QB",
@@ -1667,6 +2493,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "interceptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.5773737406530399
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "interceptions_mean_pred",
     "model_class": "baseline",
@@ -1678,6 +2511,13 @@
     "metric": "interceptions_mean_pred",
     "model_class": "lightgbm",
     "value": 0.5865618329737925
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "interceptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.5754264741269766
   },
   {
     "position": "QB",
@@ -1695,6 +2535,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "interceptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8671114629867437
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "interceptions_rmse",
     "model_class": "baseline",
@@ -1706,6 +2553,13 @@
     "metric": "interceptions_rmse",
     "model_class": "lightgbm",
     "value": 0.8474857853405376
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "interceptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8402215529085931
   },
   {
     "position": "QB",
@@ -1723,6 +2577,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "interceptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8356315823053673
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "interceptions_rmse",
     "model_class": "baseline",
@@ -1734,6 +2595,13 @@
     "metric": "interceptions_rmse",
     "model_class": "lightgbm",
     "value": 0.8293821033219998
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "interceptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8265280277529534
   },
   {
     "position": "QB",
@@ -1751,6 +2619,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "passing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8813310274526223
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "passing_tds_mae",
     "model_class": "baseline",
@@ -1762,6 +2637,13 @@
     "metric": "passing_tds_mae",
     "model_class": "lightgbm",
     "value": 0.8288398595889732
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8285574805519507
   },
   {
     "position": "QB",
@@ -1779,6 +2661,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "passing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8048855210810453
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "passing_tds_mae",
     "model_class": "baseline",
@@ -1790,6 +2679,13 @@
     "metric": "passing_tds_mae",
     "model_class": "lightgbm",
     "value": 0.8730384273348257
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.8612115472238132
   },
   {
     "position": "QB",
@@ -1807,6 +2703,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "passing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.3598972127655249
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "passing_tds_mean_pred",
     "model_class": "baseline",
@@ -1818,6 +2721,13 @@
     "metric": "passing_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 1.2884978791192396
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.2997256657168283
   },
   {
     "position": "QB",
@@ -1835,6 +2745,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "passing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.2386973955001563
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "passing_tds_mean_pred",
     "model_class": "baseline",
@@ -1846,6 +2763,13 @@
     "metric": "passing_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 1.2657454579699803
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.2660062871629696
   },
   {
     "position": "QB",
@@ -1863,6 +2787,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "passing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.0767629206724993
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "passing_tds_rmse",
     "model_class": "baseline",
@@ -1874,6 +2805,13 @@
     "metric": "passing_tds_rmse",
     "model_class": "lightgbm",
     "value": 1.0109579857887916
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.0092932007143107
   },
   {
     "position": "QB",
@@ -1891,6 +2829,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "passing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9957201756614628
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "passing_tds_rmse",
     "model_class": "baseline",
@@ -1902,6 +2847,13 @@
     "metric": "passing_tds_rmse",
     "model_class": "lightgbm",
     "value": 1.0669334255890832
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.0591340987504239
   },
   {
     "position": "QB",
@@ -1919,6 +2871,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "passing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 68.7716558985
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "passing_yards_mae",
     "model_class": "baseline",
@@ -1930,6 +2889,13 @@
     "metric": "passing_yards_mae",
     "model_class": "lightgbm",
     "value": 62.925005392024104
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 62.991415989628535
   },
   {
     "position": "QB",
@@ -1947,6 +2913,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "passing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 64.59926126844573
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "passing_yards_mae",
     "model_class": "baseline",
@@ -1958,6 +2931,13 @@
     "metric": "passing_yards_mae",
     "model_class": "lightgbm",
     "value": 65.44927902851808
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 64.6666379171394
   },
   {
     "position": "QB",
@@ -1975,6 +2955,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "passing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 213.0137263749091
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "passing_yards_mean_pred",
     "model_class": "baseline",
@@ -1986,6 +2973,13 @@
     "metric": "passing_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 207.55087689545115
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 206.68647131734298
   },
   {
     "position": "QB",
@@ -2003,6 +2997,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "passing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 197.93788961877502
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "passing_yards_mean_pred",
     "model_class": "baseline",
@@ -2014,6 +3015,13 @@
     "metric": "passing_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 199.19833707589208
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 198.71800996806638
   },
   {
     "position": "QB",
@@ -2031,6 +3039,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "passing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 84.46242645005226
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "passing_yards_rmse",
     "model_class": "baseline",
@@ -2042,6 +3057,13 @@
     "metric": "passing_yards_rmse",
     "model_class": "lightgbm",
     "value": 79.19759514310725
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "passing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 78.92720445472825
   },
   {
     "position": "QB",
@@ -2059,6 +3081,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "passing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 80.30936270940637
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "passing_yards_rmse",
     "model_class": "baseline",
@@ -2070,6 +3099,13 @@
     "metric": "passing_yards_rmse",
     "model_class": "lightgbm",
     "value": 80.99313075466331
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "passing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 80.0818085862227
   },
   {
     "position": "RB",
@@ -2087,6 +3123,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.14234506891703036
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "receiving_tds_mae",
     "model_class": "baseline",
@@ -2098,6 +3141,13 @@
     "metric": "receiving_tds_mae",
     "model_class": "lightgbm",
     "value": 0.16571388548270058
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.15231790851717245
   },
   {
     "position": "RB",
@@ -2115,6 +3165,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.1485109693573841
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "receiving_tds_mae",
     "model_class": "baseline",
@@ -2126,6 +3183,13 @@
     "metric": "receiving_tds_mae",
     "model_class": "lightgbm",
     "value": 0.12913565409018915
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.12631986836011747
   },
   {
     "position": "TE",
@@ -2143,6 +3207,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.39117586585823344
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "receiving_tds_mae",
     "model_class": "baseline",
@@ -2154,6 +3225,13 @@
     "metric": "receiving_tds_mae",
     "model_class": "lightgbm",
     "value": 0.3908022141119223
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.38974106352369176
   },
   {
     "position": "TE",
@@ -2171,6 +3249,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.3773993409793216
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "receiving_tds_mae",
     "model_class": "baseline",
@@ -2182,6 +3267,13 @@
     "metric": "receiving_tds_mae",
     "model_class": "lightgbm",
     "value": 0.37163157221092624
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.37082943462652784
   },
   {
     "position": "WR",
@@ -2199,6 +3291,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.4229035348492435
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "receiving_tds_mae",
     "model_class": "baseline",
@@ -2210,6 +3309,13 @@
     "metric": "receiving_tds_mae",
     "model_class": "lightgbm",
     "value": 0.4049872048270255
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.40518362345779796
   },
   {
     "position": "WR",
@@ -2227,6 +3333,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.3879611245443746
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "receiving_tds_mae",
     "model_class": "baseline",
@@ -2238,6 +3351,13 @@
     "metric": "receiving_tds_mae",
     "model_class": "lightgbm",
     "value": 0.40087035974836105
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.40469345553128755
   },
   {
     "position": "RB",
@@ -2255,6 +3375,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.07805289219268713
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "receiving_tds_mean_pred",
     "model_class": "baseline",
@@ -2266,6 +3393,13 @@
     "metric": "receiving_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.11727713459581289
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.105050381204979
   },
   {
     "position": "RB",
@@ -2283,6 +3417,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.10058382554737327
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "receiving_tds_mean_pred",
     "model_class": "baseline",
@@ -2294,6 +3435,13 @@
     "metric": "receiving_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.07829634317659134
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.07587336528350502
   },
   {
     "position": "TE",
@@ -2311,6 +3459,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.29669525855761636
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "receiving_tds_mean_pred",
     "model_class": "baseline",
@@ -2322,6 +3477,13 @@
     "metric": "receiving_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.29821499476583013
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2961713460973471
   },
   {
     "position": "TE",
@@ -2339,6 +3501,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2962330513212505
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "receiving_tds_mean_pred",
     "model_class": "baseline",
@@ -2350,6 +3519,13 @@
     "metric": "receiving_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.29850878712993534
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.29640111945068515
   },
   {
     "position": "WR",
@@ -2367,6 +3543,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.30905221123730914
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "receiving_tds_mean_pred",
     "model_class": "baseline",
@@ -2378,6 +3561,13 @@
     "metric": "receiving_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.30644123958087127
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.3093415108385282
   },
   {
     "position": "WR",
@@ -2395,6 +3585,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2929286791094277
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "receiving_tds_mean_pred",
     "model_class": "baseline",
@@ -2406,6 +3603,13 @@
     "metric": "receiving_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.27560494378330613
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2792018398117785
   },
   {
     "position": "RB",
@@ -2423,6 +3627,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2894296539470069
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "receiving_tds_rmse",
     "model_class": "baseline",
@@ -2434,6 +3645,13 @@
     "metric": "receiving_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.2766382871037284
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.27367449661800186
   },
   {
     "position": "RB",
@@ -2451,6 +3669,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.26657942980889726
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "receiving_tds_rmse",
     "model_class": "baseline",
@@ -2462,6 +3687,13 @@
     "metric": "receiving_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.25124314247354507
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.25175063828423516
   },
   {
     "position": "TE",
@@ -2479,6 +3711,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.46391297365130224
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "receiving_tds_rmse",
     "model_class": "baseline",
@@ -2490,6 +3729,13 @@
     "metric": "receiving_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.482648866537071
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.48283061773997493
   },
   {
     "position": "TE",
@@ -2507,6 +3753,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.44847436510366245
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "receiving_tds_rmse",
     "model_class": "baseline",
@@ -2518,6 +3771,13 @@
     "metric": "receiving_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.4231404275312682
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.423293391499037
   },
   {
     "position": "WR",
@@ -2535,6 +3795,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.5152686859371268
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "receiving_tds_rmse",
     "model_class": "baseline",
@@ -2546,6 +3813,13 @@
     "metric": "receiving_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.4840346929611773
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.48271692091724827
   },
   {
     "position": "WR",
@@ -2563,6 +3837,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.46970219868299384
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "receiving_tds_rmse",
     "model_class": "baseline",
@@ -2574,6 +3855,13 @@
     "metric": "receiving_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.5036057947307504
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.5053292927325149
   },
   {
     "position": "RB",
@@ -2591,6 +3879,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 13.357573379857568
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "receiving_yards_mae",
     "model_class": "baseline",
@@ -2602,6 +3897,13 @@
     "metric": "receiving_yards_mae",
     "model_class": "lightgbm",
     "value": 12.377075531283172
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 12.291368901773316
   },
   {
     "position": "RB",
@@ -2619,6 +3921,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 12.012681881271838
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "receiving_yards_mae",
     "model_class": "baseline",
@@ -2630,6 +3939,13 @@
     "metric": "receiving_yards_mae",
     "model_class": "lightgbm",
     "value": 11.788602061786072
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 11.817858220595358
   },
   {
     "position": "TE",
@@ -2647,6 +3963,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 17.153073428280354
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "receiving_yards_mae",
     "model_class": "baseline",
@@ -2658,6 +3981,13 @@
     "metric": "receiving_yards_mae",
     "model_class": "lightgbm",
     "value": 16.767585910167323
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 16.64544610548027
   },
   {
     "position": "TE",
@@ -2675,6 +4005,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 16.177380997484857
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "receiving_yards_mae",
     "model_class": "baseline",
@@ -2686,6 +4023,13 @@
     "metric": "receiving_yards_mae",
     "model_class": "lightgbm",
     "value": 17.061219084221396
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 16.979278120017497
   },
   {
     "position": "WR",
@@ -2703,6 +4047,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 24.24781632279755
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "receiving_yards_mae",
     "model_class": "baseline",
@@ -2714,6 +4065,13 @@
     "metric": "receiving_yards_mae",
     "model_class": "lightgbm",
     "value": 24.780203090522104
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 24.54700257646136
   },
   {
     "position": "WR",
@@ -2731,6 +4089,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 24.087159427911317
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "receiving_yards_mae",
     "model_class": "baseline",
@@ -2742,6 +4107,13 @@
     "metric": "receiving_yards_mae",
     "model_class": "lightgbm",
     "value": 23.640804468514233
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 23.627182168694002
   },
   {
     "position": "RB",
@@ -2759,6 +4131,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 16.132397777682353
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "receiving_yards_mean_pred",
     "model_class": "baseline",
@@ -2770,6 +4149,13 @@
     "metric": "receiving_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 15.553873585314292
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 15.686233643616381
   },
   {
     "position": "RB",
@@ -2787,6 +4173,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 15.162068312189477
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "receiving_yards_mean_pred",
     "model_class": "baseline",
@@ -2798,6 +4191,13 @@
     "metric": "receiving_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 14.403221200945113
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 14.856525974028136
   },
   {
     "position": "TE",
@@ -2815,6 +4215,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 27.345153937514286
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "receiving_yards_mean_pred",
     "model_class": "baseline",
@@ -2826,6 +4233,13 @@
     "metric": "receiving_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 25.62609378981421
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 26.082858839926455
   },
   {
     "position": "TE",
@@ -2843,6 +4257,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 26.865429324799813
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "receiving_yards_mean_pred",
     "model_class": "baseline",
@@ -2854,6 +4275,13 @@
     "metric": "receiving_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 25.70570250324561
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 26.133240216970062
   },
   {
     "position": "WR",
@@ -2871,6 +4299,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 41.38275252414017
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "receiving_yards_mean_pred",
     "model_class": "baseline",
@@ -2882,6 +4317,13 @@
     "metric": "receiving_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 41.37662945666016
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 41.54732468398037
   },
   {
     "position": "WR",
@@ -2899,6 +4341,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 40.14700587224309
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "receiving_yards_mean_pred",
     "model_class": "baseline",
@@ -2910,6 +4359,13 @@
     "metric": "receiving_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 40.367391744731925
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 40.941694588261946
   },
   {
     "position": "RB",
@@ -2927,6 +4383,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 18.06026606453128
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "receiving_yards_rmse",
     "model_class": "baseline",
@@ -2938,6 +4401,13 @@
     "metric": "receiving_yards_rmse",
     "model_class": "lightgbm",
     "value": 16.229496653479487
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 16.096002200954683
   },
   {
     "position": "RB",
@@ -2955,6 +4425,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 15.960202756534493
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "receiving_yards_rmse",
     "model_class": "baseline",
@@ -2966,6 +4443,13 @@
     "metric": "receiving_yards_rmse",
     "model_class": "lightgbm",
     "value": 15.508055636171052
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 15.429476043461776
   },
   {
     "position": "TE",
@@ -2983,6 +4467,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 23.09994490749428
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "receiving_yards_rmse",
     "model_class": "baseline",
@@ -2994,6 +4485,13 @@
     "metric": "receiving_yards_rmse",
     "model_class": "lightgbm",
     "value": 22.037244304626988
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 21.863636702237397
   },
   {
     "position": "TE",
@@ -3011,6 +4509,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 21.429875537667993
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "receiving_yards_rmse",
     "model_class": "baseline",
@@ -3022,6 +4527,13 @@
     "metric": "receiving_yards_rmse",
     "model_class": "lightgbm",
     "value": 22.651223263631437
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 22.466830421202058
   },
   {
     "position": "WR",
@@ -3039,6 +4551,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 31.45143409031368
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "receiving_yards_rmse",
     "model_class": "baseline",
@@ -3050,6 +4569,13 @@
     "metric": "receiving_yards_rmse",
     "model_class": "lightgbm",
     "value": 31.542647718429226
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 31.35197087270455
   },
   {
     "position": "WR",
@@ -3067,6 +4593,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 31.75356406603095
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "receiving_yards_rmse",
     "model_class": "baseline",
@@ -3078,6 +4611,13 @@
     "metric": "receiving_yards_rmse",
     "model_class": "lightgbm",
     "value": 30.985971657983153
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receiving_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 30.92221360223196
   },
   {
     "position": "RB",
@@ -3095,6 +4635,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.3594544800774908
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "receptions_mae",
     "model_class": "baseline",
@@ -3106,6 +4653,13 @@
     "metric": "receptions_mae",
     "model_class": "lightgbm",
     "value": 1.3191051326287597
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.3186470541325555
   },
   {
     "position": "RB",
@@ -3123,6 +4677,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.2537627673488767
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "receptions_mae",
     "model_class": "baseline",
@@ -3134,6 +4695,13 @@
     "metric": "receptions_mae",
     "model_class": "lightgbm",
     "value": 1.2060612868369858
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.2146488219738711
   },
   {
     "position": "TE",
@@ -3151,6 +4719,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.279520522927895
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "receptions_mae",
     "model_class": "baseline",
@@ -3162,6 +4737,13 @@
     "metric": "receptions_mae",
     "model_class": "lightgbm",
     "value": 1.29454879738216
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.2752556761516658
   },
   {
     "position": "TE",
@@ -3179,6 +4761,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.2468641293991314
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "receptions_mae",
     "model_class": "baseline",
@@ -3190,6 +4779,13 @@
     "metric": "receptions_mae",
     "model_class": "lightgbm",
     "value": 1.3797069104428956
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.3644676933212045
   },
   {
     "position": "WR",
@@ -3207,6 +4803,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.5820614227361087
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "receptions_mae",
     "model_class": "baseline",
@@ -3218,6 +4821,13 @@
     "metric": "receptions_mae",
     "model_class": "lightgbm",
     "value": 1.6340718355526713
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.627429650400027
   },
   {
     "position": "WR",
@@ -3235,6 +4845,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.5203662473386421
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "receptions_mae",
     "model_class": "baseline",
@@ -3246,6 +4863,13 @@
     "metric": "receptions_mae",
     "model_class": "lightgbm",
     "value": 1.5606661842273484
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receptions_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.5546610935815282
   },
   {
     "position": "RB",
@@ -3263,6 +4887,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.993381356113043
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "receptions_mean_pred",
     "model_class": "baseline",
@@ -3274,6 +4905,13 @@
     "metric": "receptions_mean_pred",
     "model_class": "lightgbm",
     "value": 1.9467651167143296
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.9715590671229501
   },
   {
     "position": "RB",
@@ -3291,6 +4929,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.9304754114741727
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "receptions_mean_pred",
     "model_class": "baseline",
@@ -3302,6 +4947,13 @@
     "metric": "receptions_mean_pred",
     "model_class": "lightgbm",
     "value": 1.8735615201788673
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.9035086239219052
   },
   {
     "position": "TE",
@@ -3319,6 +4971,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 2.481842392708719
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "receptions_mean_pred",
     "model_class": "baseline",
@@ -3330,6 +4989,13 @@
     "metric": "receptions_mean_pred",
     "model_class": "lightgbm",
     "value": 2.3684379793506665
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 2.389650800891655
   },
   {
     "position": "TE",
@@ -3347,6 +5013,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 2.4414521624248517
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "receptions_mean_pred",
     "model_class": "baseline",
@@ -3358,6 +5031,13 @@
     "metric": "receptions_mean_pred",
     "model_class": "lightgbm",
     "value": 2.406574486665929
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 2.4205390802392146
   },
   {
     "position": "WR",
@@ -3375,6 +5055,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 3.161763028236753
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "receptions_mean_pred",
     "model_class": "baseline",
@@ -3386,6 +5073,13 @@
     "metric": "receptions_mean_pred",
     "model_class": "lightgbm",
     "value": 3.2004437229062197
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 3.235034595345546
   },
   {
     "position": "WR",
@@ -3403,6 +5097,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 3.1071459526286946
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "receptions_mean_pred",
     "model_class": "baseline",
@@ -3414,6 +5115,13 @@
     "metric": "receptions_mean_pred",
     "model_class": "lightgbm",
     "value": 3.117853847158272
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receptions_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 3.142763817297064
   },
   {
     "position": "RB",
@@ -3431,6 +5139,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.7910470441562785
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "receptions_rmse",
     "model_class": "baseline",
@@ -3442,6 +5157,13 @@
     "metric": "receptions_rmse",
     "model_class": "lightgbm",
     "value": 1.7099519250088973
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.7025623257601836
   },
   {
     "position": "RB",
@@ -3459,6 +5181,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.6012360542050443
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "receptions_rmse",
     "model_class": "baseline",
@@ -3470,6 +5199,13 @@
     "metric": "receptions_rmse",
     "model_class": "lightgbm",
     "value": 1.5215377261663086
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.5221867519569228
   },
   {
     "position": "TE",
@@ -3487,6 +5223,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.6902902034925145
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "receptions_rmse",
     "model_class": "baseline",
@@ -3498,6 +5241,13 @@
     "metric": "receptions_rmse",
     "model_class": "lightgbm",
     "value": 1.7213803372070717
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.7028972537146838
   },
   {
     "position": "TE",
@@ -3515,6 +5265,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.703058472885983
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "receptions_rmse",
     "model_class": "baseline",
@@ -3526,6 +5283,13 @@
     "metric": "receptions_rmse",
     "model_class": "lightgbm",
     "value": 1.9092405100773504
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.894144781721291
   },
   {
     "position": "WR",
@@ -3543,6 +5307,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 2.0616564650372458
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "receptions_rmse",
     "model_class": "baseline",
@@ -3554,6 +5325,13 @@
     "metric": "receptions_rmse",
     "model_class": "lightgbm",
     "value": 2.102577869322431
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 2.0921994238452353
   },
   {
     "position": "WR",
@@ -3571,6 +5349,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 2.0021819798220806
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "receptions_rmse",
     "model_class": "baseline",
@@ -3582,6 +5367,13 @@
     "metric": "receptions_rmse",
     "model_class": "lightgbm",
     "value": 2.029770539355247
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "receptions_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 2.019693748761772
   },
   {
     "position": "QB",
@@ -3599,6 +5391,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.37128800478917856
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "rushing_tds_mae",
     "model_class": "baseline",
@@ -3610,6 +5409,13 @@
     "metric": "rushing_tds_mae",
     "model_class": "lightgbm",
     "value": 0.3791102243706239
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.3187658705924076
   },
   {
     "position": "QB",
@@ -3627,6 +5433,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.34838807326581417
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "rushing_tds_mae",
     "model_class": "baseline",
@@ -3638,6 +5451,13 @@
     "metric": "rushing_tds_mae",
     "model_class": "lightgbm",
     "value": 0.3241615054359683
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.32546636206867746
   },
   {
     "position": "RB",
@@ -3655,6 +5475,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.4210371941913242
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "rushing_tds_mae",
     "model_class": "baseline",
@@ -3666,6 +5493,13 @@
     "metric": "rushing_tds_mae",
     "model_class": "lightgbm",
     "value": 0.4321453914735864
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.4186253835569658
   },
   {
     "position": "RB",
@@ -3683,6 +5517,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.41596863556801933
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "rushing_tds_mae",
     "model_class": "baseline",
@@ -3694,6 +5535,13 @@
     "metric": "rushing_tds_mae",
     "model_class": "lightgbm",
     "value": 0.42498187655324743
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.4299687473837492
   },
   {
     "position": "TE",
@@ -3711,6 +5559,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.002912621359223301
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "rushing_tds_mae",
     "model_class": "baseline",
@@ -3722,6 +5577,13 @@
     "metric": "rushing_tds_mae",
     "model_class": "lightgbm",
     "value": 0.003822241492424877
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.003676470588235294
   },
   {
     "position": "TE",
@@ -3739,6 +5601,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "rushing_tds_mae",
     "model_class": "baseline",
@@ -3750,6 +5619,13 @@
     "metric": "rushing_tds_mae",
     "model_class": "lightgbm",
     "value": 0.005623920942594298
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.005550416281221091
   },
   {
     "position": "WR",
@@ -3767,6 +5643,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.012102865402538675
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "rushing_tds_mae",
     "model_class": "baseline",
@@ -3778,6 +5661,13 @@
     "metric": "rushing_tds_mae",
     "model_class": "lightgbm",
     "value": 0.011489717920166788
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.014380377081462318
   },
   {
     "position": "WR",
@@ -3795,6 +5685,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.013006612808252467
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "rushing_tds_mae",
     "model_class": "baseline",
@@ -3806,6 +5703,13 @@
     "metric": "rushing_tds_mae",
     "model_class": "lightgbm",
     "value": 0.009666597521002171
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_tds_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.010465042240210172
   },
   {
     "position": "QB",
@@ -3823,6 +5727,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2979483876915678
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "rushing_tds_mean_pred",
     "model_class": "baseline",
@@ -3834,6 +5745,13 @@
     "metric": "rushing_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.2975133203326551
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.22660871222228118
   },
   {
     "position": "QB",
@@ -3851,6 +5769,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.27216212956067704
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "rushing_tds_mean_pred",
     "model_class": "baseline",
@@ -3862,6 +5787,13 @@
     "metric": "rushing_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.23352694428683896
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2417873068757156
   },
   {
     "position": "RB",
@@ -3879,6 +5811,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.3081113646599695
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "rushing_tds_mean_pred",
     "model_class": "baseline",
@@ -3890,6 +5829,13 @@
     "metric": "rushing_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.31513683440228335
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.3132948353538218
   },
   {
     "position": "RB",
@@ -3907,6 +5853,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.31057132893732997
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "rushing_tds_mean_pred",
     "model_class": "baseline",
@@ -3918,6 +5871,13 @@
     "metric": "rushing_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.3013082446157877
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.31550846967754725
   },
   {
     "position": "TE",
@@ -3935,6 +5895,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "rushing_tds_mean_pred",
     "model_class": "baseline",
@@ -3946,6 +5913,13 @@
     "metric": "rushing_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.00014577090418958305
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0
   },
   {
     "position": "TE",
@@ -3963,6 +5937,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "rushing_tds_mean_pred",
     "model_class": "baseline",
@@ -3974,6 +5955,13 @@
     "metric": "rushing_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 7.350466137320621e-05
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0
   },
   {
     "position": "WR",
@@ -3991,6 +5979,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0011423390619162638
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "rushing_tds_mean_pred",
     "model_class": "baseline",
@@ -4002,6 +5997,13 @@
     "metric": "rushing_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.001139654150502338
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.004417422043091767
   },
   {
     "position": "WR",
@@ -4019,6 +6021,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0030931871559968112
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "rushing_tds_mean_pred",
     "model_class": "baseline",
@@ -4030,6 +6039,13 @@
     "metric": "rushing_tds_mean_pred",
     "model_class": "lightgbm",
     "value": 0.002483283137204407
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_tds_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.003274145061793121
   },
   {
     "position": "QB",
@@ -4047,6 +6063,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.4433327860221519
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "rushing_tds_rmse",
     "model_class": "baseline",
@@ -4058,6 +6081,13 @@
     "metric": "rushing_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.4593496267642164
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.4362913275490023
   },
   {
     "position": "QB",
@@ -4075,6 +6105,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.42683587310654164
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "rushing_tds_rmse",
     "model_class": "baseline",
@@ -4086,6 +6123,13 @@
     "metric": "rushing_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.4464233357750705
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.44379767197158776
   },
   {
     "position": "RB",
@@ -4103,6 +6147,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.5327962472514088
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "rushing_tds_rmse",
     "model_class": "baseline",
@@ -4114,6 +6165,13 @@
     "metric": "rushing_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.5349423537807437
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.525473738013178
   },
   {
     "position": "RB",
@@ -4131,6 +6189,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.5230333984216349
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "rushing_tds_rmse",
     "model_class": "baseline",
@@ -4142,6 +6207,13 @@
     "metric": "rushing_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.5490303437903752
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.5464775956306723
   },
   {
     "position": "TE",
@@ -4159,6 +6231,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.05396870722208659
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "rushing_tds_rmse",
     "model_class": "baseline",
@@ -4170,6 +6249,13 @@
     "metric": "rushing_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.060641864950943355
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.06063390625908324
   },
   {
     "position": "TE",
@@ -4187,6 +6273,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "rushing_tds_rmse",
     "model_class": "baseline",
@@ -4198,6 +6291,13 @@
     "metric": "rushing_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.11380383503727295
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.113802334434972
   },
   {
     "position": "WR",
@@ -4215,6 +6315,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.10919449203403164
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "rushing_tds_rmse",
     "model_class": "baseline",
@@ -4226,6 +6333,13 @@
     "metric": "rushing_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.10641587064515481
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.10848121939880946
   },
   {
     "position": "WR",
@@ -4243,6 +6357,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.10175146726029724
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "rushing_tds_rmse",
     "model_class": "baseline",
@@ -4254,6 +6375,13 @@
     "metric": "rushing_tds_rmse",
     "model_class": "lightgbm",
     "value": 0.08518935574581663
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_tds_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.08677981196976961
   },
   {
     "position": "QB",
@@ -4271,6 +6399,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 11.67468700108554
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "rushing_yards_mae",
     "model_class": "baseline",
@@ -4282,6 +6417,13 @@
     "metric": "rushing_yards_mae",
     "model_class": "lightgbm",
     "value": 13.154152578720112
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 13.16217009472601
   },
   {
     "position": "QB",
@@ -4299,6 +6441,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 11.724020161421578
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "rushing_yards_mae",
     "model_class": "baseline",
@@ -4310,6 +6459,13 @@
     "metric": "rushing_yards_mae",
     "model_class": "lightgbm",
     "value": 12.889396077783635
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 12.777143249652791
   },
   {
     "position": "RB",
@@ -4327,6 +6483,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 22.480567327543298
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "rushing_yards_mae",
     "model_class": "baseline",
@@ -4338,6 +6501,13 @@
     "metric": "rushing_yards_mae",
     "model_class": "lightgbm",
     "value": 22.820953980493677
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 22.788339859031865
   },
   {
     "position": "RB",
@@ -4355,6 +6525,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 21.117790618127696
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "rushing_yards_mae",
     "model_class": "baseline",
@@ -4366,6 +6543,13 @@
     "metric": "rushing_yards_mae",
     "model_class": "lightgbm",
     "value": 23.011679201646203
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 23.00048655335117
   },
   {
     "position": "TE",
@@ -4383,6 +6567,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.1333411177275894
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "rushing_yards_mae",
     "model_class": "baseline",
@@ -4394,6 +6585,13 @@
     "metric": "rushing_yards_mae",
     "model_class": "lightgbm",
     "value": 0.12822172259099252
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.14407183220619524
   },
   {
     "position": "TE",
@@ -4411,6 +6609,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.04983070492234734
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "rushing_yards_mae",
     "model_class": "baseline",
@@ -4422,6 +6627,13 @@
     "metric": "rushing_yards_mae",
     "model_class": "lightgbm",
     "value": 0.28870332587056524
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 0.2929575773549047
   },
   {
     "position": "WR",
@@ -4439,6 +6651,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 2.2798055716628127
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "rushing_yards_mae",
     "model_class": "baseline",
@@ -4450,6 +6669,13 @@
     "metric": "rushing_yards_mae",
     "model_class": "lightgbm",
     "value": 2.236604995765782
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 2.348635335444026
   },
   {
     "position": "WR",
@@ -4467,6 +6693,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 2.1410834101692466
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "rushing_yards_mae",
     "model_class": "baseline",
@@ -4478,6 +6711,13 @@
     "metric": "rushing_yards_mae",
     "model_class": "lightgbm",
     "value": 1.8526619165081581
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_yards_mae",
+    "model_class": "lightgbm-tuned",
+    "value": 1.8686493736060175
   },
   {
     "position": "QB",
@@ -4495,6 +6735,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 13.959035976282593
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "rushing_yards_mean_pred",
     "model_class": "baseline",
@@ -4506,6 +6753,13 @@
     "metric": "rushing_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 16.0555943811914
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 16.483467229170007
   },
   {
     "position": "QB",
@@ -4523,6 +6777,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 15.414772784945955
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "rushing_yards_mean_pred",
     "model_class": "baseline",
@@ -4534,6 +6795,13 @@
     "metric": "rushing_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 17.019720377873075
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 17.30212767488351
   },
   {
     "position": "RB",
@@ -4551,6 +6819,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 38.49822102866233
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "rushing_yards_mean_pred",
     "model_class": "baseline",
@@ -4562,6 +6837,13 @@
     "metric": "rushing_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 37.24463929352366
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 38.43055359527689
   },
   {
     "position": "RB",
@@ -4579,6 +6861,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 38.02910785582634
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "rushing_yards_mean_pred",
     "model_class": "baseline",
@@ -4590,6 +6879,13 @@
     "metric": "rushing_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 38.90374182482971
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 39.6761385580315
   },
   {
     "position": "TE",
@@ -4607,6 +6903,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0024012217209938578
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "rushing_yards_mean_pred",
     "model_class": "baseline",
@@ -4618,6 +6921,13 @@
     "metric": "rushing_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 0.00939981961352491
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.02673427963082971
   },
   {
     "position": "TE",
@@ -4635,6 +6945,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.0076476269503079316
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "rushing_yards_mean_pred",
     "model_class": "baseline",
@@ -4646,6 +6963,13 @@
     "metric": "rushing_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 0.0014204570712355595
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 0.007267333369565942
   },
   {
     "position": "WR",
@@ -4663,6 +6987,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.2862700739918191
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "rushing_yards_mean_pred",
     "model_class": "baseline",
@@ -4674,6 +7005,13 @@
     "metric": "rushing_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 1.2119734379151348
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.4420427426608562
   },
   {
     "position": "WR",
@@ -4691,6 +7029,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.306045094190808
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "rushing_yards_mean_pred",
     "model_class": "baseline",
@@ -4702,6 +7047,13 @@
     "metric": "rushing_yards_mean_pred",
     "model_class": "lightgbm",
     "value": 1.2537276354337021
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_yards_mean_pred",
+    "model_class": "lightgbm-tuned",
+    "value": 1.3327587836765076
   },
   {
     "position": "QB",
@@ -4719,6 +7071,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 16.982904330718494
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "rushing_yards_rmse",
     "model_class": "baseline",
@@ -4730,6 +7089,13 @@
     "metric": "rushing_yards_rmse",
     "model_class": "lightgbm",
     "value": 19.332210791124204
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 19.28379737198218
   },
   {
     "position": "QB",
@@ -4747,6 +7113,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 15.567144510409594
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "rushing_yards_rmse",
     "model_class": "baseline",
@@ -4758,6 +7131,13 @@
     "metric": "rushing_yards_rmse",
     "model_class": "lightgbm",
     "value": 17.501847115525884
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 17.407402557414905
   },
   {
     "position": "RB",
@@ -4775,6 +7155,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 29.358099728402408
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "rushing_yards_rmse",
     "model_class": "baseline",
@@ -4786,6 +7173,13 @@
     "metric": "rushing_yards_rmse",
     "model_class": "lightgbm",
     "value": 30.697641235169456
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 30.484061534872453
   },
   {
     "position": "RB",
@@ -4803,6 +7197,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 28.447948960798847
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "rushing_yards_rmse",
     "model_class": "baseline",
@@ -4814,6 +7215,13 @@
     "metric": "rushing_yards_rmse",
     "model_class": "lightgbm",
     "value": 30.657779099288184
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 30.523037924866692
   },
   {
     "position": "TE",
@@ -4831,6 +7239,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9203671587346478
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "rushing_yards_rmse",
     "model_class": "baseline",
@@ -4842,6 +7257,13 @@
     "metric": "rushing_yards_rmse",
     "model_class": "lightgbm",
     "value": 1.1957085154098865
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 1.1941085031247018
   },
   {
     "position": "TE",
@@ -4859,6 +7281,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 0.38669562336406116
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "rushing_yards_rmse",
     "model_class": "baseline",
@@ -4870,6 +7299,13 @@
     "metric": "rushing_yards_rmse",
     "model_class": "lightgbm",
     "value": 4.502311149302499
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 4.503528453143744
   },
   {
     "position": "WR",
@@ -4887,6 +7323,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 5.569494150033228
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "rushing_yards_rmse",
     "model_class": "baseline",
@@ -4898,6 +7341,13 @@
     "metric": "rushing_yards_rmse",
     "model_class": "lightgbm",
     "value": 5.576635970133203
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 5.559093954913064
   },
   {
     "position": "WR",
@@ -4915,6 +7365,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 4.984163727697951
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "rushing_yards_rmse",
     "model_class": "baseline",
@@ -4926,6 +7383,13 @@
     "metric": "rushing_yards_rmse",
     "model_class": "lightgbm",
     "value": 3.9259076758391522
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "rushing_yards_rmse",
+    "model_class": "lightgbm-tuned",
+    "value": 3.9495457745097937
   },
   {
     "position": "QB",
@@ -5167,6 +7631,13 @@
   },
   {
     "position": "QB",
+    "year": 2021,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9504985552520908
+  },
+  {
+    "position": "QB",
     "year": 2022,
     "metric": "spearman_topN",
     "model_class": "baseline",
@@ -5178,6 +7649,13 @@
     "metric": "spearman_topN",
     "model_class": "lightgbm",
     "value": 0.9655374887082204
+  },
+  {
+    "position": "QB",
+    "year": 2022,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9668021680216802
   },
   {
     "position": "QB",
@@ -5195,6 +7673,13 @@
   },
   {
     "position": "QB",
+    "year": 2023,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9575867170803879
+  },
+  {
+    "position": "QB",
     "year": 2024,
     "metric": "spearman_topN",
     "model_class": "baseline",
@@ -5206,6 +7691,13 @@
     "metric": "spearman_topN",
     "model_class": "lightgbm",
     "value": 0.9449688651544412
+  },
+  {
+    "position": "QB",
+    "year": 2024,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9460215039284833
   },
   {
     "position": "RB",
@@ -5223,6 +7715,13 @@
   },
   {
     "position": "RB",
+    "year": 2021,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.96112963678181
+  },
+  {
+    "position": "RB",
     "year": 2022,
     "metric": "spearman_topN",
     "model_class": "baseline",
@@ -5234,6 +7733,13 @@
     "metric": "spearman_topN",
     "model_class": "lightgbm",
     "value": 0.9603349745792759
+  },
+  {
+    "position": "RB",
+    "year": 2022,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9674403263739149
   },
   {
     "position": "RB",
@@ -5251,6 +7757,13 @@
   },
   {
     "position": "RB",
+    "year": 2023,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9633669661435708
+  },
+  {
+    "position": "RB",
     "year": 2024,
     "metric": "spearman_topN",
     "model_class": "baseline",
@@ -5262,6 +7775,13 @@
     "metric": "spearman_topN",
     "model_class": "lightgbm",
     "value": 0.9745998239960214
+  },
+  {
+    "position": "RB",
+    "year": 2024,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.976254213606645
   },
   {
     "position": "TE",
@@ -5279,6 +7799,13 @@
   },
   {
     "position": "TE",
+    "year": 2021,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9616718313649139
+  },
+  {
+    "position": "TE",
     "year": 2022,
     "metric": "spearman_topN",
     "model_class": "baseline",
@@ -5290,6 +7817,13 @@
     "metric": "spearman_topN",
     "model_class": "lightgbm",
     "value": 0.9605789031702022
+  },
+  {
+    "position": "TE",
+    "year": 2022,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9620843823669482
   },
   {
     "position": "TE",
@@ -5307,6 +7841,13 @@
   },
   {
     "position": "TE",
+    "year": 2023,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.974290089296541
+  },
+  {
+    "position": "TE",
     "year": 2024,
     "metric": "spearman_topN",
     "model_class": "baseline",
@@ -5318,6 +7859,13 @@
     "metric": "spearman_topN",
     "model_class": "lightgbm",
     "value": 0.9567975122060691
+  },
+  {
+    "position": "TE",
+    "year": 2024,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9581543615623677
   },
   {
     "position": "WR",
@@ -5335,6 +7883,13 @@
   },
   {
     "position": "WR",
+    "year": 2021,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9650931537236498
+  },
+  {
+    "position": "WR",
     "year": 2022,
     "metric": "spearman_topN",
     "model_class": "baseline",
@@ -5346,6 +7901,13 @@
     "metric": "spearman_topN",
     "model_class": "lightgbm",
     "value": 0.9670471720030338
+  },
+  {
+    "position": "WR",
+    "year": 2022,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9690488296040184
   },
   {
     "position": "WR",
@@ -5363,6 +7925,13 @@
   },
   {
     "position": "WR",
+    "year": 2023,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9628302386072736
+  },
+  {
+    "position": "WR",
     "year": 2024,
     "metric": "spearman_topN",
     "model_class": "baseline",
@@ -5374,5 +7943,12 @@
     "metric": "spearman_topN",
     "model_class": "lightgbm",
     "value": 0.9669394212565381
+  },
+  {
+    "position": "WR",
+    "year": 2024,
+    "metric": "spearman_topN",
+    "model_class": "lightgbm-tuned",
+    "value": 0.9673087239079234
   }
 ]
