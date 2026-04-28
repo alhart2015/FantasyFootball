@@ -116,14 +116,20 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        choices=["baseline", "lightgbm", "both"],
+        choices=["baseline", "lightgbm", "lightgbm-tuned", "both", "all"],
         default="both",
-        help="Which model class(es) to run. 'both' runs Model A and Model C side-by-side.",
+        help=(
+            "Which model class(es) to run. "
+            "'both' = Model A + Model C (legacy default). "
+            "'all' = Model A + Model C + Model C-tuned."
+        ),
     )
     args = parser.parse_args()
 
     if args.model == "both":
         model_classes: tuple[str, ...] = ("baseline", "lightgbm")
+    elif args.model == "all":
+        model_classes = ("baseline", "lightgbm", "lightgbm-tuned")
     else:
         model_classes = (args.model,)
 
