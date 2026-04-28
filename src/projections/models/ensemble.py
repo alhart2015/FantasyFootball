@@ -35,6 +35,10 @@ from projections.distributions import (
     unpack_per_stat_params,
 )
 from projections.distributions.base import Distribution
+from projections.distributions.mixture import (
+    _bracket_for_components,
+    _quantile_with_bracket,
+)
 from projections.models.base import compute_code_hash
 from projections.models.baseline import (
     BaselineModel,
@@ -122,12 +126,21 @@ def _fit_weight_for_stat(
         )
         return 0.5
 
+    # Pre-compute per-row brackets — invariant in w. Saves ~4 component-quantile
+    # calls per row per outer brent iteration; with ~50 outer iterations x N
+    # rows x 2 quantiles, this is the dominant cost in the loss closure.
+    brackets: list[tuple[float, float]] = [
+        _bracket_for_components(a, b) for a, b in zip(components_a, components_b, strict=True)
+    ]
+
     def loss(w: float) -> float:
         total = 0.0
-        for a_dist, b_dist, actual in zip(components_a, components_b, actuals, strict=True):
+        for a_dist, b_dist, actual, (lo, hi) in zip(
+            components_a, components_b, actuals, brackets, strict=True
+        ):
             mix = MixtureDistribution(component_a=a_dist, component_b=b_dist, weight=w)
             for q in _QUANTILES_FOR_FIT:
-                q_pred = mix.quantile(q)
+                q_pred = _quantile_with_bracket(mix, q, lo, hi)
                 total += _pinball(float(actual), q_pred, q)
         return total
 

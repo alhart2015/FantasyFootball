@@ -70,37 +70,11 @@ class MixtureDistribution:
     def quantile(self, q: float) -> float:
         if not (0.0 < q < 1.0):
             raise ValueError(f"q must lie strictly in (0, 1), got {q}")
-
         # Build a bracket [lo, hi] guaranteed to contain the q-quantile.
         # Distribution Protocol guarantees quantile(q) is finite for q in (0, 1),
         # so unconditional calls are safe.
-        a_low = self.component_a.quantile(_QUANTILE_EPS)
-        a_high = self.component_a.quantile(1.0 - _QUANTILE_EPS)
-        b_low = self.component_b.quantile(_QUANTILE_EPS)
-        b_high = self.component_b.quantile(1.0 - _QUANTILE_EPS)
-
-        lo = min(a_low, b_low) - _BRACKET_PADDING
-        hi = max(a_high, b_high) + _BRACKET_PADDING
-
-        # cdf is non-decreasing, so brentq on cdf(x) - q is well-defined --
-        # provided q lies inside the joint support of the mixture. Children
-        # whose cdf clamps (e.g., QuantileDistribution clamping at qs[0]) can
-        # produce a mixture cdf that does not reach 0 or 1 at the bracket
-        # endpoints. Raise explicitly in that case rather than silently
-        # returning the endpoint.
-        f_lo = self.cdf(lo) - q
-        f_hi = self.cdf(hi) - q
-        if f_lo > 0.0:
-            raise ValueError(
-                f"q={q} lies below joint support of mixture: cdf(lo={lo:.6g})={f_lo + q:.6g} "
-                "(can happen when both children's cdfs clamp at a common minimum)"
-            )
-        if f_hi < 0.0:
-            raise ValueError(
-                f"q={q} lies above joint support of mixture: cdf(hi={hi:.6g})={f_hi + q:.6g} "
-                "(can happen when both children's cdfs clamp at a common maximum)"
-            )
-        return float(brentq(lambda x: self.cdf(x) - q, lo, hi, xtol=1e-9, rtol=1e-9))
+        lo, hi = _bracket_for_components(self.component_a, self.component_b)
+        return _quantile_with_bracket(self, q, lo, hi)
 
     def sample(self, n: int, rng: np.random.Generator | None = None) -> NDArray[np.float64]:
         rng = rng if rng is not None else np.random.default_rng()
@@ -114,3 +88,55 @@ class MixtureDistribution:
         if n_b > 0:
             out[~use_a] = self.component_b.sample(n=n_b, rng=rng)
         return out
+
+
+def _bracket_for_components(
+    component_a: Distribution, component_b: Distribution
+) -> tuple[float, float]:
+    """Compute [lo, hi] bracket for any mixture of these two components,
+    invariant in the mixture weight. Used by callers that build many
+    mixtures over the same components with varying weights (e.g., the
+    pinball weight optimizer)."""
+    a_low = component_a.quantile(_QUANTILE_EPS)
+    a_high = component_a.quantile(1.0 - _QUANTILE_EPS)
+    b_low = component_b.quantile(_QUANTILE_EPS)
+    b_high = component_b.quantile(1.0 - _QUANTILE_EPS)
+    return (
+        min(a_low, b_low) - _BRACKET_PADDING,
+        max(a_high, b_high) + _BRACKET_PADDING,
+    )
+
+
+def _quantile_with_bracket(mix: MixtureDistribution, q: float, lo: float, hi: float) -> float:
+    """Inverse of cdf at q given a pre-computed bracket [lo, hi].
+
+    Caller is responsible for ensuring the bracket spans the support of the
+    mixture's combined cdf. Used by EnsembleModel weight fitting to avoid
+    re-deriving brackets on every optimizer iteration; for the standalone
+    quantile() method, the bracket is computed inline from the children's
+    quantiles. Both paths share the same brentq root-finder afterwards.
+
+    Raises ValueError if q lies outside the joint support represented by
+    the bracket (cdf(lo) > q or cdf(hi) < q).
+    """
+    if not (0.0 < q < 1.0):
+        raise ValueError(f"q must lie strictly in (0, 1), got {q}")
+    # cdf is non-decreasing, so brentq on cdf(x) - q is well-defined --
+    # provided q lies inside the joint support of the mixture. Children
+    # whose cdf clamps (e.g., QuantileDistribution clamping at qs[0]) can
+    # produce a mixture cdf that does not reach 0 or 1 at the bracket
+    # endpoints. Raise explicitly in that case rather than silently
+    # returning the endpoint.
+    f_lo = mix.cdf(lo) - q
+    f_hi = mix.cdf(hi) - q
+    if f_lo > 0.0:
+        raise ValueError(
+            f"q={q} lies below joint support of mixture: cdf(lo={lo:.6g})={f_lo + q:.6g} "
+            "(can happen when both children's cdfs clamp at a common minimum)"
+        )
+    if f_hi < 0.0:
+        raise ValueError(
+            f"q={q} lies above joint support of mixture: cdf(hi={hi:.6g})={f_hi + q:.6g} "
+            "(can happen when both children's cdfs clamp at a common maximum)"
+        )
+    return float(brentq(lambda x: mix.cdf(x) - q, lo, hi, xtol=1e-9, rtol=1e-9))

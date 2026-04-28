@@ -335,8 +335,14 @@ def _fit_ensemble_weights(
 
 
 def _pinball(actual: float, q_pred: float, q: float) -> float:
-    """Standard quantile pinball loss."""
-    return max((q - 1.0) * (q_pred - actual), q * (q_pred - actual))
+    """Standard quantile pinball loss.
+
+    pinball(y, q_pred, q) = max(q * (y - q_pred), (q - 1) * (y - q_pred))
+                          = q * (y - q_pred) when y >= q_pred (under-estimate)
+                          = (1 - q) * (q_pred - y) when y < q_pred (over-estimate)
+    """
+    diff = actual - q_pred
+    return max(q * diff, (q - 1.0) * diff)
 ```
 
 Compute per cell: ~50 outer brent iterations × N_rows × 2 quantiles × ~30 inner brentq iterations × analytic CDF eval ≈ a few seconds. 24 cells × 4 folds ≈ 5 minutes total weight-fitting overhead per backtest run.
