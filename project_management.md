@@ -4,6 +4,50 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 7 — Calibration-aware NB-2 fitting (Model C-NB-cal) — STOPPED at Phase 0 (2026-04-28)
+
+**Verdict:** stop the plan. Spec premise was misaligned with empirical reality. Phase 0 ships as research output; Phase 1+ unexecuted. Branch `feat/plan-7-calibration-aware-nb` proposed for merge with just the diagnostic CLI + spec + plan + research note (record-of-decision). Filed TODO #30 for the right follow-up plan.
+
+### What happened
+
+Plan 7's spec assumed Plan 5c's "NB-2 distribution too narrow at the [p10, p90] tails" claim mapped directly to per-stat NB-2 distributions being too narrow at p10/p90. The Phase 0 diagnostic measured per-stat empirical [p10, p90] coverage on Plan 5c's C-NB output and showed the opposite: count NB-2 distributions are *over*-covering at [p10, p90] by ~16pp (mean gap **-0.169**; range -0.188 to -0.154 across all 16 cells). Yards distributions are well-calibrated (mean gap **+0.011**).
+
+Pinball-loss fitting at q=0.10 / q=0.90 — Plan 7's exact mechanism — would tighten count distributions toward 0.80 nominal, which is the opposite direction needed to close the composite [p10, p90] coverage gap (-0.062 mean vs A). The composite gap mechanism lives in **upper-tail behavior beyond p90** — outside what Plan 7's loss function targets.
+
+### Why per-stat over-coverage coexists with composite under-coverage
+
+For low-mean count NB-2 (μ ≈ 0.4 typical for RB receiving_tds), discrete support concentrates ~95% of mass at {0, 1}, so the predicted [p10, p90] = [0, 1] trivially over-covers at the 80% nominal. The thin upper tail (P(X≥2) ≈ 0.05 model vs ~7-10% empirical) is what Plan 5c described as "too narrow" — the wording is imprecise; the narrowness is at p95-p99, not at p10/p90. Composite [p10, p90] under-coverage comes from upper-tail count outliers (TD weight × 6 = 12-18 fp jumps) exceeding composite p90 set by yards width.
+
+Per-stat coverage at [p10, p90] does NOT decompose to composite coverage at [p10, p90] — convolution behavior at the central interval is dominated by the wider distribution's mean shift, not by the narrower distribution's own [p10, p90] coverage.
+
+### Diagnostic CLI ships as reusable research output
+
+`scripts/diagnose_calibration_breakdown.py` reads any per-row backtest parquet, filters by `model_id` prefix, and emits a per-(position, year) CSV decomposing per-stat coverage. It can be re-pointed at any future model-class output. 8 unit tests; mypy / ruff clean.
+
+### What was missed at scoping
+
+1. Trusted Plan 5c's mechanism statement without empirically checking it. A two-line python check at scoping would have caught the per-stat-over-coverage finding.
+2. Per-stat coverage doesn't decompose composite coverage (convolution effect). The right diagnostic was counterfactual replacement (swap count distributions for A's; re-sample composite; measure closure). Shipped diagnostic measures a related-but-not-identical quantity that happens to surface the right verdict.
+3. Missed the discreteness math: at μ ≈ 0.4, NB-2 mass at {0,1} trivially over-covers any [p10, p90] band at 80% nominal. Mechanical, catchable in 5 minutes.
+
+Cost of getting it wrong: ~30 min conversation + 10 min compute. Cheap vs. building Phase 1 + Phase 2 and discovering empirically.
+
+### Per-cell breakdown
+
+Pasted into the research note: `docs/superpowers/research/2026-04-28-calibration-breakdown.md`.
+
+### Next action
+
+The composite calibration shortfall remains the binding constraint. Three candidate follow-up tracks (TODO #30 captures all three):
+
+1. **Pinball-loss dispersion fit at upper-tail quantiles** (q=0.90, q=0.95 or q=0.95 only). Same machinery as Plan 7; right mechanism for the actual gap location.
+2. **ZIP (zero-inflated Poisson) for count cells.** Handles zero mass + thin tail decoupled rather than via NB-2's single overdispersion knob. Fundamental family change.
+3. **Mixture model: point mass at 0 + heavier-tailed integer distribution.** Most flexible, most code; defer until 1 and 2 are tried.
+
+Or: accept the calibration shortfall as a known limitation and pivot to feature-class tracks (TODO #3, TODO #23) or Plan 6 (ensemble) instead. None of the planned downstream consumers (Draft Hub, start/sit, DFS) actually depend on a perfectly calibrated [p10, p90] — they consume mean and rank. Plan 5c PM already framed this as acceptable.
+
+---
+
 ## Plan 5c — Hybrid LightGBM with NB-2 for Count Stats (Model C-NB) — shipped (run 2026-04-28)
 
 **Closes:** the count-stat-bias mechanism identified in Plan 5b's diagnostic. Model C-NB strictly dominates Model C-tuned on RMSE (16/16 cells better) but still fails Model A's adoption gate — the gap moved from "tuning regression" to "calibration regression."
@@ -952,23 +996,31 @@ are a clean win across all metrics; RB/TE/WR get RMSE wins paired with 6-12 pp
 [p10,p90] coverage regressions because NB-2 dispersion fit on training
 residuals under-disperses on held-out years.
 
-Three remaining model-improvement tracks, any of which is a plausible next session:
+**Update 2026-04-28 (post-Plan-7):** Plan 7 (calibration-aware NB-2 fitting at
+p10/p90) was attempted and stopped at Phase 0 — the diagnostic showed per-stat
+NB-2 count distributions are over-covering at p10/p90 (gap mean -0.169), not
+under-covering as the spec assumed. Pinball fit at p10/p90 would narrow them,
+opposite the direction needed for the composite gap. Composite gap mechanism
+lives in upper-tail (p95+) behavior. See the Plan 7 entry above and TODO #30.
+
+Two remaining model-improvement tracks (with Plan 7's correct successor split out):
 
 1. **Plan 6 — Model D ensemble.** Stack of (Model A, Model C-NB) per
    (position, stat) with calibration-aware weighting. Cheapest given Plan 5c's
    infrastructure; covers the case where C-NB's mean-prediction wins on QB
    and Model A's calibration wins on RB/TE/WR. Most promising single-shot win
    given the per-position split observed in 5c.
-2. **Calibration-aware NB-2 fitting.** Fit dispersion to minimize p10/p90
-   pinball loss directly rather than maximize residual likelihood. Preserves
-   C-NB's RMSE wins; targets the calibration regression directly.
+2. **TODO #30 — Upper-tail count calibration.** Three candidate mechanisms
+   (pinball at q=0.95; ZIP family; mixture model) — one of them is what Plan 7
+   should have been if scoped right. Targets the actual gap location. Plan 7's
+   diagnostic CLI is reusable.
 3. **TODO #3 (PBP / EPA features)** + **TODO #23 (target decomposition)** —
    feature-class tracks. Independent of model class. Estimated 5-15% RMSE
    win on top of any model.
 
 Followup housekeeping (low-priority): Model C-tuned is now strictly dominated
 by Model C-NB on RMSE — file a pruning TODO to drop Tuned from the dispatch
-table once C-NB has a few more weeks of soak time.
+table once C-NB has a few more weeks of soak time. (See TODO #29.)
 
 Pick one in the next session. After model-improvement work: Plan 4 (public
 API + CLI verbs + free-tier hosting), then Draft Hub.
