@@ -46,7 +46,7 @@ def test_backtest_smoke_one_cell() -> None:
         held_out_years=[2024],
         positions=[Position.WR],
         train_start=2018,
-        model_classes=("baseline", "lightgbm", "lightgbm-tuned"),
+        model_classes=("baseline", "lightgbm", "lightgbm-tuned", "lightgbm-nb"),
         features_root=_FEATURES_ROOT,
         raw_root=_RAW_ROOT,
     )
@@ -55,7 +55,12 @@ def test_backtest_smoke_one_cell() -> None:
     # Plan 5 Task 12: metrics now carry `model_class`.
     assert set(out.metrics.columns) == {"position", "year", "metric", "model_class", "value"}
     # Plan 5 Task 14: both models ran for the cell.
-    assert set(out.metrics["model_class"].unique()) == {"baseline", "lightgbm", "lightgbm-tuned"}
+    assert set(out.metrics["model_class"].unique()) == {
+        "baseline",
+        "lightgbm",
+        "lightgbm-tuned",
+        "lightgbm-nb",
+    }
     # Exactly one (position, year) cell.
     assert sorted(out.metrics["position"].unique().tolist()) == ["WR"]
     assert sorted(out.metrics["year"].unique().tolist()) == [2024]
@@ -85,7 +90,7 @@ def test_backtest_smoke_one_cell() -> None:
         "spearman_topN",
         "calibration_p10p90",
     }
-    for model_class in ("baseline", "lightgbm", "lightgbm-tuned"):
+    for model_class in ("baseline", "lightgbm", "lightgbm-tuned", "lightgbm-nb"):
         per_model = out.metrics[out.metrics["model_class"] == model_class]
         per_model_metrics = set(per_model["metric"].unique())
         missing = core_metrics - per_model_metrics
@@ -134,4 +139,15 @@ def test_backtest_smoke_one_cell() -> None:
     assert tuned_season_rows.empty, (
         "lightgbm-tuned is not expected to emit season_calibration_* rows yet; "
         f"got: {tuned_season_rows.to_dict('records')}"
+    )
+
+    # Plan 5c: lightgbm-nb emits family=MIXED rows which (like SAMPLED_SUMMARY-vs-non
+    # gate today) are skipped by aggregate_to_season. TODO #28 widening still open.
+    nb_metrics = out.metrics[out.metrics["model_class"] == "lightgbm-nb"]
+    nb_season_rows = nb_metrics[
+        nb_metrics["metric"].isin(["season_calibration_p10p90", "season_calibration_le_p90"])
+    ]
+    assert nb_season_rows.empty, (
+        "lightgbm-nb is not expected to emit season_calibration_* rows yet; "
+        f"got: {nb_season_rows.to_dict('records')}"
     )
