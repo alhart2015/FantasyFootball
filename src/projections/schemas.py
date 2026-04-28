@@ -152,6 +152,7 @@ class DistributionFamily(StrEnum):
     SAMPLED = "SAMPLED"  # explicit sample array
     SAMPLED_SUMMARY = "SAMPLED_SUMMARY"  # per-stat dist params + summary in mean/p10/p50/p90
     QUANTILE = "QUANTILE"  # NEW (Plan 5) — Model C (LightGBM quantile regression)
+    MIXED = "MIXED"  # NEW (Plan 5c) — per-row distribution mixes families per stat
 
 
 class Stat(StrEnum):

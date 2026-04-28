@@ -236,9 +236,9 @@ Wind especially tanks passing efficiency (rule of thumb: >20mph wind drops passi
 
 Small feature add; likely small but real win on a subset of games. Same plan slot as TODO #24 (player-trajectory) — both are quick adds inside existing builders.
 
-### 26. Plan 5 / 5b — LightGBM with quantile regression (Model C / C-tuned) — closed in Plan 5 + Plan 5b
+### 26. Plan 5 / 5b / 5c — LightGBM with quantile regression and NB-2 hybrid (Model C / C-tuned / C-NB) — closed in Plan 5 + 5b + 5c
 
-Closed 2026-04-27 (Plan 5) and 2026-04-28 (Plan 5b).
+Closed 2026-04-27 (Plan 5), 2026-04-28 (Plan 5b), 2026-04-28 (Plan 5c).
 
 **Plan 5 (Model C):** Per-stat sub-models trained at quantiles [0.05, 0.10, 0.50, 0.90, 0.95];
 new QuantileDistribution + codec branch; POSITION_DISPATCH.factories dict;
@@ -256,10 +256,41 @@ QB cells now strictly dominate A. Hyperparameter tuning cannot address the
 per-stat-sub-model "no shared prior" mechanism that drives the residual gap
 on RB / TE / WR.
 
-Model A stays the production default. **No Plan 5c filed.** Model C and
-Model C-tuned infrastructure preserved for Plan 6 (ensemble) or a future
-multi-output / shared-prior plan. See project_management.md for the per-cell
-A vs C vs C-tuned comparison table and detailed analysis.
+**Plan 5c (Model C-NB):** `LightGBMNbModel` subclass overriding only count-stat
+training and prediction; yards stats inherited unchanged from
+`LightGBMTunedModel`. For the 13 zero-inflated count cells (`*_tds`,
+`interceptions`, `fumbles_lost` × per-position target_stats), trains one
+`lgb.LGBMRegressor(objective="poisson")` per stat using Plan 5b's tuned
+hyperparameters; reads predicted mu directly from `regressor.predict(X)`
+(lgb's poisson predict returns mean in original scale, no `np.exp`); fits
+NB-2 dispersion via `nb_dispersion_from_residuals` on training residuals;
+predicts via `ParametricNegativeBinomial`. Per-row family is `MIXED`.
+Snapshot extended (1136 → 1504 rows). **Adoption verdict: also failed all
+three §1.3 criteria** — but RMSE moved further: NB strictly dominates Tuned
+on 16/16 cells; NB beats A on 11/16 (vs Tuned's 4/16); max worse vs A is
++1.69% (vs Tuned's +2.95%). The mean-prediction fix Plan 5b's diagnostic
+predicted worked. Calibration regression carried over essentially unchanged
+(NB mean delta -0.062 vs Tuned -0.063); the binding constraint is now
+calibration, not mean. **QB cells cleanly beat A on every metric** (4/4
+RMSE wins, mean calib +0.012, all Spearman within ±0.005); RB/TE/WR show
+the same pattern of RMSE-win-paired-with-calib-regression because NB-2
+dispersion fitted on training residuals under-disperses on held-out years
+where target variance exceeds the training-fit dispersion.
+
+Model A stays the production default. Model C / C-tuned / C-NB all ship as
+peers; none is adopted. **Model C-NB strictly dominates Model C-tuned on
+RMSE** — Tuned can be pruned once C-NB has soak time. Infrastructure for
+all three preserved. See project_management.md for the per-cell A vs C vs
+C-tuned vs C-NB comparison table and detailed analysis.
+
+**Next experiments (per project_management.md "Next action"):**
+1. Plan 6 — ensemble of A + C-NB with calibration-aware weighting (most
+   promising given the per-position split: C-NB's QB win + A's RB/TE/WR
+   calibration advantage are exactly what an ensemble exploits).
+2. Calibration-aware NB-2 fitting (fit dispersion to optimize p10/p90
+   pinball loss directly; preserves C-NB's RMSE wins).
+3. Feature-class tracks: TODO #3 (PBP / EPA features), TODO #23 (target
+   decomposition).
 
 ### 27. Revisit Model Protocol shape (Fitted vs base separation)
 
@@ -280,7 +311,7 @@ Revisit when Plan 6 (EnsembleModel) lands — that's the natural moment to redes
 the Protocol surface as more model classes need to share the contract. Until then,
 the `cast()` pattern in CLI scripts is the trade-off accepted.
 
-### 28. Widen aggregate_to_season to accept QUANTILE family
+### 28. Widen aggregate_to_season to accept QUANTILE / MIXED family
 
 Surfaced in Plan 5 Task 12. The harness gates season-aggregation on
 `(predictions["family"] == SAMPLED_SUMMARY).all()`, so LightGBM cells skip
@@ -290,5 +321,36 @@ inverse-CDF sampling already works (Monte Carlo via `score_distribution`
 uses the Distribution Protocol's `.sample()`). Only the explicit
 family-restriction guard at the top of `aggregate_to_season` blocks reuse.
 
-Land alongside Plan 5b or Plan 6 to give Model C complete metric coverage
-(would add 32 rows to model_metrics.json).
+Plan 5c (Model C-NB) extends the asymmetry to the `MIXED` family — every
+NB row's per-stat distributions are NB-2 / QuantileDistribution mixtures
+encoded inside the params blob; `unpack_per_stat_params` would already
+return mixture-aware Distribution instances ready for sampling. Same
+single-line guard widening covers both QUANTILE and MIXED.
+
+Land alongside Plan 6 to give Model C / Model C-tuned / Model C-NB
+complete metric coverage (would add ~96 rows to model_metrics.json:
+32 each for QUANTILE, QUANTILE-tuned, MIXED).
+
+### 29. Prune Model C-tuned from POSITION_DISPATCH (deferred until Model C-NB soaks)
+
+Surfaced in Plan 5c (2026-04-28). Model C-NB strictly dominates Model
+C-tuned on RMSE (16/16 cells) and is mostly equivalent on calibration
+(NB +0.0013 mean delta vs Tuned). Tuned has no remaining advantage over
+NB and is therefore pruning candidate.
+
+Concrete tasks (when ready):
+- Drop `"lightgbm-tuned"` from each `_<POS>_FACTORIES` dict in
+  `src/projections/models/__init__.py`.
+- Remove `LightGBMTunedModel` factories from `__all__` (the class itself
+  can stay — `LightGBMNbModel` subclasses it).
+- Delete or migrate Plan 5b backtest snapshot rows under
+  `model_class="lightgbm-tuned"` from `tests/backtest/model_metrics.json`
+  (368 rows; backtest gate would shrink to 1136 rows).
+- Update `scripts/backtest.py --model all` to expand to 3 classes
+  (`baseline`, `lightgbm`, `lightgbm-nb`) instead of 4.
+- Possibly drop Model C (untuned) too — it's strictly dominated by both
+  Tuned (Plan 5b verdict) and NB (Plan 5c verdict). Decide together.
+
+Defer until Plan 6 (ensemble) lands and we're confident which model
+classes the ensemble references — then prune dead classes in the same
+housekeeping commit.

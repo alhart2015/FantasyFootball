@@ -27,6 +27,7 @@ def test_distribution_family_options() -> None:
         "SAMPLED",
         "SAMPLED_SUMMARY",
         "QUANTILE",
+        "MIXED",
     }
 
 

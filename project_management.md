@@ -4,6 +4,112 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 5c — Hybrid LightGBM with NB-2 for Count Stats (Model C-NB) — shipped (run 2026-04-28)
+
+**Closes:** the count-stat-bias mechanism identified in Plan 5b's diagnostic. Model C-NB strictly dominates Model C-tuned on RMSE (16/16 cells better) but still fails Model A's adoption gate — the gap moved from "tuning regression" to "calibration regression."
+
+`LightGBMNbModel` (Model C-NB) lands as a fourth peer of Models A, C, C-tuned. Subclasses `LightGBMTunedModel`; for the 13 count cells Plan 3e routes through NB-2 in Ridge (`passing_tds`/`rushing_tds`/`receiving_tds`/`interceptions`/`fumbles_lost` × per-position target_stats), trains one `lgb.LGBMRegressor(objective="poisson")` per stat, fits NB-2 dispersion via the public `nb_dispersion_from_residuals` (relocated from `models/baseline.py` to `distributions/parametric.py` in Phase 0), and predicts via `ParametricNegativeBinomial(mu, dispersion)`. Yards/receptions stats unchanged from Model C-tuned (5-quantile + `QuantileDistribution`). Reuses Plan 5b's tuned hyperparameters from `data/tuned_params/lightgbm.json`. Per-row family is `MIXED`; per-stat families remain encoded inside the params blob via the existing codec.
+
+Snapshot extended 1136 → 1504 rows (368 new lightgbm-nb rows; the 32 `season_calibration_*` rows are skipped by the SAMPLED_SUMMARY-only family gate, TODO #28 still open).
+
+### Per-position model_ids
+
+| Position | Model A | Model C | Model C-tuned | Model C-NB |
+|---|---|---|---|---|
+| WR | `baseline:wr:6d955427:2018-2023` | `lightgbm:wr:a4dd5a82:2018-2023` | `lightgbm-tuned:wr:62df14ad:2018-2023` | `lightgbm-nb:wr:dc445a2d:2018-2023` |
+| QB | `baseline:qb:c98738f3:2018-2023` | `lightgbm:qb:06fadb3f:2018-2023` | `lightgbm-tuned:qb:fc902ed6:2018-2023` | `lightgbm-nb:qb:3ae5b940:2018-2023` |
+| RB | `baseline:rb:5a86c8ee:2018-2023` | `lightgbm:rb:fb169c0e:2018-2023` | `lightgbm-tuned:rb:5d69fdfe:2018-2023` | `lightgbm-nb:rb:ba2e35cc:2018-2023` |
+| TE | `baseline:te:9c00025b:2018-2023` | `lightgbm:te:bd4c2a5b:2018-2023` | `lightgbm-tuned:te:89dafdb6:2018-2023` | `lightgbm-nb:te:e76e590a:2018-2023` |
+
+### Adoption-gate verdict — DO NOT ADOPT Model C-NB as default
+
+Spec §1.3 required Model C-NB to beat Model A on three criteria. **All three failed.**
+
+| Criterion | Threshold | Actual (C-NB vs A) | Pass? |
+|---|---|---|---|
+| Composite RMSE strictly lower on >=12/16 cells; max +1% worse | C-NB < A on 12+; max +1% worse | C-NB strictly lower on **11/16**; max +1.69% worse (TE 2024); 4/16 cells exceed 1% | **FAIL** |
+| Spearman top-N within +-0.005 on every cell | All within ±0.005 | 4/16 outside ±0.005; max abs delta 0.0204 (QB 2021, **a +0.0204 IMPROVEMENT**) | **FAIL** |
+| Calibration no worse on any cell; mean delta >= +0.02 | No regressions; mean ≥ +0.02 | C-NB worse on 13/16; mean delta -0.0617 | **FAIL** |
+
+### Side-by-side per-cell comparison (16 cells × 4 metrics × 4 models)
+
+`RMSE Cnb-A %` is the percentage delta on composite RMSE (negative = NB wins; threshold +1.00%). Spearman / Calib columns show NB's value and the (NB − A) delta.
+
+| Cell | RMSE A | RMSE C | RMSE Ctuned | RMSE Cnb | RMSE Cnb-A % | Spearman A | Spearman Cnb | Spearman Cnb-A | Calib A | Calib Cnb | Calib Cnb-A |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| QB 2021 | 7.8342 | 7.8386 | 7.7320 | 7.5651 | -3.43% | 0.9342 | 0.9546 | +0.0204 | 0.6947 | 0.7173 | +0.0226 |
+| QB 2022 | 7.2261 | 7.2718 | 7.1220 | 7.0637 | -2.25% | 0.9669 | 0.9672 | +0.0003 | 0.7458 | 0.7686 | +0.0228 |
+| QB 2023 | 7.3092 | 7.3213 | 7.2602 | 7.2152 | -1.29% | 0.9454 | 0.9569 | +0.0115 | 0.7313 | 0.7194 | -0.0119 |
+| QB 2024 | 7.6995 | 7.5523 | 7.4845 | 7.4597 | -3.12% | 0.9383 | 0.9452 | +0.0069 | 0.7018 | 0.7178 | +0.0161 |
+| RB 2021 | 6.8486 | 7.0688 | 6.9895 | 6.9292 | +1.18% | 0.9700 | 0.9623 | -0.0077 | 0.7475 | 0.6327 | -0.1148 |
+| RB 2022 | 6.6359 | 6.8370 | 6.7032 | 6.6331 | -0.04% | 0.9658 | 0.9692 | +0.0034 | 0.7415 | 0.6446 | -0.0969 |
+| RB 2023 | 6.3143 | 6.5069 | 6.4255 | 6.3744 | +0.95% | 0.9665 | 0.9640 | -0.0025 | 0.7872 | 0.6751 | -0.1121 |
+| RB 2024 | 6.4860 | 6.6370 | 6.6242 | 6.5157 | +0.46% | 0.9753 | 0.9763 | +0.0010 | 0.7568 | 0.6512 | -0.1056 |
+| TE 2021 | 5.3365 | 5.4636 | 5.3835 | 5.3137 | -0.43% | 0.9655 | 0.9640 | -0.0015 | 0.7350 | 0.6602 | -0.0748 |
+| TE 2022 | 5.2498 | 5.3710 | 5.3197 | 5.2092 | -0.78% | 0.9615 | 0.9629 | +0.0015 | 0.7647 | 0.6710 | -0.0938 |
+| TE 2023 | 4.9422 | 5.1324 | 5.0272 | 4.9314 | -0.22% | 0.9704 | 0.9742 | +0.0038 | 0.7561 | 0.6805 | -0.0756 |
+| TE 2024 | 5.0804 | 5.2661 | 5.2302 | 5.1662 | +1.69% | 0.9620 | 0.9580 | -0.0040 | 0.7345 | 0.6586 | -0.0759 |
+| WR 2021 | 6.7333 | 6.8837 | 6.8025 | 6.7244 | -0.13% | 0.9699 | 0.9679 | -0.0020 | 0.6956 | 0.6354 | -0.0602 |
+| WR 2022 | 6.6255 | 6.7479 | 6.7149 | 6.6189 | -0.10% | 0.9767 | 0.9729 | -0.0038 | 0.6970 | 0.6256 | -0.0714 |
+| WR 2023 | 6.5159 | 6.7129 | 6.5922 | 6.5380 | +0.34% | 0.9680 | 0.9645 | -0.0035 | 0.7256 | 0.6447 | -0.0809 |
+| WR 2024 | 6.6728 | 6.7339 | 6.7218 | 6.6589 | -0.21% | 0.9739 | 0.9709 | -0.0030 | 0.7109 | 0.6362 | -0.0747 |
+
+### Aggregate movement: NB strictly dominates Tuned on RMSE; calibration unchanged in aggregate
+
+| Metric | Tuned vs A | NB vs A | NB vs Tuned |
+|---|---|---|---|
+| RMSE: cells where C-* beats A | 4/16 | 11/16 | 16/16 strict dominance |
+| RMSE: max pct worse vs A | +2.95% | +1.69% | — |
+| Spearman: cells outside ±0.005 vs A | 7/16 | 4/16 | improved |
+| Spearman: max abs delta vs A | 0.0163 | 0.0204 (a +0.0204 *gain* on QB 2021) | — |
+| Calibration: cells where C-* worse than A | 12/16 | 13/16 | NB on average +0.0013 vs Tuned |
+| Calibration: mean delta vs A | -0.0630 | -0.0617 | +0.0013 (essentially unchanged) |
+
+**NB strictly dominates Tuned on RMSE on every cell.** Replacing the 5-knot quantile prediction for count stats with a poisson-objective regressor + NB-2 dispersion eliminated the count-stat over-prediction Plan 5b diagnosed. The mean RMSE pct vs A moved from "Tuned regresses on 12/16 cells" to "NB beats A on 11/16 cells." But that improvement does not propagate to calibration — the mean p10/p90 coverage delta vs A stayed essentially flat (-0.0630 → -0.0617).
+
+### Per-position split — QB clean win; RB/TE/WR are RMSE wins paired with calibration regressions
+
+| Position | RMSE wins vs A | Mean calib delta vs A |
+|---|---|---|
+| QB | 4/4 | **+0.0124 (positive)** |
+| RB | 1/4 | -0.1074 |
+| TE | 3/4 | -0.0800 |
+| WR | 3/4 | -0.0718 |
+
+**QB is the only position where C-NB cleanly beats A on every metric:** RMSE -1.3% to -3.4% across 4/4 years, calibration +0.012 mean (3 of 4 years positive), Spearman +0 to +0.02. QB's count-stat distributions (passing_tds with mean ~1.5, interceptions ~0.7) are the exact zero-inflated count stats NB-2 was designed for, and the per-row mean is the dominant signal in QB scoring (rushing yards and passing yards together account for ~85% of fantasy points; passing TDs are the next ~10%).
+
+**RB / TE / WR show the same pattern across the board:** RMSE improves (RB 1/4 wins, TE 3/4, WR 3/4 — close to a 50/50 split), but [p10, p90] calibration regresses 6-12 percentage points. The mechanism: NB-2 dispersion fitted on training residuals via conditional MLE produces tight predictive intervals when the per-row mean is well-fit (which the poisson booster does), but the residual variance on test data — particularly RB/TE/WR which have higher target variance and more regime drift between seasons — exceeds the training-fit dispersion. The fitted NB-2 distribution is therefore too narrow at the [p10, p90] tails on held-out years.
+
+A practical illustration: RB 2024 has C-NB calib 0.6512 vs A 0.7568 — a 10 pp coverage drop. The NB-2 receiving_tds distribution for an average-volume RB with mu_hat ≈ 0.4 and fitted dispersion ≈ 5 has [p10, p90] of [0, 1] (NB-2 mode at 0; long right tail). When test-set actuals scatter to 2-3 TDs (a realistic RB game), they fall outside p90. The booster predicts the mean correctly; the dispersion under-estimates the heavy right tail.
+
+### Why this should work / does it work
+
+The Plan 5b diagnostic identified the mechanism: 5-knot QuantileDistribution linear interpolation + sort + clip produces a biased empirical mean on zero-inflated count stats (over-prediction of 30-60% on TE/WR receiving_tds, QB rushing_tds/fumbles, etc.). NB-2 with mean = mu_hat and dispersion fit on training residuals does not have this bias — the empirical mean of NB-2 samples ≈ mu_hat by construction.
+
+**The mean-prediction fix worked.** NB strictly dominates Tuned on RMSE on every cell — closing the entire mean-prediction gap Plan 5 / 5b's quantile sub-models couldn't. RMSE moved from "C-tuned 4/16 wins, max +2.95% worse" to "C-NB 11/16 wins, max +1.69% worse" — a step closer to the §1.3 threshold but still short of 12/16.
+
+**The calibration regression that Plan 5 / 5b had against A on the [p10, p90] interval did NOT close.** NB-2's narrow predictive interval at low mu trades RMSE for coverage. Plan 3e Phase 1 saw the same shape in Ridge (NB cells nudged calibration in the right direction in aggregate but did not solve the problem). Replacing GAMMA with NB-2 in Ridge, or quantile regression with NB-2 in LightGBM, both improve mean-prediction RMSE without solving the underlying coverage problem because the underlying residual variance on held-out years exceeds what a well-fit conditional distribution can represent without overfitting the noise floor.
+
+Yards stats are unchanged from Model C-tuned (the test `test_yards_stat_predictions_match_tuned_baseline` pins yards-stat best_iters to be bit-exact identical between the two models) — the calibration regression on RB/TE/WR is fully attributable to the count-stat NB-2 path, not to anything in the inherited yards path.
+
+### Decision
+
+**Default model selection:** Model A stays the production default. Models C, C-tuned, and C-NB all ship as peers; none is adopted. Model C-NB strictly dominates Model C-tuned on RMSE — Model C-tuned is now arguably prunable (TODO followup).
+
+**Pivot:** the next model-improvement track stays one of the three remaining options. With C-NB now showing what mean-prediction fixes alone can do, the calibration gap is the unambiguous binding constraint. Three remaining tracks:
+
+- **Plan 6 — Model D ensemble.** Stack of (Model A, Model C-NB) per (position, stat) with calibration-aware weighting. Cheapest given Plan 5c's infrastructure. Covers the case where C-NB's mean-prediction wins on QB and Model A's calibration wins on RB/TE/WR.
+- **Calibration-aware NB fitting.** Fit NB-2 dispersion to optimize p10/p90 coverage directly (quantile loss) rather than likelihood. Preserves C-NB's RMSE wins; targets the calibration regression directly. Risk: overfit to validation noise.
+- **TODO #3 (PBP / EPA features)** + **TODO #23 (target decomposition)** — feature-class tracks. Independent of model class. Estimated 5-15% RMSE win on top of any model class.
+
+Pick one in the next session. Plan 4 (public Python API + CLI verbs + free-tier hosting) remains the post-modeling milestone.
+
+### Per-position model_ids on disk
+
+Standalone artifacts at `models/artifacts/lightgbm-nb-{pos}-2018-2023-{hash}.joblib` (only created on `scripts/train_baseline.py`-style invocations; the backtest harness regenerates per-fold artifacts from the feature cache and does not write standalone files).
+
+---
+
 ## Plan 5b — Optuna Tuning of Model C (Model C-tuned) — shipped (run 2026-04-28)
 
 **Closes:** TODO #26 follow-up "if tuning closes the gap, revisit adoption."
@@ -836,25 +942,33 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Plan 5b (Optuna tuning of Model C) shipped; Model C-tuned failed all three
-§1.3 adoption-gate criteria.** Model A stays the production default. Tuning
-moved every metric in the right direction (QB cells now strictly dominate A;
-calibration mean delta -0.086 → -0.063) but did not flip the verdict, and
-hyperparameter tuning cannot address the per-stat-sub-model "no shared prior"
-mechanism that drives the residual gap on RB / TE / WR. **No Plan 5c filed.**
+**Plan 5c (Model C-NB — hybrid LightGBM with NB-2 for count stats) shipped;
+adoption-gate verdict FAIL on all three §1.3 criteria.** Model A stays the
+production default. Model C-NB **strictly dominates Model C-tuned on RMSE
+(16/16 cells)** and pushes RMSE wins from 4/16 (Tuned) to 11/16 (NB) — the
+mean-prediction fix worked. But the calibration regression carried over
+unchanged in aggregate (mean delta vs A: Tuned -0.063 → NB -0.062). QB cells
+are a clean win across all metrics; RB/TE/WR get RMSE wins paired with 6-12 pp
+[p10,p90] coverage regressions because NB-2 dispersion fit on training
+residuals under-disperses on held-out years.
 
 Three remaining model-improvement tracks, any of which is a plausible next session:
 
-1. **Plan 6 — Model D ensemble.** Stack of (Model A, Model C, Model C-tuned)
-   per (position, stat). Cheapest given Plan 5b's infrastructure; QB cells
-   where C-tuned has a robust edge are exactly where ensembling helps most.
-2. **TODO #3 (PBP / EPA features)** — feature track. Independent of model
-   class. Estimated 5-15% RMSE win on top of any model.
-3. **TODO #23 (target decomposition)** — volume × efficiency factorization.
-   Independent of model class. Estimated 3-10% RMSE win.
-4. **Future plan: multi-output / shared-prior LightGBM** — directly addresses
-   the per-stat-sub-model mechanism Plan 5 / 5b couldn't. Not yet specced;
-   would inherit Plan 5b's LightGBM machinery.
+1. **Plan 6 — Model D ensemble.** Stack of (Model A, Model C-NB) per
+   (position, stat) with calibration-aware weighting. Cheapest given Plan 5c's
+   infrastructure; covers the case where C-NB's mean-prediction wins on QB
+   and Model A's calibration wins on RB/TE/WR. Most promising single-shot win
+   given the per-position split observed in 5c.
+2. **Calibration-aware NB-2 fitting.** Fit dispersion to minimize p10/p90
+   pinball loss directly rather than maximize residual likelihood. Preserves
+   C-NB's RMSE wins; targets the calibration regression directly.
+3. **TODO #3 (PBP / EPA features)** + **TODO #23 (target decomposition)** —
+   feature-class tracks. Independent of model class. Estimated 5-15% RMSE
+   win on top of any model.
+
+Followup housekeeping (low-priority): Model C-tuned is now strictly dominated
+by Model C-NB on RMSE — file a pruning TODO to drop Tuned from the dispatch
+table once C-NB has a few more weeks of soak time.
 
 Pick one in the next session. After model-improvement work: Plan 4 (public
 API + CLI verbs + free-tier hosting), then Draft Hub.
