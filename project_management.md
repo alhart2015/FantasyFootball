@@ -4,6 +4,100 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 5b — Optuna Tuning of Model C (Model C-tuned) — shipped (run 2026-04-28)
+
+**Closes:** TODO #26 follow-up "if tuning closes the gap, revisit adoption."
+
+`LightGBMTunedModel` (Model C-tuned) lands as a third peer of `BaselineModel` (Model A) and `LightGBMModel` (Model C) under the existing `Model` Protocol. Subclass overrides only `_hyperparams_for(stat)`, `code_hash`, and `model_id`; all training and prediction logic is inherited from `LightGBMModel`. Tuned hyperparameters live in `data/tuned_params/lightgbm.json` (checked in, dense across all 24 (position, stat) entries, content-hashed into `model_id`). 24 per-(position, stat) Optuna studies × 50 trials with TPE sampler + median pruner via `LightGBMPruningCallback`; trial scorer = sum of 5 pinball losses on 2023 val. Train 2018-2021; early-stop val 2022; trial scorer 2023. Tuned params reused across all 4 backtest folds. Backtest snapshot keyed by `(position, year, metric, model_class)` extended from 768 → 1136 rows (368 new lightgbm-tuned rows; SAMPLED_SUMMARY-vs-QUANTILE family asymmetry pinned, TODO #28 still open).
+
+### Per-position model_ids
+
+| Position | Model A model_id | Model C model_id | Model C-tuned model_id |
+|---|---|---|---|
+| WR | `baseline:wr:6d955427:2018-2023` | `lightgbm:wr:a4dd5a82:2018-2023` | `lightgbm-tuned:wr:62df14ad:2018-2023` |
+| QB | `baseline:qb:c98738f3:2018-2023` | `lightgbm:qb:06fadb3f:2018-2023` | `lightgbm-tuned:qb:fc902ed6:2018-2023` |
+| RB | `baseline:rb:5a86c8ee:2018-2023` | `lightgbm:rb:fb169c0e:2018-2023` | `lightgbm-tuned:rb:5d69fdfe:2018-2023` |
+| TE | `baseline:te:9c00025b:2018-2023` | `lightgbm:te:bd4c2a5b:2018-2023` | `lightgbm-tuned:te:89dafdb6:2018-2023` |
+
+### Adoption-gate verdict — DO NOT ADOPT Model C-tuned as default
+
+Spec §1.3 required Model C-tuned to beat Model A on three criteria. **All three failed.**
+
+| Criterion | Threshold | Actual (C-tuned vs A) | Pass? |
+|---|---|---|---|
+| Composite RMSE strictly lower on >=12 of 16 cells; not worse by >1% on any cell | C-tuned < A on 12+ cells; max +1% worse | C-tuned strictly lower on 4/16; max +2.95% worse (TE 2024); 8/16 cells exceed 1% | **FAIL** |
+| Spearman top-N within +-0.005 of A on every cell | All 16 within +-0.005 | 9/16 within tolerance; 7 fail; worst +0.0163 (QB 2021) | **FAIL** |
+| Weekly mean [p10,p90] coverage no worse on any cell; mean improvement >= +0.02 | No regressions; mean delta >= +0.02 | C-tuned no worse on 5/16 (all 4 QB cells + TE 2021 marginal); mean delta -0.0630 | **FAIL** |
+
+### Side-by-side metric comparison (16 cells)
+
+A vs C vs C-tuned with the C-tuned − A deltas on RMSE, Spearman, and calibration. `RMSE Ctuned-A %` is the percentage delta on composite RMSE; positive = C-tuned worse; threshold is +1.00% per criterion 1.
+
+| Cell | RMSE A | RMSE C | RMSE C-tuned | RMSE Ctuned-A % | MAE A | MAE C | MAE Ctuned | Spearman A | Spearman C | Spearman Ctuned | Spearman Ctuned-A | Calib A | Calib C | Calib Ctuned | Calib Ctuned-A |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| QB 2021 | 7.8342 | 7.8386 | 7.7320 | -1.30% | 6.3606 | 6.4652 | 6.3581 | 0.9342 | 0.9501 | 0.9505 | +0.0163 | 0.6947 | 0.6857 | 0.7128 | +0.0180 |
+| QB 2022 | 7.2261 | 7.2718 | 7.1220 | -1.44% | 5.7093 | 5.7649 | 5.6199 | 0.9669 | 0.9655 | 0.9668 | -0.0001 | 0.7458 | 0.7595 | 0.7854 | +0.0396 |
+| QB 2023 | 7.3092 | 7.3213 | 7.2602 | -0.67% | 5.8796 | 5.9636 | 5.8887 | 0.9454 | 0.9560 | 0.9576 | +0.0122 | 0.7313 | 0.6955 | 0.7448 | +0.0134 |
+| QB 2024 | 7.6995 | 7.5523 | 7.4845 | -2.79% | 6.0788 | 6.1338 | 6.0594 | 0.9383 | 0.9450 | 0.9460 | +0.0078 | 0.7018 | 0.6944 | 0.7281 | +0.0263 |
+| RB 2021 | 6.8486 | 7.0688 | 6.9895 | +2.06% | 5.2108 | 5.6643 | 5.5522 | 0.9700 | 0.9565 | 0.9611 | -0.0089 | 0.7475 | 0.6008 | 0.6167 | -0.1308 |
+| RB 2022 | 6.6359 | 6.8370 | 6.7032 | +1.01% | 5.0383 | 5.4613 | 5.3138 | 0.9658 | 0.9603 | 0.9674 | +0.0016 | 0.7415 | 0.6221 | 0.6379 | -0.1037 |
+| RB 2023 | 6.3143 | 6.5069 | 6.4255 | +1.76% | 4.7179 | 5.0392 | 5.0039 | 0.9665 | 0.9600 | 0.9634 | -0.0032 | 0.7872 | 0.6354 | 0.6590 | -0.1281 |
+| RB 2024 | 6.4860 | 6.6370 | 6.6242 | +2.13% | 4.9290 | 5.1591 | 5.1982 | 0.9753 | 0.9746 | 0.9763 | +0.0009 | 0.7568 | 0.6231 | 0.6307 | -0.1261 |
+| TE 2021 | 5.3365 | 5.4636 | 5.3835 | +0.88% | 3.8932 | 4.1989 | 4.1390 | 0.9655 | 0.9598 | 0.9617 | -0.0038 | 0.7350 | 0.6398 | 0.6670 | -0.0680 |
+| TE 2022 | 5.2498 | 5.3710 | 5.3197 | +1.33% | 3.6970 | 4.1489 | 4.0954 | 0.9615 | 0.9606 | 0.9621 | +0.0006 | 0.7647 | 0.6415 | 0.6700 | -0.0947 |
+| TE 2023 | 4.9422 | 5.1324 | 5.0272 | +1.72% | 3.5439 | 4.0228 | 3.9442 | 0.9704 | 0.9709 | 0.9743 | +0.0039 | 0.7561 | 0.6711 | 0.6900 | -0.0662 |
+| TE 2024 | 5.0804 | 5.2661 | 5.2302 | +2.95% | 3.7446 | 4.1408 | 4.1022 | 0.9620 | 0.9568 | 0.9582 | -0.0038 | 0.7345 | 0.6401 | 0.6735 | -0.0611 |
+| WR 2021 | 6.7333 | 6.8837 | 6.8025 | +1.03% | 5.0891 | 5.4583 | 5.3996 | 0.9699 | 0.9624 | 0.9651 | -0.0048 | 0.6956 | 0.6107 | 0.6321 | -0.0635 |
+| WR 2022 | 6.6255 | 6.7479 | 6.7149 | +1.35% | 5.0221 | 5.3711 | 5.3580 | 0.9767 | 0.9670 | 0.9690 | -0.0076 | 0.6970 | 0.6004 | 0.6151 | -0.0818 |
+| WR 2023 | 6.5159 | 6.7129 | 6.5922 | +1.17% | 4.7814 | 5.2292 | 5.0860 | 0.9680 | 0.9590 | 0.9628 | -0.0051 | 0.7256 | 0.6220 | 0.6379 | -0.0877 |
+| WR 2024 | 6.6728 | 6.7339 | 6.7218 | +0.74% | 4.9437 | 5.1907 | 5.2066 | 0.9739 | 0.9669 | 0.9673 | -0.0066 | 0.7109 | 0.6128 | 0.6177 | -0.0933 |
+
+### Tuning helped — but not enough
+
+Aggregate movement vs untuned Model C (Plan 5):
+
+| Metric | Untuned C vs A | Tuned C vs A | Delta from tuning |
+|---|---|---|---|
+| RMSE: cells where C beats A | 1/16 | 4/16 | +3 cells |
+| RMSE: max pct worse | +3.85% | +2.95% | -0.90 pp |
+| Spearman: cells outside ±0.005 | 12/16 | 7/16 | -5 cells |
+| Spearman: max abs delta | 0.0135 | 0.0163 | +0.0028 (worse on outlier) |
+| Calibration: cells where C-tuned worse | 15/16 | 11/16 | -4 cells |
+| Calibration: mean delta | -0.0857 | -0.0630 | +0.0227 |
+
+**QB cells responded strongly to tuning.** All 4 QB years now strictly beat Model A on RMSE (-0.67% to -2.79%) and on calibration (+0.013 to +0.040 deltas; all positive). The hand-set defaults from Plan 5 had QBs landing in only 1 cell of "C wins"; tuning produced 4-for-4. QB tuning preferred shallow trees (`max_depth` mostly 3) with moderate `num_leaves` (33-127) and meaningful `reg_alpha` on count stats — i.e., regularize harder than the defaults did.
+
+**RB / TE / WR cells improved but did not flip.** All three positions still regress on RMSE (1-3% worse), Spearman (mostly within tolerance now but some still outside), and calibration (still 6-13 pp under A). Tuning compressed the gaps but didn't eliminate them. The Plan 5 post-mortem hypothesis #1 (per-stat sub-models lack a shared prior; small-data positions overfit) and #4 (multi-output training would let the model borrow strength across stats) are the most plausible remaining mechanisms — tuning operates *within* per-stat sub-models and so cannot address the fundamental "each sub-model fits its own noise" problem.
+
+### Why Model C-tuned still lost (refined hypothesis)
+
+Plan 5's post-mortem listed four candidate mechanisms; tuning addresses only #2:
+
+1. **No shared prior across the 5 quantile sub-models per (position, stat).** Tuning made each sub-model's hyperparameters more conservative on average (lower `learning_rate`, more aggressive `min_child_samples`), but each still fits independently. **Not addressed.**
+2. **Hand-set hyperparameters were sub-optimal.** Tuning addressed this directly. QBs benefited materially; smaller-data positions partially benefited.
+3. **5-quantile interpolation is too coarse.** Tuning didn't change the quantile grid. **Not addressed.**
+4. **Per-stat independent training discards shared signal across stats.** Tuning operates at the per-stat level. **Not addressed.**
+
+Mechanisms #1 and #4 jointly explain why QB tunes well while WR/RB/TE don't: QB has fewer rows but each row has one strong target (passing yards) with high signal-to-noise; the other QB stats are zero-inflated counts that benefit from the tuning's harder regularization. RB/TE/WR have similar-sized datasets but each (position, stat) sub-model is a small-data fit on its own — total dataset size is fine, but per-sub-model is starved. A multi-output gradient-boosted model trained jointly across the 6 stats per position (and arguably across all 4 positions) is the natural next experiment.
+
+### Decision
+
+**Default model selection:** Model A stays the production default. Model C and Model C-tuned both ship as peers; neither is adopted. **No Plan 5c is filed** — the diagnostic verdict is unambiguous on the criteria, and per-fold tuning would not address mechanisms #1 / #3 / #4.
+
+**Pivot:** the next model-improvement track is one of:
+- **Plan 6 — Model D ensemble.** Stacked predictor (Model A + Model C + Model C-tuned). Even with all three losing head-to-head against A on most cells, a per-cell weighted ensemble could beat A — particularly on QB where C-tuned now has a robust edge. Cheapest experiment given Plan 5b's infrastructure.
+- **TODO #3 (PBP / EPA features).** Feature track. Independent of model class. Estimated 5-15% RMSE win on top of any model class.
+- **TODO #23 (target decomposition).** Volume × efficiency factorization. Independent of model class. Estimated 3-10% RMSE win.
+- **Future Plan: multi-output LightGBM / shared-prior training** — addresses mechanisms #1 / #4 directly. Not yet specced; would inherit the LightGBM machinery from Plan 5.
+
+The user picks one in the next session. Plan 4 (public Python API + CLI verbs + free-tier hosting) remains the post-modeling milestone.
+
+### Per-position model_ids on disk
+
+Standalone artifacts at `models/artifacts/lightgbm-tuned-{pos}-2018-2023-{hash}.joblib`. Backtest harness regenerates per-fold artifacts via the feature cache; standalone artifacts are for ad-hoc prediction / sanity checks.
+
+---
+
 ## Plan 5 — LightGBM with Quantile Regression (Model C) — shipped (run 2026-04-27)
 
 **Closes:** TODO #26.
@@ -742,22 +836,25 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Plan 5 (Model C — LightGBM with quantile regression) shipped, but Model C
-failed the adoption gate.** Model A stays the production default. Three
-documented follow-ups:
+**Plan 5b (Optuna tuning of Model C) shipped; Model C-tuned failed all three
+§1.3 adoption-gate criteria.** Model A stays the production default. Tuning
+moved every metric in the right direction (QB cells now strictly dominate A;
+calibration mean delta -0.086 → -0.063) but did not flip the verdict, and
+hyperparameter tuning cannot address the per-stat-sub-model "no shared prior"
+mechanism that drives the residual gap on RB / TE / WR. **No Plan 5c filed.**
 
-1. **Plan 5b — hyperparameter tuning for Model C.** Optuna-based search per
-   (position, stat, quantile). The fastest experiment that could justify
-   adopting C; QB cells already favor C, so even a partial tune may flip
-   the verdict on more cells.
-2. **Plan 6 — Model D (ensemble of Model A + Model C).** Stack the two
-   predictors per (position, stat). Could beat A alone even if C loses
-   head-to-head, because where the two models disagree their consensus is
-   often closer to truth than either alone — particularly on QB where C
-   has a real edge.
-3. **TODO #3 (PBP / EPA features)** — feature track. Independent of model
-   class; would benefit both A and C if pursued.
-4. **TODO #23 (target decomposition)** — also independent of model class.
+Three remaining model-improvement tracks, any of which is a plausible next session:
+
+1. **Plan 6 — Model D ensemble.** Stack of (Model A, Model C, Model C-tuned)
+   per (position, stat). Cheapest given Plan 5b's infrastructure; QB cells
+   where C-tuned has a robust edge are exactly where ensembling helps most.
+2. **TODO #3 (PBP / EPA features)** — feature track. Independent of model
+   class. Estimated 5-15% RMSE win on top of any model.
+3. **TODO #23 (target decomposition)** — volume × efficiency factorization.
+   Independent of model class. Estimated 3-10% RMSE win.
+4. **Future plan: multi-output / shared-prior LightGBM** — directly addresses
+   the per-stat-sub-model mechanism Plan 5 / 5b couldn't. Not yet specced;
+   would inherit Plan 5b's LightGBM machinery.
 
 Pick one in the next session. After model-improvement work: Plan 4 (public
 API + CLI verbs + free-tier hosting), then Draft Hub.

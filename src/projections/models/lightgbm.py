@@ -284,6 +284,15 @@ class LightGBMModel:
             f":{self._train_start}-{self._train_end}"
         )
 
+    def _hyperparams_for(self, stat: Stat) -> dict[str, Any]:
+        """Return LightGBM kwargs for the given stat's sub-models.
+
+        Subclasses override to provide tuned per-(position, stat) hyperparameters.
+        The base implementation returns a copy of LGBM_DEFAULTS so all sub-models
+        share the same baseline settings.
+        """
+        return dict(LGBM_DEFAULTS)
+
     def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:
         """Train per-stat per-quantile sub-models with early stopping on the last
         training season. Stores boosters in self._sub_models and best iterations
@@ -329,11 +338,12 @@ class LightGBMModel:
             self._sub_models[stat] = {}
             y_train = joined.loc[train_mask, stat.value].to_numpy(dtype=np.float64)
             y_val = joined.loc[val_mask, stat.value].to_numpy(dtype=np.float64)
+            stat_params = self._hyperparams_for(stat)
             for q in QUANTILE_GRID:
                 regressor = lgb.LGBMRegressor(
                     objective="quantile",
                     alpha=q,
-                    **LGBM_DEFAULTS,
+                    **stat_params,
                 )
                 regressor.fit(
                     x_train,
