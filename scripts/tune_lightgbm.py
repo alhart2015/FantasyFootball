@@ -317,7 +317,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Use in-memory study storage (overrides --studies-db); not resumable.",
     )
-    parser.add_argument("--data-root", type=Path, default=Path("data"), help="Raw data root.")
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path("data/raw"),
+        help="Raw partition store root (matches harness raw_root convention).",
+    )
     parser.add_argument(
         "--features-root",
         type=Path,
