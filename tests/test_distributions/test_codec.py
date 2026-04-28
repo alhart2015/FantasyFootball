@@ -244,3 +244,141 @@ def test_codec_round_trip_mixed_with_quantile() -> None:
     assert isinstance(decoded[Stat.RECEPTIONS], ParametricNormal)
     assert isinstance(decoded[Stat.RUSHING_YARDS], ParametricGamma)
     assert isinstance(decoded[Stat.RECEIVING_TDS], ParametricNegativeBinomial)
+
+
+# Plan 6 Phase 1 — MIXTURE codec branch tests
+def test_codec_mixture_round_trip_normal_normal() -> None:
+    import numpy as np
+
+    from projections.distributions import (
+        MixtureDistribution,
+        ParametricNormal,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    _ = np  # keep numpy import grouped with the other mixture tests' imports
+    a = ParametricNormal(mean=5.0, std=2.0)
+    b = ParametricNormal(mean=15.0, std=3.0)
+    mix = MixtureDistribution(component_a=a, component_b=b, weight=0.4)
+    blob = pack_per_stat_params({Stat.PASSING_YARDS: mix})
+    decoded = unpack_per_stat_params(blob)
+    out = decoded[Stat.PASSING_YARDS]
+    assert isinstance(out, MixtureDistribution)
+    assert out.weight == pytest.approx(0.4, abs=1e-12)
+    assert isinstance(out.component_a, ParametricNormal)
+    assert out.component_a.mean() == pytest.approx(5.0)
+    assert out.component_a.std() == pytest.approx(2.0)
+    assert isinstance(out.component_b, ParametricNormal)
+    assert out.component_b.mean() == pytest.approx(15.0)
+    assert out.component_b.std() == pytest.approx(3.0)
+
+
+def test_codec_mixture_round_trip_gamma_quantile() -> None:
+    import numpy as np
+
+    from projections.distributions import (
+        MixtureDistribution,
+        ParametricGamma,
+        QuantileDistribution,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    a = ParametricGamma(shape=4.0, scale=2.5)
+    b = QuantileDistribution(
+        quantiles=np.array([0.05, 0.25, 0.5, 0.75, 0.95], dtype=np.float64),
+        values=np.array([1.0, 5.0, 10.0, 18.0, 30.0], dtype=np.float64),
+    )
+    mix = MixtureDistribution(component_a=a, component_b=b, weight=0.65)
+    blob = pack_per_stat_params({Stat.RUSHING_YARDS: mix})
+    decoded = unpack_per_stat_params(blob)
+    out = decoded[Stat.RUSHING_YARDS]
+    assert isinstance(out, MixtureDistribution)
+    assert out.weight == pytest.approx(0.65, abs=1e-12)
+    assert isinstance(out.component_a, ParametricGamma)
+    assert isinstance(out.component_b, QuantileDistribution)
+    np.testing.assert_array_almost_equal(
+        out.component_b.quantiles_, np.array([0.05, 0.25, 0.5, 0.75, 0.95])
+    )
+    np.testing.assert_array_almost_equal(
+        out.component_b.values_, np.array([1.0, 5.0, 10.0, 18.0, 30.0])
+    )
+
+
+def test_codec_mixture_round_trip_nb_nb() -> None:
+    from projections.distributions import (
+        MixtureDistribution,
+        ParametricNegativeBinomial,
+        pack_per_stat_params,
+        unpack_per_stat_params,
+    )
+    from projections.schemas import Stat
+
+    a = ParametricNegativeBinomial(mean=1.5, dispersion=4.0)
+    b = ParametricNegativeBinomial(mean=2.5, dispersion=8.0)
+    mix = MixtureDistribution(component_a=a, component_b=b, weight=0.3)
+    blob = pack_per_stat_params({Stat.RECEIVING_TDS: mix})
+    decoded = unpack_per_stat_params(blob)
+    out = decoded[Stat.RECEIVING_TDS]
+    assert isinstance(out, MixtureDistribution)
+    assert out.weight == pytest.approx(0.3, abs=1e-12)
+    assert isinstance(out.component_a, ParametricNegativeBinomial)
+    assert out.component_a.mean() == pytest.approx(1.5)
+    assert out.component_a.dispersion_ == pytest.approx(4.0)
+    assert isinstance(out.component_b, ParametricNegativeBinomial)
+    assert out.component_b.mean() == pytest.approx(2.5)
+    assert out.component_b.dispersion_ == pytest.approx(8.0)
+
+
+def test_codec_mixture_family_name() -> None:
+    """The encoded blob carries family='MIXTURE' for mixture entries."""
+    import msgpack
+
+    from projections.distributions import (
+        MixtureDistribution,
+        ParametricNormal,
+        pack_per_stat_params,
+    )
+    from projections.schemas import DistributionFamily, Stat
+
+    a = ParametricNormal(mean=5.0, std=2.0)
+    b = ParametricNormal(mean=15.0, std=3.0)
+    mix = MixtureDistribution(component_a=a, component_b=b, weight=0.5)
+    blob = pack_per_stat_params({Stat.PASSING_YARDS: mix})
+    payload = msgpack.unpackb(blob, raw=False)
+    assert payload["schema_version"] == 2
+    entry = payload["stats"]["passing_yards"]
+    assert entry["family"] == DistributionFamily.MIXTURE.value
+    assert entry["weight"] == pytest.approx(0.5)
+    assert entry["component_a"]["family"] == DistributionFamily.NORMAL.value
+    assert entry["component_b"]["family"] == DistributionFamily.NORMAL.value
+
+
+def test_codec_v1_blobs_no_longer_decodable() -> None:
+    """Plan 5/5b/5c blobs (v1) without MIXTURE entries are no longer
+    forward-compat after the schema_version bump to 2.
+
+    No v1 readers exist outside this codec, so we test by directly
+    synthesizing a v1-shaped blob and asserting unpack rejects it.
+    """
+    import msgpack
+
+    from projections.distributions import unpack_per_stat_params
+    from projections.schemas import DistributionFamily
+
+    payload = {
+        "schema_version": 1,  # legacy
+        "stats": {
+            "passing_yards": {
+                "family": DistributionFamily.NORMAL.value,
+                "mean": 250.0,
+                "std": 50.0,
+            }
+        },
+    }
+    blob = msgpack.packb(payload, use_bin_type=True)
+    with pytest.raises(ValueError, match="schema_version"):
+        unpack_per_stat_params(bytes(blob))
