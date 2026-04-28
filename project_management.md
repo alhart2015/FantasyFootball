@@ -62,7 +62,7 @@ Spec §1.3 required Model C-NB to beat Model A on three criteria. **All three fa
 | RMSE: max pct worse vs A | +2.95% | +1.69% | — |
 | Spearman: cells outside ±0.005 vs A | 7/16 | 4/16 | improved |
 | Spearman: max abs delta vs A | 0.0163 | 0.0204 (a +0.0204 *gain* on QB 2021) | — |
-| Calibration: cells where C-* worse than A | 11/16 | 13/16 | NB on average +0.0013 vs Tuned |
+| Calibration: cells where C-* worse than A | 12/16 | 13/16 | NB on average +0.0013 vs Tuned |
 | Calibration: mean delta vs A | -0.0630 | -0.0617 | +0.0013 (essentially unchanged) |
 
 **NB strictly dominates Tuned on RMSE on every cell.** Replacing the 5-knot quantile prediction for count stats with a poisson-objective regressor + NB-2 dispersion eliminated the count-stat over-prediction Plan 5b diagnosed. The mean RMSE pct vs A moved from "Tuned regresses on 12/16 cells" to "NB beats A on 11/16 cells." But that improvement does not propagate to calibration — the mean p10/p90 coverage delta vs A stayed essentially flat (-0.0630 → -0.0617).

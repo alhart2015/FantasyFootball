@@ -576,7 +576,7 @@ class LightGBMNbModel(LightGBMTunedModel):
             y_val = joined.loc[val_mask, stat.value].to_numpy(dtype=np.float64)
 
             if stat in COUNT_STATS_FOR_NB:
-                # Single poisson regressor; predicts log-mu.
+                # Single poisson regressor; predict() returns mu in original scale.
                 regressor = lgb.LGBMRegressor(
                     objective="poisson",
                     **stat_params,
@@ -599,8 +599,13 @@ class LightGBMNbModel(LightGBMTunedModel):
                     )
                 self._count_models[stat] = regressor.booster_
                 self._count_best_iters[stat] = best_iter
-                # Fit NB-2 dispersion on training residuals.
-                mu_hat_train = np.exp(regressor.predict(x_train))
+                # Fit NB-2 dispersion on training residuals. lgb.LGBMRegressor's
+                # poisson predict() already returns mu (the mean) in original
+                # scale -- not log-mu. Floor matches the predict-time clip.
+                mu_hat_train = np.maximum(
+                    np.asarray(regressor.predict(x_train), dtype=np.float64),
+                    _NB_MU_FLOOR,
+                )
                 dispersion = nb_dispersion_from_residuals(
                     mu_hat=mu_hat_train, actual=y_train
                 )
@@ -667,8 +672,12 @@ class LightGBMNbModel(LightGBMTunedModel):
         per_stat_quantile_pred: dict[Stat, np.ndarray[Any, np.dtype[np.float64]]] = {}
         for stat in self._config.target_stats:
             if stat in COUNT_STATS_FOR_NB:
-                log_mu = self._count_models[stat].predict(x).astype(np.float64)
-                mu_hat = np.maximum(np.exp(log_mu), _NB_MU_FLOOR)
+                # LightGBM poisson predict() returns mu (mean) in original
+                # scale, already exponentiated -- no np.exp needed here.
+                mu_hat = np.maximum(
+                    np.asarray(self._count_models[stat].predict(x), dtype=np.float64),
+                    _NB_MU_FLOOR,
+                )
                 per_stat_count_mu[stat] = mu_hat
             else:
                 preds_per_q = np.column_stack(
@@ -894,9 +903,10 @@ Subclass of LightGBMTunedModel. For zero-inflated count stats (the 13 cells
 Plan 3e routes to NB-2 in Ridge — passing_tds/rushing_tds/receiving_tds/
 interceptions/fumbles_lost intersected with each position's target_stats),
 trains one lgb.LGBMRegressor with objective="poisson" using tuned
-hyperparameters; predicts log-mu, exponentiates to mu_hat, fits NB-2
-dispersion on training residuals; wraps in ParametricNegativeBinomial at
-predict time.
+hyperparameters; reads predicted mu directly from regressor.predict(X)
+(lgb's poisson predict returns mean in original scale, already
+exponentiated); fits NB-2 dispersion on training residuals; wraps in
+ParametricNegativeBinomial at predict time.
 
 For yards/receptions stats: 5 quantile sub-models exactly as
 LightGBMTunedModel does today; QuantileDistribution at predict time.

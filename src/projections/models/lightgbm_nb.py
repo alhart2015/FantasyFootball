@@ -209,7 +209,7 @@ class LightGBMNbModel(LightGBMTunedModel):
             y_val = joined.loc[val_mask, stat.value].to_numpy(dtype=np.float64)
 
             if stat in COUNT_STATS_FOR_NB:
-                # Single poisson regressor; predicts log-mu.
+                # Single poisson regressor; predict() returns mu in original scale.
                 regressor = lgb.LGBMRegressor(
                     objective="poisson",
                     **stat_params,
