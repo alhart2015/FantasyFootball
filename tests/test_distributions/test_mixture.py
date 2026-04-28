@@ -85,6 +85,28 @@ def test_quantile_invalid_q() -> None:
         mix.quantile(-0.1)
 
 
+def test_quantile_raises_when_q_outside_joint_support() -> None:
+    """When both children's cdfs clamp at a common minimum, q below that minimum
+    cannot be represented and quantile() raises rather than silently clipping."""
+    # Build a mixture of two QuantileDistributions both clamping at q=0.05 below.
+    a = QuantileDistribution(
+        quantiles=np.array([0.05, 0.5, 0.95], dtype=np.float64),
+        values=np.array([10.0, 20.0, 30.0], dtype=np.float64),
+    )
+    b = QuantileDistribution(
+        quantiles=np.array([0.05, 0.5, 0.95], dtype=np.float64),
+        values=np.array([15.0, 25.0, 35.0], dtype=np.float64),
+    )
+    mix = MixtureDistribution(component_a=a, component_b=b, weight=0.5)
+    # q=0.02 is below both children's lowest stored quantile (0.05); cdf clamps
+    # at 0.05 for x below the lowest stored value, so cdf(lo) >= 0.05 > 0.02.
+    with pytest.raises(ValueError, match="below joint support"):
+        mix.quantile(0.02)
+    # Symmetric: q=0.98 is above both children's highest stored quantile (0.95).
+    with pytest.raises(ValueError, match="above joint support"):
+        mix.quantile(0.98)
+
+
 def test_sample_converges_to_analytic_moments() -> None:
     a = ParametricNormal(mean=0.0, std=1.0)
     b = ParametricNormal(mean=5.0, std=2.0)
