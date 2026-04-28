@@ -109,32 +109,66 @@ def test_factories_construct() -> None:
         assert isinstance(m, LightGBMTunedModel)
 
 
-def test_seeded_json_matches_lgbm_defaults() -> None:
-    """Phase 0's seeded JSON contains LGBM_DEFAULTS values verbatim."""
+def test_production_tuned_json_has_dense_24_entries() -> None:
+    """The shipped data/tuned_params/lightgbm.json has all 24 (position, stat)
+    entries with the 8 tunable axes — structural invariant after Plan 5b
+    Phase 3's Optuna run overwrote the seeded defaults with real tuned values.
+    """
     from projections.models.lightgbm_tuned import _TUNED_AXES, _TUNED_PARAMS_PATH
 
     raw = json.loads(_TUNED_PARAMS_PATH.read_text())
-    for pos_key in ("qb", "rb", "te", "wr"):
+    expected_positions = {"qb", "rb", "te", "wr"}
+    assert set(raw.keys()) == expected_positions
+    total_entries = sum(len(v) for v in raw.values())
+    assert total_entries == 24, f"expected 24 (position, stat) entries; got {total_entries}"
+    for pos_key in expected_positions:
         for stat_key, axis_map in raw[pos_key].items():
             assert set(axis_map.keys()) == _TUNED_AXES, (
                 f"{pos_key}/{stat_key}: axes {sorted(axis_map.keys())} "
                 f"differ from {sorted(_TUNED_AXES)}"
             )
-            for axis_name, value in axis_map.items():
-                assert value == LGBM_DEFAULTS[axis_name], (
-                    f"{pos_key}/{stat_key}/{axis_name}: seeded JSON value "
-                    f"{value} differs from LGBM_DEFAULTS value "
-                    f"{LGBM_DEFAULTS[axis_name]}"
-                )
 
 
-def test_predictions_bit_exact_vs_untuned_under_seeded_json() -> None:
-    """Phase 0 exit criterion: with seeded JSON, tuned predictions equal untuned."""
+def test_override_mechanism_is_bit_exact_when_tuned_equals_defaults(tmp_path: Path) -> None:
+    """Construct a tuned-params JSON that contains LGBM_DEFAULTS verbatim and
+    verify the override is a numerical no-op vs LightGBMModel. Proves
+    `_hyperparams_for(stat)` is plumbed correctly without changing arithmetic
+    when the tuned values happen to equal the defaults.
+
+    Independent of the shipped tuned JSON: this test stays valid even after
+    Plan 5b Phase 3 wrote real tuned values into the production JSON.
+    """
+    from projections.models.lightgbm import (
+        _WR_FEATURE_COLUMNS,
+        _WR_NON_NEGATIVE,
+        _WR_TARGET_STATS,
+        _filter_features,
+        _LightGBMConfig,
+    )
+    from projections.models.lightgbm_tuned import _TUNED_AXES, _load_tuned_params
+    from projections.schemas import Position, WrFeaturesSchema
+
+    defaults_block = {axis: LGBM_DEFAULTS[axis] for axis in _TUNED_AXES}
+    payload: dict[str, dict[str, dict[str, float]]] = {pos: {} for pos in ("qb", "rb", "te", "wr")}
+    payload["wr"] = {stat.value: dict(defaults_block) for stat in _WR_TARGET_STATS}
+    defaults_json = tmp_path / "defaults.json"
+    defaults_json.write_text(json.dumps(payload))
+    _load_tuned_params.cache_clear()
+
     features = _build_synthetic_wr_features()
     weekly = _build_synthetic_wr_weekly_stats(features)
 
     untuned = wr_lightgbm()
-    tuned = wr_lightgbm_tuned()
+    tuned = LightGBMTunedModel(
+        config=_LightGBMConfig(
+            position=Position.WR,
+            target_stats=_WR_TARGET_STATS,
+            feature_columns=_filter_features(_WR_FEATURE_COLUMNS),
+            feature_schema=WrFeaturesSchema,
+            non_negative_stats=_WR_NON_NEGATIVE,
+        ),
+        tuned_params_path=defaults_json,
+    )
 
     untuned.fit(features, weekly)
     tuned.fit(features, weekly)
@@ -142,14 +176,11 @@ def test_predictions_bit_exact_vs_untuned_under_seeded_json() -> None:
     pred_untuned = untuned.predict_distribution(features, ruleset=Ruleset.espn_ppr())
     pred_tuned = tuned.predict_distribution(features, ruleset=Ruleset.espn_ppr())
 
-    # Compare the numeric scoring columns. model_id, generated_at, and family
-    # differ by design (different prefix / fresh timestamp / same family but
-    # checked separately).
     for col in ("mean", "p10", "p50", "p90"):
         np.testing.assert_array_equal(
             pred_untuned[col].to_numpy(),
             pred_tuned[col].to_numpy(),
-            err_msg=f"column {col!r} differs between untuned and tuned",
+            err_msg=f"column {col!r} differs between untuned and tuned-with-defaults",
         )
 
 
