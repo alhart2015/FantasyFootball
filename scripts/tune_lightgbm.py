@@ -38,6 +38,19 @@ from projections.models.lightgbm import QUANTILE_GRID, LightGBMModel
 from projections.schemas import Position, Stat, WeeklyStatsSchema
 from projections.store import read_partition
 
+# Suppress noisy LightGBM convergence warnings on small data (irrelevant for
+# tuning runs) and the Optuna "reported value already exists for step N"
+# warning that fires when LightGBMPruningCallback reports identical step
+# numbers across the 5 quantile sub-fits per trial. At module scope so
+# direct callers of _run_one_study / run_studies (e.g. tests) get them too.
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+warnings.filterwarnings("ignore", category=UserWarning, module="lightgbm")
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*reported value.*already reported.*",
+)
+
 # Search window: most-recent fold's training data. Train 2018-2022;
 # 2022 is the early-stopping val; 2023 is the trial scorer.
 _TRAIN_SEASONS: Final[range] = range(2018, 2023)  # 2018..2022 inclusive
@@ -340,9 +353,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         studies_db = args.studies_db
         studies_db.parent.mkdir(parents=True, exist_ok=True)
-
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-    warnings.filterwarnings("ignore", category=UserWarning, module="lightgbm")
 
     tuned = run_studies(
         positions=positions,

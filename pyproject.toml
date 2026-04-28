@@ -45,6 +45,16 @@ markers = [
     "network: tests that hit the live nfl_data_py API; skipped by default",
     "backtest: tests that run the full walk-forward backtest gate; skipped without --run-backtest",
 ]
+# Mirror the module-scope filters in scripts/tune_lightgbm.py — pytest's per-
+# test catch_warnings() resets the warning state, so module-level
+# warnings.filterwarnings() calls are not honoured during test runs. The
+# Optuna LightGBMPruningCallback reports the same step number across the
+# 5 quantile sub-fits per trial, producing thousands of duplicate
+# "value already reported" warnings; suppress at the pytest level too.
+filterwarnings = [
+    "ignore:.*reported value.*already reported.*:UserWarning",
+    "ignore::UserWarning:lightgbm",
+]
 
 [tool.mypy]
 strict = true

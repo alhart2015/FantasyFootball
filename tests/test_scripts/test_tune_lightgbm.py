@@ -8,8 +8,6 @@ exactly like the production output.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -20,14 +18,12 @@ import pytest
 
 @pytest.fixture(scope="module")
 def tune_module() -> Any:
-    spec = importlib.util.spec_from_file_location(
-        "tune_lightgbm", Path(__file__).resolve().parents[2] / "scripts" / "tune_lightgbm.py"
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["tune_lightgbm"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    """Import the script directly. tests/test_scripts/conftest.py adds
+    scripts/ to sys.path; the same pattern is used by test_diagnose_calibration.py.
+    """
+    import tune_lightgbm
+
+    return tune_lightgbm
 
 
 # Real WR feature columns the LightGBMModel reads from its config — required
