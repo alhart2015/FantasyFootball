@@ -25,7 +25,7 @@ This plan delivers Model C-NB (`LightGBMNbModel`) as a fourth peer model class c
 ### 1.1 Goals (in scope)
 
 - New `LightGBMNbModel` subclassing `LightGBMTunedModel`. Trains:
-  - **Count stats** (13 cells across 4 positions; QB has 4, RB / TE / WR have 3 each): one `lgb.LGBMRegressor(objective="poisson", **tuned_params)` per stat. Predicts log-mu; mu_hat = exp(prediction). NB-2 dispersion fit on training set via `nb_dispersion_from_residuals(mu_hat=mu_hat_train, actual=y_train)` — the same conditional-MLE estimator Ridge uses (signature unchanged from the relocated helper). Predict-time distribution: `ParametricNegativeBinomial(mu=mu_hat, alpha=dispersion)`.
+  - **Count stats** (13 cells across 4 positions; QB has 4, RB / TE / WR have 3 each): one `lgb.LGBMRegressor(objective="poisson", **tuned_params)` per stat. The booster's `predict(X)` already returns mu (the mean) in original scale — lgb's poisson objective exponentiates the leaf scores internally. Read `mu_hat = regressor.predict(X)` directly (no `np.exp`); clip to `[_NB_MU_FLOOR, ∞)`. NB-2 dispersion fit on training set via `nb_dispersion_from_residuals(mu_hat=mu_hat_train, actual=y_train)` — the same conditional-MLE estimator Ridge uses (signature unchanged from the relocated helper). Predict-time distribution: `ParametricNegativeBinomial(mu=mu_hat, alpha=dispersion)`.
   - **Yards / receptions stats**: 5-quantile sub-models exactly as `LightGBMTunedModel` does today. Predict-time distribution: `QuantileDistribution(quantiles, sorted_clipped_values)`. **No behavior change** for these stats.
 - Per-position factories `qb_lightgbm_nb`, `rb_lightgbm_nb`, `te_lightgbm_nb`, `wr_lightgbm_nb` mirroring the Plan 5b factory shape.
 - New `DistributionFamily.MIXED` enum value to mark rows whose per-stat distributions span multiple families. The `ProjectionWeeklySchema.family` column is set to `MIXED` for `LightGBMNbModel` rows; per-stat families remain encoded individually inside `params` (the existing codec already supports this — each stats_blob entry carries its own `family`).
@@ -113,10 +113,10 @@ Subclasses `LightGBMTunedModel`. Inherits the tuned-params loader, the `_hyperpa
 
 - **Internal state extension.** Adds `self._count_models: dict[Stat, lgb.Booster]` and `self._count_dispersions: dict[Stat, float]`. The inherited `self._sub_models` continues to hold the 5-quantile boosters for yards stats. `self._best_iters` continues to record per-(stat, q) early-stopping iterations for yards stats only; a parallel `self._count_best_iters: dict[Stat, int]` is added for count stats.
 - **`fit(features, weekly_stats)`.** Same outer plumbing as parent (validate, join, season-split). Per-stat branch:
-  - If `stat in COUNT_STATS_FOR_NB`: fit one `lgb.LGBMRegressor(objective="poisson", **self._hyperparams_for(stat))` with early stopping on the last training season. Predict on training rows to obtain `mu_hat_train` (= `np.exp(log_mu_pred_train)`). Fit dispersion via `nb_dispersion_from_residuals(y_train, mu_hat_train)` from `parametric.py`. Store the booster in `self._count_models[stat]` and the dispersion in `self._count_dispersions[stat]`.
+  - If `stat in COUNT_STATS_FOR_NB`: fit one `lgb.LGBMRegressor(objective="poisson", **self._hyperparams_for(stat))` with early stopping on the last training season. Predict on training rows to obtain `mu_hat_train = np.maximum(regressor.predict(X_train), _NB_MU_FLOOR)` — lgb's poisson `predict()` already returns mu in original scale, so no `np.exp` is applied. Fit dispersion via `nb_dispersion_from_residuals(y_train, mu_hat_train)` from `parametric.py`. Store the booster in `self._count_models[stat]` and the dispersion in `self._count_dispersions[stat]`.
   - Else (yards/receptions): identical behavior to `LightGBMTunedModel.fit` for that stat. The 5 quantile boosters land in `self._sub_models[stat]` exactly as before.
 - **`predict_distribution(features, ruleset)`.** Same outer plumbing as parent (feature-column check, schema validate, score_distribution wrap). Per-stat branch:
-  - If `stat in COUNT_STATS_FOR_NB`: predict `log_mu` from `self._count_models[stat]`, exponentiate per row to get `mu_hat`, clip to `[_NB_MU_FLOOR, ∞)` (matches the floor used in `_negative_binomial_dispersion_from_residuals`), construct `ParametricNegativeBinomial(mu=mu_hat[row], alpha=self._count_dispersions[stat])` per row.
+  - If `stat in COUNT_STATS_FOR_NB`: predict mu directly from `self._count_models[stat]` (lgb poisson `predict()` returns the mean in original scale), clip to `[_NB_MU_FLOOR, ∞)` (matches the floor used in `nb_dispersion_from_residuals`), construct `ParametricNegativeBinomial(mu=mu_hat[row], alpha=self._count_dispersions[stat])` per row.
   - Else: 5 quantile predictions per row, sort, clip to `[0, ∞)` if `stat in non_negative_stats`, wrap in `QuantileDistribution`. Identical to parent.
   - Per-stat dict goes into `score_distribution(per_stat_dists, ruleset, seed=derive_row_seed(row))` exactly as before. Per-row family at the schema level is `DistributionFamily.MIXED.value`.
 - **`COUNT_STATS_FOR_NB`.** Module-level `frozenset[Stat]` of the 5 count `Stat` values Plan 3e's `_<POS>_DIST_FAMILIES` routes to NB-2 in Ridge:
@@ -243,7 +243,7 @@ features parquet                weekly_stats parquet
            │                eval_set=[(X_val, y_val_stat)],
            │                callbacks=[lgb.early_stopping(50, verbose=False)])
            ├─ store regressor.booster_ in self._count_models[Stat]
-           ├─ mu_hat_train = np.exp(regressor.predict(X_train))
+           ├─ mu_hat_train = np.maximum(regressor.predict(X_train), _NB_MU_FLOOR)  # lgb poisson predict returns mu directly
            ├─ dispersion = nb_dispersion_from_residuals(mu_hat=mu_hat_train, actual=y_train_stat)
            └─ store dispersion in self._count_dispersions[Stat]
          else:
@@ -259,8 +259,7 @@ features parquet (target weeks)
         ▼
 For each row, for each Stat in target_stats:
   if Stat in COUNT_STATS_FOR_NB:
-    ├─ log_mu = self._count_models[Stat].predict(X[row])
-    ├─ mu_hat = np.exp(log_mu).clip(_NB_MU_FLOOR, None)
+    ├─ mu_hat = np.maximum(self._count_models[Stat].predict(X[row]), _NB_MU_FLOOR)  # lgb poisson predict returns mu directly
     └─ per_stat_dists[Stat] = ParametricNegativeBinomial(
                                   mu=mu_hat, alpha=self._count_dispersions[Stat]
                               )
@@ -303,8 +302,8 @@ Inherits all parent failure modes (empty join, insufficient seasons, feature col
 
 Inherits parent's failure modes. New count-stat-specific:
 
-- **`mu_hat` underflow.** `np.exp(log_mu)` can return values arbitrarily close to 0 if the booster predicts a very negative log-mean. Clip to `[_NB_MU_FLOOR, ∞)` to keep `ParametricNegativeBinomial` well-defined (the same clip Plan 3e applies in Ridge's NB path). No warning.
-- **`mu_hat` overflow.** `np.exp(log_mu)` can overflow if log_mu > ~700. Won't happen with `objective="poisson"` early-stopped on real fantasy data (log-mean of TD prediction is bounded ~log(5) ≈ 1.6), but guard with a finite-check assertion in the predict path; if it ever fires the artifact is corrupt and the model should be retrained.
+- **`mu_hat` underflow.** lgb's poisson `predict()` can return values arbitrarily close to 0 if the booster predicts a very small mean. Clip to `[_NB_MU_FLOOR, ∞)` to keep `ParametricNegativeBinomial` well-defined (the same clip Plan 3e applies in Ridge's NB path). No warning.
+- **`mu_hat` non-finite.** lgb's poisson `predict()` should always return finite, non-negative values for valid inputs, but a corrupt booster artifact could return NaN/inf. The downstream `ParametricNegativeBinomial(mean=..., dispersion=...)` constructor will surface a violation; if it ever fires the artifact is corrupt and the model should be retrained.
 
 ### 5.3 Mixed-family per-row
 

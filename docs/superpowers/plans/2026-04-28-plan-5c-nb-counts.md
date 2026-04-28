@@ -4,7 +4,7 @@
 
 **Goal:** Ship `LightGBMNbModel` (Model C-NB) as a fourth peer model class. Replaces `QuantileDistribution` with `ParametricNegativeBinomial` for the 13 count cells Plan 3e routes through NB-2 in Ridge; yards stats stay on QuantileDistribution unchanged from Model C-tuned.
 
-**Architecture:** Subclass `LightGBMTunedModel`. For count stats: train one `objective="poisson"` regressor; fit NB-2 dispersion on training residuals; wrap in `ParametricNegativeBinomial(mu, dispersion)` at predict time. For yards stats: inherited 5-quantile + `QuantileDistribution` behavior unchanged. Reuses Plan 5b's tuned hyperparameters via the inherited `_hyperparams_for(stat)` hook. New `DistributionFamily.MIXED` row-level family for the per-stat-mixed rows.
+**Architecture:** Subclass `LightGBMTunedModel`. For count stats: train one `objective="poisson"` regressor; fit NB-2 dispersion on training residuals; wrap in `ParametricNegativeBinomial(mu, dispersion)` at predict time. lgb's poisson `predict(X)` returns mu (the mean) directly in original scale — no `np.exp` needed. For yards stats: inherited 5-quantile + `QuantileDistribution` behavior unchanged. Reuses Plan 5b's tuned hyperparameters via the inherited `_hyperparams_for(stat)` hook. New `DistributionFamily.MIXED` row-level family for the per-stat-mixed rows.
 
 **Tech Stack:** Python 3.12, LightGBM ≥4.0 (`objective="poisson"` is built-in), scipy.stats / scipy.optimize (already in use), pandera, joblib, pytest, mypy strict, ruff.
 
@@ -367,10 +367,11 @@ Subclass of LightGBMTunedModel. For zero-inflated count stats (the 13 cells
 Plan 3e routes through NB-2 in Ridge — passing_tds / rushing_tds /
 receiving_tds / interceptions / fumbles_lost, intersected with each
 position's target_stats), trains one lgb.LGBMRegressor with
-``objective="poisson"``, predicts log-mu, exponentiates to mu_hat, and
-fits NB-2 dispersion on training residuals via
-``nb_dispersion_from_residuals``. Predict-time distribution per count
-stat: ``ParametricNegativeBinomial(mu, dispersion)``.
+``objective="poisson"``, reads predicted mu directly from
+``regressor.predict(X)`` (lgb's poisson predict returns the mean in
+original scale, already exponentiated), and fits NB-2 dispersion on
+training residuals via ``nb_dispersion_from_residuals``. Predict-time
+distribution per count stat: ``ParametricNegativeBinomial(mu, dispersion)``.
 
 For yards / receptions stats: 5-quantile sub-models exactly as
 LightGBMTunedModel does today. Predict-time distribution:
