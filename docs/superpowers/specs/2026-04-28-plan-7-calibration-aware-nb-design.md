@@ -1,9 +1,11 @@
 # Plan 7 — Calibration-aware NB-2 fitting (Model C-NB-cal) — Design
 
-**Status:** approved (brainstorming, 2026-04-28).
+**Status:** **STOPPED at Phase 0** (2026-04-28). Premise was misaligned with the actual mechanism. See `docs/superpowers/research/2026-04-28-calibration-breakdown.md` for the diagnostic finding and `project_management.md` for the verdict. Spec preserved as record-of-decision.
 **Date:** 2026-04-28
 **Author:** alden + claude
 **Builds on:** Plan 5c (PR #13, merged at `166ea97`) — depends on `LightGBMNbModel`, `nb_dispersion_from_residuals` in `src/projections/distributions/parametric.py`, the `POSITION_DISPATCH.factories` dict, and the snapshot keying by `(position, year, metric, model_class)`. Branched from `main` at `166ea97`.
+
+> **Why stopped:** Phase 0 measured per-stat empirical coverage on Plan 5c's C-NB output. Per-stat NB-2 count distributions are *over*-covering at [p10, p90] (gap mean -0.16 across 16 cells; counts cover ~96% vs nominal 80%) while yards stats are well-calibrated (gap ≈ 0). Plan 7 assumed NB-2 is *under*-covering at p10/p90; pinball fitting at q=0.10/0.90 would *narrow* the count distributions, opposite the direction needed for the composite [p10, p90] coverage gap. The composite gap mechanism lives in upper-tail (p95+) behavior — beyond what this plan's loss function targets. See research note for full analysis. Follow-up TODO #30 captures the right next plan: upper-tail count calibration.
 
 ---
 

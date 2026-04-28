@@ -354,3 +354,40 @@ Concrete tasks (when ready):
 Defer until Plan 6 (ensemble) lands and we're confident which model
 classes the ensemble references — then prune dead classes in the same
 housekeeping commit.
+
+### 30. Upper-tail count calibration follow-up to Plan 7
+
+Plan 7 (calibration-aware NB-2 fitting at p10/p90) was stopped at Phase 0
+because the diagnostic measured per-stat NB-2 count distributions on Plan 5c's
+C-NB output and found they are *over*-covering at [p10, p90] by ~16pp (gap
+mean -0.169 across 16 cells), not under-covering as Plan 7 assumed. Pinball
+fitting at q=0.10/0.90 would narrow count distributions, opposite the
+direction needed to close the composite [p10, p90] coverage gap. See
+`docs/superpowers/research/2026-04-28-calibration-breakdown.md` and the
+Plan 7 entry in `project_management.md` for the full analysis.
+
+The composite calibration shortfall remains real (-0.062 mean vs A) but its
+mechanism lives in upper-tail (p95+) count behavior — outside Plan 7's loss
+target. Three candidate follow-up mechanisms, in expected-leverage order:
+
+1. **Pinball-loss dispersion fit at upper-tail quantiles.** Same machinery
+   as Plan 7 but `quantiles=(0.90, 0.95)` or `(0.95,)` only. Targets the
+   actual gap location. Plan 7's diagnostic CLI is reusable. Cheapest if
+   it works.
+2. **Switch count family to ZIP (zero-inflated Poisson).** Handles zero
+   mass / non-zero tail decoupled rather than via NB-2's single
+   overdispersion knob. Fundamental distribution-family change. More code
+   surface (new `ParametricZeroInflatedPoisson` + codec branch).
+3. **Mixture model: explicit point mass at 0 + heavier-tailed integer
+   distribution.** Most flexible, most code surface. Defer until 1 and 2
+   are tried.
+
+Defer indefinitely if the user accepts the calibration shortfall as a known
+limitation (Plan 5c PM's framing). None of the planned downstream consumers
+(Draft Hub, start/sit, DFS lineup optimizer) depend on a perfectly calibrated
+[p10, p90] interval — they consume mean and rank.
+
+Plan 7's spec, plan, and diagnostic CLI ship to main as record-of-decision
+on branch `feat/plan-7-calibration-aware-nb`. Future work re-points the
+diagnostic at any new model output to verify the upper-tail mechanism on
+the same per-row backtest-output schema.

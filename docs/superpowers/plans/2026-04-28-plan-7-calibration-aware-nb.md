@@ -1,5 +1,7 @@
 # Plan 7 — Calibration-aware NB-2 fitting (Model C-NB-cal) — Implementation Plan
 
+> **STATUS: STOPPED AT PHASE 0 (2026-04-28).** Phase 0 diagnostic surfaced that the plan's premise (NB-2 count distributions too narrow at [p10, p90]) is opposite of empirical reality (count NB-2 is *over*-covering at [p10, p90]; gap mean -0.16). Pinball fitting at q=0.10/0.90 would narrow count distributions, opposite direction needed for the composite [p10, p90] coverage gap. See `docs/superpowers/research/2026-04-28-calibration-breakdown.md`. Tasks 4-15 unexecuted. The diagnostic CLI (Tasks 2-3) ships as reusable research output.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship `LightGBMNbCalModel` (Model C-NB-cal) as a fifth peer model class that closes the [p10,p90] coverage regression Model C-NB carries vs Model A on RB/TE/WR. Mean prediction (Poisson booster) is unchanged. Only the dispersion estimator changes — α is re-fit by minimizing pinball loss at q=0.10 and q=0.90 on a held-out validation slice instead of maximizing the conditional NB-2 log-likelihood on training residuals.
