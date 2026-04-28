@@ -16,14 +16,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+import warnings
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 import joblib
+import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
+from scipy.optimize import minimize_scalar
 
 from projections.distributions import (
     MixtureDistribution,
@@ -67,6 +71,99 @@ from projections.scoring.score_distribution import (
 
 _PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 _DEFAULT_WEIGHTS_DIR: Final[Path] = _PROJECT_ROOT / "data" / "ensemble_weights"
+_QUANTILES_FOR_FIT: Final[tuple[float, float]] = (0.10, 0.90)
+_WEIGHT_BOUNDS: Final[tuple[float, float]] = (0.001, 0.999)
+
+
+def _pinball(actual: float, q_pred: float, q: float) -> float:
+    """Standard quantile pinball loss.
+
+    pinball(y, q_pred, q) = max(q * (y - q_pred), (q - 1) * (y - q_pred))
+
+    Equivalently: q * (y - q_pred) when y >= q_pred (under-estimate),
+                  (1 - q) * (q_pred - y) when y < q_pred (over-estimate).
+    """
+    diff = actual - q_pred
+    return float(max(q * diff, (q - 1.0) * diff))
+
+
+def _fit_weight_for_stat(
+    *,
+    components_a: Sequence[Distribution],
+    components_b: Sequence[Distribution],
+    actuals: NDArray[np.float64],
+) -> float:
+    """Fit one scalar weight w in (0.001, 0.999) minimizing summed pinball
+    loss at q in {0.10, 0.90} on the per-row mixture distribution.
+
+    components_a[i], components_b[i], actuals[i] correspond to the same row
+    on the calibration year. len(components_a) == len(components_b) ==
+    len(actuals) is required.
+
+    Returns 0.5 with RuntimeWarning on zero-length input. Raises ValueError
+    on length mismatch.
+
+    Uses scipy.optimize.minimize_scalar (bounded brent). Falls back to a
+    coarse 11-point grid search if scipy fails (non-finite loss, optimizer
+    failure). If the grid also produces only non-finite losses, returns
+    0.5 with RuntimeWarning.
+    """
+    n = len(actuals)
+    if not (n == len(components_a) == len(components_b)):
+        raise ValueError(
+            f"length mismatch: components_a={len(components_a)}, "
+            f"components_b={len(components_b)}, actuals={n}"
+        )
+    if n == 0:
+        warnings.warn(
+            "_fit_weight_for_stat received zero-length input; returning 0.5 default",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return 0.5
+
+    def loss(w: float) -> float:
+        total = 0.0
+        for a_dist, b_dist, actual in zip(components_a, components_b, actuals, strict=True):
+            mix = MixtureDistribution(component_a=a_dist, component_b=b_dist, weight=w)
+            for q in _QUANTILES_FOR_FIT:
+                q_pred = mix.quantile(q)
+                total += _pinball(float(actual), q_pred, q)
+        return total
+
+    try:
+        result = minimize_scalar(
+            loss,
+            method="bounded",
+            bounds=_WEIGHT_BOUNDS,
+            options={"xatol": 1e-3},
+        )
+        if result.success and np.isfinite(result.fun):
+            return float(np.clip(result.x, *_WEIGHT_BOUNDS))
+    except (ValueError, OverflowError) as exc:
+        warnings.warn(
+            f"_fit_weight_for_stat: scipy optimization failed ({exc!r}); falling back to grid",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    # Grid-search fallback.
+    grid = np.linspace(_WEIGHT_BOUNDS[0], _WEIGHT_BOUNDS[1], 11)
+    losses: list[float] = []
+    for w in grid:
+        try:
+            losses.append(loss(float(w)))
+        except (ValueError, OverflowError):
+            losses.append(float("inf"))
+    losses_arr = np.asarray(losses)
+    if not np.any(np.isfinite(losses_arr)):
+        warnings.warn(
+            "_fit_weight_for_stat: all grid points returned non-finite loss; returning 0.5 default",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return 0.5
+    return float(grid[int(np.argmin(losses_arr))])
 
 
 def _code_hash_files_ensemble() -> tuple[Path, ...]:
