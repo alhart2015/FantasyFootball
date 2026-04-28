@@ -39,6 +39,13 @@ from projections.models.lightgbm import (
     te_lightgbm,
     wr_lightgbm,
 )
+from projections.models.lightgbm_nb import (
+    LightGBMNbModel,
+    qb_lightgbm_nb,
+    rb_lightgbm_nb,
+    te_lightgbm_nb,
+    wr_lightgbm_nb,
+)
 from projections.models.lightgbm_tuned import (
     LightGBMTunedModel,
     qb_lightgbm_tuned,
@@ -58,20 +65,25 @@ __all__ = [
     "POSITION_DISPATCH",
     "BaselineModel",
     "LightGBMModel",
+    "LightGBMNbModel",
     "LightGBMTunedModel",
     "Model",
     "compute_code_hash",
     "qb_baseline",
     "qb_lightgbm",
+    "qb_lightgbm_nb",
     "qb_lightgbm_tuned",
     "rb_baseline",
     "rb_lightgbm",
+    "rb_lightgbm_nb",
     "rb_lightgbm_tuned",
     "te_baseline",
     "te_lightgbm",
+    "te_lightgbm_nb",
     "te_lightgbm_tuned",
     "wr_baseline",
     "wr_lightgbm",
+    "wr_lightgbm_nb",
     "wr_lightgbm_tuned",
 ]
 
@@ -110,21 +122,25 @@ _QB_FACTORIES: dict[str, Callable[[], Model]] = {
     "baseline": qb_baseline,
     "lightgbm": qb_lightgbm,
     "lightgbm-tuned": qb_lightgbm_tuned,
+    "lightgbm-nb": qb_lightgbm_nb,
 }
 _RB_FACTORIES: dict[str, Callable[[], Model]] = {
     "baseline": rb_baseline,
     "lightgbm": rb_lightgbm,
     "lightgbm-tuned": rb_lightgbm_tuned,
+    "lightgbm-nb": rb_lightgbm_nb,
 }
 _TE_FACTORIES: dict[str, Callable[[], Model]] = {
     "baseline": te_baseline,
     "lightgbm": te_lightgbm,
     "lightgbm-tuned": te_lightgbm_tuned,
+    "lightgbm-nb": te_lightgbm_nb,
 }
 _WR_FACTORIES: dict[str, Callable[[], Model]] = {
     "baseline": wr_baseline,
     "lightgbm": wr_lightgbm,
     "lightgbm-tuned": wr_lightgbm_tuned,
+    "lightgbm-nb": wr_lightgbm_nb,
 }
 
 
