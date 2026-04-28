@@ -137,3 +137,22 @@ class QuantileDistribution:
         rng = rng if rng is not None else np.random.default_rng()
         u = rng.uniform(0.0, 1.0, size=n)
         return self._quantile_vec(u)
+
+    def cdf(self, x: float) -> float:
+        """Return P(X <= x) by piecewise-linear inversion of the stored
+        (quantiles, values) knots.
+
+        Below the lowest stored value, clamps at the lowest stored quantile.
+        Above the highest stored value, clamps at the highest stored quantile.
+        Mixtures pool both children's cdfs, so the clamp does not impede the
+        brentq inversion in MixtureDistribution.quantile.
+        """
+        qs = self.quantiles_
+        vs = self.values_
+        if x <= vs[0]:
+            return float(qs[0])
+        if x >= vs[-1]:
+            return float(qs[-1])
+        # Linear interpolation in (value -> quantile) space.
+        # np.interp expects ascending xp; values_ is non-decreasing (validated in __init__).
+        return float(np.interp(x, vs, qs))

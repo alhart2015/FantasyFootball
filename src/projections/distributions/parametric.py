@@ -88,6 +88,9 @@ class ParametricNormal:
         rng = rng if rng is not None else np.random.default_rng()
         return rng.normal(loc=self.mean_, scale=self.std_, size=n).astype(np.float64)
 
+    def cdf(self, x: float) -> float:
+        return float(stats.norm.cdf(x, loc=self.mean_, scale=self.std_))
+
 
 @dataclass(slots=True, frozen=True)
 class ParametricGamma:
@@ -120,6 +123,9 @@ class ParametricGamma:
     def sample(self, n: int, rng: np.random.Generator | None = None) -> NDArray[np.float64]:
         rng = rng if rng is not None else np.random.default_rng()
         return rng.gamma(shape=self.shape, scale=self.scale, size=n).astype(np.float64)
+
+    def cdf(self, x: float) -> float:
+        return float(stats.gamma.cdf(x, a=self.shape, scale=self.scale))
 
 
 @dataclass(slots=True, frozen=True, init=False)
@@ -178,6 +184,10 @@ class ParametricNegativeBinomial:
         raw = stats.nbinom.rvs(n=n_size, p=p, size=n, random_state=rng)
         return np.asarray(raw, dtype=np.float64)
 
+    def cdf(self, x: float) -> float:
+        n, p = self._scipy_n_p()
+        return float(stats.nbinom.cdf(x, n=n, p=p))
+
 
 @dataclass(slots=True, frozen=True, init=False)
 class ParametricStudentT:
@@ -221,3 +231,6 @@ class ParametricStudentT:
         # a properly-typed NDArray[np.float64] instead of Any.
         raw = stats.t.rvs(df=self.df_, loc=self.loc_, scale=self.scale_, size=n, random_state=rng)
         return np.asarray(raw, dtype=np.float64)
+
+    def cdf(self, x: float) -> float:
+        return float(stats.t.cdf(x, df=self.df_, loc=self.loc_, scale=self.scale_))
