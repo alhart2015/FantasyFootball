@@ -12,6 +12,7 @@ from projections.backtest.adoption_gate import (
     BootstrapDelta,
     PositionVerdict,
     paired_bootstrap_rmse_delta,
+    paired_bootstrap_spearman_delta,
 )
 from projections.schemas import Position
 
@@ -108,3 +109,64 @@ def test_rmse_delta_raises_on_length_mismatch() -> None:
     cand = np.zeros(199)
     with pytest.raises(ValueError, match="same length"):
         paired_bootstrap_rmse_delta(inc, cand)
+
+
+def test_spearman_delta_identical_predictions_brackets_zero() -> None:
+    rng = np.random.default_rng(0)
+    actual = rng.normal(size=2000)
+    pred = actual + rng.normal(scale=0.5, size=2000)
+    grouping = np.repeat([2021, 2022, 2023, 2024], 500)
+    bd = paired_bootstrap_spearman_delta(pred, pred, actual, grouping, n_bootstrap=300, seed=42)
+    assert bd.point == 0.0
+    assert bd.lo_95 <= 0.0 <= bd.hi_95
+
+
+def test_spearman_delta_candidate_perfect_vs_incumbent_random() -> None:
+    rng = np.random.default_rng(0)
+    actual = np.arange(2000, dtype=np.float64)
+    candidate = actual.copy()  # perfect rank
+    incumbent = rng.normal(size=2000)  # random rank
+    grouping = np.repeat([2021, 2022, 2023, 2024], 500)
+    bd = paired_bootstrap_spearman_delta(
+        incumbent, candidate, actual, grouping, n_bootstrap=300, seed=42
+    )
+    assert bd.point > 0.5
+    assert bd.lo_95 > 0.0
+
+
+def test_spearman_delta_per_year_averaging_cancels_opposite_year_wins() -> None:
+    rng = np.random.default_rng(0)
+    n_per_year = 600
+    actual = rng.normal(size=n_per_year * 2)
+    incumbent = actual + rng.normal(scale=0.5, size=n_per_year * 2)
+    candidate = incumbent.copy()
+    candidate[:n_per_year] = actual[:n_per_year] + rng.normal(scale=0.2, size=n_per_year)
+    candidate[n_per_year:] = rng.normal(size=n_per_year)
+    grouping = np.repeat([2021, 2022], n_per_year)
+    bd = paired_bootstrap_spearman_delta(
+        incumbent, candidate, actual, grouping, n_bootstrap=300, seed=42
+    )
+    assert -0.6 < bd.point < 0.6
+
+
+def test_spearman_delta_constant_candidate_propagates_nan() -> None:
+    rng = np.random.default_rng(0)
+    actual = rng.normal(size=2000)
+    incumbent = actual + rng.normal(scale=0.5, size=2000)
+    candidate = np.full(2000, 7.0)
+    grouping = np.repeat([2021, 2022, 2023, 2024], 500)
+    bd = paired_bootstrap_spearman_delta(
+        incumbent, candidate, actual, grouping, n_bootstrap=200, seed=42
+    )
+    assert np.isnan(bd.point) or np.isnan(bd.lo_95) or np.isnan(bd.hi_95)
+
+
+def test_spearman_delta_deterministic_under_same_seed() -> None:
+    rng = np.random.default_rng(0)
+    actual = rng.normal(size=500)
+    inc = actual + rng.normal(scale=0.5, size=500)
+    cand = actual + rng.normal(scale=0.4, size=500)
+    grouping = np.repeat([2021, 2022], 250)
+    bd1 = paired_bootstrap_spearman_delta(inc, cand, actual, grouping, n_bootstrap=200, seed=99)
+    bd2 = paired_bootstrap_spearman_delta(inc, cand, actual, grouping, n_bootstrap=200, seed=99)
+    assert bd1 == bd2 or (np.isnan(bd1.point) and np.isnan(bd2.point))

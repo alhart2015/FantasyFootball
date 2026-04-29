@@ -14,6 +14,7 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 
 from projections.schemas import Position
 
@@ -102,6 +103,104 @@ def paired_bootstrap_rmse_delta(
         rmse_inc = np.sqrt(np.mean(inc[idx] ** 2))
         rmse_cand = np.sqrt(np.mean(cand[idx] ** 2))
         deltas[b] = rmse_cand - rmse_inc
+
+    lo, hi = np.percentile(deltas, [2.5, 97.5])
+    return BootstrapDelta(
+        point=point,
+        lo_95=float(lo),
+        hi_95=float(hi),
+        n_paired_rows=n,
+        n_bootstrap=n_bootstrap,
+    )
+
+
+def _per_group_mean_spearman(
+    predicted: np.ndarray,
+    actual: np.ndarray,
+    grouping: np.ndarray,
+) -> float:
+    """Spearman correlation per group, averaged unweighted across groups.
+
+    Returns NaN if any group's correlation is undefined (constant input,
+    or empty). The verdict_for_position rule downgrades NaN to DO_NOT_ADOPT.
+    """
+    groups = np.unique(grouping)
+    if groups.size == 0:
+        return float("nan")
+    rhos = np.empty(groups.size, dtype=np.float64)
+    for i, g in enumerate(groups):
+        mask = grouping == g
+        if mask.sum() < 2:
+            return float("nan")
+        rho = spearmanr(predicted[mask], actual[mask]).statistic
+        if np.isnan(rho):
+            return float("nan")
+        rhos[i] = rho
+    return float(rhos.mean())
+
+
+def paired_bootstrap_spearman_delta(
+    predicted_incumbent: np.ndarray,
+    predicted_candidate: np.ndarray,
+    actual: np.ndarray,
+    grouping: np.ndarray,
+    *,
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+) -> BootstrapDelta:
+    """Paired bootstrap CI on (per-group-mean Spearman) delta candidate - incumbent.
+
+    Per-year (group) Spearman is computed within each group, then averaged
+    unweighted across groups. Pooling across years would mix populations
+    because the player set rotates between held-out years.
+
+    Args:
+        predicted_incumbent: shape (n,) per-row predicted composite from incumbent.
+        predicted_candidate: shape (n,) per-row predicted composite from candidate.
+        actual: shape (n,) per-row actual composite.
+        grouping: shape (n,) integer/string per-row group key (held-out year).
+        n_bootstrap: number of bootstrap resamples. Default 1000.
+        seed: RNG seed. Default 42.
+
+    Returns:
+        BootstrapDelta. NaN values propagate when either model produces a
+        constant prediction within a group.
+
+    Raises:
+        ValueError: arrays have inconsistent lengths or fewer than 100 rows.
+    """
+    inc = np.asarray(predicted_incumbent, dtype=np.float64)
+    cand = np.asarray(predicted_candidate, dtype=np.float64)
+    act = np.asarray(actual, dtype=np.float64)
+    grp = np.asarray(grouping)
+    n = inc.shape[0]
+    if not (cand.shape[0] == act.shape[0] == grp.shape[0] == n):
+        raise ValueError(
+            "predicted_incumbent, predicted_candidate, actual, grouping must "
+            f"have the same length; got {inc.shape[0]}, {cand.shape[0]}, "
+            f"{act.shape[0]}, {grp.shape[0]}"
+        )
+    if n < _MIN_PAIRED_ROWS:
+        raise ValueError(f"need at least {_MIN_PAIRED_ROWS} paired rows, got {n}")
+
+    point = _per_group_mean_spearman(cand, act, grp) - _per_group_mean_spearman(inc, act, grp)
+
+    rng = np.random.default_rng(seed)
+    deltas = np.empty(n_bootstrap, dtype=np.float64)
+    for b in range(n_bootstrap):
+        idx = rng.integers(0, n, size=n)
+        s_inc = _per_group_mean_spearman(inc[idx], act[idx], grp[idx])
+        s_cand = _per_group_mean_spearman(cand[idx], act[idx], grp[idx])
+        deltas[b] = s_cand - s_inc
+
+    if np.isnan(point) or np.isnan(deltas).any():
+        return BootstrapDelta(
+            point=float("nan"),
+            lo_95=float("nan"),
+            hi_95=float("nan"),
+            n_paired_rows=n,
+            n_bootstrap=n_bootstrap,
+        )
 
     lo, hi = np.percentile(deltas, [2.5, 97.5])
     return BootstrapDelta(
