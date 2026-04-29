@@ -6,7 +6,13 @@ from collections.abc import Callable
 
 import pytest
 
-from projections.models import POSITION_DISPATCH, BaselineModel, production_model_for
+from projections.models import (
+    POSITION_DISPATCH,
+    BaselineModel,
+    EnsembleModel,
+    LightGBMNbModel,
+    production_model_for,
+)
 from projections.models.base import Model
 from projections.schemas import Position
 
@@ -22,12 +28,26 @@ def test_every_dispatch_entry_has_default_model_class() -> None:
         )
 
 
-def test_initial_default_is_baseline_for_every_position() -> None:
-    for pos, dispatch in POSITION_DISPATCH.items():
-        assert dispatch.default_model_class == "baseline", (
-            f"{pos} default_model_class is {dispatch.default_model_class!r}, "
-            f"expected 'baseline' (initial Plan 8 state — Phase 4 will update)"
-        )
+def test_default_model_class_per_position() -> None:
+    """Defaults reflect Plan 8 Phase 4 re-evaluation verdicts.
+
+    See reports/adoption_gate_summary.md for the full report. Per-position
+    routing per spec §6 mechanical tie-break (most-negative rmse_delta.point):
+
+    - QB: lightgbm-nb (3 ADOPTers; NB wins tie-break)
+    - RB: baseline (no ADOPT verdict)
+    - TE: baseline (no ADOPT verdict)
+    - WR: ensemble (sole ADOPTer)
+    """
+    expected = {
+        Position.QB: "lightgbm-nb",
+        Position.RB: "baseline",
+        Position.TE: "baseline",
+        Position.WR: "ensemble",
+    }
+    for pos, want in expected.items():
+        got = POSITION_DISPATCH[pos].default_model_class
+        assert got == want, f"{pos} default_model_class={got!r} expected {want!r}"
 
 
 def test_post_init_raises_when_default_not_in_factories() -> None:
@@ -48,11 +68,19 @@ def test_post_init_raises_when_default_not_in_factories() -> None:
         )
 
 
-def test_production_model_for_returns_baseline_instance_initially() -> None:
-    for pos in [Position.QB, Position.RB, Position.TE, Position.WR]:
+def test_production_model_for_returns_expected_class_per_position() -> None:
+    """`production_model_for` instantiates the per-position default per Plan 8
+    Phase 4 verdicts (see reports/adoption_gate_summary.md)."""
+    expected: dict[Position, type[Model]] = {
+        Position.QB: LightGBMNbModel,
+        Position.RB: BaselineModel,
+        Position.TE: BaselineModel,
+        Position.WR: EnsembleModel,
+    }
+    for pos, want_cls in expected.items():
         model = production_model_for(pos)
-        assert isinstance(model, BaselineModel), (
-            f"{pos} initial production model should be a BaselineModel, got {type(model).__name__}"
+        assert isinstance(model, want_cls), (
+            f"{pos} production model should be a {want_cls.__name__}, got {type(model).__name__}"
         )
 
 

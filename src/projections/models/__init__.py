@@ -174,7 +174,7 @@ POSITION_DISPATCH: Mapping[Position, _PositionDispatch] = {
         feature_builder=build_qb_features,
         feature_schema=QbFeaturesSchema,
         ngs_stat_type="passing",
-        default_model_class="baseline",
+        default_model_class="lightgbm-nb",
     ),
     Position.RB: _PositionDispatch(
         factories=_RB_FACTORIES,
@@ -195,7 +195,7 @@ POSITION_DISPATCH: Mapping[Position, _PositionDispatch] = {
         feature_builder=build_wr_features,
         feature_schema=WrFeaturesSchema,
         ngs_stat_type="receiving",
-        default_model_class="baseline",
+        default_model_class="ensemble",
     ),
 }
 
