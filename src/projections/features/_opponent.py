@@ -1,34 +1,156 @@
-"""Opponent-strength proxy: average fantasy points allowed to a position
-over a trailing window. v1 substitute for true opponent-adjusted EPA
-(which would need play-by-play ingest, deferred to a later plan)."""
+"""Opponent-strength helper: schedule-of-strength-adjusted EPA-per-play
+residual, computed from play-by-play data.
+
+Replaces the v1 `opp_allowed_fppg` (Plan 2a) which used team-week fppg
+trailing means without schedule-of-strength adjustment.
+"""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 
-from projections.schemas import Position, Ruleset
-from projections.scoring.score import StatLine, score
+if TYPE_CHECKING:
+    from projections.schemas import Position, Ruleset
 
 
-def _row_to_statline(row: pd.Series[Any]) -> StatLine:
-    """Build a StatLine from a weekly_stats row. Defaults to 0 for any
-    field not present in weekly_stats (e.g., 2pt conversions, return_tds,
-    which the foundations-era schema doesn't track)."""
-    return StatLine(
-        passing_yards=float(row.get("passing_yards", 0.0) or 0.0),
-        passing_tds=int(row.get("passing_tds", 0) or 0),
-        interceptions=int(row.get("interceptions", 0) or 0),
-        rushing_yards=float(row.get("rushing_yards", 0.0) or 0.0),
-        rushing_tds=int(row.get("rushing_tds", 0) or 0),
-        receptions=int(row.get("receptions", 0) or 0),
-        receiving_yards=float(row.get("receiving_yards", 0.0) or 0.0),
-        receiving_tds=int(row.get("receiving_tds", 0) or 0),
-        fumbles_lost=int(row.get("fumbles_lost", 0) or 0),
+def _is_pass_play(df: pd.DataFrame) -> pd.Series[bool]:
+    """A play is pass-classified if play_type=pass OR a sack OR a scramble."""
+    return (
+        (df["play_type"] == "pass")
+        | (df["sack"].fillna(0).astype(int) == 1)
+        | (df["qb_scramble"].fillna(0).astype(int) == 1)
     )
 
 
+def _is_run_play(df: pd.DataFrame) -> pd.Series[bool]:
+    """A play is run-classified if play_type=run AND not a scramble."""
+    return (df["play_type"] == "run") & (df["qb_scramble"].fillna(0).astype(int) != 1)
+
+
+def opp_epa_allowed_residual(
+    pbp: pd.DataFrame,
+    *,
+    play_type: Literal["pass", "run"],
+    n_weeks: int,
+) -> pd.DataFrame:
+    """Schedule-of-strength-adjusted EPA-allowed per play type.
+
+    Per-play residual = EPA(p) - mean_EPA_for(posteam, play_type, in_window),
+    where mean_EPA_for is that offense's overall pass/run EPA-per-play in the
+    same trailing window. The residual answers: "given who they faced, how
+    much better/worse than expected did this defense play?"
+
+    Returns one row per (season, target_week, opp_team) with target_week
+    shifted +1 from the trailing window's last week, mirroring the v1
+    `opp_allowed_fppg` join interface. The opp_team column carries the
+    defense; join onto offense-side feature rows on (season, week, opponent).
+
+    Target weeks emitted per (defteam, season) span ``range(2, span_end)``
+    where ``span_end = max(max_observed_week, n_weeks) + 2`` — i.e. weeks
+    2 through whichever of "the last week with any observation" or "the
+    natural lookback target ``n_weeks + 1``" is larger. This handles both
+    early-season expanding-window emissions and bye weeks where the defense
+    hasn't played in the immediate prior week but still needs a residual
+    for prediction.
+    """
+    empty_out = pd.DataFrame(
+        columns=["season", "week", "opp_team", "opp_epa_allowed_residual"]
+    ).astype({"season": "int64", "week": "int64", "opp_epa_allowed_residual": float})
+
+    if pbp.empty:
+        return empty_out
+
+    # Broad filter: drop pre-snap penalties / bad rows. Used to identify
+    # which (defteam, season) pairs exist in the dataset.
+    broad = pbp[
+        pbp["epa"].notna()
+        & pbp["posteam"].notna()
+        & pbp["defteam"].notna()
+        & (pbp["play_type"] != "no_play")
+    ].copy()
+
+    if broad.empty:
+        return empty_out
+
+    # Play-type-filtered subset: residuals are computed *only* over plays of
+    # the requested type. The window's mean residual is what we emit.
+    if play_type == "pass":
+        typed = broad[_is_pass_play(broad)].copy()
+    else:
+        typed = broad[_is_run_play(broad)].copy()
+
+    if typed.empty:
+        return empty_out
+
+    rows: list[dict[str, object]] = []
+    for season, season_broad in broad.groupby("season", sort=False):
+        max_week = int(season_broad["week"].max())
+        # Target weeks span 2 through whichever of `max_week + 1` or
+        # `n_weeks + 1` is larger. The latter ensures the natural
+        # "predict-week-(n+1)" target is always emitted even if the dataset
+        # ends earlier than that.
+        span_end = max(max_week, n_weeks) + 2  # exclusive upper bound for range
+        target_weeks = list(range(2, span_end))
+
+        defteams_in_season = sorted(season_broad["defteam"].unique())
+        season_typed = typed[typed["season"] == season]
+
+        for defteam in defteams_in_season:
+            for target_week in target_weeks:
+                window_min = max(1, target_week - n_weeks)
+                window_max = target_week - 1
+                window_weeks = list(range(window_min, window_max + 1))
+
+                # Plays this defense allowed in window_weeks (typed only).
+                mask_def_window = (season_typed["defteam"] == defteam) & (
+                    season_typed["week"].isin(window_weeks)
+                )
+                window_plays = season_typed[mask_def_window]
+                if window_plays.empty:
+                    continue
+
+                # Offense overall mean (typed only) in the same window
+                # across ALL defenses faced — schedule-of-strength baseline.
+                mask_off_window = season_typed["week"].isin(window_weeks)
+                off_window = season_typed[mask_off_window]
+                off_means = off_window.groupby("posteam")["epa"].mean().rename("off_window_mean")
+
+                joined = window_plays.merge(
+                    off_means.to_frame(),
+                    left_on="posteam",
+                    right_index=True,
+                    how="left",
+                )
+                joined["residual"] = joined["epa"] - joined["off_window_mean"]
+                mean_residual = float(joined["residual"].mean())
+
+                rows.append(
+                    {
+                        "season": int(season),
+                        "week": target_week,
+                        "opp_team": defteam,
+                        "opp_epa_allowed_residual": mean_residual,
+                    }
+                )
+
+    if not rows:
+        return empty_out
+
+    out = pd.DataFrame(rows, columns=["season", "week", "opp_team", "opp_epa_allowed_residual"])
+    out["season"] = out["season"].astype("int64")
+    out["week"] = out["week"].astype("int64")
+    return out
+
+
+# --- Transitional shim — REMOVED IN PLAN 9 PHASE 3 -------------------------
+# The v1 `opp_allowed_fppg` is no longer implemented; only a typed shim
+# remains so that the per-position builders (qb.py, rb.py, wr.py, te.py)
+# still type-check while Tasks 6-9 migrate each to `opp_epa_allowed_residual`.
+# At runtime the shim raises immediately — this matches the Phase 3 design
+# where each builder's tests intentionally fail at the start of its task and
+# pass after the swap. Delete this once Task 9 (te.py) lands.
 def opp_allowed_fppg(
     weekly_stats: pd.DataFrame,
     *,
@@ -36,49 +158,9 @@ def opp_allowed_fppg(
     ruleset: Ruleset,
     n_weeks: int,
 ) -> pd.DataFrame:
-    """For each `(opp_team, season, week)`, the mean fantasy points allowed
-    to `position` over the trailing `n_weeks`.
-
-    Returns a DataFrame with columns `(season, week, opp_team, opp_allowed_fppg)`,
-    where `week` is the week being scored against (NOT included in the
-    trailing window). Joining onto a feature row uses `(season, week, opponent)`
-    on the offense side to retrieve the opponent's allowed-points proxy.
-    """
-    pos_stats = weekly_stats[weekly_stats["position"] == position.value].copy()
-    if pos_stats.empty:
-        return pd.DataFrame(columns=["season", "week", "opp_team", "opp_allowed_fppg"]).astype(
-            {"season": int, "week": int, "opp_allowed_fppg": float}
-        )
-
-    # Score each per-game line.
-    pos_stats["fpts"] = pos_stats.apply(lambda r: score(_row_to_statline(r), ruleset), axis=1)
-
-    # Sum per (opp_team, season, week) — that's all `position`-players' points
-    # allowed by `opp_team` in that week.
-    weekly_allowed = (
-        pos_stats.groupby(["opponent", "season", "week"], as_index=False)["fpts"]
-        .sum()
-        .rename(columns={"opponent": "opp_team"})
+    """Removed in Plan 9. Use ``opp_epa_allowed_residual`` instead."""
+    del weekly_stats, position, ruleset, n_weeks  # silence unused-arg
+    raise NotImplementedError(
+        "opp_allowed_fppg was replaced by opp_epa_allowed_residual in Plan 9. "
+        "Per-position builders (qb/rb/wr/te) are migrated in Tasks 6-9."
     )
-
-    # Trailing-N mean per opp_team, BUT the result is associated with the NEXT
-    # week (the one where the opponent will face this defense).
-    # Approach: keep the trailing window, then shift the resulting mean to
-    # week+1 of the same season.
-    rows: list[dict[str, object]] = []
-    for (opp_team, season), g in weekly_allowed.groupby(["opp_team", "season"], sort=False):
-        g_sorted = g.sort_values("week").reset_index(drop=True)
-        for i in range(len(g_sorted)):
-            window = g_sorted.iloc[max(0, i - n_weeks + 1) : i + 1]
-            mean_fppg = float(window["fpts"].mean())
-            target_week = int(g_sorted.iloc[i]["week"]) + 1
-            rows.append(
-                {
-                    "season": int(season),
-                    "week": target_week,
-                    "opp_team": opp_team,
-                    "opp_allowed_fppg": mean_fppg,
-                }
-            )
-
-    return pd.DataFrame(rows, columns=["season", "week", "opp_team", "opp_allowed_fppg"])
