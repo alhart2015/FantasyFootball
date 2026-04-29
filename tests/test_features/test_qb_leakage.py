@@ -227,11 +227,14 @@ def test_no_leakage_from_pbp_other_weeks(
     qb_schedules: pd.DataFrame,
     fake_pbp_df: pd.DataFrame,
 ) -> None:
-    """Future PBP rows (week >= as_of_week) must not influence the residual.
+    """build_qb_features must not leak future-week PBP rows into current-week features.
 
-    Baseline uses only PBP rows from weeks < 5; the leaky frame appends a
-    week-6 row with an extreme EPA. Builder must filter via prior_mask before
-    calling opp_epa_allowed_residual."""
+    Defense-in-depth: opp_epa_allowed_residual itself bounds its trailing window to
+    [target_week - n_weeks, target_week - 1], the builder's prior_mask(pbp, ...)
+    filter drops as_of_week+ rows pre-helper-call, AND the post-helper merge selects
+    only the week == as_of_week residual. Any of these alone would block the leak;
+    this test verifies the composition by injecting an extreme-EPA row at a future
+    week and asserting bit-identical output."""
     baseline = _baseline(
         qb_weekly_stats,
         qb_snap_counts,

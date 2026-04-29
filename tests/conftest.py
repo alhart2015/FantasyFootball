@@ -904,7 +904,8 @@ def _build_synthetic_pbp() -> pd.DataFrame:
     play_id = 1
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
-            # KC offense vs MIN defense — 2 pass + 2 run.
+            # Each posteam → defteam pairing produces 2 pass + 2 run plays; the outer loop
+            # iterates both (KC, MIN) and (MIN, KC) so both teams appear as offense and defense.
             for posteam, defteam in [("KC", "MIN"), ("MIN", "KC")]:
                 for play_kind in ("pass", "pass", "run", "run"):
                     rows.append(
