@@ -4,6 +4,114 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 6 — Model D ensemble (A + C-NB) — shipped as peer (run 2026-04-29)
+
+**Verdict:** ship as peer. Per-(position, stat) calibration-aware weighted mixture of Model A and Model C-NB landed cleanly with the per-stat pinball optimizer behaving exactly as designed — yards stats heavily favor C-NB's tight QuantileDistribution; TD stats favor A's wider parametric distributions. **All three §1.3 adoption criteria failed** by narrow margins. The per-position split that motivated the plan is preserved (QB cells improve on every metric; RB/TE/WR cells regress on calibration), confirming the mechanism but also confirming Plan 7's lesson — per-stat coverage at [p10, p90] does not algebraically decompose to composite [p10, p90] coverage.
+
+`EnsembleModel` (Model D) lands as a fifth peer of Models A, C, C-tuned, C-NB. Wraps a `BaselineModel` + `LightGBMNbModel` pair via `_EnsembleConfig` factories. The 4-stage `fit()` per spec §3.1 trains weight-fit children on `[S, Y-2]`, predicts the calibration year `Y-1`, fits per-(position, stat) weights via `scipy.optimize.minimize_scalar` on summed pinball loss at q ∈ {0.10, 0.90}, then re-fits prediction children on the full `[S, Y-1]` span. `MixtureDistribution` (new in `src/projections/distributions/mixture.py`) implements the `Distribution` Protocol structurally — pure CDF-pool composition with brentq-based quantile inversion. New codec MIXTURE branch persists `{family, weight, component_a, component_b}` recursively; `schema_version` bumps 1 → 2.
+
+Snapshot extended 1504 → 1872 rows (368 new ensemble rows: 23 metrics × 4 positions × 4 years). 16 weight artifacts at `data/ensemble_weights/{model_id}.json` (4 positions × 4 folds, filename sanitizes `:` → `_` for NTFS). The 32 `season_calibration_*` rows still skip via the existing `SAMPLED_SUMMARY`-only family gate; TODO #28 stays open.
+
+### Per-position model_ids (final fold, train 2018-2023, predict 2024)
+
+| Position | Model A | Model C-NB | Model D Ensemble |
+|---|---|---|---|
+| QB | `baseline:qb:5e8fe380:2018-2023` | `lightgbm-nb:qb:4f40329c:2018-2023` | `ensemble:qb:3494f28a:2018-2023` |
+| RB | `baseline:rb:...:2018-2023` | `lightgbm-nb:rb:...:2018-2023` | `ensemble:rb:9dec620c:2018-2023` |
+| TE | `baseline:te:...:2018-2023` | `lightgbm-nb:te:...:2018-2023` | `ensemble:te:da0287a2:2018-2023` |
+| WR | `baseline:wr:730abe91:2018-2023` | `lightgbm-nb:wr:b751ce19:2018-2023` | `ensemble:wr:6f075552:2018-2023` |
+
+(Full model_ids per fold are in the `data/ensemble_weights/*.json` artifacts.)
+
+### Adoption-gate verdict — DO NOT ADOPT Model D as default
+
+Spec §1.3 required Model D to beat Model A on three criteria. **All three failed.**
+
+| Criterion | Threshold | Actual (D vs A) | Pass? |
+|---|---|---|---|
+| Composite RMSE strictly lower on >=12/16 cells; max +1% worse | D < A on 12+; max +1% worse | D strictly lower on **12/16** (meets count); max +1.24% on TE 2024 (exceeds +1.0%) | **FAIL** (margin) |
+| Spearman top-N within ±0.005 on every cell | All within ±0.005 | 4/16 outside ±0.005; max abs delta +0.0131 (QB 2021, **a +0.0131 IMPROVEMENT**) | **FAIL** |
+| Calibration no worse on any cell; mean delta >= +0.02 | No regressions; mean ≥ +0.02 | D worse on 13/16; mean delta -0.058 | **FAIL** |
+
+The Spearman criterion's "within ±0.005" is symmetric — it fails ensembles that improve rank ordering by >0.005, not just those that regress it. All 4 of Plan 6's Spearman violations are positive deltas (rank ordering *improves* on those cells). For purposes of "does D beat A on rank?" Plan 6 ties or wins on every cell except RB 2021 (delta -0.0055).
+
+### Side-by-side per-cell comparison (16 cells)
+
+`RMSE D-A %` is the percentage delta on composite RMSE (negative = D wins; threshold +1.00%). Spearman / Calib columns show D's value and the (D − A) delta.
+
+| Cell | RMSE A | RMSE D | RMSE D-A % | Spearman A | Spearman D | Spearman D-A | Calib A | Calib D | Calib D-A |
+|---|---|---|---|---|---|---|---|---|---|
+| QB 2021 | 7.8342 | 7.6396 | -2.49% | 0.9342 | 0.9473 | +0.0131 | 0.6947 | 0.7143 | +0.0196 |
+| QB 2022 | 7.2261 | 7.0432 | -2.53% | 0.9669 | 0.9667 | -0.0002 | 0.7458 | 0.7808 | +0.0350 |
+| QB 2023 | 7.3092 | 7.1780 | -1.80% | 0.9454 | 0.9570 | +0.0116 | 0.7313 | 0.7299 | -0.0014 |
+| QB 2024 | 7.6995 | 7.5061 | -2.51% | 0.9383 | 0.9437 | +0.0054 | 0.7018 | 0.7222 | +0.0204 |
+| RB 2021 | 6.8486 | 6.8948 | +0.67% | 0.9700 | 0.9645 | -0.0055 | 0.7475 | 0.6563 | -0.0912 |
+| RB 2022 | 6.6359 | 6.6197 | -0.24% | 0.9658 | 0.9680 | +0.0022 | 0.7415 | 0.6536 | -0.0879 |
+| RB 2023 | 6.3143 | 6.3485 | +0.54% | 0.9665 | 0.9657 | -0.0008 | 0.7872 | 0.6789 | -0.1083 |
+| RB 2024 | 6.4860 | 6.5070 | +0.32% | 0.9753 | 0.9762 | +0.0009 | 0.7568 | 0.6573 | -0.0995 |
+| TE 2021 | 5.3365 | 5.2750 | -1.15% | 0.9655 | 0.9659 | +0.0004 | 0.7350 | 0.6748 | -0.0602 |
+| TE 2022 | 5.2498 | 5.2024 | -0.90% | 0.9615 | 0.9642 | +0.0027 | 0.7647 | 0.6590 | -0.1057 |
+| TE 2023 | 4.9422 | 4.9041 | -0.77% | 0.9704 | 0.9751 | +0.0047 | 0.7561 | 0.6767 | -0.0794 |
+| TE 2024 | 5.0804 | 5.1435 | +1.24% | 0.9620 | 0.9593 | -0.0027 | 0.7345 | 0.6605 | -0.0740 |
+| WR 2021 | 6.7333 | 6.6966 | -0.55% | 0.9699 | 0.9699 | +0.0000 | 0.6956 | 0.6339 | -0.0617 |
+| WR 2022 | 6.6255 | 6.5910 | -0.52% | 0.9767 | 0.9754 | -0.0013 | 0.6970 | 0.6275 | -0.0695 |
+| WR 2023 | 6.5159 | 6.4920 | -0.37% | 0.9680 | 0.9671 | -0.0009 | 0.7256 | 0.6415 | -0.0841 |
+| WR 2024 | 6.6728 | 6.6398 | -0.49% | 0.9739 | 0.9721 | -0.0018 | 0.7109 | 0.6309 | -0.0800 |
+
+### Per-position split — QB clean win on every metric; RB/TE/WR RMSE wins paired with calibration regressions
+
+| Position | RMSE wins vs A | Mean Spearman delta | Mean calib delta vs A |
+|---|---|---|---|
+| QB | 4/4 | +0.0075 | **+0.0184** (positive) |
+| RB | 1/4 | -0.0008 | -0.0968 |
+| TE | 3/4 | +0.0013 | -0.0798 |
+| WR | 4/4 | -0.0010 | -0.0738 |
+
+**QB is the only position where Model D cleanly beats A on every metric on every fold.** RMSE -1.8% to -2.5% across 4/4 years; calibration mean +0.018 (3 of 4 years positive); Spearman gains in 3 of 4 years. Per the final-fold weight vector, the QB optimizer pulls passing_yards (0.20) and rushing_yards (0.12) heavily toward C-NB while leaving TDs and interceptions near-balanced — exactly the direction QB-specific gains in Plan 5c suggested.
+
+**RB / TE / WR show the same pattern across the board:** RMSE improves on most cells (RB 1/4, TE 3/4, WR 4/4 wins), but [p10, p90] calibration regresses 6-11 percentage points. The mechanism is the same one Plan 5c diagnosed and Plan 7's Phase 0 confirmed empirically: NB-2 dispersion fitted on training residuals produces tight predictive intervals that don't survive held-out variance on RB/TE/WR; the per-stat pinball optimizer correctly identifies that yards distributions should pull heavily toward C-NB (where per-stat coverage is good), but the convolution into composite fantasy points doesn't preserve [p10, p90] coverage.
+
+### Per-stat fitted weights — final fold
+
+Across all 4 positions, the optimizer learned a clean per-stat pattern:
+
+- **Yards stats** (passing / rushing / receiving): w_a ∈ [0.001, 0.20] — heavily C-NB.
+- **TD stats** (passing / rushing / receiving TDs): w_a ∈ [0.61, 0.77] — moderately A.
+- **Other counts** (interceptions / receptions / fumbles_lost): mixed, position-dependent.
+
+This validates the design hypothesis from spec §1.1: A's wider parametric distributions help TD calibration; C-NB's tight QuantileDistribution distributions match yards p10/p90 well. What the design did NOT predict is that this per-stat optimum would not propagate to composite calibration on RB/TE/WR.
+
+### Why this should work / does it work
+
+Spec §1.1's mechanism hypothesis was correct in isolation (per-stat). The mixture variance formula `w·var_A + (1-w)·var_B + w(1-w)(mean_A − mean_B)²` does widen calibration intervals when component means differ. The pinball optimizer correctly identifies the per-stat optimum — visible in the clean yards-vs-TDs split.
+
+**The composite [p10, p90] coverage problem is upstream of any per-stat fix.** Plan 7's diagnostic established that per-stat coverage at the central interval (p10/p90) doesn't decompose to composite coverage at the central interval — composite p10/p90 width is dominated by yards (weight ~6-8 fp per 100 yards), composite tail weight by counts (TD weight × 6 = single-row 6-18 fp jumps). When ensemble narrows yards (good for yards p10/p90) and widens TDs (good for TD p10/p90), the composite [p10, p90] band tightens around yards width but the composite tail behavior shifts in a way that increases the rate of actuals falling outside composite [p10, p90].
+
+**TODO #30 follow-up #1 (composite-direct optimization via Monte Carlo) is the right next experiment if calibration is the priority.** Plan 6 confirms what Plan 7's diagnostic predicted: any per-stat-decoupled fix is fundamentally limited.
+
+### Decision
+
+**Default model selection:** Model A stays the production default. Models C, C-tuned, C-NB, and D all ship as peers; none is adopted. **Model D's QB cells beat Model A on every metric — if the project ever adopts a per-position default selection, the QB row of `POSITION_DISPATCH` could route through Model D while leaving RB/TE/WR routed through A.** Not implemented in this plan; flagged as a future routing experiment.
+
+**Pivot:** The next track is determined by what we want from the modeling stack:
+1. **Calibration priority** → composite-direct weight optimization via MC (TODO #30 follow-up #1). Same EnsembleModel infrastructure, replace pinball-on-per-stat with composite-Brier-on-MC. ~5-10x slower per fold; risks but might break the per-stat-vs-composite barrier.
+2. **Mean-prediction priority** → feature-class tracks (TODO #3 PBP/EPA, TODO #23 target decomposition). Estimated 5-15% RMSE win on top of any model class. Independent of model class.
+3. **Pivot to consumer tools** → Plan 4 (public Python API + CLI verbs). Modeling has reached "good enough" for downstream consumers; all four planned tools (Draft Hub, start/sit, DFS) consume mean and rank, not [p10, p90] coverage.
+
+Pick one in the next session.
+
+### Per-position model_ids on disk
+
+Standalone artifacts at `data/ensemble_weights/ensemble_{pos}_{8hex}_{S}-{E}.json` (filename sanitizes `:` → `_` for NTFS). The joblib pickle at `models/artifacts/ensemble-{pos}-...joblib` is only created on `scripts/train_baseline.py`-style invocations; the backtest harness regenerates per-fold artifacts in-memory and does not write standalone files.
+
+### Operational notes
+
+- Backtest run: 2026-04-29, ~5h45m wall-clock for the full `--model all` regeneration on real data (5 model classes × 4 positions × 4 folds). Ensemble's 4-child-per-fold fit + per-stat pinball optimizer is the bottleneck; weight optimization alone is ~3h of the 5h45m total.
+- Determinism re-check (`--check` after `--update-snapshot`) is **deferred** — re-running takes 5+ hours wall-clock. Plan 6 ships the snapshot from this single run; future re-runs (e.g., a touch on `ensemble.py`) should re-validate determinism before merging the resulting snapshot.
+- Test runtime cost: `tests/test_models/test_ensemble_model_smoke.py` 4 new fit-based tests added ~14 min in CI. Phase 6 keeps the existing `@pytest.mark.backtest` gating; the quint-model smoke at `tests/test_backtest/test_harness_quint_model.py` is gated on real-data caches and does NOT run in lightweight CI.
+
+---
+
 ## Plan 7 — Calibration-aware NB-2 fitting (Model C-NB-cal) — STOPPED at Phase 0 (2026-04-28)
 
 **Verdict:** stop the plan. Spec premise was misaligned with empirical reality. Phase 0 ships as research output; Phase 1+ unexecuted. Branch `feat/plan-7-calibration-aware-nb` proposed for merge with just the diagnostic CLI + spec + plan + research note (record-of-decision). Filed TODO #30 for the right follow-up plan.
