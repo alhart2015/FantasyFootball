@@ -228,3 +228,74 @@ def test_cli_missing_candidate_exits_nonzero(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "ensemble" in result.stderr or "ensemble" in result.stdout
+
+
+def test_cli_writes_csv_when_csv_out_provided(tmp_path: Path) -> None:
+    run_dir = _make_synthetic_run(tmp_path, ["baseline", "ensemble"], n_per_class=2000)
+    csv_path = tmp_path / "out.csv"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.adoption_gate",
+            "--run",
+            str(run_dir),
+            "--candidate",
+            "ensemble",
+            "--n-bootstrap",
+            "200",
+            "--position",
+            "QB",
+            "--csv-out",
+            str(csv_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert csv_path.is_file()
+    csv = pd.read_csv(csv_path)
+    expected_cols = {
+        "position",
+        "incumbent",
+        "candidate",
+        "year",
+        "metric",
+        "point",
+        "lo_95",
+        "hi_95",
+        "n_paired",
+        "verdict",
+        "reason",
+    }
+    assert expected_cols <= set(csv.columns)
+    # Two pooled rows (rmse, spearman) + 4 years x 2 metrics for QB.
+    assert (csv["position"] == "QB").sum() == 10
+
+
+def test_cli_position_filter_only_runs_one_position(tmp_path: Path) -> None:
+    run_dir = _make_synthetic_run(tmp_path, ["baseline", "ensemble"], n_per_class=2000)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.adoption_gate",
+            "--run",
+            str(run_dir),
+            "--candidate",
+            "ensemble",
+            "--n-bootstrap",
+            "200",
+            "--position",
+            "RB",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "### RB" in result.stdout
+    assert "### QB" not in result.stdout
+    assert "### TE" not in result.stdout
+    assert "### WR" not in result.stdout
