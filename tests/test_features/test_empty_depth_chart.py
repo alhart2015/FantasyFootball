@@ -32,6 +32,7 @@ def test_build_wr_features_empty_depth_chart_does_not_crash(
     qb_depth_charts: pd.DataFrame,  # contains only QBs — no WR rows in target week
     wr_ngs_receiving: pd.DataFrame,
     wr_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     out = build_wr_features(
         weekly_stats=wr_weekly_stats,
@@ -39,6 +40,7 @@ def test_build_wr_features_empty_depth_chart_does_not_crash(
         depth_charts=qb_depth_charts,
         ngs_receiving=wr_ngs_receiving,
         schedules=wr_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )

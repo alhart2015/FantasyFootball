@@ -410,7 +410,7 @@ def test_wr_features_schema_accepts_valid_row() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
-            "opp_allowed_wr_fppg_l4": [22.5],
+            "opp_pass_epa_allowed_l4": [-0.05],
         }
     )
     WrFeaturesSchema.validate(df)
@@ -445,7 +445,7 @@ def test_wr_features_schema_rejects_target_share_over_one() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
-            "opp_allowed_wr_fppg_l4": [22.5],
+            "opp_pass_epa_allowed_l4": [-0.05],
         }
     )
     with pytest.raises(SchemaError):

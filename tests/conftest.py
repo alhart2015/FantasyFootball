@@ -518,6 +518,7 @@ def baseline_features_wr(baseline_weekly_stats_wr: pd.DataFrame) -> pd.DataFrame
     schedules["home_moneyline"] = schedules["home_moneyline"].astype(pd.Int64Dtype())
     schedules["away_moneyline"] = schedules["away_moneyline"].astype(pd.Int64Dtype())
 
+    pbp = _build_synthetic_pbp()
     feat_frames: list[pd.DataFrame] = []
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
@@ -527,6 +528,7 @@ def baseline_features_wr(baseline_weekly_stats_wr: pd.DataFrame) -> pd.DataFrame
                 depth_charts=depth,
                 ngs_receiving=ngs,
                 schedules=schedules,
+                pbp=pbp,
                 season=season,
                 as_of_week=week,
             )

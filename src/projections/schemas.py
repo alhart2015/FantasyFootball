@@ -505,8 +505,10 @@ class WrFeaturesSchema(pa.DataFrameModel):
     is_home: Series[bool]
     roof_dome: Series[bool]
 
-    # Opponent strength (proxy: opp's allowed WR fantasy points/game over trailing 4)
-    opp_allowed_wr_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
+    # Opponent strength: schedule-of-strength-adjusted pass-EPA residual
+    # (Plan 9). Negative = defense better than expected vs. offenses faced;
+    # positive = worse. No ge=0 bound — residuals can be negative.
+    opp_pass_epa_allowed_l4: Series[float] = pa.Field(nullable=True)
 
     class Config:
         strict = "filter"

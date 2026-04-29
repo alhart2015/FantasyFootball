@@ -284,7 +284,7 @@ _WR_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "spread",
     "is_home",
     "roof_dome",
-    "opp_allowed_wr_fppg_l4",
+    "opp_pass_epa_allowed_l4",
 )
 
 

@@ -181,6 +181,7 @@ def test_end_to_end_ingest_and_features(
         depth_charts=extra_dc,
         ngs_receiving=ngs_receiving,
         schedules=extra_sched,
+        pbp=pbp,
         season=2024,
         as_of_week=4,
     )
