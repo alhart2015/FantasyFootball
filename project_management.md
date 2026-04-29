@@ -4,6 +4,27 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 8 — Adoption gate redesign — in progress (started 2026-04-29, on branch `feat/plan-8-gate-redesign`)
+
+**Status:** brainstorming → spec → plan → execute. No code yet.
+
+**Context — diagnosis of the PR-10-through-PR-15 model losing streak (2026-04-29 conversation).** Plans 3e / 5 / 5b / 5c / 7 / 6 all failed the §1.3 adoption gate. The streak decomposes into two compounding structural problems:
+
+1. **§1.3 thresholds sit below the per-cell noise floor.** "Composite RMSE strictly lower on ≥12/16 cells AND not worse by >1% on any cell" + "weekly calibration no worse on any cell, mean delta ≥ +0.02" treat sampling variation as systematic regression. Smoking gun: Plan 6 hit 12/16 RMSE wins (meets the count!) but failed because TE 2024 was +1.24% worse — 0.24pp over the no-regression line, on a 1081-week cell. There is no significance test gating this; the noise floor on a single cell's RMSE is plausibly ≥1%.
+2. **The calibration metric isn't load-bearing for any planned consumer.** Plan 5c PM and Plan 6 §96–99 already note this out loud — Draft Hub, start/sit, and the DFS lineup optimizer all consume mean and rank, not `[p10, p90]` coverage. Five plans of calibration work optimized a metric whose failure has no downstream cost. Plan 7's Phase 0 separately showed the assumed calibration mechanism was wrong (per-stat coverage doesn't decompose to composite coverage), so multiple plans were also pulling the wrong end of the distribution.
+
+**Goal.** Replace §1.3 with a gate that:
+
+- Treats per-cell deltas as random variables (bootstrap CI or paired significance test on the per-row residual difference) rather than fixed-threshold accept/reject.
+- Drops or significantly downweights the weekly `[p10, p90]` calibration criterion to match what downstream consumers actually need.
+- Lets us re-evaluate the four existing peer models (C, C-tuned, C-NB, D) under the new gate. Strong prior: Model D-for-QB-only — and possibly C-NB for QB — become adoptable.
+
+**Out of scope.** No model code changes; no feature pipeline changes; no new model classes. Strictly the gate spec, the statistical machinery, and a re-evaluation of existing snapshots.
+
+**Next track after Plan 8.** Feature-class work starting with **TODO #3 (PBP / EPA features)**. Five model-class swaps on identical features hit the same information ceiling; the next real RMSE lift (estimated 5–15%) lives in features, not in model class.
+
+---
+
 ## Plan 6 — Model D ensemble (A + C-NB) — shipped as peer (run 2026-04-29)
 
 **Verdict:** ship as peer. Per-(position, stat) calibration-aware weighted mixture of Model A and Model C-NB landed cleanly with the per-stat pinball optimizer behaving exactly as designed — yards stats heavily favor C-NB's tight QuantileDistribution; TD stats favor A's wider parametric distributions. **All three §1.3 adoption criteria failed** by narrow margins. The per-position split that motivated the plan is preserved (QB cells improve on every metric; RB/TE/WR cells regress on calibration), confirming the mechanism but also confirming Plan 7's lesson — per-stat coverage at [p10, p90] does not algebraically decompose to composite [p10, p90] coverage.
@@ -1094,44 +1115,31 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Plan 5c (Model C-NB — hybrid LightGBM with NB-2 for count stats) shipped;
-adoption-gate verdict FAIL on all three §1.3 criteria.** Model A stays the
-production default. Model C-NB **strictly dominates Model C-tuned on RMSE
-(16/16 cells)** and pushes RMSE wins from 4/16 (Tuned) to 11/16 (NB) — the
-mean-prediction fix worked. But the calibration regression carried over
-unchanged in aggregate (mean delta vs A: Tuned -0.063 → NB -0.062). QB cells
-are a clean win across all metrics; RB/TE/WR get RMSE wins paired with 6-12 pp
-[p10,p90] coverage regressions because NB-2 dispersion fit on training
-residuals under-disperses on held-out years.
+**Plan 8 — adoption gate redesign — in progress on `feat/plan-8-gate-redesign`.**
+Diagnosis 2026-04-29 traced the PR-10-through-PR-15 model losing streak
+(Plans 3e / 5 / 5b / 5c / 7 / 6 — all failed §1.3) to two compounding causes:
+(1) §1.3 thresholds sit below the per-cell noise floor, so a model that's
+better in expectation routinely fails from sampling variation alone — Plan 6
+hit 12/16 RMSE wins but failed because TE 2024 was 0.24pp over the
++1.0% no-regression line; (2) the weekly `[p10, p90]` calibration metric
+isn't load-bearing for any planned downstream consumer (Draft Hub,
+start/sit, DFS all consume mean and rank, not coverage). See the Plan 8
+entry at the top of this file for full context. Plan 8 ships a redesigned
+gate plus a re-evaluation of existing peers (C, C-tuned, C-NB, D) under it.
 
-**Update 2026-04-28 (post-Plan-7):** Plan 7 (calibration-aware NB-2 fitting at
-p10/p90) was attempted and stopped at Phase 0 — the diagnostic showed per-stat
-NB-2 count distributions are over-covering at p10/p90 (gap mean -0.169), not
-under-covering as the spec assumed. Pinball fit at p10/p90 would narrow them,
-opposite the direction needed for the composite gap. Composite gap mechanism
-lives in upper-tail (p95+) behavior. See the Plan 7 entry above and TODO #30.
+**Track 2 — feature-class work, starting with TODO #3 (PBP / EPA features).**
+Five model-class swaps on identical features extract the same signal and
+hit the same ceiling. The next real RMSE lift (estimated 5-15%) lives in
+features. TODO #3 covers play-by-play ingest + the family of opponent-
+adjusted EPA / pace / PROE / air-yards features it unlocks. Brainstorm and
+spec after Plan 8 lands.
 
-Two remaining model-improvement tracks (with Plan 7's correct successor split out):
+**Followup housekeeping (low-priority):** Model C-tuned is strictly
+dominated by Model C-NB on RMSE — TODO #29 captures the pruning when
+ready.
 
-1. **Plan 6 — Model D ensemble.** Stack of (Model A, Model C-NB) per
-   (position, stat) with calibration-aware weighting. Cheapest given Plan 5c's
-   infrastructure; covers the case where C-NB's mean-prediction wins on QB
-   and Model A's calibration wins on RB/TE/WR. Most promising single-shot win
-   given the per-position split observed in 5c.
-2. **TODO #30 — Upper-tail count calibration.** Three candidate mechanisms
-   (pinball at q=0.95; ZIP family; mixture model) — one of them is what Plan 7
-   should have been if scoped right. Targets the actual gap location. Plan 7's
-   diagnostic CLI is reusable.
-3. **TODO #3 (PBP / EPA features)** + **TODO #23 (target decomposition)** —
-   feature-class tracks. Independent of model class. Estimated 5-15% RMSE
-   win on top of any model.
-
-Followup housekeeping (low-priority): Model C-tuned is now strictly dominated
-by Model C-NB on RMSE — file a pruning TODO to drop Tuned from the dispatch
-table once C-NB has a few more weeks of soak time. (See TODO #29.)
-
-Pick one in the next session. After model-improvement work: Plan 4 (public
-API + CLI verbs + free-tier hosting), then Draft Hub.
+After Plans 8 + the feature-class work: Plan 4 (public API + CLI verbs +
+free-tier hosting), then Draft Hub.
 
 ---
 
@@ -1167,6 +1175,7 @@ API + CLI verbs + free-tier hosting), then Draft Hub.
 | 2026-04-26 | Plan 3c uses summed weekly means as season totals (degenerate aggregation); real Monte Carlo aggregation deferred to Plan 3d | Decouples gating infrastructure from season-distribution design. Plan 3d converges TODOs #13 / #14 and calibration tightening. |
 | 2026-04-26 | Feature cache invalidation is manual via `scripts/refresh_features.py`; auto-invalidation deferred (TODO #21) | Manual is documented in CONTRIBUTING.md and produces a clear FileNotFoundError pointing at the refresh command. Auto-invalidation via code-hash is straightforward but adds surface area; defer until manual produces a real-world bug. |
 | 2026-04-26 | `score_distribution` perf vectorization pulled forward from Plan 3d into Plan 3c | Spec section 1.2 deferred the perf TODO under "feature caching means we predict once per (player-week, year), not per training fold." Phase 6 demonstrated this was wrong: the per-sample Python loop still dominated at 20-30 minutes for the full harness. Math is bit-identical (linear scoring rule); fix is mechanically safe. |
+| 2026-04-29 | Pivot to gate redesign (Plan 8) before any further model-improvement work; feature-class track (TODO #3 PBP / EPA) is the next-up modeling lift after Plan 8 lands | PR-10-through-PR-15 diagnosis: §1.3's per-cell thresholds are below the noise floor (Plan 6 failed by 0.24pp on a single noisy cell after winning 12/16 RMSE) and the calibration criterion isn't load-bearing for any planned downstream consumer. Five model-class swaps on identical features hit the same information ceiling — feature work is the next real lift, not another model class. |
 
 ---
 
