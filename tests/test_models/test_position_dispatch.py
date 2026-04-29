@@ -6,8 +6,9 @@ from collections.abc import Callable
 
 import pytest
 
-from projections.models import POSITION_DISPATCH
+from projections.models import POSITION_DISPATCH, BaselineModel, production_model_for
 from projections.models.base import Model
+from projections.schemas import Position
 
 
 def test_every_dispatch_entry_has_default_model_class() -> None:
@@ -45,3 +46,32 @@ def test_post_init_raises_when_default_not_in_factories() -> None:
             ngs_stat_type="passing",
             default_model_class="lightgbm",  # not in factories
         )
+
+
+def test_production_model_for_returns_baseline_instance_initially() -> None:
+    for pos in [Position.QB, Position.RB, Position.TE, Position.WR]:
+        model = production_model_for(pos)
+        assert isinstance(model, BaselineModel), (
+            f"{pos} initial production model should be a BaselineModel, got {type(model).__name__}"
+        )
+
+
+def test_production_model_for_respects_default_model_class_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If we patch QB's default to 'ensemble', production_model_for(QB) returns
+    an EnsembleModel instance."""
+    from projections.models import _PositionDispatch
+    from projections.models.ensemble import EnsembleModel
+
+    qb_dispatch = POSITION_DISPATCH[Position.QB]
+    patched = _PositionDispatch(
+        factories=qb_dispatch.factories,
+        feature_builder=qb_dispatch.feature_builder,
+        feature_schema=qb_dispatch.feature_schema,
+        ngs_stat_type=qb_dispatch.ngs_stat_type,
+        default_model_class="ensemble",
+    )
+    monkeypatch.setitem(POSITION_DISPATCH, Position.QB, patched)
+    model = production_model_for(Position.QB)
+    assert isinstance(model, EnsembleModel)

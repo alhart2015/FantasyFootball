@@ -77,6 +77,7 @@ __all__ = [
     "LightGBMTunedModel",
     "Model",
     "compute_code_hash",
+    "production_model_for",
     "qb_baseline",
     "qb_ensemble",
     "qb_lightgbm",
@@ -197,3 +198,15 @@ POSITION_DISPATCH: Mapping[Position, _PositionDispatch] = {
         default_model_class="baseline",
     ),
 }
+
+
+def production_model_for(position: Position) -> Model:
+    """Return a freshly instantiated production-default model for the position.
+
+    Reads `_PositionDispatch.default_model_class` and calls the matching
+    factory. The single sanctioned entry point for "the production model
+    for this position" — callers asking for a specific class continue to
+    use `POSITION_DISPATCH[pos].factories[name]()` directly.
+    """
+    dispatch = POSITION_DISPATCH[position]
+    return dispatch.factories[dispatch.default_model_class]()
