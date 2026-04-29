@@ -1,0 +1,224 @@
+"""Plan 8 — adoption gate tests."""
+
+from __future__ import annotations
+
+from dataclasses import FrozenInstanceError
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from projections.backtest.adoption_gate import (
+    BootstrapDelta,
+    PositionVerdict,
+    paired_bootstrap_rmse_delta,
+    paired_bootstrap_spearman_delta,
+    verdict_for_position,
+)
+from projections.schemas import Position
+
+
+def test_bootstrap_delta_is_frozen_dataclass() -> None:
+    bd = BootstrapDelta(point=-0.5, lo_95=-1.2, hi_95=0.1, n_paired_rows=1000, n_bootstrap=500)
+    assert bd.point == -0.5
+    assert bd.n_bootstrap == 500
+    with pytest.raises(FrozenInstanceError):
+        bd.point = 0.0  # type: ignore[misc]
+
+
+def test_position_verdict_bundles_metrics() -> None:
+    rmse = BootstrapDelta(point=-0.3, lo_95=-0.5, hi_95=-0.1, n_paired_rows=500, n_bootstrap=1000)
+    spear = BootstrapDelta(
+        point=0.01, lo_95=-0.005, hi_95=0.025, n_paired_rows=500, n_bootstrap=1000
+    )
+    breakdown = pd.DataFrame(
+        {
+            "year": [2021, 2022],
+            "rmse_delta_point": [-0.4, -0.2],
+            "rmse_delta_lo": [-0.7, -0.4],
+            "rmse_delta_hi": [-0.1, 0.0],
+            "spearman_delta_point": [0.02, 0.0],
+            "spearman_delta_lo": [-0.01, -0.02],
+            "spearman_delta_hi": [0.04, 0.02],
+        }
+    )
+    pv = PositionVerdict(
+        position=Position.QB,
+        incumbent_class="baseline",
+        candidate_class="ensemble",
+        rmse_delta=rmse,
+        spearman_delta=spear,
+        verdict="ADOPT",
+        reason="RMSE win, Spearman within floor",
+        per_year_breakdown=breakdown,
+    )
+    assert pv.position is Position.QB
+    assert pv.verdict == "ADOPT"
+    assert len(pv.per_year_breakdown) == 2
+
+
+def test_rmse_delta_identical_residuals_brackets_zero() -> None:
+    rng = np.random.default_rng(0)
+    residuals = rng.normal(size=2000)
+    bd = paired_bootstrap_rmse_delta(residuals, residuals, n_bootstrap=500, seed=42)
+    assert bd.point == 0.0
+    assert bd.lo_95 <= 0.0 <= bd.hi_95
+    assert bd.n_paired_rows == 2000
+    assert bd.n_bootstrap == 500
+
+
+def test_rmse_delta_candidate_strictly_better_has_negative_ci() -> None:
+    rng = np.random.default_rng(0)
+    incumbent_residuals = rng.normal(scale=2.0, size=3000)
+    candidate_residuals = incumbent_residuals / 2.0  # half the variance
+    bd = paired_bootstrap_rmse_delta(
+        incumbent_residuals, candidate_residuals, n_bootstrap=500, seed=42
+    )
+    assert bd.point < 0.0
+    assert bd.hi_95 < 0.0  # 95% CI entirely below zero
+
+
+def test_rmse_delta_candidate_strictly_worse_has_positive_ci() -> None:
+    rng = np.random.default_rng(0)
+    incumbent_residuals = rng.normal(scale=2.0, size=3000)
+    candidate_residuals = incumbent_residuals * 2.0
+    bd = paired_bootstrap_rmse_delta(
+        incumbent_residuals, candidate_residuals, n_bootstrap=500, seed=42
+    )
+    assert bd.point > 0.0
+    assert bd.lo_95 > 0.0
+
+
+def test_rmse_delta_deterministic_under_same_seed() -> None:
+    rng = np.random.default_rng(0)
+    inc = rng.normal(size=500)
+    cand = inc + rng.normal(scale=0.1, size=500)
+    bd1 = paired_bootstrap_rmse_delta(inc, cand, n_bootstrap=200, seed=99)
+    bd2 = paired_bootstrap_rmse_delta(inc, cand, n_bootstrap=200, seed=99)
+    assert bd1 == bd2
+
+
+def test_rmse_delta_raises_on_too_few_rows() -> None:
+    inc = np.zeros(50)
+    cand = np.zeros(50)
+    with pytest.raises(ValueError, match="at least 100 paired rows"):
+        paired_bootstrap_rmse_delta(inc, cand)
+
+
+def test_rmse_delta_raises_on_length_mismatch() -> None:
+    inc = np.zeros(200)
+    cand = np.zeros(199)
+    with pytest.raises(ValueError, match="same length"):
+        paired_bootstrap_rmse_delta(inc, cand)
+
+
+def test_spearman_delta_identical_predictions_brackets_zero() -> None:
+    rng = np.random.default_rng(0)
+    actual = rng.normal(size=2000)
+    pred = actual + rng.normal(scale=0.5, size=2000)
+    grouping = np.repeat([2021, 2022, 2023, 2024], 500)
+    bd = paired_bootstrap_spearman_delta(pred, pred, actual, grouping, n_bootstrap=300, seed=42)
+    assert bd.point == 0.0
+    assert bd.lo_95 <= 0.0 <= bd.hi_95
+
+
+def test_spearman_delta_candidate_perfect_vs_incumbent_random() -> None:
+    rng = np.random.default_rng(0)
+    actual = np.arange(2000, dtype=np.float64)
+    candidate = actual.copy()  # perfect rank
+    incumbent = rng.normal(size=2000)  # random rank
+    grouping = np.repeat([2021, 2022, 2023, 2024], 500)
+    bd = paired_bootstrap_spearman_delta(
+        incumbent, candidate, actual, grouping, n_bootstrap=300, seed=42
+    )
+    assert bd.point > 0.5
+    assert bd.lo_95 > 0.0
+
+
+def test_spearman_delta_per_year_averaging_cancels_opposite_year_wins() -> None:
+    rng = np.random.default_rng(0)
+    n_per_year = 600
+    actual = rng.normal(size=n_per_year * 2)
+    incumbent = actual + rng.normal(scale=0.5, size=n_per_year * 2)
+    candidate = incumbent.copy()
+    candidate[:n_per_year] = actual[:n_per_year] + rng.normal(scale=0.2, size=n_per_year)
+    candidate[n_per_year:] = rng.normal(size=n_per_year)
+    grouping = np.repeat([2021, 2022], n_per_year)
+    bd = paired_bootstrap_spearman_delta(
+        incumbent, candidate, actual, grouping, n_bootstrap=300, seed=42
+    )
+    assert -0.6 < bd.point < 0.6
+
+
+def test_spearman_delta_constant_candidate_propagates_nan() -> None:
+    rng = np.random.default_rng(0)
+    actual = rng.normal(size=2000)
+    incumbent = actual + rng.normal(scale=0.5, size=2000)
+    candidate = np.full(2000, 7.0)
+    grouping = np.repeat([2021, 2022, 2023, 2024], 500)
+    bd = paired_bootstrap_spearman_delta(
+        incumbent, candidate, actual, grouping, n_bootstrap=200, seed=42
+    )
+    assert np.isnan(bd.point) or np.isnan(bd.lo_95) or np.isnan(bd.hi_95)
+
+
+def test_spearman_delta_deterministic_under_same_seed() -> None:
+    rng = np.random.default_rng(0)
+    actual = rng.normal(size=500)
+    inc = actual + rng.normal(scale=0.5, size=500)
+    cand = actual + rng.normal(scale=0.4, size=500)
+    grouping = np.repeat([2021, 2022], 250)
+    bd1 = paired_bootstrap_spearman_delta(inc, cand, actual, grouping, n_bootstrap=200, seed=99)
+    bd2 = paired_bootstrap_spearman_delta(inc, cand, actual, grouping, n_bootstrap=200, seed=99)
+    assert bd1 == bd2 or (np.isnan(bd1.point) and np.isnan(bd2.point))
+
+
+def _bd(point: float, lo: float, hi: float) -> BootstrapDelta:
+    return BootstrapDelta(point=point, lo_95=lo, hi_95=hi, n_paired_rows=1000, n_bootstrap=1000)
+
+
+def test_verdict_adopt_when_rmse_wins_and_spearman_within_floor() -> None:
+    rmse = _bd(point=-0.5, lo=-0.8, hi=-0.1)  # PASS_RMSE: hi_95 < 0
+    spear = _bd(point=0.0, lo=-0.01, hi=0.01)  # PASS_SPEARMAN: lo_95 > -0.02
+    label, reason = verdict_for_position(rmse, spear)
+    assert label == "ADOPT"
+    assert "RMSE" in reason or "rmse" in reason
+
+
+def test_verdict_marginal_when_rmse_wins_but_spearman_regresses() -> None:
+    rmse = _bd(point=-0.5, lo=-0.8, hi=-0.1)
+    spear = _bd(point=-0.05, lo=-0.08, hi=-0.03)  # FAIL_SPEARMAN: lo_95 < -0.02
+    label, reason = verdict_for_position(rmse, spear)
+    assert label == "MARGINAL"
+    assert "Spearman" in reason
+
+
+def test_verdict_do_not_adopt_when_rmse_inconclusive() -> None:
+    rmse = _bd(point=-0.1, lo=-0.4, hi=0.2)  # FAIL_RMSE: CI brackets zero
+    spear = _bd(point=0.01, lo=-0.005, hi=0.025)
+    label, _reason = verdict_for_position(rmse, spear)
+    assert label == "DO_NOT_ADOPT"
+
+
+def test_verdict_do_not_adopt_when_both_fail() -> None:
+    rmse = _bd(point=0.5, lo=0.2, hi=0.8)
+    spear = _bd(point=-0.05, lo=-0.08, hi=-0.03)
+    label, _reason = verdict_for_position(rmse, spear)
+    assert label == "DO_NOT_ADOPT"
+
+
+def test_verdict_respects_custom_spearman_floor() -> None:
+    rmse = _bd(point=-0.5, lo=-0.8, hi=-0.1)
+    spear = _bd(point=-0.04, lo=-0.06, hi=-0.02)  # lo_95 = -0.06
+    label_strict, _ = verdict_for_position(rmse, spear, spearman_floor=-0.02)
+    assert label_strict == "MARGINAL"
+    label_loose, _ = verdict_for_position(rmse, spear, spearman_floor=-0.10)
+    assert label_loose == "ADOPT"
+
+
+def test_verdict_degenerate_when_nan_inputs() -> None:
+    rmse = _bd(point=float("nan"), lo=float("nan"), hi=float("nan"))
+    spear = _bd(point=float("nan"), lo=float("nan"), hi=float("nan"))
+    label, reason = verdict_for_position(rmse, spear)
+    assert label == "DO_NOT_ADOPT"
+    assert "degenerate" in reason.lower()

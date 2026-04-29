@@ -4,6 +4,98 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 8 — Adoption gate redesign — complete; ready for PR (2026-04-29, on branch `feat/plan-8-gate-redesign`)
+
+**Status:** all 7 phases shipped. Final verification gates green: 464 pytest pass / 13 skipped (opt-in only) / 0 fail; mypy 145 source files clean; ruff check + format clean across 154 files. **Two production routing changes shipped** (QB → lightgbm-nb; WR → ensemble) per Phase 4 verdicts below.
+
+### Diagnosis recap
+
+Plans 3e / 5 / 5b / 5c / 7 / 6 all failed the prior §1.3 adoption gate. The streak decomposes into two compounding structural problems:
+
+1. **§1.3 thresholds sit below the per-cell noise floor.** "Composite RMSE strictly lower on ≥12/16 cells AND not worse by >1% on any cell" + "weekly calibration no worse on any cell, mean delta ≥ +0.02" treat sampling variation as systematic regression. Smoking gun: Plan 6 hit 12/16 RMSE wins (meets the count!) but failed because TE 2024 was +1.24% worse — 0.24pp over the no-regression line, on a 1081-week cell. There is no significance test gating this; the noise floor on a single cell's RMSE is plausibly ≥1%.
+2. **The calibration metric isn't load-bearing for any planned consumer.** Plan 5c PM and Plan 6 §96–99 already note this out loud — Draft Hub, start/sit, and the DFS lineup optimizer all consume mean and rank, not `[p10, p90]` coverage. Five plans of calibration work optimized a metric whose failure has no downstream cost. Plan 7's Phase 0 separately showed the assumed calibration mechanism was wrong (per-stat coverage doesn't decompose to composite coverage), so multiple plans were also pulling the wrong end of the distribution.
+
+### What shipped (Phases 1–4)
+
+- **Pure-stats module** at `src/projections/backtest/adoption_gate.py`: `BootstrapDelta`, `PositionVerdict`, `paired_bootstrap_rmse_delta`, `paired_bootstrap_spearman_delta`, `verdict_for_position` with the §1.3-replacement rule (RMSE: 95% CI strictly below 0; Spearman: lower CI > -0.02 catastrophic-regression floor; calibration informational, not gating).
+- **CLI** at `scripts/adoption_gate.py`: reads any backtest run's per-row `results.parquet`, pairs rows on `(gsis_id, season, week)`, emits per-position adoption verdicts as markdown to stdout + optional CSV via `--csv-out`.
+- **Per-position routing**: `_PositionDispatch.default_model_class` field with `__post_init__` validation; `production_model_for(position)` helper (single sanctioned entry point for "the production model for this position"); per-position defaults set per re-evaluation verdicts.
+- **37 new tests** (Phase 1: 19 stats tests; Phase 2: 13 CLI tests; Phase 3: 5 routing tests). All pass; mypy + ruff + format clean across 145 source files.
+- **Re-evaluation reports** committed under `reports/adoption_gate_*.{md,csv,stderr}` and `reports/adoption_gate_summary.md`.
+
+### Phase 4 re-evaluation verdicts (run_20260429T003552Z)
+
+Paired bootstrap, n_bootstrap=1000, seed=42. Pairing key `(gsis_id, season, week)`. ADOPT requires `rmse_delta` 95% CI strictly below 0 AND `spearman_delta` 95% CI strictly above -0.02.
+
+| Position | Candidate      | Verdict       | RMSE delta (95% CI)             | Spearman delta (95% CI)        | n_paired |
+|---|---|---|---|---|---:|
+| QB | lightgbm       | DO_NOT_ADOPT  | -0.0233 ([-0.1239, +0.0758])    | +0.0155 ([+0.0010, +0.0296])   | 2676 |
+| QB | lightgbm-tuned | **ADOPT**     | -0.1189 ([-0.2063, -0.0310])    | +0.0177 ([+0.0046, +0.0304])   | 2676 |
+| QB | lightgbm-nb    | **ADOPT**     | **-0.1933 ([-0.2719, -0.1102])** | +0.0183 ([+0.0045, +0.0313])   | 2676 |
+| QB | ensemble       | **ADOPT**     | -0.1760 ([-0.2274, -0.1242])    | +0.0184 ([+0.0098, +0.0262])   | 2676 |
+| RB | lightgbm       | DO_NOT_ADOPT  | +0.1916 ([+0.1438, +0.2421])    | -0.0023 ([-0.0082, +0.0028])   | 5273 |
+| RB | lightgbm-tuned | DO_NOT_ADOPT  | +0.1144 ([+0.0798, +0.1520])    | -0.0043 ([-0.0098, +0.0009])   | 5273 |
+| RB | lightgbm-nb    | DO_NOT_ADOPT  | +0.0420 ([+0.0133, +0.0740])    | -0.0012 ([-0.0068, +0.0039])   | 5273 |
+| RB | ensemble       | DO_NOT_ADOPT  | +0.0212 ([-0.0021, +0.0455])    | +0.0003 ([-0.0037, +0.0043])   | 5273 |
+| TE | lightgbm       | DO_NOT_ADOPT  | +0.1553 ([+0.1096, +0.2060])    | +0.0043 ([-0.0052, +0.0132])   | 4257 |
+| TE | lightgbm-tuned | DO_NOT_ADOPT  | +0.0879 ([+0.0468, +0.1322])    | +0.0082 ([-0.0003, +0.0170])   | 4257 |
+| TE | lightgbm-nb    | DO_NOT_ADOPT  | +0.0028 ([-0.0289, +0.0422])    | +0.0071 ([-0.0014, +0.0160])   | 4257 |
+| TE | ensemble       | DO_NOT_ADOPT  | -0.0208 ([-0.0454, +0.0097])    | +0.0076 ([+0.0016, +0.0137])   | 4257 |
+| WR | lightgbm       | DO_NOT_ADOPT  | +0.1338 ([+0.0963, +0.1721])    | +0.0045 ([-0.0012, +0.0101])   | 8460 |
+| WR | lightgbm-tuned | DO_NOT_ADOPT  | +0.0711 ([+0.0397, +0.1046])    | +0.0044 ([-0.0012, +0.0099])   | 8460 |
+| WR | lightgbm-nb    | DO_NOT_ADOPT  | -0.0016 ([-0.0316, +0.0291])    | +0.0027 ([-0.0032, +0.0080])   | 8460 |
+| WR | ensemble       | **ADOPT**     | -0.0320 ([-0.0531, -0.0092])    | +0.0069 ([+0.0028, +0.0109])   | 8460 |
+
+### Per-position routing changes shipped
+
+| Position | Pre-Plan-8 default | Post-Plan-8 default | Reason                           |
+|----------|--------------------|---------------------|----------------------------------|
+| QB       | baseline           | **lightgbm-nb**     | 3 ADOPTers; mechanical tie-break (most-negative rmse_delta.point) selects lightgbm-nb (-0.1933) over ensemble (-0.1760) and tuned (-0.1189). |
+| RB       | baseline           | baseline            | No ADOPT verdict; every candidate regresses RB or has rank-correlation issues. |
+| TE       | baseline           | baseline            | No ADOPT verdict; ensemble is closest (rmse_delta -0.021) but CI brackets zero. |
+| WR       | baseline           | **ensemble**        | Sole ADOPTer; rmse_delta -0.032 fpts, both CIs strictly clear zero. n=8460 paired rows give it the statistical power. |
+
+### Surprises vs spec §6 strong prior
+
+Two findings deviate from the spec's prediction:
+
+1. **QB winner is `lightgbm-nb`, not `ensemble`.** The spec expected ensemble to win QB. Reality: NB beats ensemble's RMSE point estimate by ~0.017 fpts; CIs overlap heavily but mechanical tie-break selects NB. Side benefit: NB is structurally simpler than ensemble (no MixtureDistribution / per-stat weight optimizer / 4-stage fit) — simpler is better when stat-equivalent.
+2. **WR ADOPTs `ensemble`.** The spec said "WR's improvements were ≤0.55% per cell, pooled CI may or may not clear zero." It cleared. Larger sample (n=8460) gives the bootstrap enough power for a small-but-clean win.
+
+### Snapshot regression gate audit (Phase 5)
+
+`tests/backtest/tolerances.json` defaults vs measured per-cell noise floor (from Plan 8's bootstrap reports under `reports/adoption_gate_*.csv`, per-year breakdown rows):
+
+| Metric kind            | snapshot default | Measured per-cell RMSE-delta CI half-width (absolute, fpts) | Translated to relative (÷ typical per-cell RMSE ≈ 6 fpts) | Verdict |
+|---|---|---|---|---|
+| `rmse_relative`        | 5.0%   | median 0.076; p75 0.100; max 0.217 | median 1.26%; p75 1.66%; max 3.61% | **Fine — ~3-4× headroom over the median noise floor** |
+| `mae_relative`         | 5.0%   | (same scale as rmse) | (same) | **Fine** |
+| `spearman_absolute`    | 0.02   | (Spearman per-year deltas have CI half-widths ~0.005–0.015) | n/a | **Fine — matches Plan 8's catastrophic-regression floor** |
+| `calibration_absolute` | 0.03   | (calibration is informational under Plan 8; not load-bearing for adoption) | n/a | **Fine for code-regression purposes** |
+| `mean_pred_relative`   | 10.0%  | (broader window, intentionally — guards against unintended mean shifts) | n/a | **Fine** |
+
+**Conclusion**: snapshot.py's tolerances are above the per-cell noise floor with comfortable headroom; the regression gate is doing the right job (catching real code-induced numeric drift, not flagging sampling noise). No changes needed; no follow-up TODO filed.
+
+The snapshot regression gate (catches code regression on a frozen model) and the new adoption gate (decides which class is the production default) answer different questions and stay independent. Both ship as-is.
+
+### Phase 6 — §1.3 spec template
+
+`docs/superpowers/specs/_adoption_gate_template.md` shipped. Future model-class specs inline-copy the §1.3 body into their own spec, so each spec carries the gate it was evaluated under as record-of-decision.
+
+### Phase 7 — Final verification
+
+All gates green at the tip of the branch:
+
+- `mypy src tests` — 145 source files, no issues.
+- `ruff check src tests scripts` + `ruff format --check src tests scripts` — clean across 154 files.
+- `pytest` (excluding the slow `test_models` leakage tests + opt-in `--run-backtest` / `--run-network` gates): **464 passed, 13 skipped, 0 failed** in 7m50s.
+
+### Next track after Plan 8
+
+Feature-class work starting with **TODO #3 (PBP / EPA features)**. Five model-class swaps on identical features hit the same information ceiling; the next real RMSE lift (estimated 5–15%) lives in features, not in model class.
+
+---
+
 ## Plan 6 — Model D ensemble (A + C-NB) — shipped as peer (run 2026-04-29)
 
 **Verdict:** ship as peer. Per-(position, stat) calibration-aware weighted mixture of Model A and Model C-NB landed cleanly with the per-stat pinball optimizer behaving exactly as designed — yards stats heavily favor C-NB's tight QuantileDistribution; TD stats favor A's wider parametric distributions. **All three §1.3 adoption criteria failed** by narrow margins. The per-position split that motivated the plan is preserved (QB cells improve on every metric; RB/TE/WR cells regress on calibration), confirming the mechanism but also confirming Plan 7's lesson — per-stat coverage at [p10, p90] does not algebraically decompose to composite [p10, p90] coverage.
@@ -1094,44 +1186,31 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Plan 5c (Model C-NB — hybrid LightGBM with NB-2 for count stats) shipped;
-adoption-gate verdict FAIL on all three §1.3 criteria.** Model A stays the
-production default. Model C-NB **strictly dominates Model C-tuned on RMSE
-(16/16 cells)** and pushes RMSE wins from 4/16 (Tuned) to 11/16 (NB) — the
-mean-prediction fix worked. But the calibration regression carried over
-unchanged in aggregate (mean delta vs A: Tuned -0.063 → NB -0.062). QB cells
-are a clean win across all metrics; RB/TE/WR get RMSE wins paired with 6-12 pp
-[p10,p90] coverage regressions because NB-2 dispersion fit on training
-residuals under-disperses on held-out years.
+**Plan 8 — adoption gate redesign — in progress on `feat/plan-8-gate-redesign`.**
+Diagnosis 2026-04-29 traced the PR-10-through-PR-15 model losing streak
+(Plans 3e / 5 / 5b / 5c / 7 / 6 — all failed §1.3) to two compounding causes:
+(1) §1.3 thresholds sit below the per-cell noise floor, so a model that's
+better in expectation routinely fails from sampling variation alone — Plan 6
+hit 12/16 RMSE wins but failed because TE 2024 was 0.24pp over the
++1.0% no-regression line; (2) the weekly `[p10, p90]` calibration metric
+isn't load-bearing for any planned downstream consumer (Draft Hub,
+start/sit, DFS all consume mean and rank, not coverage). See the Plan 8
+entry at the top of this file for full context. Plan 8 ships a redesigned
+gate plus a re-evaluation of existing peers (C, C-tuned, C-NB, D) under it.
 
-**Update 2026-04-28 (post-Plan-7):** Plan 7 (calibration-aware NB-2 fitting at
-p10/p90) was attempted and stopped at Phase 0 — the diagnostic showed per-stat
-NB-2 count distributions are over-covering at p10/p90 (gap mean -0.169), not
-under-covering as the spec assumed. Pinball fit at p10/p90 would narrow them,
-opposite the direction needed for the composite gap. Composite gap mechanism
-lives in upper-tail (p95+) behavior. See the Plan 7 entry above and TODO #30.
+**Track 2 — feature-class work, starting with TODO #3 (PBP / EPA features).**
+Five model-class swaps on identical features extract the same signal and
+hit the same ceiling. The next real RMSE lift (estimated 5-15%) lives in
+features. TODO #3 covers play-by-play ingest + the family of opponent-
+adjusted EPA / pace / PROE / air-yards features it unlocks. Brainstorm and
+spec after Plan 8 lands.
 
-Two remaining model-improvement tracks (with Plan 7's correct successor split out):
+**Followup housekeeping (low-priority):** Model C-tuned is strictly
+dominated by Model C-NB on RMSE — TODO #29 captures the pruning when
+ready.
 
-1. **Plan 6 — Model D ensemble.** Stack of (Model A, Model C-NB) per
-   (position, stat) with calibration-aware weighting. Cheapest given Plan 5c's
-   infrastructure; covers the case where C-NB's mean-prediction wins on QB
-   and Model A's calibration wins on RB/TE/WR. Most promising single-shot win
-   given the per-position split observed in 5c.
-2. **TODO #30 — Upper-tail count calibration.** Three candidate mechanisms
-   (pinball at q=0.95; ZIP family; mixture model) — one of them is what Plan 7
-   should have been if scoped right. Targets the actual gap location. Plan 7's
-   diagnostic CLI is reusable.
-3. **TODO #3 (PBP / EPA features)** + **TODO #23 (target decomposition)** —
-   feature-class tracks. Independent of model class. Estimated 5-15% RMSE
-   win on top of any model.
-
-Followup housekeeping (low-priority): Model C-tuned is now strictly dominated
-by Model C-NB on RMSE — file a pruning TODO to drop Tuned from the dispatch
-table once C-NB has a few more weeks of soak time. (See TODO #29.)
-
-Pick one in the next session. After model-improvement work: Plan 4 (public
-API + CLI verbs + free-tier hosting), then Draft Hub.
+After Plans 8 + the feature-class work: Plan 4 (public API + CLI verbs +
+free-tier hosting), then Draft Hub.
 
 ---
 
@@ -1167,6 +1246,7 @@ API + CLI verbs + free-tier hosting), then Draft Hub.
 | 2026-04-26 | Plan 3c uses summed weekly means as season totals (degenerate aggregation); real Monte Carlo aggregation deferred to Plan 3d | Decouples gating infrastructure from season-distribution design. Plan 3d converges TODOs #13 / #14 and calibration tightening. |
 | 2026-04-26 | Feature cache invalidation is manual via `scripts/refresh_features.py`; auto-invalidation deferred (TODO #21) | Manual is documented in CONTRIBUTING.md and produces a clear FileNotFoundError pointing at the refresh command. Auto-invalidation via code-hash is straightforward but adds surface area; defer until manual produces a real-world bug. |
 | 2026-04-26 | `score_distribution` perf vectorization pulled forward from Plan 3d into Plan 3c | Spec section 1.2 deferred the perf TODO under "feature caching means we predict once per (player-week, year), not per training fold." Phase 6 demonstrated this was wrong: the per-sample Python loop still dominated at 20-30 minutes for the full harness. Math is bit-identical (linear scoring rule); fix is mechanically safe. |
+| 2026-04-29 | Pivot to gate redesign (Plan 8) before any further model-improvement work; feature-class track (TODO #3 PBP / EPA) is the next-up modeling lift after Plan 8 lands | PR-10-through-PR-15 diagnosis: §1.3's per-cell thresholds are below the noise floor (Plan 6 failed by 0.24pp on a single noisy cell after winning 12/16 RMSE) and the calibration criterion isn't load-bearing for any planned downstream consumer. Five model-class swaps on identical features hit the same information ceiling — feature work is the next real lift, not another model class. |
 
 ---
 

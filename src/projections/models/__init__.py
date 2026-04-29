@@ -77,6 +77,7 @@ __all__ = [
     "LightGBMTunedModel",
     "Model",
     "compute_code_hash",
+    "production_model_for",
     "qb_baseline",
     "qb_ensemble",
     "qb_lightgbm",
@@ -104,25 +105,32 @@ __all__ = [
 class _PositionDispatch:
     """Per-position bundle of "what's needed to train and predict" entries.
 
-    Consumed by the CLI scripts (scripts/train_baseline.py etc.) and Plan
-    3c's backtest harness. Frozen so callers can't mutate the registry by
-    accident.
+    Plan 8 adds `default_model_class`: the production-default model class for
+    this position. Consumers asking for "the production model" go through
+    `production_model_for(position)`; consumers asking for a specific class
+    keep going through `dispatch.factories[name]()`.
 
     Attributes:
-        factories: mapping of model-class identifier -> zero-arg callable
-            returning an unfitted model. Keys today: "baseline" (Model A,
-            BaselineModel) and "lightgbm" (Model C, LightGBMModel).
-            Callers select via `dispatch.factories[args.model]()`.
+        factories: model-class identifier -> zero-arg factory returning unfitted Model.
         feature_builder: position-specific build_*_features function.
         feature_schema: pandera schema for the feature builder's output.
-        ngs_stat_type: which NGS partition the feature builder consumes
-            ("passing" / "rushing" / "receiving").
+        ngs_stat_type: NGS partition consumed by the feature builder.
+        default_model_class: factories key for this position's production default.
+            Must be present in `factories` (validated post-init).
     """
 
     factories: Mapping[str, Callable[[], Model]]
     feature_builder: Callable[..., Any]
     feature_schema: type[pa.DataFrameModel]
     ngs_stat_type: NgsStatType
+    default_model_class: str
+
+    def __post_init__(self) -> None:
+        if self.default_model_class not in self.factories:
+            raise ValueError(
+                f"default_model_class={self.default_model_class!r} not in factories "
+                f"(available: {sorted(self.factories)})"
+            )
 
 
 # Explicit per-position factories dicts. Annotated as
@@ -166,23 +174,39 @@ POSITION_DISPATCH: Mapping[Position, _PositionDispatch] = {
         feature_builder=build_qb_features,
         feature_schema=QbFeaturesSchema,
         ngs_stat_type="passing",
+        default_model_class="lightgbm-nb",
     ),
     Position.RB: _PositionDispatch(
         factories=_RB_FACTORIES,
         feature_builder=build_rb_features,
         feature_schema=RbFeaturesSchema,
         ngs_stat_type="rushing",
+        default_model_class="baseline",
     ),
     Position.TE: _PositionDispatch(
         factories=_TE_FACTORIES,
         feature_builder=build_te_features,
         feature_schema=TeFeaturesSchema,
         ngs_stat_type="receiving",
+        default_model_class="baseline",
     ),
     Position.WR: _PositionDispatch(
         factories=_WR_FACTORIES,
         feature_builder=build_wr_features,
         feature_schema=WrFeaturesSchema,
         ngs_stat_type="receiving",
+        default_model_class="ensemble",
     ),
 }
+
+
+def production_model_for(position: Position) -> Model:
+    """Return a freshly instantiated production-default model for the position.
+
+    Reads `_PositionDispatch.default_model_class` and calls the matching
+    factory. The single sanctioned entry point for "the production model
+    for this position" — callers asking for a specific class continue to
+    use `POSITION_DISPATCH[pos].factories[name]()` directly.
+    """
+    dispatch = POSITION_DISPATCH[position]
+    return dispatch.factories[dispatch.default_model_class]()
