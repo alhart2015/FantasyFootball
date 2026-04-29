@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import nfl_data_py as nfl
 import pytest
 
 from projections.ingest.depth_charts import (
@@ -40,6 +41,10 @@ from projections.ingest.ngs import (
 )
 from projections.ingest.ngs import (
     _normalize_one_season as _normalize_ngs,
+)
+from projections.ingest.pbp import _KEEP as _KEEP_PBP
+from projections.ingest.pbp import (
+    _normalize_one_season as _normalize_pbp,
 )
 from projections.ingest.schedules import (
     _fetch_raw_schedules,
@@ -226,3 +231,22 @@ def test_snap_counts_api_columns_and_schema(tmp_path: Path) -> None:
     build_id_map(tmp_path)
     df = _normalize_snap_counts(raw, tmp_path)
     assert not df.empty
+
+
+def test_pbp_api_columns_and_schema() -> None:
+    """Opt-in network smoke: pulls a small live PBP slice and asserts every
+    column we keep is present, then runs the normalize end-to-end so pandera
+    surfaces dtype / value drift."""
+    raw = nfl.import_pbp_data([_DRIFT_SEASON])
+    missing = set(_KEEP_PBP) - set(raw.columns)
+    assert not missing, (
+        f"PBP upstream missing columns we depend on: {sorted(missing)}. "
+        "If this fails after a nfl_data_py bump, patch _KEEP / _normalize_one_season "
+        "in src/projections/ingest/pbp.py and re-run."
+    )
+
+    normalized = _normalize_pbp(raw)
+    # Sanity: lots of plays, sensibly distributed.
+    assert len(normalized) > 30000  # ~50k expected
+    assert normalized["play_type"].notna().any()
+    assert normalized["epa"].notna().mean() > 0.6  # ~80% in practice
