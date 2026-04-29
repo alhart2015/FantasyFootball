@@ -205,6 +205,89 @@ def evaluate_position(
     )
 
 
+def format_position_report(pv: PositionVerdict) -> str:
+    """One-position markdown report: verdict line + per-year breakdown table."""
+    lines: list[str] = []
+    lines.append(
+        f"### {pv.position.value} — {pv.candidate_class} vs {pv.incumbent_class}: **{pv.verdict}**"
+    )
+    lines.append("")
+    lines.append(f"_{pv.reason}_")
+    lines.append("")
+    lines.append(
+        f"- n_paired: {pv.rmse_delta.n_paired_rows}; n_bootstrap: {pv.rmse_delta.n_bootstrap}"
+    )
+    lines.append(
+        f"- RMSE delta: {pv.rmse_delta.point:+.4f} "
+        f"(95% CI [{pv.rmse_delta.lo_95:+.4f}, {pv.rmse_delta.hi_95:+.4f}])"
+    )
+    lines.append(
+        f"- Spearman delta: {pv.spearman_delta.point:+.4f} "
+        f"(95% CI [{pv.spearman_delta.lo_95:+.4f}, {pv.spearman_delta.hi_95:+.4f}])"
+    )
+    lines.append("")
+    lines.append("Per-year breakdown (informational):")
+    lines.append("")
+    lines.append(pv.per_year_breakdown.to_string(index=False))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _write_csv(verdicts: list[PositionVerdict], path: Path) -> None:
+    """Long-form CSV: one row per (position, metric, year-or-pooled)."""
+    rows: list[dict[str, object]] = []
+    for pv in verdicts:
+        rows.append(
+            {
+                "position": pv.position.value,
+                "incumbent": pv.incumbent_class,
+                "candidate": pv.candidate_class,
+                "year": "pooled",
+                "metric": "rmse_delta",
+                "point": pv.rmse_delta.point,
+                "lo_95": pv.rmse_delta.lo_95,
+                "hi_95": pv.rmse_delta.hi_95,
+                "n_paired": pv.rmse_delta.n_paired_rows,
+                "verdict": pv.verdict,
+                "reason": pv.reason,
+            }
+        )
+        rows.append(
+            {
+                "position": pv.position.value,
+                "incumbent": pv.incumbent_class,
+                "candidate": pv.candidate_class,
+                "year": "pooled",
+                "metric": "spearman_delta",
+                "point": pv.spearman_delta.point,
+                "lo_95": pv.spearman_delta.lo_95,
+                "hi_95": pv.spearman_delta.hi_95,
+                "n_paired": pv.spearman_delta.n_paired_rows,
+                "verdict": pv.verdict,
+                "reason": pv.reason,
+            }
+        )
+        for _, by in pv.per_year_breakdown.iterrows():
+            for metric in ("rmse_delta", "spearman_delta"):
+                rows.append(
+                    {
+                        "position": pv.position.value,
+                        "incumbent": pv.incumbent_class,
+                        "candidate": pv.candidate_class,
+                        "year": int(by["year"]),
+                        "metric": metric,
+                        "point": by[f"{metric}_point"],
+                        "lo_95": by[f"{metric}_lo"],
+                        "hi_95": by[f"{metric}_hi"],
+                        "n_paired": int(by["n_paired"]),
+                        "verdict": "",
+                        "reason": "",
+                    }
+                )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plan 8 adoption gate.")
     parser.add_argument("--run", type=Path, required=True, help="run_<ts> directory")
@@ -226,8 +309,35 @@ def main() -> None:
 
     df = load_run_parquet(args.run)
     validate_model_classes_present(df, incumbent=args.incumbent, candidate=args.candidate)
-    print(f"Loaded {len(df)} rows from {args.run / 'results.parquet'}.")
-    print(f"Model classes present: {sorted(df['model_class'].unique())}")
+
+    positions = (
+        [Position.QB, Position.RB, Position.TE, Position.WR]
+        if args.position == "all"
+        else [Position(args.position)]
+    )
+
+    print(f"# Adoption gate report — {args.candidate} vs {args.incumbent}")
+    print()
+    print(f"Run: `{args.run}`")
+    print(f"n_bootstrap: {args.n_bootstrap}, seed: {args.seed}")
+    print()
+
+    verdicts: list[PositionVerdict] = []
+    for pos in positions:
+        pv = evaluate_position(
+            df,
+            position=pos,
+            incumbent=args.incumbent,
+            candidate=args.candidate,
+            n_bootstrap=args.n_bootstrap,
+            seed=args.seed,
+        )
+        print(format_position_report(pv))
+        verdicts.append(pv)
+
+    if args.csv_out is not None:
+        _write_csv(verdicts, args.csv_out)
+        print(f"Wrote CSV: {args.csv_out}")
 
 
 if __name__ == "__main__":

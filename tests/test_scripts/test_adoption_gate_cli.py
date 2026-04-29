@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +11,7 @@ import pandas as pd
 import pytest
 from scripts.adoption_gate import (
     evaluate_position,
+    format_position_report,
     load_run_parquet,
     pair_rows,
     validate_model_classes_present,
@@ -158,3 +161,70 @@ def test_evaluate_position_emits_position_verdict(tmp_path: Path) -> None:
     assert pv.verdict in {"ADOPT", "MARGINAL", "DO_NOT_ADOPT"}
     assert pv.rmse_delta.n_bootstrap == 200
     assert len(pv.per_year_breakdown) == 4  # 4 held-out years
+
+
+def test_format_position_report_contains_verdict_and_breakdown(tmp_path: Path) -> None:
+    run_dir = _make_synthetic_run(tmp_path, ["baseline", "ensemble"], n_per_class=2000)
+    df = load_run_parquet(run_dir)
+    pv = evaluate_position(
+        df,
+        position=Position.QB,
+        incumbent="baseline",
+        candidate="ensemble",
+        n_bootstrap=200,
+        seed=42,
+    )
+    text = format_position_report(pv)
+    assert "QB" in text
+    assert pv.verdict in text
+    assert "RMSE" in text
+    assert "Spearman" in text
+    # Per-year breakdown table includes year numbers.
+    assert "2021" in text and "2024" in text
+
+
+def test_cli_smoke_exits_zero_with_verdict_in_stdout(tmp_path: Path) -> None:
+    run_dir = _make_synthetic_run(tmp_path, ["baseline", "ensemble"], n_per_class=2000)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.adoption_gate",
+            "--run",
+            str(run_dir),
+            "--candidate",
+            "ensemble",
+            "--n-bootstrap",
+            "200",
+            "--position",
+            "QB",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert "QB" in result.stdout
+    assert any(v in result.stdout for v in ("ADOPT", "MARGINAL", "DO_NOT_ADOPT"))
+
+
+def test_cli_missing_candidate_exits_nonzero(tmp_path: Path) -> None:
+    run_dir = _make_synthetic_run(tmp_path, ["baseline"], n_per_class=2000)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.adoption_gate",
+            "--run",
+            str(run_dir),
+            "--candidate",
+            "ensemble",
+            "--n-bootstrap",
+            "200",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "ensemble" in result.stderr or "ensemble" in result.stdout
