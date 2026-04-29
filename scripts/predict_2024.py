@@ -92,6 +92,16 @@ def main() -> None:
     ws_full = pd.concat([ws_prior, ws_curr], ignore_index=True)
     sc_full = pd.concat([sc_prior, sc_curr], ignore_index=True)
     ngs_full = pd.concat([ngs_prior, ngs_curr], ignore_index=True)
+    # Plan 9: PBP for opp-defensive EPA features. Degrade gracefully if a
+    # season's partition doesn't exist (e.g., pre-Plan-9 ingest hasn't run);
+    # builders accept an empty frame and emit NaN-filled values.
+    pbp_frames: list[pd.DataFrame] = []
+    for s in (_PROJECTION_SEASON - 1, _PROJECTION_SEASON):
+        try:
+            pbp_frames.append(read_partition(raw_root, "pbp", season=s))
+        except FileNotFoundError:
+            pass
+    pbp_full = pd.concat(pbp_frames, ignore_index=True) if pbp_frames else pd.DataFrame()
 
     weeks = sorted(dc_curr["week"].unique())
     rule_partition = ruleset.name  # e.g., "ESPN_PPR"
@@ -103,6 +113,7 @@ def main() -> None:
             "schedules": sch_curr,
             "season": _PROJECTION_SEASON,
             "as_of_week": int(week),
+            "pbp": pbp_full,
             ngs_kwarg: ngs_full,
         }
         feats = builder(**kwargs)
