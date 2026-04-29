@@ -26,6 +26,7 @@ from projections.ingest import (
     build_id_map,
     refresh_depth_charts,
     refresh_ngs,
+    refresh_pbp,
     refresh_schedules,
     refresh_snap_counts,
     refresh_weekly_stats,
@@ -55,6 +56,7 @@ def test_end_to_end_ingest_and_features(
     fake_ngs_passing_df: pd.DataFrame,
     fake_ngs_rushing_df: pd.DataFrame,
     fake_ngs_receiving_df: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ingest every Plan 2a/2b table from synthetic fixtures, read the
@@ -100,6 +102,10 @@ def test_end_to_end_ingest_and_features(
         "projections.ingest.ngs._fetch_raw_ngs",
         lambda stat_type, seasons: ngs_fixtures[stat_type],
     )
+    monkeypatch.setattr(
+        "projections.ingest.pbp._fetch_raw_pbp",
+        lambda seasons: fake_pbp_df,
+    )
 
     # 1) Build id_map first — required by snap_counts ingest for the
     # pfr_id -> gsis_id resolution.
@@ -112,6 +118,7 @@ def test_end_to_end_ingest_and_features(
     refresh_depth_charts(tmp_path, seasons=[2024])
     for stat_type in ("passing", "rushing", "receiving"):
         refresh_ngs(tmp_path, stat_type=stat_type, seasons=[2024])
+    refresh_pbp(tmp_path, seasons=[2024])
 
     # 3) Manifest has one row per ingest table.
     manifest = read_manifest(tmp_path)
@@ -124,6 +131,7 @@ def test_end_to_end_ingest_and_features(
         "ngs_passing",
         "ngs_rushing",
         "ngs_receiving",
+        "pbp",
     }
     assert expected <= tables_in_manifest
 
@@ -135,6 +143,7 @@ def test_end_to_end_ingest_and_features(
     ngs_passing = read_partition(tmp_path / "raw", "ngs_passing", season=2024)
     ngs_rushing = read_partition(tmp_path / "raw", "ngs_rushing", season=2024)
     ngs_receiving = read_partition(tmp_path / "raw", "ngs_receiving", season=2024)
+    pbp = read_partition(tmp_path / "raw", "pbp", season=2024)
 
     # 5) Fixtures all describe week 3 of 2024. The feature builders require
     # depth chart + schedule rows for the *as_of_week* itself (filtered with
@@ -152,6 +161,7 @@ def test_end_to_end_ingest_and_features(
         depth_charts=extra_dc,
         ngs_passing=ngs_passing,
         schedules=extra_sched,
+        pbp=pbp,
         season=2024,
         as_of_week=4,
     )

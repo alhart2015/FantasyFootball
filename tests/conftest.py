@@ -890,12 +890,67 @@ def _build_position_supporting_frames(
     }
 
 
+def _build_synthetic_pbp() -> pd.DataFrame:
+    """Per-play frame for the synthetic KC-vs-MIN universe (Plan 9).
+
+    Generates 8 plays per (season, week) — 4 KC-vs-MIN passes, 4 KC-vs-MIN
+    runs, with deterministic non-zero EPA so `opp_epa_allowed_residual`
+    produces a finite (not all-NaN) value for both defenses across the
+    2024 weeks 1-8 + 2025 weeks 1-4 window. The exact residual magnitude
+    is irrelevant to baseline-model fit tests; what matters is that the
+    column has finite values so RidgeCV can learn a coefficient.
+    """
+    rows: list[dict[str, object]] = []
+    play_id = 1
+    for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
+        for week in weeks:
+            # KC offense vs MIN defense — 2 pass + 2 run.
+            for posteam, defteam in [("KC", "MIN"), ("MIN", "KC")]:
+                for play_kind in ("pass", "pass", "run", "run"):
+                    rows.append(
+                        {
+                            "play_id": play_id,
+                            "game_id": f"{season}_{week:02d}_KC_MIN",
+                            "season": season,
+                            "week": week,
+                            "posteam": posteam,
+                            "defteam": defteam,
+                            "play_type": play_kind,
+                            "qb_dropback": 1.0 if play_kind == "pass" else 0.0,
+                            "qb_scramble": 0.0,
+                            "sack": 0.0,
+                            "rush_attempt": 1.0 if play_kind == "run" else 0.0,
+                            "pass_attempt": 1.0 if play_kind == "pass" else 0.0,
+                            # Vary EPA slightly by week + offense so residuals are
+                            # non-zero but bounded.
+                            "epa": 0.05 - 0.02 * (week % 3) + (0.03 if posteam == "KC" else -0.03),
+                            "wpa": 0.0,
+                            "success": 1.0,
+                            "air_yards": 8.0 if play_kind == "pass" else None,
+                            "yards_after_catch": 3.0 if play_kind == "pass" else None,
+                            "complete_pass": 1.0 if play_kind == "pass" else 0.0,
+                            "xpass": 0.55 if play_kind == "pass" else 0.45,
+                            "pass_oe": 0.0,
+                            "down": 1.0,
+                            "ydstogo": 10,
+                            "yardline_100": 50.0,
+                            "half_seconds_remaining": 1200.0,
+                            "passer_player_id": None,
+                            "rusher_player_id": None,
+                            "receiver_player_id": None,
+                        }
+                    )
+                    play_id += 1
+    return pd.DataFrame(rows)
+
+
 @pytest.fixture
 def baseline_features_qb(baseline_weekly_stats_qb: pd.DataFrame) -> pd.DataFrame:
     """QB feature rows produced by build_qb_features for every (season, week)."""
     from projections.features import build_qb_features
 
     aux = _build_position_supporting_frames(baseline_weekly_stats_qb, "QB")
+    pbp = _build_synthetic_pbp()
     feat_frames: list[pd.DataFrame] = []
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
@@ -905,6 +960,7 @@ def baseline_features_qb(baseline_weekly_stats_qb: pd.DataFrame) -> pd.DataFrame
                 depth_charts=aux["depth_charts"],
                 ngs_passing=aux["ngs"],
                 schedules=aux["schedules"],
+                pbp=pbp,
                 season=season,
                 as_of_week=week,
             )
