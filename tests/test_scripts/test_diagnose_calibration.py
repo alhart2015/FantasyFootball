@@ -86,7 +86,7 @@ def _build_params_blob_normal(stat_name: str, mean: float, std: float) -> bytes:
     Avoids depending on pack_per_stat_params; the diagnostic only needs to
     decode, not encode."""
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "stats": {stat_name: {"family": "NORMAL", "mean": mean, "std": std}},
     }
     return bytes(msgpack.packb(payload, use_bin_type=True))
@@ -136,7 +136,7 @@ def _build_params_blob_gamma(stat_name: str, shape: float, scale: float) -> byte
     Mirrors _build_params_blob_normal's pattern; the diagnostic only needs to
     decode, not encode."""
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "stats": {stat_name: {"family": "GAMMA", "shape": shape, "scale": scale}},
     }
     return bytes(msgpack.packb(payload, use_bin_type=True))

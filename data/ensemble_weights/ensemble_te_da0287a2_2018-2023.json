@@ -1,0 +1,21 @@
+{
+  "calibration_year": 2023,
+  "child_a_model_id": "baseline:te:e3163299:2018-2023",
+  "child_b_model_id": "lightgbm-nb:te:0f60ef76:2018-2023",
+  "fitted_at": "2026-04-29T04:02:55.947948+00:00",
+  "model_class": "ensemble",
+  "model_id": "ensemble:te:da0287a2:2018-2023",
+  "position": "TE",
+  "train_seasons": [
+    2018,
+    2023
+  ],
+  "weights": {
+    "fumbles_lost": 0.434047,
+    "receiving_tds": 0.624475,
+    "receiving_yards": 0.001375,
+    "receptions": 0.212694,
+    "rushing_tds": 0.763404,
+    "rushing_yards": 0.001398
+  }
+}

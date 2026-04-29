@@ -1,4 +1,4 @@
-"""Distribution interface — value object exposing mean/quantile/sample."""
+"""Distribution interface — value object exposing mean/quantile/sample/cdf."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from numpy.typing import NDArray
 @runtime_checkable
 class Distribution(Protocol):
     """A probability distribution over a single player's fantasy points (or
-    underlying stat). Backings: parametric (Normal/Gamma), empirical-quantile,
-    or sampled. Same surface regardless."""
+    underlying stat). Backings: parametric (Normal/Gamma/NB/Student-t), empirical-quantile,
+    sampled, or mixture. Same surface regardless."""
 
     # NOTE: @runtime_checkable enables isinstance() checks but performs structural
     # (attribute-presence) checking only — it does NOT verify method signatures or
@@ -22,3 +22,4 @@ class Distribution(Protocol):
     def std(self) -> float: ...
     def quantile(self, q: float) -> float: ...
     def sample(self, n: int, rng: np.random.Generator | None = None) -> NDArray[np.float64]: ...
+    def cdf(self, x: float) -> float: ...

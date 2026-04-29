@@ -331,6 +331,14 @@ Land alongside Plan 6 to give Model C / Model C-tuned / Model C-NB
 complete metric coverage (would add ~96 rows to model_metrics.json:
 32 each for QUANTILE, QUANTILE-tuned, MIXED).
 
+**Update 2026-04-29 (Plan 6):** Plan 6 ships Model D (ensemble) as a fifth
+peer with row-level family `MIXED` — same `SAMPLED_SUMMARY`-only family
+gate skips its 32 season_calibration rows. Widening `aggregate_to_season`
+would now add ~128 rows total (32 each for QUANTILE, QUANTILE-tuned,
+MIXED, MIXED-via-MIXTURE). Single-line guard widening covers all four
+families. Still deferred; not load-bearing for any planned downstream
+consumer.
+
 ### 29. Prune Model C-tuned from POSITION_DISPATCH (deferred until Model C-NB soaks)
 
 Surfaced in Plan 5c (2026-04-28). Model C-NB strictly dominates Model
@@ -354,6 +362,13 @@ Concrete tasks (when ready):
 Defer until Plan 6 (ensemble) lands and we're confident which model
 classes the ensemble references — then prune dead classes in the same
 housekeeping commit.
+
+**Update 2026-04-29 (Plan 6):** Plan 6 (ensemble) shipped as peer.
+EnsembleModel references **Model A and Model C-NB** only — Tuned is not
+in the ensemble. Tuned is therefore a clean pruning candidate. Concrete
+tasks above remain accurate; the snapshot would shrink from 1872 to 1504
+rows after the prune (drop the 368 lightgbm-tuned rows). Defer to next
+housekeeping pass; nothing actively references Tuned post-Plan-6.
 
 ### 30. Upper-tail count calibration follow-up to Plan 7
 
@@ -391,3 +406,25 @@ Plan 7's spec, plan, and diagnostic CLI ship to main as record-of-decision
 on branch `feat/plan-7-calibration-aware-nb`. Future work re-points the
 diagnostic at any new model output to verify the upper-tail mechanism on
 the same per-row backtest-output schema.
+
+**Update 2026-04-29 (Plan 6):** Plan 6 (ensemble of A + C-NB with per-stat
+pinball at q ∈ {0.10, 0.90}) shipped as peer with **all three §1.3 criteria
+failing**. The per-stat pinball optimizer found a clean per-stat optimum
+(yards heavily C-NB, TDs moderately A) but the per-stat optimum did NOT
+propagate to composite calibration on RB/TE/WR (mean delta -0.097 / -0.080
+/ -0.074). This is exactly Plan 7's diagnostic prediction recurring:
+per-stat coverage at [p10, p90] does NOT algebraically decompose to
+composite [p10, p90] coverage. Plan 6 confirms the mechanism with real
+backtest data. The three TODO #30 candidate mechanisms above remain the
+right next experiments; the **composite-direct optimization track** (TODO
+#30 follow-up #1, but applied at composite level via Monte Carlo rather
+than per-stat) is now elevated as the natural successor — same
+EnsembleModel infrastructure, replace pinball-on-per-stat with
+composite-Brier-on-MC. ~5-10x slower per fold but targets the actual
+gate metric directly.
+
+QB cells in Plan 6 *do* improve on every metric (mean calib +0.018; RMSE
+strict -1.8% to -2.5% across 4/4 years). Per-position routing
+(`POSITION_DISPATCH[QB].factories['default'] = qb_ensemble`) would adopt
+Model D for QB only without breaking RB/TE/WR. Open as a follow-up if
+QB-specific accuracy ever matters more than uniform routing.
