@@ -30,7 +30,12 @@ from projections.backtest.metrics import (
 from projections.backtest.naive import compute_naive_predictions
 from projections.distributions import unpack_per_stat_params
 from projections.features.cache import read_features
-from projections.models import POSITION_DISPATCH, BaselineModel, LightGBMModel
+from projections.models import (
+    POSITION_DISPATCH,
+    BaselineModel,
+    EnsembleModel,
+    LightGBMModel,
+)
 from projections.schemas import DistributionFamily, Position, Ruleset, Stat
 from projections.scoring import INTEGER_STATS, score
 from projections.scoring.score import StatLine
@@ -259,7 +264,7 @@ def run_backtest(
                 # the union of concrete classes so we can read
                 # `target_stats` (not on the Model protocol).
                 model = cast(
-                    BaselineModel | LightGBMModel,
+                    BaselineModel | LightGBMModel | EnsembleModel,
                     dispatch.factories[model_class](),
                 )
                 model.fit(train_features, train_actuals)
