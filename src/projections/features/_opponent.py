@@ -1,18 +1,18 @@
 """Opponent-strength helper: schedule-of-strength-adjusted EPA-per-play
 residual, computed from play-by-play data.
 
-Replaces the v1 `opp_allowed_fppg` (Plan 2a) which used team-week fppg
-trailing means without schedule-of-strength adjustment.
+Replaces the v1 ``opp_allowed_fppg`` (Plan 2a), which used team-week fppg
+trailing means without schedule-of-strength adjustment. The v1 helper and its
+``_row_to_statline`` companion were removed at the end of Plan 9 Phase 3 once
+all four per-position builders (qb/rb/wr/te) had migrated to
+``opp_epa_allowed_residual``.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import pandas as pd
-
-if TYPE_CHECKING:
-    from projections.schemas import Position, Ruleset
 
 
 def _is_pass_play(df: pd.DataFrame) -> pd.Series[bool]:
@@ -157,25 +157,3 @@ def opp_epa_allowed_residual(
     out["season"] = out["season"].astype("int64")
     out["week"] = out["week"].astype("int64")
     return out
-
-
-# --- Transitional shim — REMOVED IN PLAN 9 PHASE 3 -------------------------
-# The v1 `opp_allowed_fppg` is no longer implemented; only a typed shim
-# remains so that the per-position builders (qb.py, rb.py, wr.py, te.py)
-# still type-check while Tasks 6-9 migrate each to `opp_epa_allowed_residual`.
-# At runtime the shim raises immediately — this matches the Phase 3 design
-# where each builder's tests intentionally fail at the start of its task and
-# pass after the swap. Delete this once Task 9 (te.py) lands.
-def opp_allowed_fppg(
-    weekly_stats: pd.DataFrame,
-    *,
-    position: Position,
-    ruleset: Ruleset,
-    n_weeks: int,
-) -> pd.DataFrame:
-    """Removed in Plan 9. Use ``opp_epa_allowed_residual`` instead."""
-    del weekly_stats, position, ruleset, n_weeks  # silence unused-arg
-    raise NotImplementedError(
-        "opp_allowed_fppg was replaced by opp_epa_allowed_residual in Plan 9. "
-        "Per-position builders (qb/rb/wr/te) are migrated in Tasks 6-9."
-    )
