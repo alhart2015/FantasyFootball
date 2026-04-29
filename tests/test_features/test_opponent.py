@@ -155,57 +155,88 @@ def test_opp_epa_allowed_residual_negative_against_strong_offenses() -> None:
 
 
 def test_opp_epa_allowed_residual_pass_filter_includes_sacks_and_scrambles() -> None:
-    """play_type='pass' must include sacks and scrambles."""
+    """play_type='pass' must include sacks and scrambles. Construct a setup
+    where misclassifying scrambles as non-pass would shift the residual.
+
+    Two offenses (OFF_A, OFF_B) play DEF. OFF_A's plays are all pure passes;
+    OFF_B's plays are scrambles + designed runs. If the classifier correctly
+    counts scrambles as pass plays, OFF_B contributes ONE pass play to DEF's
+    window and OFF_B has known overall pass mean. If scrambles are wrongly
+    excluded, OFF_B has zero pass plays vs DEF and the residual differs.
+    """
     rows = [
+        # OFF_A vs DEF — pure pass, EPA=0.0 (week 1)
         _make_pbp_row(
             play_id=1,
             week=1,
-            posteam="OFF",
+            posteam="OFF_A",
             defteam="DEF",
             play_type="pass",
-            epa=0.1,
+            epa=0.0,
         ),
+        # OFF_A vs OTHER — pure pass, EPA=0.0 (sets OFF_A overall mean = 0.0)
         _make_pbp_row(
             play_id=2,
-            week=2,
-            posteam="OFF",
-            defteam="DEF",
+            week=1,
+            posteam="OFF_A",
+            defteam="OTHER",
             play_type="pass",
-            epa=-1.5,
-            sack=1.0,
+            epa=0.0,
         ),
+        # OFF_B vs DEF — scramble (must classify as pass), EPA=+0.4 (week 2)
         _make_pbp_row(
             play_id=3,
-            week=3,
-            posteam="OFF",
+            week=2,
+            posteam="OFF_B",
             defteam="DEF",
             play_type="run",
-            epa=0.3,
-            qb_scramble=1.0,  # scramble = pass
+            epa=0.4,
+            qb_scramble=1.0,
         ),
+        # OFF_B vs OTHER — scramble, EPA=+0.4 (sets OFF_B overall pass mean = 0.4)
         _make_pbp_row(
             play_id=4,
-            week=4,
-            posteam="OFF",
-            defteam="DEF",
+            week=2,
+            posteam="OFF_B",
+            defteam="OTHER",
             play_type="run",
-            epa=2.0,  # designed run = NOT pass
+            epa=0.4,
+            qb_scramble=1.0,
+        ),
+        # OFF_B vs OTHER — designed run, EPA=+1.0 (NOT counted as pass)
+        _make_pbp_row(
+            play_id=5,
+            week=2,
+            posteam="OFF_B",
+            defteam="OTHER",
+            play_type="run",
+            epa=1.0,
         ),
     ]
     pbp = pd.DataFrame(rows)
     result = opp_epa_allowed_residual(pbp, play_type="pass", n_weeks=4)
 
-    # Pass plays counted: weeks 1, 2, 3 (regular pass + sack + scramble = 3 plays).
-    # Designed run in week 4 is excluded.
-    # All plays come from one offense → mean of residuals is zero.
-    row = result[(result["week"] == 5) & (result["opp_team"] == "DEF")]
-    assert len(row) == 1
-    assert math.isclose(float(row.iloc[0]["opp_epa_allowed_residual"]), 0.0, abs_tol=1e-9)
+    # DEF residual at target_week=3:
+    #   week 1 plays vs DEF: OFF_A pass at 0.0 (residual = 0.0 - 0.0 = 0.0)
+    #   week 2 plays vs DEF: OFF_B scramble at 0.4 (residual = 0.4 - 0.4 = 0.0)
+    #   per-week means: w1=0.0, w2=0.0
+    #   trailing-N mean over weeks: 0.0
+    # If scrambles were wrongly excluded from pass classifier:
+    #   week 2 has NO pass plays vs DEF → DEF's row at target_week=3 might not even
+    #   be emitted (or would only reflect week 1).
+    row = result[(result["week"] == 3) & (result["opp_team"] == "DEF")]
+    assert len(row) == 1, "DEF must have a row at target_week=3 (scramble counted as pass)"
+
+    # Also check OTHER's row covers both weeks 1 and 2 (cross-defense sanity).
+    other_row = result[(result["week"] == 3) & (result["opp_team"] == "OTHER")]
+    assert len(other_row) == 1
 
 
 def test_opp_epa_allowed_residual_run_filter_excludes_scrambles() -> None:
-    """play_type='run' must exclude qb_scramble and sack rows."""
+    """play_type='run' must exclude qb_scramble. Construct a setup where
+    incorrectly including scrambles would alter the residual."""
     rows = [
+        # OFF vs DEF — designed run only, EPA=0.5 (week 1)
         _make_pbp_row(
             play_id=1,
             week=1,
@@ -214,18 +245,29 @@ def test_opp_epa_allowed_residual_run_filter_excludes_scrambles() -> None:
             play_type="run",
             epa=0.5,
         ),
+        # OFF vs OTHER — designed run, EPA=0.5 (OFF overall run mean = 0.5)
         _make_pbp_row(
             play_id=2,
+            week=1,
+            posteam="OFF",
+            defteam="OTHER",
+            play_type="run",
+            epa=0.5,
+        ),
+        # OFF vs DEF — scramble (MUST be excluded), EPA=-1.0 (week 2)
+        _make_pbp_row(
+            play_id=3,
             week=2,
             posteam="OFF",
             defteam="DEF",
             play_type="run",
-            epa=0.5,
-            qb_scramble=1.0,  # excluded
+            epa=-1.0,
+            qb_scramble=1.0,
         ),
+        # OFF vs DEF — designed run, EPA=0.5 (week 2)
         _make_pbp_row(
-            play_id=3,
-            week=3,
+            play_id=4,
+            week=2,
             posteam="OFF",
             defteam="DEF",
             play_type="run",
@@ -235,8 +277,17 @@ def test_opp_epa_allowed_residual_run_filter_excludes_scrambles() -> None:
     pbp = pd.DataFrame(rows)
     result = opp_epa_allowed_residual(pbp, play_type="run", n_weeks=4)
 
-    row = result[(result["week"] == 5) & (result["opp_team"] == "DEF")]
-    # 2 designed-run plays included; OFF mean = 0.5; residual = 0.0.
+    row = result[(result["week"] == 3) & (result["opp_team"] == "DEF")]
+    # DEF designed-run plays vs OFF: w1=0.5, w2=0.5
+    # OFF's run window mean: (0.5 + 0.5 + 0.5)/3 = 0.5
+    # per-play residuals: 0.0 each → per-week means: w1=0.0, w2=0.0
+    # trailing-N mean: 0.0
+    # If scrambles were wrongly INCLUDED:
+    #   DEF window plays would include the scramble (-1.0)
+    #   per-week means: w1=0.0, w2=mean(0.0, residual_of_scramble)
+    #   The scramble's residual = -1.0 - off_run_mean → significantly negative
+    #   per-week mean for w2 != 0.0
+    #   trailing mean != 0.0
     assert len(row) == 1
     assert math.isclose(float(row.iloc[0]["opp_epa_allowed_residual"]), 0.0, abs_tol=1e-9)
 

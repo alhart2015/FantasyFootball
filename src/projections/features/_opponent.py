@@ -42,6 +42,18 @@ def opp_epa_allowed_residual(
     same trailing window. The residual answers: "given who they faced, how
     much better/worse than expected did this defense play?"
 
+    Aggregation follows spec §5.1 in two stages:
+
+    1. Group per-play residuals by (defteam, season, week) and take the
+       mean. This yields a single per-week mean residual per defense and
+       prevents weeks with abnormally many plays (e.g. a high-pace game)
+       from dominating the trailing-window estimate.
+    2. Take the mean of those per-week means across the trailing window.
+       This is the value emitted as ``opp_epa_allowed_residual``.
+
+    A one-stage per-play mean across the entire window would weight weeks
+    by their play count, which the spec deliberately avoids.
+
     Returns one row per (season, target_week, opp_team) with target_week
     shifted +1 from the trailing window's last week, mirroring the v1
     `opp_allowed_fppg` join interface. The opp_team column carries the
@@ -124,7 +136,10 @@ def opp_epa_allowed_residual(
                     how="left",
                 )
                 joined["residual"] = joined["epa"] - joined["off_window_mean"]
-                mean_residual = float(joined["residual"].mean())
+                # Spec §5.1 step 6: per-week mean of per-play residuals.
+                weekly_residuals = joined.groupby("week", as_index=False)["residual"].mean()
+                # Spec §5.1 step 7: trailing-N-week mean over the per-week means.
+                mean_residual = float(weekly_residuals["residual"].mean())
 
                 rows.append(
                     {
