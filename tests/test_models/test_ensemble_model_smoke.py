@@ -95,12 +95,15 @@ def _build_synthetic_data(position: Position) -> tuple[pd.DataFrame, pd.DataFram
 
 
 @pytest.mark.parametrize("position", [Position.QB, Position.RB, Position.TE, Position.WR])
-def test_ensemble_fit_predict_smoke(position: Position) -> None:
+def test_ensemble_fit_predict_smoke(position: Position, tmp_path: Path) -> None:
     """Each position's EnsembleModel fits two children, predicts MIXED rows,
     and round-trips MixtureDistribution per stat through the codec."""
     features, weekly_stats = _build_synthetic_data(position)
     factory = POSITION_DISPATCH[position].factories["ensemble"]
     model = factory()
+    assert isinstance(model, EnsembleModel)
+    # Re-point the weights dir to a tmp path so we don't pollute the repo.
+    model._config.weights_dir = tmp_path
     model.fit(features, weekly_stats)
 
     test_features = features[features["season"] == 2021].head(5).copy()
@@ -121,18 +124,20 @@ def test_ensemble_fit_predict_smoke(position: Position) -> None:
         assert isinstance(dist, MixtureDistribution), (
             f"stat {stat} not MixtureDistribution: got {type(dist).__name__}"
         )
-        # Phase 2 uses static 0.5 weights.
-        assert dist.weight == pytest.approx(0.5, abs=1e-12), (
-            f"Phase 2 expects static 0.5 weights; got {dist.weight} for stat {stat}"
+        # Phase 3 fits per-stat weights via pinball loss; bound check only.
+        assert 0.001 <= dist.weight <= 0.999, (
+            f"Phase 3 fitted weight out of bounds for stat {stat}: {dist.weight}"
         )
 
 
 @pytest.mark.parametrize("position", [Position.QB, Position.RB, Position.TE, Position.WR])
-def test_ensemble_model_id_format(position: Position) -> None:
+def test_ensemble_model_id_format(position: Position, tmp_path: Path) -> None:
     """model_id format: 'ensemble:<pos>:<8-hex>:<train_start>-<train_end>'."""
     features, weekly_stats = _build_synthetic_data(position)
     factory = POSITION_DISPATCH[position].factories["ensemble"]
     model = factory()
+    assert isinstance(model, EnsembleModel)
+    model._config.weights_dir = tmp_path
     with pytest.raises(RuntimeError, match="model_id"):
         _ = model.model_id  # not yet fitted
 
@@ -150,6 +155,8 @@ def test_ensemble_save_load_round_trip(tmp_path: Path) -> None:
     features, weekly_stats = _build_synthetic_data(Position.QB)
     factory = POSITION_DISPATCH[Position.QB].factories["ensemble"]
     model = factory()
+    assert isinstance(model, EnsembleModel)
+    model._config.weights_dir = tmp_path
     model.fit(features, weekly_stats)
     test_features = features[features["season"] == 2021].head(5).copy()
     pred_before = model.predict_distribution(test_features, Ruleset.espn_ppr())
@@ -166,15 +173,84 @@ def test_ensemble_save_load_round_trip(tmp_path: Path) -> None:
     )
 
 
-def test_ensemble_predict_handles_empty_features() -> None:
+def test_ensemble_predict_handles_empty_features(tmp_path: Path) -> None:
     """Empty feature input returns an empty schema-validated frame, mirroring
     BaselineModel and LightGBMNbModel behavior."""
     features, weekly_stats = _build_synthetic_data(Position.QB)
     factory = POSITION_DISPATCH[Position.QB].factories["ensemble"]
     model = factory()
+    assert isinstance(model, EnsembleModel)
+    model._config.weights_dir = tmp_path
     model.fit(features, weekly_stats)
 
     empty_features = features.iloc[0:0].copy()
     out = model.predict_distribution(empty_features, Ruleset.espn_ppr())
     assert out.empty
     ProjectionWeeklySchema.validate(out)
+
+
+def test_fit_produces_non_static_weights(tmp_path: Path) -> None:
+    """After fit() with the real pinball optimizer, at least one weight should
+    differ from 0.5 (Phase 3 replaces the static-0.5 default with optimized
+    values)."""
+    features, weekly_stats = _build_synthetic_data(Position.QB)
+    factory = POSITION_DISPATCH[Position.QB].factories["ensemble"]
+    model = factory()
+    assert isinstance(model, EnsembleModel)
+    # Re-point the weights dir to a tmp path so we don't pollute the repo.
+    model._config.weights_dir = tmp_path
+    model.fit(features, weekly_stats)
+    weights = list(model._weights.values())
+    assert any(w != 0.5 for w in weights), (
+        f"expected at least one optimized weight != 0.5, got {weights}"
+    )
+
+
+def test_fit_rejects_too_few_seasons() -> None:
+    """EnsembleModel.fit needs >= 3 seasons (>= 2 for weight-fit children +
+    1 calibration year)."""
+    features, weekly_stats = _build_synthetic_data(Position.QB)
+    seasons = sorted(features["season"].unique())
+    if len(seasons) < 3:
+        pytest.skip(
+            f"synthetic fixture has only {len(seasons)} seasons; "
+            "need >=3 to exercise the weight-fit split"
+        )
+    only_two = features[features["season"].isin(seasons[:2])]
+    weekly_two = weekly_stats[weekly_stats["season"].isin(seasons[:2])]
+    factory = POSITION_DISPATCH[Position.QB].factories["ensemble"]
+    model = factory()
+    with pytest.raises(ValueError, match="seasons"):
+        model.fit(only_two, weekly_two)
+
+
+def test_fit_writes_weights_json(tmp_path: Path) -> None:
+    """fit() persists weights to {weights_dir}/{model_id}.json."""
+    import json
+
+    features, weekly_stats = _build_synthetic_data(Position.QB)
+    factory = POSITION_DISPATCH[Position.QB].factories["ensemble"]
+    model = factory()
+    assert isinstance(model, EnsembleModel)
+    model._config.weights_dir = tmp_path
+    model.fit(features, weekly_stats)
+
+    # Filename sanitizes ':' to '_' for Windows compatibility (':' is a
+    # reserved char on NTFS).
+    safe_id = model.model_id.replace(":", "_")
+    weights_path = tmp_path / f"{safe_id}.json"
+    assert weights_path.exists(), f"expected weights file at {weights_path}"
+
+    payload = json.loads(weights_path.read_text())
+    assert payload["model_class"] == "ensemble"
+    assert payload["position"] == "QB"
+    assert "train_seasons" in payload
+    assert "calibration_year" in payload
+    assert "child_a_model_id" in payload
+    assert "child_b_model_id" in payload
+    assert "weights" in payload
+    # Weights dict has one entry per target stat.
+    assert set(payload["weights"].keys()) == {s.value for s in model.target_stats}
+    # All weights are valid floats in (0.001, 0.999).
+    for stat_name, w in payload["weights"].items():
+        assert 0.001 <= w <= 0.999, f"weight for {stat_name} out of bounds: {w}"

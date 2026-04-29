@@ -4,8 +4,10 @@ Per-(position, stat) weighted mixture of Model A (BaselineModel) and Model
 C-NB (LightGBMNbModel). Weights are constant per (position, stat); per-row
 distributions are MixtureDistribution(F_a, F_b, w[stat]).
 
-Phase 2 scaffolding: weights default to 0.5 per stat. Phase 3 wires the
-pinball-loss optimizer into fit().
+fit() runs the 4-stage flow per spec sec 3.1: weight-fit children on
+[S, Y-2] -> predict on calibration year Y-1 -> fit per-stat weights via
+pinball at q in {0.10, 0.90} -> re-fit prediction children on full [S, Y-1]
+-> persist weights JSON to ``data/ensemble_weights/``.
 
 Per-row schema:
     family = DistributionFamily.MIXED
@@ -195,10 +197,9 @@ class _EnsembleConfig:
     target_stats: tuple[Stat, ...]
     child_a_factory: Callable[[], BaselineModel]
     child_b_factory: Callable[[], LightGBMNbModel]
-    # Forward-compat: directory where the Phase 3 pinball-loss optimizer
-    # will persist per-(position, stat) weight blobs. Unused in Phase 2
-    # (static 0.5 weights); wired now to avoid a config-shape change in
-    # the next phase.
+    # Directory where fit() persists per-(position, train-span) weight blobs
+    # (one JSON per fold per position; spec sec 3.3). Tests override this
+    # to a tmp_path to avoid polluting the repo.
     weights_dir: Path = field(default=_DEFAULT_WEIGHTS_DIR)
 
 
@@ -221,7 +222,7 @@ class EnsembleModel:
         self._weights = {}
         self._train_start = None
         self._train_end = None
-        # unused in Phase 2; Phase 3 weight optimizer uses it as the Y-1 calibration year.
+        # The Y-1 calibration year used by fit() to optimize per-stat weights.
         self._calibration_year = None
         self._is_fitted = False
 
@@ -270,24 +271,141 @@ class EnsembleModel:
         )
 
     def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:
-        """Phase 2 simplified fit: train both children on full span; static
-        weights = 0.5. Phase 3 replaces this with the 4-stage weight-fitting
-        flow."""
-        seasons = sorted(int(s) for s in features["season"].unique())
-        if len(seasons) < 2:
-            raise ValueError(f"EnsembleModel.fit needs >=2 training seasons; got {len(seasons)}")
+        """4-stage fit: weight-fit children on [S, Y-2] -> predict Y-1 ->
+        fit weights via pinball at q in {0.10, 0.90} -> re-fit prediction
+        children on [S, Y-1].
 
+        Spec sec 3.1.
+        """
+        seasons = sorted(int(s) for s in features["season"].unique())
+        if len(seasons) < 3:
+            raise ValueError(
+                f"EnsembleModel.fit needs >=3 training seasons "
+                f"(>=2 for weight-fit children + 1 calibration year); got {len(seasons)}"
+            )
+
+        cal_year = seasons[-1]
+        weight_fit_seasons = seasons[:-1]
+
+        wf_features = features[features["season"].isin(weight_fit_seasons)].copy()
+        wf_weekly = weekly_stats[weekly_stats["season"].isin(weight_fit_seasons)].copy()
+        cal_features = features[features["season"] == cal_year].copy()
+        cal_weekly = weekly_stats[weekly_stats["season"] == cal_year].copy()
+
+        # Stage 1 - weight-fit children on [S, Y-2]
+        child_a_wf = self._config.child_a_factory()
+        child_b_wf = self._config.child_b_factory()
+        child_a_wf.fit(wf_features, wf_weekly)
+        child_b_wf.fit(wf_features, wf_weekly)
+
+        # Stage 2 - predict Y-1
+        ruleset = Ruleset.espn_ppr()
+        pred_a = child_a_wf.predict_distribution(cal_features, ruleset=ruleset)
+        pred_b = child_b_wf.predict_distribution(cal_features, ruleset=ruleset)
+
+        # Stage 3 - fit weights via pinball at q in {0.10, 0.90}
+        self._weights = self._fit_weights(
+            pred_a=pred_a,
+            pred_b=pred_b,
+            cal_weekly=cal_weekly,
+        )
+
+        # Stage 4 - re-fit children on the full prediction span [S, Y-1]
         self._child_a = self._config.child_a_factory()
         self._child_a.fit(features, weekly_stats)
         self._child_b = self._config.child_b_factory()
         self._child_b.fit(features, weekly_stats)
 
-        self._weights = {stat: 0.5 for stat in self._config.target_stats}
-
         self._train_start = seasons[0]
         self._train_end = seasons[-1]
-        self._calibration_year = seasons[-1]
+        self._calibration_year = cal_year
         self._is_fitted = True
+
+        # Stage 5 - persist weights JSON for traceability
+        self._write_weights_json()
+
+    def _fit_weights(
+        self,
+        *,
+        pred_a: pd.DataFrame,
+        pred_b: pd.DataFrame,
+        cal_weekly: pd.DataFrame,
+    ) -> dict[Stat, float]:
+        """For each target stat, fit one scalar weight via pinball at q=(0.10, 0.90).
+
+        Inner-joins predictions with this position's actuals on (gsis_id, season,
+        week) so row alignment is explicit. Returns 0.5 defaults if no aligned
+        rows are available."""
+        keys = ["gsis_id", "season", "week"]
+        cal_pos = cal_weekly[cal_weekly["position"] == self._config.position.value].copy()
+
+        target_cols = [s.value for s in self._config.target_stats]
+        joined = pred_a[keys].merge(
+            cal_pos[keys + target_cols],
+            on=keys,
+            how="inner",
+            validate="one_to_one",
+        )
+        if joined.empty:
+            warnings.warn(
+                f"EnsembleModel._fit_weights: no calibration rows for "
+                f"{self._config.position.value}; defaulting all weights to 0.5",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return {stat: 0.5 for stat in self._config.target_stats}
+
+        pred_a_keyed = pred_a.set_index(keys, drop=False)
+        pred_b_keyed = pred_b.set_index(keys, drop=False)
+        joined_idx = joined.set_index(keys, drop=False)
+
+        # Decode per-row per-stat distributions for both children, restricted to
+        # the joined rows.
+        per_row_a: list[dict[Stat, Distribution]] = [
+            unpack_per_stat_params(bytes(pred_a_keyed.loc[idx, "params"]))
+            for idx in joined_idx.index
+        ]
+        per_row_b: list[dict[Stat, Distribution]] = [
+            unpack_per_stat_params(bytes(pred_b_keyed.loc[idx, "params"]))
+            for idx in joined_idx.index
+        ]
+
+        weights: dict[Stat, float] = {}
+        for stat in self._config.target_stats:
+            actuals = joined[stat.value].to_numpy(dtype=np.float64)
+            components_a = [r[stat] for r in per_row_a]
+            components_b = [r[stat] for r in per_row_b]
+            weights[stat] = _fit_weight_for_stat(
+                components_a=components_a,
+                components_b=components_b,
+                actuals=actuals,
+            )
+        return weights
+
+    def _write_weights_json(self) -> None:
+        """Write the weights artifact to {weights_dir}/{model_id}.json.
+
+        The model_id contains ':' separators which are reserved on NTFS;
+        we sanitize to '_' for the filename. Payload retains the original
+        model_id for traceability.
+        """
+        if self._child_a is None or self._child_b is None:
+            return
+        self._config.weights_dir.mkdir(parents=True, exist_ok=True)
+        safe_id = self.model_id.replace(":", "_")
+        artifact_path = self._config.weights_dir / f"{safe_id}.json"
+        payload = {
+            "model_class": "ensemble",
+            "position": self._config.position.value,
+            "model_id": self.model_id,
+            "train_seasons": [self._train_start, self._train_end],
+            "calibration_year": self._calibration_year,
+            "child_a_model_id": self._child_a.model_id,
+            "child_b_model_id": self._child_b.model_id,
+            "weights": {stat.value: round(w, 6) for stat, w in self._weights.items()},
+            "fitted_at": datetime.now(UTC).isoformat(),
+        }
+        artifact_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
     def predict_distribution(self, features: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
         """Predict per-row composite fantasy-points distribution as the
