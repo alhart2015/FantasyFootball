@@ -976,6 +976,7 @@ def baseline_features_rb(baseline_weekly_stats_rb: pd.DataFrame) -> pd.DataFrame
     from projections.features import build_rb_features
 
     aux = _build_position_supporting_frames(baseline_weekly_stats_rb, "RB")
+    pbp = _build_synthetic_pbp()
     feat_frames: list[pd.DataFrame] = []
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
@@ -985,6 +986,7 @@ def baseline_features_rb(baseline_weekly_stats_rb: pd.DataFrame) -> pd.DataFrame
                 depth_charts=aux["depth_charts"],
                 ngs_rushing=aux["ngs"],
                 schedules=aux["schedules"],
+                pbp=pbp,
                 season=season,
                 as_of_week=week,
             )

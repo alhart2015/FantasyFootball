@@ -17,6 +17,7 @@ def _baseline(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> pd.DataFrame:
     return build_rb_features(
         weekly_stats=rb_weekly_stats,
@@ -24,6 +25,7 @@ def _baseline(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -35,9 +37,15 @@ def test_no_leakage_from_weekly_stats(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing, rb_schedules
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
     )
     leaky = rb_weekly_stats.copy()
     mask_future = (leaky["gsis_id"] == "00-0034796") & (leaky["week"] >= _AS_OF_WEEK)
@@ -50,6 +58,7 @@ def test_no_leakage_from_weekly_stats(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -62,9 +71,15 @@ def test_no_leakage_from_snap_counts(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing, rb_schedules
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
     )
     leaky = rb_snap_counts.copy()
     mask_future = leaky["week"] >= _AS_OF_WEEK
@@ -76,6 +91,7 @@ def test_no_leakage_from_snap_counts(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -88,9 +104,15 @@ def test_no_leakage_from_ngs_rushing(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing, rb_schedules
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
     )
     extra = pd.DataFrame(
         [
@@ -120,6 +142,7 @@ def test_no_leakage_from_ngs_rushing(
         depth_charts=rb_depth_charts,
         ngs_rushing=leaky,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -132,9 +155,15 @@ def test_no_leakage_from_depth_charts_other_weeks(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing, rb_schedules
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
     )
     extra_weeks = pd.concat(
         [
@@ -150,6 +179,7 @@ def test_no_leakage_from_depth_charts_other_weeks(
         depth_charts=leaky,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -162,9 +192,15 @@ def test_no_leakage_from_schedules_other_weeks(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing, rb_schedules
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
     )
     extra_weeks = rb_schedules.assign(week=6, total_line=99.0, spread_line=99.0)
     leaky = pd.concat([rb_schedules, extra_weeks], ignore_index=True)
@@ -174,6 +210,49 @@ def test_no_leakage_from_schedules_other_weeks(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=leaky,
+        pbp=fake_pbp_df,
+        season=_SEASON,
+        as_of_week=_AS_OF_WEEK,
+    )
+    pd.testing.assert_frame_equal(baseline, after, check_like=True)
+
+
+def test_no_leakage_from_pbp_other_weeks(
+    rb_weekly_stats: pd.DataFrame,
+    rb_snap_counts: pd.DataFrame,
+    rb_depth_charts: pd.DataFrame,
+    rb_ngs_rushing: pd.DataFrame,
+    rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """build_rb_features must not leak future-week PBP rows into current-week features.
+
+    Defense-in-depth: opp_epa_allowed_residual itself bounds its trailing window to
+    [target_week - n_weeks, target_week - 1], the builder's prior_mask(pbp, ...)
+    filter drops as_of_week+ rows pre-helper-call, AND the post-helper merge selects
+    only the week == as_of_week residual. Any of these alone would block the leak;
+    this test verifies the composition by injecting an extreme-EPA row at a future
+    week and asserting bit-identical output."""
+    baseline = _baseline(
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
+    )
+    extra = fake_pbp_df.iloc[[0]].copy()
+    extra.loc[:, "week"] = 6
+    extra.loc[:, "epa"] = 99.0
+    extra.loc[:, "play_id"] = int(fake_pbp_df["play_id"].max()) + 1
+    leaky = pd.concat([fake_pbp_df, extra], ignore_index=True)
+    after = build_rb_features(
+        weekly_stats=rb_weekly_stats,
+        snap_counts=rb_snap_counts,
+        depth_charts=rb_depth_charts,
+        ngs_rushing=rb_ngs_rushing,
+        schedules=rb_schedules,
+        pbp=leaky,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )

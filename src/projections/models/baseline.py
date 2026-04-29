@@ -370,7 +370,7 @@ _RB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "spread",
     "is_home",
     "roof_dome",
-    "opp_allowed_rb_fppg_l4",
+    "opp_run_epa_allowed_l4",
 )
 
 

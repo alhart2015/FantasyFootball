@@ -546,7 +546,7 @@ def test_rb_features_schema_accepts_valid_row() -> None:
             "spread": [-2.5],
             "is_home": [False],
             "roof_dome": [False],
-            "opp_allowed_rb_fppg_l4": [20.5],
+            "opp_run_epa_allowed_l4": [-0.05],
         }
     )
     RbFeaturesSchema.validate(df)
@@ -579,7 +579,7 @@ def test_rb_features_schema_rejects_rush_share_over_one() -> None:
             "spread": [-2.5],
             "is_home": [False],
             "roof_dome": [False],
-            "opp_allowed_rb_fppg_l4": [20.5],
+            "opp_run_epa_allowed_l4": [-0.05],
         }
     )
     with pytest.raises(SchemaError):
