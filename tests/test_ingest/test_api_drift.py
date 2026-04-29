@@ -26,7 +26,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import nfl_data_py as nfl
 import pytest
 
 from projections.ingest.depth_charts import (
@@ -43,6 +42,7 @@ from projections.ingest.ngs import (
     _normalize_one_season as _normalize_ngs,
 )
 from projections.ingest.pbp import _KEEP as _KEEP_PBP
+from projections.ingest.pbp import _fetch_raw_pbp
 from projections.ingest.pbp import (
     _normalize_one_season as _normalize_pbp,
 )
@@ -237,7 +237,7 @@ def test_pbp_api_columns_and_schema() -> None:
     """Opt-in network smoke: pulls a small live PBP slice and asserts every
     column we keep is present, then runs the normalize end-to-end so pandera
     surfaces dtype / value drift."""
-    raw = nfl.import_pbp_data([_DRIFT_SEASON])
+    raw = _fetch_raw_pbp([_DRIFT_SEASON])
     missing = set(_KEEP_PBP) - set(raw.columns)
     assert not missing, (
         f"PBP upstream missing columns we depend on: {sorted(missing)}. "
