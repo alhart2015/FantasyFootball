@@ -1,10 +1,21 @@
-"""Plan 8 — adoption gate CLI.
+"""Plan 8 / Plan 9 — adoption gate CLI.
 
-Reads a backtest run's per-row results.parquet, pairs rows on
-(gsis_id, season, week) between two model classes, and emits per-position
-adoption verdicts via paired-bootstrap CIs.
+Reads per-row backtest results, pairs rows on (gsis_id, season, week), and
+emits per-position adoption verdicts via paired-bootstrap CIs.
 
-Usage:
+Two pairing modes:
+
+1. **Single-run (Plan 8):** one ``results.parquet`` containing two
+   ``model_class`` values (e.g. ``baseline`` vs ``ensemble``). Rows are paired
+   on the model_class column.
+
+2. **Dual-run (Plan 9+):** two ``results.parquet`` files representing the
+   same backtest configuration with different feature sets (both files share
+   the same ``model_class``). The dual-run loader synthesizes per-file
+   ``_baseline_run`` / ``_candidate_run`` labels so the existing pair logic
+   applies unchanged.
+
+Usage (single-run):
     python -m scripts.adoption_gate \\
         --run data/backtest/run_<ts> \\
         --candidate <model_class> \\
@@ -14,7 +25,17 @@ Usage:
         [--n-bootstrap 1000] \\
         [--seed 42]
 
-Spec: docs/superpowers/specs/2026-04-29-plan-8-gate-redesign-design.md
+Usage (dual-run):
+    python -m scripts.adoption_gate \\
+        --baseline-run data/backtest/run_pre_<feature> \\
+        --candidate-run data/backtest/run_post_<feature> \\
+        [--position QB|RB|TE|WR|all] \\
+        [--csv-out reports/adoption_gate_<feature>.csv] \\
+        [--n-bootstrap 1000] \\
+        [--seed 42]
+
+Spec: docs/superpowers/specs/2026-04-29-plan-8-gate-redesign-design.md (single)
+      docs/superpowers/specs/2026-04-29-plan-9-pbp-ingest-opp-epa-design.md (dual)
 """
 
 from __future__ import annotations
@@ -48,6 +69,68 @@ def load_run_parquet(run_dir: Path) -> pd.DataFrame:
             f"backtest output produced by scripts/backtest.py."
         )
     return pd.read_parquet(results_path)
+
+
+# Synthetic model_class labels used by the dual-run loader. They are
+# intentionally underscore-prefixed so a real model_class (e.g. "baseline",
+# "ensemble", "lightgbm") can never collide with them.
+DUAL_RUN_INCUMBENT_CLASS = "_baseline_run"
+DUAL_RUN_CANDIDATE_CLASS = "_candidate_run"
+
+
+def load_dual_run_paired(baseline_run: Path, candidate_run: Path) -> pd.DataFrame:
+    """Load two backtest runs and return a single combined frame with
+    ``model_class`` synthesized to ``_baseline_run`` / ``_candidate_run`` so
+    the existing :func:`pair_rows` logic can pair them.
+
+    Both runs must hold identical (gsis_id, season, week, position) coverage —
+    they're meant to be the same backtest configuration with only the
+    feature set differing. Any row in one but not the other indicates a
+    backtest mismatch (e.g. a feature builder dropped rows on one side) and
+    must surface as an error rather than silently shrink the paired sample.
+
+    Used for feature-set vs feature-set comparisons (Plan 9 onward) where
+    both runs share the same ``model_class``. The single-run ``--run`` path
+    remains the canonical Plan 8 mode for model-class-vs-model-class
+    comparisons.
+
+    Args:
+        baseline_run: directory containing ``results.parquet`` for the
+            pre-feature run (treated as incumbent for the verdict).
+        candidate_run: directory containing ``results.parquet`` for the
+            post-feature run (treated as candidate for the verdict).
+
+    Returns:
+        Concatenated frame with the original ``model_class`` column overwritten
+        by the synthesized labels above.
+
+    Raises:
+        FileNotFoundError: either run is missing its ``results.parquet``.
+        ValueError: row coverage between the two runs differs.
+    """
+    base = load_run_parquet(baseline_run)
+    cand = load_run_parquet(candidate_run)
+
+    keys = ["gsis_id", "season", "week", "position"]
+    base_keys = base[keys].drop_duplicates().sort_values(keys).reset_index(drop=True)
+    cand_keys = cand[keys].drop_duplicates().sort_values(keys).reset_index(drop=True)
+    if not base_keys.equals(cand_keys):
+        only_in_base = base_keys.merge(cand_keys, on=keys, how="left", indicator=True).query(
+            '_merge == "left_only"'
+        )
+        only_in_cand = cand_keys.merge(base_keys, on=keys, how="left", indicator=True).query(
+            '_merge == "left_only"'
+        )
+        raise ValueError(
+            f"row coverage mismatch between runs: "
+            f"{len(only_in_base)} rows only in baseline-run, "
+            f"{len(only_in_cand)} rows only in candidate-run. "
+            "Both runs must hold identical (gsis_id, season, week, position) coverage."
+        )
+
+    base = base.assign(model_class=DUAL_RUN_INCUMBENT_CLASS)
+    cand = cand.assign(model_class=DUAL_RUN_CANDIDATE_CLASS)
+    return pd.concat([base, cand], ignore_index=True)
 
 
 def validate_model_classes_present(df: pd.DataFrame, *, incumbent: str, candidate: str) -> None:
@@ -288,12 +371,51 @@ def _write_csv(verdicts: list[PositionVerdict], path: Path) -> None:
     pd.DataFrame(rows).to_csv(path, index=False)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Plan 8 adoption gate.")
-    parser.add_argument("--run", type=Path, required=True, help="run_<ts> directory")
-    parser.add_argument("--candidate", type=str, required=True, help="candidate model_class")
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Build and parse the adoption-gate CLI arg namespace.
+
+    Two mutually-exclusive modes:
+
+    1. **Single-run** (``--run`` + ``--candidate``): pairs rows between two
+       ``model_class`` values within one backtest run. Plan 8 mode.
+    2. **Dual-run** (``--baseline-run`` + ``--candidate-run``): pairs rows
+       across two backtest runs that share the same ``model_class`` but
+       differ in feature set. Plan 9+ mode.
+    """
+    parser = argparse.ArgumentParser(description="Plan 8/9 adoption gate.")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        "--run",
+        type=Path,
+        default=None,
+        help="single backtest run directory (Plan 8 mode); pair on model_class within this run",
+    )
+    mode.add_argument(
+        "--baseline-run",
+        type=Path,
+        default=None,
+        help=(
+            "baseline (pre-feature) run directory; requires --candidate-run "
+            "(Plan 9+ feature-comparison mode)"
+        ),
+    )
     parser.add_argument(
-        "--incumbent", type=str, default="baseline", help="incumbent model_class (default baseline)"
+        "--candidate-run",
+        type=Path,
+        default=None,
+        help="candidate (post-feature) run directory; required when --baseline-run is given",
+    )
+    parser.add_argument(
+        "--candidate",
+        type=str,
+        default=None,
+        help="candidate model_class; required when --run is given",
+    )
+    parser.add_argument(
+        "--incumbent",
+        type=str,
+        default="baseline",
+        help="incumbent model_class (single-run mode only; default baseline)",
     )
     parser.add_argument(
         "--position",
@@ -305,10 +427,35 @@ def main() -> None:
     parser.add_argument("--csv-out", type=Path, default=None, help="optional CSV output path")
     parser.add_argument("--n-bootstrap", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    df = load_run_parquet(args.run)
-    validate_model_classes_present(df, incumbent=args.incumbent, candidate=args.candidate)
+    # argparse's mutually_exclusive_group only enforces "at most one of"; the
+    # second-arg-of-each-pair invariant is enforced manually so the error
+    # messages name the missing flag explicitly.
+    if args.baseline_run is not None and args.candidate_run is None:
+        parser.error("--baseline-run requires --candidate-run")
+    if args.candidate_run is not None and args.baseline_run is None:
+        parser.error("--candidate-run requires --baseline-run")
+    if args.run is not None and args.candidate is None:
+        parser.error("--run requires --candidate")
+    return args
+
+
+def main() -> None:
+    args = parse_args()
+
+    if args.baseline_run is not None:
+        df = load_dual_run_paired(args.baseline_run, args.candidate_run)
+        incumbent_class = DUAL_RUN_INCUMBENT_CLASS
+        candidate_class = DUAL_RUN_CANDIDATE_CLASS
+        run_label = f"baseline=`{args.baseline_run}` candidate=`{args.candidate_run}`"
+    else:
+        df = load_run_parquet(args.run)
+        incumbent_class = args.incumbent
+        candidate_class = args.candidate
+        run_label = f"`{args.run}`"
+
+    validate_model_classes_present(df, incumbent=incumbent_class, candidate=candidate_class)
 
     positions = (
         [Position.QB, Position.RB, Position.TE, Position.WR]
@@ -316,9 +463,9 @@ def main() -> None:
         else [Position(args.position)]
     )
 
-    print(f"# Adoption gate report — {args.candidate} vs {args.incumbent}")
+    print(f"# Adoption gate report — {candidate_class} vs {incumbent_class}")
     print()
-    print(f"Run: `{args.run}`")
+    print(f"Run: {run_label}")
     print(f"n_bootstrap: {args.n_bootstrap}, seed: {args.seed}")
     print()
 
@@ -327,8 +474,8 @@ def main() -> None:
         pv = evaluate_position(
             df,
             position=pos,
-            incumbent=args.incumbent,
-            candidate=args.candidate,
+            incumbent=incumbent_class,
+            candidate=candidate_class,
             n_bootstrap=args.n_bootstrap,
             seed=args.seed,
         )
