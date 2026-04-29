@@ -81,6 +81,17 @@ _QUANTILES_FOR_FIT: Final[tuple[float, float]] = (0.10, 0.90)
 _WEIGHT_BOUNDS: Final[tuple[float, float]] = (0.001, 0.999)
 
 
+def _weights_artifact_path(weights_dir: Path, model_id: str) -> Path:
+    """Map a model_id to its weights JSON path on disk.
+
+    The model_id contains ':' separators which are reserved on NTFS;
+    we sanitize to '_' for the filename. Tests should call this helper
+    rather than re-implementing the substitution.
+    """
+    safe_id = model_id.replace(":", "_")
+    return weights_dir / f"{safe_id}.json"
+
+
 def _pinball(actual: float, q_pred: float, q: float) -> float:
     """Standard quantile pinball loss.
 
@@ -383,17 +394,17 @@ class EnsembleModel:
         return weights
 
     def _write_weights_json(self) -> None:
-        """Write the weights artifact to {weights_dir}/{model_id}.json.
+        """Write the weights artifact to {weights_dir}/{sanitize(model_id)}.json.
 
-        The model_id contains ':' separators which are reserved on NTFS;
-        we sanitize to '_' for the filename. Payload retains the original
+        Filename sanitization (':' → '_') lives in `_weights_artifact_path` to
+        keep tests and source in lockstep; payload retains the original
         model_id for traceability.
         """
-        if self._child_a is None or self._child_b is None:
-            return
+        assert self._child_a is not None and self._child_b is not None, (
+            "_write_weights_json called before children were fit"
+        )
         self._config.weights_dir.mkdir(parents=True, exist_ok=True)
-        safe_id = self.model_id.replace(":", "_")
-        artifact_path = self._config.weights_dir / f"{safe_id}.json"
+        artifact_path = _weights_artifact_path(self._config.weights_dir, self.model_id)
         payload = {
             "model_class": "ensemble",
             "position": self._config.position.value,
@@ -405,7 +416,10 @@ class EnsembleModel:
             "weights": {stat.value: round(w, 6) for stat, w in self._weights.items()},
             "fitted_at": datetime.now(UTC).isoformat(),
         }
-        artifact_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        artifact_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     def predict_distribution(self, features: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
         """Predict per-row composite fantasy-points distribution as the

@@ -19,6 +19,7 @@ import pytest
 
 from projections.distributions import MixtureDistribution, unpack_per_stat_params
 from projections.models import POSITION_DISPATCH, EnsembleModel
+from projections.models.ensemble import _weights_artifact_path
 from projections.schemas import (
     _PYARROW_STR,
     DistributionFamily,
@@ -235,10 +236,7 @@ def test_fit_writes_weights_json(tmp_path: Path) -> None:
     model._config.weights_dir = tmp_path
     model.fit(features, weekly_stats)
 
-    # Filename sanitizes ':' to '_' for Windows compatibility (':' is a
-    # reserved char on NTFS).
-    safe_id = model.model_id.replace(":", "_")
-    weights_path = tmp_path / f"{safe_id}.json"
+    weights_path = _weights_artifact_path(tmp_path, model.model_id)
     assert weights_path.exists(), f"expected weights file at {weights_path}"
 
     payload = json.loads(weights_path.read_text())

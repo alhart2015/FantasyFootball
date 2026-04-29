@@ -212,11 +212,7 @@ Per-(position, train-span) weights persist to `data/ensemble_weights/{model_id}.
     "rushing_tds":   0.689,
     "fumbles_lost":  0.702
   },
-  "loss_per_stat": {
-    "passing_yards": 12.341,
-    "passing_tds":    0.812,
-    ...
-  },
+  "model_id": "ensemble:qb:abc12345:2018-2023",
   "fitted_at": "2026-04-28T12:34:56Z"
 }
 ```
