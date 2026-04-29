@@ -62,9 +62,24 @@ Two findings deviate from the spec's prediction:
 1. **QB winner is `lightgbm-nb`, not `ensemble`.** The spec expected ensemble to win QB. Reality: NB beats ensemble's RMSE point estimate by ~0.017 fpts; CIs overlap heavily but mechanical tie-break selects NB. Side benefit: NB is structurally simpler than ensemble (no MixtureDistribution / per-stat weight optimizer / 4-stage fit) — simpler is better when stat-equivalent.
 2. **WR ADOPTs `ensemble`.** The spec said "WR's improvements were ≤0.55% per cell, pooled CI may or may not clear zero." It cleared. Larger sample (n=8460) gives the bootstrap enough power for a small-but-clean win.
 
+### Snapshot regression gate audit (Phase 5)
+
+`tests/backtest/tolerances.json` defaults vs measured per-cell noise floor (from Plan 8's bootstrap reports under `reports/adoption_gate_*.csv`, per-year breakdown rows):
+
+| Metric kind            | snapshot default | Measured per-cell RMSE-delta CI half-width (absolute, fpts) | Translated to relative (÷ typical per-cell RMSE ≈ 6 fpts) | Verdict |
+|---|---|---|---|---|
+| `rmse_relative`        | 5.0%   | median 0.076; p75 0.100; max 0.217 | median 1.26%; p75 1.66%; max 3.61% | **Fine — ~3-4× headroom over the median noise floor** |
+| `mae_relative`         | 5.0%   | (same scale as rmse) | (same) | **Fine** |
+| `spearman_absolute`    | 0.02   | (Spearman per-year deltas have CI half-widths ~0.005–0.015) | n/a | **Fine — matches Plan 8's catastrophic-regression floor** |
+| `calibration_absolute` | 0.03   | (calibration is informational under Plan 8; not load-bearing for adoption) | n/a | **Fine for code-regression purposes** |
+| `mean_pred_relative`   | 10.0%  | (broader window, intentionally — guards against unintended mean shifts) | n/a | **Fine** |
+
+**Conclusion**: snapshot.py's tolerances are above the per-cell noise floor with comfortable headroom; the regression gate is doing the right job (catching real code-induced numeric drift, not flagging sampling noise). No changes needed; no follow-up TODO filed.
+
+The snapshot regression gate (catches code regression on a frozen model) and the new adoption gate (decides which class is the production default) answer different questions and stay independent. Both ship as-is.
+
 ### Remaining work
 
-- **Phase 5**: Snapshot regression gate audit (read-only) — compare `snapshot.py`'s default tolerances against the per-cell noise floor measured during re-evaluation; document conclusion (file follow-up TODO if tolerances are below noise floor).
 - **Phase 6**: Create `docs/superpowers/specs/_adoption_gate_template.md` for future model-class specs to inline-copy.
 - **Phase 7**: Final pytest + mypy + ruff sweep; PR.
 
