@@ -13,6 +13,7 @@ from projections.backtest.adoption_gate import (
     PositionVerdict,
     paired_bootstrap_rmse_delta,
     paired_bootstrap_spearman_delta,
+    verdict_for_position,
 )
 from projections.schemas import Position
 
@@ -170,3 +171,54 @@ def test_spearman_delta_deterministic_under_same_seed() -> None:
     bd1 = paired_bootstrap_spearman_delta(inc, cand, actual, grouping, n_bootstrap=200, seed=99)
     bd2 = paired_bootstrap_spearman_delta(inc, cand, actual, grouping, n_bootstrap=200, seed=99)
     assert bd1 == bd2 or (np.isnan(bd1.point) and np.isnan(bd2.point))
+
+
+def _bd(point: float, lo: float, hi: float) -> BootstrapDelta:
+    return BootstrapDelta(point=point, lo_95=lo, hi_95=hi, n_paired_rows=1000, n_bootstrap=1000)
+
+
+def test_verdict_adopt_when_rmse_wins_and_spearman_within_floor() -> None:
+    rmse = _bd(point=-0.5, lo=-0.8, hi=-0.1)  # PASS_RMSE: hi_95 < 0
+    spear = _bd(point=0.0, lo=-0.01, hi=0.01)  # PASS_SPEARMAN: lo_95 > -0.02
+    label, reason = verdict_for_position(rmse, spear)
+    assert label == "ADOPT"
+    assert "RMSE" in reason or "rmse" in reason
+
+
+def test_verdict_marginal_when_rmse_wins_but_spearman_regresses() -> None:
+    rmse = _bd(point=-0.5, lo=-0.8, hi=-0.1)
+    spear = _bd(point=-0.05, lo=-0.08, hi=-0.03)  # FAIL_SPEARMAN: lo_95 < -0.02
+    label, reason = verdict_for_position(rmse, spear)
+    assert label == "MARGINAL"
+    assert "Spearman" in reason
+
+
+def test_verdict_do_not_adopt_when_rmse_inconclusive() -> None:
+    rmse = _bd(point=-0.1, lo=-0.4, hi=0.2)  # FAIL_RMSE: CI brackets zero
+    spear = _bd(point=0.01, lo=-0.005, hi=0.025)
+    label, _reason = verdict_for_position(rmse, spear)
+    assert label == "DO_NOT_ADOPT"
+
+
+def test_verdict_do_not_adopt_when_both_fail() -> None:
+    rmse = _bd(point=0.5, lo=0.2, hi=0.8)
+    spear = _bd(point=-0.05, lo=-0.08, hi=-0.03)
+    label, _reason = verdict_for_position(rmse, spear)
+    assert label == "DO_NOT_ADOPT"
+
+
+def test_verdict_respects_custom_spearman_floor() -> None:
+    rmse = _bd(point=-0.5, lo=-0.8, hi=-0.1)
+    spear = _bd(point=-0.04, lo=-0.06, hi=-0.02)  # lo_95 = -0.06
+    label_strict, _ = verdict_for_position(rmse, spear, spearman_floor=-0.02)
+    assert label_strict == "MARGINAL"
+    label_loose, _ = verdict_for_position(rmse, spear, spearman_floor=-0.10)
+    assert label_loose == "ADOPT"
+
+
+def test_verdict_degenerate_when_nan_inputs() -> None:
+    rmse = _bd(point=float("nan"), lo=float("nan"), hi=float("nan"))
+    spear = _bd(point=float("nan"), lo=float("nan"), hi=float("nan"))
+    label, reason = verdict_for_position(rmse, spear)
+    assert label == "DO_NOT_ADOPT"
+    assert "degenerate" in reason.lower()

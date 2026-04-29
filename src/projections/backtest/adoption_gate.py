@@ -114,6 +114,62 @@ def paired_bootstrap_rmse_delta(
     )
 
 
+def verdict_for_position(
+    rmse: BootstrapDelta,
+    spearman: BootstrapDelta,
+    *,
+    spearman_floor: float = -0.02,
+) -> tuple[VerdictLabel, str]:
+    """Apply the §1.3-replacement rule.
+
+    Rule (per spec §1.3):
+        PASS_RMSE     := rmse.hi_95     <  0.0
+        PASS_SPEARMAN := spearman.lo_95 > spearman_floor
+
+        if  PASS_RMSE and  PASS_SPEARMAN: ADOPT
+        if  PASS_RMSE and !PASS_SPEARMAN: MARGINAL
+        if !PASS_RMSE and  PASS_SPEARMAN: DO_NOT_ADOPT
+        if !PASS_RMSE and !PASS_SPEARMAN: DO_NOT_ADOPT
+
+    Returns:
+        (verdict_label, one-line human-readable reason).
+    """
+    if (
+        np.isnan(rmse.point)
+        or np.isnan(rmse.hi_95)
+        or np.isnan(spearman.point)
+        or np.isnan(spearman.lo_95)
+    ):
+        return ("DO_NOT_ADOPT", "degenerate prediction (NaN bootstrap statistics)")
+
+    pass_rmse = rmse.hi_95 < 0.0
+    pass_spearman = spearman.lo_95 > spearman_floor
+
+    if pass_rmse and pass_spearman:
+        return (
+            "ADOPT",
+            f"RMSE delta {rmse.point:+.3f} (95% CI [{rmse.lo_95:+.3f}, {rmse.hi_95:+.3f}]); "
+            f"Spearman lo_95 {spearman.lo_95:+.4f} > floor {spearman_floor:+.3f}",
+        )
+    if pass_rmse and not pass_spearman:
+        return (
+            "MARGINAL",
+            f"RMSE wins ({rmse.point:+.3f}) but Spearman lo_95 {spearman.lo_95:+.4f} "
+            f"breaks floor {spearman_floor:+.3f}; investigate before adopting",
+        )
+    if not pass_rmse and pass_spearman:
+        return (
+            "DO_NOT_ADOPT",
+            f"RMSE inconclusive: 95% CI [{rmse.lo_95:+.3f}, {rmse.hi_95:+.3f}] brackets / "
+            f"exceeds zero",
+        )
+    return (
+        "DO_NOT_ADOPT",
+        f"RMSE worse ({rmse.point:+.3f}) and Spearman regresses "
+        f"(lo_95 {spearman.lo_95:+.4f} < floor {spearman_floor:+.3f})",
+    )
+
+
 def _per_group_mean_spearman(
     predicted: np.ndarray,
     actual: np.ndarray,
