@@ -425,6 +425,42 @@ class NgsReceivingSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class PbpSchema(pa.DataFrameModel):
+    """Per-play data — what `ingest.pbp` produces. Curated subset of
+    `nfl_data_py.import_pbp_data`'s ~370-column output."""
+
+    play_id: Series[int] = pa.Field(ge=1)
+    game_id: Series[str]
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    posteam: Series[str] = pa.Field(isin=_TEAM_VALUES, nullable=True)
+    defteam: Series[str] = pa.Field(isin=_TEAM_VALUES, nullable=True)
+    play_type: Series[str] = pa.Field(nullable=True)
+    qb_dropback: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    qb_scramble: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    sack: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    rush_attempt: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    pass_attempt: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    epa: Series[float] = pa.Field(nullable=True)
+    wpa: Series[float] = pa.Field(nullable=True)
+    success: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    air_yards: Series[float] = pa.Field(nullable=True)
+    yards_after_catch: Series[float] = pa.Field(nullable=True)
+    complete_pass: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    xpass: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    pass_oe: Series[float] = pa.Field(nullable=True)
+    down: Series[float] = pa.Field(ge=1, le=4, nullable=True)
+    ydstogo: Series[int] = pa.Field(ge=0, le=99, nullable=True)
+    yardline_100: Series[float] = pa.Field(ge=0, le=100, nullable=True)
+    half_seconds_remaining: Series[float] = pa.Field(ge=0, le=1800, nullable=True)
+    passer_player_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", nullable=True)
+    rusher_player_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", nullable=True)
+    receiver_player_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
 class WrFeaturesSchema(pa.DataFrameModel):
     """WR feature DataFrame produced by `features.wr.build_wr_features`.
     Schema enforced at the module boundary — every column has a typed range
