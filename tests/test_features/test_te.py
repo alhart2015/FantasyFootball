@@ -15,6 +15,7 @@ def test_build_te_features_returns_validated_frame(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     out = build_te_features(
         weekly_stats=te_weekly_stats,
@@ -22,6 +23,7 @@ def test_build_te_features_returns_validated_frame(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -34,6 +36,7 @@ def test_build_te_features_one_row_per_rostered_te(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     out = build_te_features(
         weekly_stats=te_weekly_stats,
@@ -41,6 +44,7 @@ def test_build_te_features_one_row_per_rostered_te(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -54,6 +58,7 @@ def test_build_te_features_targets_per_game_l4_correct(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Kelce: 8 targets/game -> mean = 8.0."""
     out = build_te_features(
@@ -62,6 +67,7 @@ def test_build_te_features_targets_per_game_l4_correct(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -75,6 +81,7 @@ def test_build_te_features_emits_rushing_columns(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """TE schema includes rushing_attempts_per_game_l4 and rushing_yards_per_game_l4
     so the TE Model A baseline (Plan 3b) can capture Taysom-Hill-style rushing
@@ -86,6 +93,7 @@ def test_build_te_features_emits_rushing_columns(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -105,6 +113,7 @@ def test_build_te_features_target_share_against_full_pass_catching_group(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Kelce 8 targets + Rice 8 targets = 16 KC team total. Kelce share = 8/16 = 0.5.
     Kittle 6 targets + Aiyuk 6 targets = 12 SF team total. Kittle share = 6/12 = 0.5."""
@@ -114,6 +123,7 @@ def test_build_te_features_target_share_against_full_pass_catching_group(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -129,6 +139,7 @@ def test_build_te_features_implied_team_total_from_schedules(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """KC @ ARI, total=49, spread_line=-7.5 (KC away favored).
     KC implied = (49 - (-7.5))/2 = 28.25."""
@@ -138,6 +149,7 @@ def test_build_te_features_implied_team_total_from_schedules(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -151,6 +163,7 @@ def test_build_te_features_roof_dome_true_for_closed_roof(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """ARI has roof='closed' in fixture -> roof_dome == True."""
     out = build_te_features(
@@ -159,6 +172,7 @@ def test_build_te_features_roof_dome_true_for_closed_roof(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -171,6 +185,7 @@ def test_build_te_features_ngs_separation_propagates(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     out = build_te_features(
         weekly_stats=te_weekly_stats,
@@ -178,6 +193,7 @@ def test_build_te_features_ngs_separation_propagates(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )

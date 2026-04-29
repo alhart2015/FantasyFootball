@@ -1003,6 +1003,7 @@ def baseline_features_te(baseline_weekly_stats_te: pd.DataFrame) -> pd.DataFrame
     from projections.features import build_te_features
 
     aux = _build_position_supporting_frames(baseline_weekly_stats_te, "TE")
+    pbp = _build_synthetic_pbp()
     feat_frames: list[pd.DataFrame] = []
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
@@ -1012,6 +1013,7 @@ def baseline_features_te(baseline_weekly_stats_te: pd.DataFrame) -> pd.DataFrame
                 depth_charts=aux["depth_charts"],
                 ngs_receiving=aux["ngs"],
                 schedules=aux["schedules"],
+                pbp=pbp,
                 season=season,
                 as_of_week=week,
             )

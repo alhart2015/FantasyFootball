@@ -98,6 +98,7 @@ def test_build_te_features_empty_depth_chart_does_not_crash(
     wr_depth_charts: pd.DataFrame,  # contains only WRs — no TE rows in target week
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     out = build_te_features(
         weekly_stats=te_weekly_stats,
@@ -105,6 +106,7 @@ def test_build_te_features_empty_depth_chart_does_not_crash(
         depth_charts=wr_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )

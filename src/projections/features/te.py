@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from projections.features._opponent import opp_allowed_fppg
+from projections.features._opponent import opp_epa_allowed_residual
 from projections.features._rolling import (
     latest_ngs_snapshot,
     trailing_4_per_player,
@@ -14,7 +14,6 @@ from projections.features._shared import build_game_environment, exact_week_mask
 from projections.schemas import (
     _PYARROW_STR,
     Position,
-    Ruleset,
     Stat,
     TeFeaturesSchema,
 )
@@ -44,10 +43,16 @@ def build_te_features(
     depth_charts: pd.DataFrame,
     ngs_receiving: pd.DataFrame,
     schedules: pd.DataFrame,
+    pbp: pd.DataFrame,
     season: int,
     as_of_week: int,
 ) -> pd.DataFrame:
-    """Build the TE feature DataFrame for week `as_of_week` of `season`."""
+    """Build the TE feature DataFrame for week `as_of_week` of `season`.
+
+    `pbp` is the play-by-play frame produced by `ingest.pbp` (PbpSchema).
+    It feeds the schedule-of-strength-adjusted opponent pass-EPA residual
+    (Plan 9), which replaces the v1 ``opp_allowed_te_fppg_l4``.
+    """
     ws = weekly_stats[prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
     sc = snap_counts[prior_mask(snap_counts, season=season, as_of_week=as_of_week)].copy()
     ngs = ngs_receiving[prior_mask(ngs_receiving, season=season, as_of_week=as_of_week)].copy()
@@ -155,12 +160,13 @@ def build_te_features(
         )
 
     game_env = build_game_environment(sch)
-    opp_proxy_full = opp_allowed_fppg(
-        ws_te, position=Position.TE, ruleset=Ruleset.espn_ppr(), n_weeks=4
-    )
+
+    # --- Opponent strength: opp-adjusted pass-EPA residual (Plan 9) ------
+    pbp_window = pbp[prior_mask(pbp, season=season, as_of_week=as_of_week)].copy()
+    opp_proxy_full = opp_epa_allowed_residual(pbp_window, play_type="pass", n_weeks=4)
     opp_proxy = opp_proxy_full[
         (opp_proxy_full["season"] == season) & (opp_proxy_full["week"] == as_of_week)
-    ].rename(columns={"opp_allowed_fppg": "opp_allowed_te_fppg_l4"})
+    ].rename(columns={"opp_epa_allowed_residual": "opp_pass_epa_allowed_l4"})
 
     out = te_dc[["gsis_id", "season", "week", "team", "depth_rank"]].copy()
     out = out.merge(game_env, on=["season", "week", "team"], how="left")
@@ -177,7 +183,7 @@ def build_te_features(
     out = out.merge(snap_l4, on="gsis_id", how="left")
     out = out.merge(ngs_cols, on="gsis_id", how="left")
     out = out.merge(
-        opp_proxy[["season", "week", "opp_team", "opp_allowed_te_fppg_l4"]].rename(
+        opp_proxy[["season", "week", "opp_team", "opp_pass_epa_allowed_l4"]].rename(
             columns={"opp_team": "opponent"}
         ),
         on=["season", "week", "opponent"],
