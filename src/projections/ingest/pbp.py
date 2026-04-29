@@ -15,7 +15,7 @@ import nfl_data_py as nfl
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
-from projections.schemas import _PYARROW_STR, PbpSchema, normalize_team_code
+from projections.schemas import _PYARROW_STR, GSIS_ID_PATTERN, PbpSchema, normalize_team_code
 from projections.store import write_partition
 
 _KEEP: tuple[str, ...] = (
@@ -48,7 +48,7 @@ _KEEP: tuple[str, ...] = (
     "receiver_player_id",
 )
 
-_GSIS_RE = re.compile(r"^\d{2}-\d{7}$")
+_GSIS_RE = re.compile(rf"^{GSIS_ID_PATTERN}$")
 
 
 def _fetch_raw_pbp(seasons: list[int]) -> pd.DataFrame:
