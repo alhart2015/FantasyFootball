@@ -4,9 +4,9 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
-## Plan 8 — Adoption gate redesign — re-evaluation complete (2026-04-29, on branch `feat/plan-8-gate-redesign`)
+## Plan 8 — Adoption gate redesign — complete; ready for PR (2026-04-29, on branch `feat/plan-8-gate-redesign`)
 
-**Status:** Phases 1–4 complete; Phases 5 (snapshot.py audit) + 6 (§1.3 spec template) + 7 (PR) remain. **Three production routing changes shipped** (per Phase 4 verdicts below).
+**Status:** all 7 phases shipped. Final verification gates green: 464 pytest pass / 13 skipped (opt-in only) / 0 fail; mypy 145 source files clean; ruff check + format clean across 154 files. **Two production routing changes shipped** (QB → lightgbm-nb; WR → ensemble) per Phase 4 verdicts below.
 
 ### Diagnosis recap
 
@@ -78,10 +78,17 @@ Two findings deviate from the spec's prediction:
 
 The snapshot regression gate (catches code regression on a frozen model) and the new adoption gate (decides which class is the production default) answer different questions and stay independent. Both ship as-is.
 
-### Remaining work
+### Phase 6 — §1.3 spec template
 
-- **Phase 6**: Create `docs/superpowers/specs/_adoption_gate_template.md` for future model-class specs to inline-copy.
-- **Phase 7**: Final pytest + mypy + ruff sweep; PR.
+`docs/superpowers/specs/_adoption_gate_template.md` shipped. Future model-class specs inline-copy the §1.3 body into their own spec, so each spec carries the gate it was evaluated under as record-of-decision.
+
+### Phase 7 — Final verification
+
+All gates green at the tip of the branch:
+
+- `mypy src tests` — 145 source files, no issues.
+- `ruff check src tests scripts` + `ruff format --check src tests scripts` — clean across 154 files.
+- `pytest` (excluding the slow `test_models` leakage tests + opt-in `--run-backtest` / `--run-network` gates): **464 passed, 13 skipped, 0 failed** in 7m50s.
 
 ### Next track after Plan 8
 
