@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from projections.backtest.adoption_gate import (
     BootstrapDelta,
     PositionVerdict,
+    paired_bootstrap_rmse_delta,
 )
 from projections.schemas import Position
 
@@ -51,3 +53,58 @@ def test_position_verdict_bundles_metrics() -> None:
     assert pv.position is Position.QB
     assert pv.verdict == "ADOPT"
     assert len(pv.per_year_breakdown) == 2
+
+
+def test_rmse_delta_identical_residuals_brackets_zero() -> None:
+    rng = np.random.default_rng(0)
+    residuals = rng.normal(size=2000)
+    bd = paired_bootstrap_rmse_delta(residuals, residuals, n_bootstrap=500, seed=42)
+    assert bd.point == 0.0
+    assert bd.lo_95 <= 0.0 <= bd.hi_95
+    assert bd.n_paired_rows == 2000
+    assert bd.n_bootstrap == 500
+
+
+def test_rmse_delta_candidate_strictly_better_has_negative_ci() -> None:
+    rng = np.random.default_rng(0)
+    incumbent_residuals = rng.normal(scale=2.0, size=3000)
+    candidate_residuals = incumbent_residuals / 2.0  # half the variance
+    bd = paired_bootstrap_rmse_delta(
+        incumbent_residuals, candidate_residuals, n_bootstrap=500, seed=42
+    )
+    assert bd.point < 0.0
+    assert bd.hi_95 < 0.0  # 95% CI entirely below zero
+
+
+def test_rmse_delta_candidate_strictly_worse_has_positive_ci() -> None:
+    rng = np.random.default_rng(0)
+    incumbent_residuals = rng.normal(scale=2.0, size=3000)
+    candidate_residuals = incumbent_residuals * 2.0
+    bd = paired_bootstrap_rmse_delta(
+        incumbent_residuals, candidate_residuals, n_bootstrap=500, seed=42
+    )
+    assert bd.point > 0.0
+    assert bd.lo_95 > 0.0
+
+
+def test_rmse_delta_deterministic_under_same_seed() -> None:
+    rng = np.random.default_rng(0)
+    inc = rng.normal(size=500)
+    cand = inc + rng.normal(scale=0.1, size=500)
+    bd1 = paired_bootstrap_rmse_delta(inc, cand, n_bootstrap=200, seed=99)
+    bd2 = paired_bootstrap_rmse_delta(inc, cand, n_bootstrap=200, seed=99)
+    assert bd1 == bd2
+
+
+def test_rmse_delta_raises_on_too_few_rows() -> None:
+    inc = np.zeros(50)
+    cand = np.zeros(50)
+    with pytest.raises(ValueError, match="at least 100 paired rows"):
+        paired_bootstrap_rmse_delta(inc, cand)
+
+
+def test_rmse_delta_raises_on_length_mismatch() -> None:
+    inc = np.zeros(200)
+    cand = np.zeros(199)
+    with pytest.raises(ValueError, match="same length"):
+        paired_bootstrap_rmse_delta(inc, cand)
