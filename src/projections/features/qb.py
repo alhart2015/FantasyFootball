@@ -162,8 +162,17 @@ def build_qb_features(
     game_env = build_game_environment(sch)
 
     # --- Opponent strength: opp-adjusted pass-EPA residual (Plan 9) -------
-    pbp_window = pbp[prior_mask(pbp, season=season, as_of_week=as_of_week)].copy()
-    opp_proxy_full = opp_epa_allowed_residual(pbp_window, play_type="pass", n_weeks=4)
+    # Filter to just the trailing window weeks before passing to the helper:
+    # the helper iterates per (defteam, last_week) and we only need the row
+    # for target_week == as_of_week. Without this filter, the helper iterates
+    # over all prior weeks (~22 per call) and the builder discards 21/22.
+    n_pbp_weeks = 4
+    pbp_window = pbp[
+        (pbp["season"] == season)
+        & (pbp["week"] >= as_of_week - n_pbp_weeks)
+        & (pbp["week"] < as_of_week)
+    ].copy()
+    opp_proxy_full = opp_epa_allowed_residual(pbp_window, play_type="pass", n_weeks=n_pbp_weeks)
     opp_proxy = opp_proxy_full[
         (opp_proxy_full["season"] == season) & (opp_proxy_full["week"] == as_of_week)
     ].rename(columns={"opp_epa_allowed_residual": "opp_pass_epa_allowed_l4"})

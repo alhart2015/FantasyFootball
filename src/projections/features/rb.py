@@ -172,8 +172,15 @@ def build_rb_features(
     game_env = build_game_environment(sch)
 
     # --- Opponent strength: opp-adjusted run-EPA residual (Plan 9) -------
-    pbp_window = pbp[prior_mask(pbp, season=season, as_of_week=as_of_week)].copy()
-    opp_proxy_full = opp_epa_allowed_residual(pbp_window, play_type="run", n_weeks=4)
+    # Filter to just the trailing window weeks before passing to the helper
+    # (see qb.py for rationale).
+    n_pbp_weeks = 4
+    pbp_window = pbp[
+        (pbp["season"] == season)
+        & (pbp["week"] >= as_of_week - n_pbp_weeks)
+        & (pbp["week"] < as_of_week)
+    ].copy()
+    opp_proxy_full = opp_epa_allowed_residual(pbp_window, play_type="run", n_weeks=n_pbp_weeks)
     opp_proxy = opp_proxy_full[
         (opp_proxy_full["season"] == season) & (opp_proxy_full["week"] == as_of_week)
     ].rename(columns={"opp_epa_allowed_residual": "opp_run_epa_allowed_l4"})
