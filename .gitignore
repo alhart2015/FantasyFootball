@@ -231,3 +231,6 @@ data/tuned_params/optuna_studies.db-journal
 # One-off probe-validation artifacts (uncommitted)
 scripts/_one_off_*.py
 data/features_probe/
+
+# Probe / adoption-gate stderr capture (LightGBM warnings etc; transient)
+reports/*.stderr

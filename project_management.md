@@ -4,6 +4,57 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 9 retro option C — EPA-residual on lightgbm-nb — DO_NOT_ADOPT (4/4 positions) (2026-04-30, on branch `feat/probe-plan9-tree-models`)
+
+**Status:** probe extended with `--force-composite` flag; 8 lightgbm-nb composite probes run against the existing Plan 9 override parquets (4 positions × {swap, augment}). All 8 cells DO_NOT_ADOPT. Plan 9's verdict (DO_NOT_ADOPT for the EPA-residual feature on baseline) generalizes to lightgbm-nb. Verification gates green: 51 probe tests pass; mypy / ruff / format clean.
+
+### What shipped
+
+- `scripts/probe_feature_signal.py`: new `--force-composite` flag bypasses Phase 1's pooled-SIGNAL gate so Phase 2 runs unconditionally. Use when `--model` is not the Ridge regressor used in Phase 1 — Phase 2's production-model fit may detect signal Phase 1's Ridge screen missed (e.g., trees on a feature Ridge can't use). Mutually exclusive with `--no-composite`.
+- `src/projections/backtest/feature_probe.py`: `ProbeReport` gains a `phase2_skip_reason: str | None` field (`"no_signal"` | `"no_pooled_signal"` | `"user_disabled"` | `None`). Renderer now distinguishes the three skip cases and suggests `--force-composite` when only per-year SIGNAL fired (replaces a pre-existing bug that misattributed the skip to `--no-composite` regardless of cause).
+- `_loosened_features_schema` extended: not only `Config.strict = False` (extras pass) but also marks all declared columns `required=False` (missing-after-`--drop` columns pass). Load-bearing for swap-mode Phase 2 — without it, the model's own `feature_schema.validate(features)` errored on every dropped column. Latent bug in the probe; surfaced once `--force-composite` made Phase 2 reachable in swap mode.
+- Windows utf-8 stdout reconfigure at `main()` entry so `Δ` and `—` survive shell redirection. Pre-existing latent issue for the same reason as above.
+- Test coverage: 8 new CLI tests (4 parse_args, 1 main integration, 3 render); 1 new feature_probe test for the schema fix. All 51 probe tests pass.
+- 8 new reports under `reports/feature_probe_plan9_lgbnb_{swap,augment}_{QB,RB,WR,TE}.{md,csv}`.
+
+### Probe verdicts (Plan 9 baseline retro vs lightgbm-nb composite)
+
+`paired_bootstrap_rmse_delta`, n_bootstrap=1000, seed=42. Pairing key `(gsis_id, season, week, position)`. Plan 9 baseline column = adoption gate output from spec §6 (full backtest); lightgbm-nb column = `--force-composite` probe (Phase 2 only, walk-forward fit per holdout year on the same override parquets).
+
+| Position | Mode | Plan 9 baseline RMSE Δ (95% CI) | lightgbm-nb RMSE Δ (95% CI) | lightgbm-nb verdict | Direction |
+|---|---|---|---|---|---|
+| QB | swap | +0.0005 ([-0.0125, +0.0144]) | +0.0004 ([-0.0139, +0.0159]) | DO_NOT_ADOPT (null) | Same (null) |
+| QB | augment | +0.0013 (probe predict; null) | +0.0110 ([-0.0003, +0.0227]) | DO_NOT_ADOPT (borderline regression) | Worse |
+| RB | swap | +0.0001 ([-0.0110, +0.0111]) | +0.0074 ([-0.0000, +0.0155]) | DO_NOT_ADOPT (borderline regression) | Worse |
+| RB | augment | -0.0193 (probe predict; null) | +0.0042 ([-0.0021, +0.0116]) | DO_NOT_ADOPT (null) | Worse but null |
+| TE | swap | -0.0037 ([-0.0121, +0.0050]) | +0.0083 ([+0.0008, +0.0161]) | DO_NOT_ADOPT (REGRESSION) | Worse, regression |
+| TE | augment | +0.0045 (probe predict; null) | +0.0036 ([-0.0020, +0.0092]) | DO_NOT_ADOPT (null) | Same (null) |
+| WR | swap | +0.0083 ([+0.0043, +0.0124]) (regression) | +0.0011 ([-0.0039, +0.0059]) | DO_NOT_ADOPT (null) | **Better** (regression → null) |
+| WR | augment | +0.0140 (probe predict; null) | +0.0053 ([+0.0010, +0.0094]) | DO_NOT_ADOPT (REGRESSION) | Worse, regression |
+
+### Findings
+
+- **No (position, mode, model_class) cell ADOPTs.** EPA-residual feature does not clear the adoption gate at any tested model class. Plan 9's overall verdict is robust.
+- **"Trees extract more signal" hypothesis is wrong.** lightgbm-nb does not systematically beat baseline on the same feature swap. The mechanism interpretation from Plan 9 (Ridge baseline is feature-saturated; opp signal is partially captured by `implied_team_total`, `spread`, NGS metrics, v1 fppg) extends to lightgbm-nb — the marginal information in EPA-residual is below the per-cell noise floor for both model classes.
+- **Model class change reshuffles the noise without unlocking adoption.** Position-specific patterns are mixed: WR swap improves (regression → null) but WR augment worsens (null → regression); TE swap worsens (null → regression); QB swap is ~unchanged. The directional changes are within the per-cell noise floor (~0.08 fpts per Plan 8) so they don't represent systematic effects of model class.
+- **No production routing change.** Plan 8's production defaults stand: QB→lightgbm-nb, RB→baseline, TE→baseline, WR→ensemble. The EPA-residual feature was reverted in Plan 9 and that decision is reaffirmed here.
+
+### Decision-log entries
+
+| Date | Decision | Rationale |
+|---|---|---|
+| 2026-04-30 | Add `--force-composite` flag to the probe CLI | Phase 1 is hardcoded to RidgeCV; without a way to bypass Phase 1's pooled-SIGNAL gate, Phase 2's `--model lightgbm-nb` is unreachable on candidates where Ridge sees no signal — exactly the case option C wanted to test. The flag preserves the default gating; it's opt-in for non-Ridge model class evaluation. |
+| 2026-04-30 | EPA-residual feature is closed across model classes | All 8 (position × mode) cells DO_NOT_ADOPT on lightgbm-nb. Combined with Plan 9's baseline DO_NOT_ADOPT verdicts and the post-Plan-9 augment retros, the feature is dead in 12/12 cells (4 positions × 3 model-class evaluations: baseline-swap, baseline-augment, lightgbm-nb-swap, lightgbm-nb-augment). Don't revisit. |
+| 2026-04-30 | Latent probe bugs fixed: `_loosened_features_schema` made all declared columns optional; Windows utf-8 stdout reconfigure | Both bugs were unreachable until `--force-composite` enabled swap-mode Phase 2 against a non-trivial output (Plan 9 retro never fired Phase 2 successfully in swap mode). Surfaced + fixed in the same PR as the flag itself. |
+
+### Next track
+
+The project_management.md "Next track" from the Feature Signal Probe section stands: pivot to TODO #3b/#3c remaining PBP-derived feature candidates (pace, PROE, air-yards distributions, pressure rate allowed, redzone usage shares). Per the Probe section's directive, bundle 3-4 candidates into one probe + adoption gate at the family level — don't probe candidates one at a time.
+
+When designing the bundled probe, **do not gate the next family by the EPA-residual result**: option C's null answer at lightgbm-nb means EPA-residual is closed, but it does NOT mean PBP features generally are. The mechanism (feature saturation in opponent-strength signal) is specific to that feature class.
+
+---
+
 ## Feature Signal Probe — shipped (2026-04-30, on branch `feat/feature-signal-probe`)
 
 **Status:** all 5 phases shipped. Final verification gates green: pytest pass, mypy clean, ruff clean. Plan 9 retro validation passes both §1.3 success criteria after a calibration fix (effect-size floor + pooled-only Phase 2 firing).
