@@ -279,6 +279,28 @@ runs one (WR, 2024) cell as part of `pytest -v`, taking ~15 seconds.
 It catches harness wiring bugs without requiring the full opt-in
 gate; auto-skips on fresh checkouts where the feature cache is empty.
 
+## Feature plan workflow
+
+Before scoping a new feature plan touching per-position feature columns, run the feature signal probe. The probe takes ~30s–2min on a single candidate column (Ridge baseline) and predicts whether the proposed feature would clear the adoption gate.
+
+1. Produce the candidate column(s) — typically a one-off script reading from `data/raw/...` partitions and emitting an override parquet at `data/features_probe/<name>.parquet` with columns `gsis_id`, `season`, `week`, plus the candidate column(s).
+2. Run the probe (augment-not-swap mode is the safer default):
+   ```bash
+   python -m scripts.probe_feature_signal \
+     --candidate-name "<descriptive_name>" \
+     --override data/features_probe/<name>.parquet \
+     --csv-out reports/feature_probe_<name>.csv
+   ```
+3. Inspect the markdown report on stdout (and `reports/feature_probe_<name>.csv` for downstream analysis).
+4. If the probe returns no pooled SIGNAL across all 4 positions: do not scope the plan. Decompose the candidate (bundle with other candidates, change model class, or shelve).
+5. If the probe returns pooled SIGNAL on at least one (position, stat) cell: Phase 2 fires automatically and predicts the adoption gate verdict. Proceed to spec → plan → execute as normal IF Phase 2 returns ADOPT for at least one position.
+
+The probe is a screening tool, not a substitute for the adoption gate. SIGNAL is necessary but not sufficient — the full backtest + adoption gate is the final word on shipping. See `docs/superpowers/specs/2026-04-30-feature-signal-probe-design.md` for full design.
+
+**Tunable thresholds:**
+- `--coverage-threshold 0.80` for overrides with structural NaN patterns (e.g., bye-week trailing-window features). Default 0.95.
+- `--effect-size-floor 0.10` for noisier domains where 0.05 fpts effects are too small to act on. Default 0.05; Plan 8's measured per-cell noise floor was ~0.08 fpts.
+
 ## Adding a new pandera schema
 
 Schemas live in `src/projections/schemas.py` (single source of truth). Append your schema after the existing ones.

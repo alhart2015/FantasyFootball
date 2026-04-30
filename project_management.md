@@ -4,6 +4,39 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Feature Signal Probe — shipped (2026-04-30, on branch `feat/feature-signal-probe`)
+
+**Status:** all 5 phases shipped. Final verification gates green: pytest pass, mypy clean, ruff clean. Plan 9 retro validation passes both §1.3 success criteria after a calibration fix (effect-size floor + pooled-only Phase 2 firing).
+
+### What shipped
+
+- `src/projections/backtest/feature_probe.py`: pure-stats module with `PerStatVerdict`, `ProbeReport`, `probe_per_stat`, `probe_composite`, `phase1_should_fire_phase2`, `_build_factory_with_columns`, `_loosened_features_schema`, `_verdict_for_per_stat` (with `effect_size_floor` parameter, default 0.05 fpts). Reuses Plan 8's `paired_bootstrap_*` helpers from `src/projections/backtest/adoption_gate.py` unchanged.
+- `scripts/probe_feature_signal.py`: CLI mirroring `scripts/adoption_gate.py`'s shape. Argparse + parse_args + load_features_with_overrides + validate_override_coverage + render_markdown + render_csv + main(). New CLI args: `--coverage-threshold` (default 0.95), `--effect-size-floor` (default 0.05), `--no-composite`.
+- Test coverage: 23 unit tests in `tests/test_backtest/test_feature_probe.py` + 23 CLI tests (including 4 integration tests with monkey-patched factories) in `tests/test_scripts/test_probe_feature_signal_cli.py`. No real backtest in the test suite — that's covered by Phase 4 retro.
+- Plan 9 retro validation: 8 per-position reports under `reports/feature_probe_plan9_{swap,augment}_retro_{QB,RB,WR,TE}.{md,csv}`. Both criteria from spec §1.3 pass at the pooled level across all 4 positions.
+
+### Calibration fix landed during Phase 4
+
+Initial Plan 9 retro flagged 3 false-positive SIGNAL cells: 1 QB single-year, 1 RB single-year, 1 RB pooled-noise-floor. Two-part fix:
+
+1. **Effect-size floor (default 0.05 fpts)**: SIGNAL/REGRESSION verdicts require `|rmse_delta| >= floor` in addition to the CI strictness condition. Below-floor effects are NULL even when statistically significant. The 0.05 default is conservative vs Plan 8's measured ~0.08 fpts per-cell noise floor.
+2. **Pooled-only Phase 2 firing**: `phase1_should_fire_phase2` filters to `year_or_pooled == "pooled"` cells. Per-year SIGNAL cells stay informational — they may flag genuine per-year RMSE improvements that wash out at the pooled level.
+
+Post-fix retro: 0 pooled SIGNAL cells across all 4 positions on the swap retro; criterion 2 passes (no augment row regresses where swap was null). 2 per-year SIGNAL cells preserved as informational (QB passing_yards 2023 = -0.29 fpts; RB rushing_yards 2024 = -0.17 fpts) — real per-year effects that the gate's pooled bootstrap correctly washes out.
+
+### Decision-log entries
+
+- **Probe is the canonical pre-spec screening step for any feature plan.** Before scoping a new feature plan touching feature columns (e.g., the remaining TODO #3b/3c PBP-derived candidates), generate an override parquet and run the probe. If the probe returns no pooled SIGNAL across positions, decompose the plan (bundle multiple candidates, change model class, or shelve) before writing the spec.
+- **Probe is not a substitute for the adoption gate.** A pooled SIGNAL verdict + Phase 2 ADOPT prediction are necessary but not sufficient for shipping. Real adoption decisions still go through the full backtest + adoption gate.
+- **Augment-not-swap is the safer default.** Plan 9's retrospective showed that swapping (drop + add) can be a strict downgrade for some positions where the dropped column carried orthogonal signal. Augment-only is the safer first probe; swap is a follow-up only when augment SIGNALs.
+- **Effect-size floor (0.05 fpts default) prevents practical-significance false positives.** Statistically-significant effects below the noise floor (e.g., -0.001 fpts on n=3000+ paired rows) shouldn't fire Phase 2. Plan 8's measured per-cell noise floor (~0.08 fpts) is the empirical reference.
+
+### Next track
+
+The probe enables disciplined pursuit of TODO #3b (remaining PBP-derived feature candidates: pace, PROE, air-yards distributions, pressure rate allowed, redzone usage shares). Each candidate should be probed before scoping. The 5–15% family-level RMSE prior in TODO #3 should be applied at the family level — bundle 3–4 features into one probe + adoption gate, not one feature at a time.
+
+---
+
 ## Plan 9 — PBP ingest + opp-adjusted EPA features — feature change DO_NOT_ADOPT (4/4 positions); plumbing ships (2026-04-29, on branch `feat/plan-9-pbp-ingest-opp-epa`)
 
 **Status:** all 7 phases shipped. Verification gates green: 291+ pytest pass / 9 skipped (network only) / 0 fail; mypy 147 source files clean; ruff check + format clean. Snapshot regression check PASS (400 metrics within tolerance). **Zero per-position routing changes shipped** per the §6 zero-position-adopt branch — feature change reverted at commit `941b96c`. PBP plumbing ships unconditionally.

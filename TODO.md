@@ -59,6 +59,8 @@ Mechanism interpretation (full discussion in spec §6 "mechanism interpretation"
 
 Each is a separate plan candidate. None is queued.
 
+**Workflow for each candidate:** generate an override parquet (one column per candidate), run `scripts/probe_feature_signal.py`. Only proceed to a full plan if the probe returns pooled SIGNAL on at least one (position, stat) cell. See `docs/superpowers/specs/2026-04-30-feature-signal-probe-design.md`.
+
 ### 3c. Remaining PBP-derived feature plans (open)
 
 Planned slices on top of Plan 9's PBP plumbing, each its own (position, builder) extension:
@@ -71,7 +73,9 @@ Planned slices on top of Plan 9's PBP plumbing, each its own (position, builder)
 
 Brainstorm in a focused session before scoping. Plan 9's negative result on opp-EPA-residual at the BaselineModel level argues for evaluating these against LightGBM / ensemble in addition to BaselineModel, since model class may dominate over feature class for marginal signals.
 
-Estimated cumulative win: still potentially 5-15% RMSE if features compose well; treat each slice's individual gate result as the truth (per Plan 8 + Plan 9's lessons).
+Estimated cumulative win: still potentially 5-15% RMSE if features compose well; treat each slice's individual gate result as the truth (per Plan 8 + Plan 9's lessons). Apply the 5-15% family-level prior at the family level — bundle 3-4 candidates into one probe + adoption gate, not one feature at a time.
+
+**Workflow for each candidate:** before scoping a plan, generate an override parquet (one column per candidate) and run `scripts/probe_feature_signal.py`. Only proceed to a full plan if the probe returns pooled SIGNAL on at least one (position, stat) cell. See `docs/superpowers/specs/2026-04-30-feature-signal-probe-design.md`.
 
 ### 4. Feature parquet storage — closed in Plan 3c
 
