@@ -17,11 +17,13 @@ Spec: docs/superpowers/specs/2026-04-30-feature-signal-probe-design.md
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 import pandas as pd
+import pandera.pandas as pa
 from sklearn.linear_model import RidgeCV
 
 from projections.backtest.adoption_gate import (
@@ -29,6 +31,8 @@ from projections.backtest.adoption_gate import (
     PositionVerdict,
     paired_bootstrap_rmse_delta,
 )
+from projections.models import POSITION_DISPATCH
+from projections.models.baseline import BaselineModel
 from projections.schemas import Position, Stat
 
 # Same alpha grid as BaselineModel.fit (src/projections/models/baseline.py:528).
@@ -270,3 +274,52 @@ def probe_per_stat(
             )
         )
     return out
+
+
+def _loosened_features_schema(base: type[pa.DataFrameModel]) -> type[pa.DataFrameModel]:
+    """Return a DataFrameModel subclass of ``base`` with ``Config.strict = False``.
+
+    Production schemas use ``strict="filter"``, which silently drops columns
+    not declared in the schema. The probe needs candidate columns (which are
+    not declared) to survive validation, so it swaps in a loosened schema for
+    the duration of one probe invocation. The production schema is untouched.
+    """
+
+    class _Loosened(base):  # type: ignore[misc, valid-type]
+        class Config(base.Config):  # type: ignore[name-defined, misc]
+            strict = False
+
+    return _Loosened
+
+
+def _build_factory_with_columns(
+    *,
+    position: Position,
+    model_class: str,
+    columns: tuple[str, ...],
+    feature_schema: type[pa.DataFrameModel],
+) -> Callable[[], BaselineModel]:
+    """Return a zero-arg factory that produces an unfitted production model
+    with overridden ``feature_columns`` and ``feature_schema``.
+
+    The base factory is ``POSITION_DISPATCH[position].factories[model_class]``.
+    Each call to the returned factory builds a fresh instance — no shared
+    mutable state across calls or with the production factory.
+    """
+    base_factory = POSITION_DISPATCH[position].factories[model_class]
+
+    def _factory() -> BaselineModel:
+        # Cast: factories[model_class] is typed as Callable[[], Model] (the
+        # Protocol), but every concrete model class in this codebase carries
+        # `feature_columns` and `feature_schema` as mutable @dataclass fields.
+        # We pin to BaselineModel for the type signature; LightGBMModel et al.
+        # share the same attribute shape so the override works identically.
+        model = cast(BaselineModel, base_factory())
+        # Concrete models are non-frozen dataclasses; the override pattern
+        # deliberately exercises that mutability so the probe can swap in
+        # candidate feature_columns / a loosened schema without subclassing.
+        model.feature_columns = columns
+        model.feature_schema = feature_schema
+        return model
+
+    return _factory

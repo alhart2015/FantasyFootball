@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,11 +13,14 @@ from projections.backtest.adoption_gate import BootstrapDelta
 from projections.backtest.feature_probe import (
     PerStatVerdict,
     ProbeReport,
+    _build_factory_with_columns,
     _coerce_bools,
+    _loosened_features_schema,
     _verdict_for_per_stat,
     phase1_should_fire_phase2,
     probe_per_stat,
 )
+from projections.models import POSITION_DISPATCH, BaselineModel
 from projections.schemas import Position, Stat
 
 
@@ -292,3 +297,75 @@ def test_coerce_bools_converts_to_int8() -> None:
     assert out["int_col"].dtype == df["int_col"].dtype  # unchanged
     # Original frame unmodified (defensive copy).
     assert df["bool_col"].dtype == bool
+
+
+def test_loosened_features_schema_flips_strict_mode() -> None:
+    """The loosened schema is a subclass of the base with Config.strict=False.
+    Production schemas use strict='filter'; the loosened version disables
+    column-filtering so undeclared candidate columns survive validation."""
+    base_schema = POSITION_DISPATCH[Position.QB].feature_schema
+    loose = _loosened_features_schema(base_schema)
+    assert loose.Config.strict is False
+    assert base_schema.Config.strict == "filter"  # production schema unchanged
+
+
+def test_loosened_features_schema_keeps_candidate_column_through_validate(
+    baseline_features_qb: pd.DataFrame,
+) -> None:
+    """End-to-end: add an undeclared column to a QB-features frame; validate
+    against the loosened schema; assert the column survives. Validate the
+    same frame against the production schema; assert the column is dropped."""
+    base_schema = POSITION_DISPATCH[Position.QB].feature_schema
+    loose = _loosened_features_schema(base_schema)
+    augmented = baseline_features_qb.copy()
+    augmented["candidate_extra"] = 0.5
+    loose_validated = loose.validate(augmented)
+    assert "candidate_extra" in loose_validated.columns
+    prod_validated = base_schema.validate(augmented)
+    assert "candidate_extra" not in prod_validated.columns
+
+
+def test_build_factory_with_columns_overrides_feature_columns_and_schema() -> None:
+    """The factory returned by _build_factory_with_columns produces an
+    unfitted model whose feature_columns and feature_schema are the candidate
+    ones; the production factory is unmodified across calls."""
+    base_schema = POSITION_DISPATCH[Position.QB].feature_schema
+    loose = _loosened_features_schema(base_schema)
+    candidate_cols = ("base_x1", "base_x2", "extra_signal_col")
+    factory = _build_factory_with_columns(
+        position=Position.QB,
+        model_class="baseline",
+        columns=candidate_cols,
+        feature_schema=loose,
+    )
+    model = factory()
+    assert model.feature_columns == candidate_cols
+    assert model.feature_schema is loose
+    assert model.position is Position.QB
+
+    # Sanity: the production factory is NOT mutated by the override; a fresh
+    # build via the production dispatch returns the production columns.
+    # Factories are typed Callable[[], Model] (Protocol), but every concrete
+    # model exposes feature_columns/feature_schema — cast for the assertion.
+    fresh = cast(BaselineModel, POSITION_DISPATCH[Position.QB].factories["baseline"]())
+    assert fresh.feature_columns != candidate_cols
+    assert fresh.feature_schema is base_schema
+
+
+def test_build_factory_with_columns_returns_fresh_instances() -> None:
+    """Each call to the returned factory must produce a fresh model (no shared
+    mutable state between calls)."""
+    base_schema = POSITION_DISPATCH[Position.QB].feature_schema
+    loose = _loosened_features_schema(base_schema)
+    factory = _build_factory_with_columns(
+        position=Position.QB,
+        model_class="baseline",
+        columns=("base_x1",),
+        feature_schema=loose,
+    )
+    a = factory()
+    b = factory()
+    assert a is not b
+    # Mutating one's feature_columns should not affect the other.
+    a.feature_columns = ("mutated",)
+    assert b.feature_columns == ("base_x1",)
