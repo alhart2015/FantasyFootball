@@ -227,3 +227,7 @@ models/artifacts/
 # Optuna study databases — artifact-of-search; tuned JSON is the artifact-of-decision
 data/tuned_params/optuna_studies.db
 data/tuned_params/optuna_studies.db-journal
+
+# One-off probe-validation artifacts (uncommitted)
+scripts/_one_off_*.py
+data/features_probe/
