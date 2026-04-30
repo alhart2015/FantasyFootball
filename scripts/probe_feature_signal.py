@@ -81,7 +81,22 @@ class OverrideCollisionError(ValueError):
 @dataclass
 class ProbeArgs:
     """Parsed CLI args. Extracted as a dataclass so tests can construct
-    one directly without going through argparse."""
+    one directly without going through argparse.
+
+    ``composite`` and ``force_composite`` together encode Phase 2 behavior:
+
+    - ``composite=True, force_composite=False`` (default): Phase 2 runs iff
+      Phase 1 finds a pooled SIGNAL.
+    - ``composite=False, force_composite=False`` (``--no-composite``): Phase 2
+      never runs.
+    - ``composite=True, force_composite=True`` (``--force-composite``): Phase
+      2 runs unconditionally — useful when ``--model`` is not the Ridge
+      regressor used in Phase 1, since Phase 2's production-model fit may
+      detect signal Phase 1's Ridge missed.
+
+    The combination ``composite=False, force_composite=True`` is rejected at
+    parse time as a contradiction.
+    """
 
     candidate_name: str
     baseline_features: Path
@@ -95,6 +110,7 @@ class ProbeArgs:
     seed: int
     csv_out: Path | None
     composite: bool
+    force_composite: bool
     coverage_threshold: float
     effect_size_floor: float
 
@@ -201,6 +217,16 @@ def parse_args(argv: list[str] | None = None) -> ProbeArgs:
         action="store_false",
         help="Skip Phase 2 even on a Phase-1 SIGNAL.",
     )
+    composite_grp.add_argument(
+        "--force-composite",
+        dest="force_composite",
+        action="store_true",
+        default=False,
+        help="Run Phase 2 unconditionally, bypassing Phase 1's pooled-SIGNAL "
+        "gate. Use to test the configured --model when Phase 1's Ridge "
+        "screen returns NULL but the production model class might still "
+        "extract signal (e.g., trees on a feature Ridge can't use).",
+    )
 
     ns = p.parse_args(argv)
 
@@ -230,6 +256,7 @@ def parse_args(argv: list[str] | None = None) -> ProbeArgs:
         seed=ns.seed,
         csv_out=ns.csv_out,
         composite=ns.composite,
+        force_composite=ns.force_composite,
         coverage_threshold=ns.coverage_threshold,
         effect_size_floor=ns.effect_size_floor,
     )
@@ -406,13 +433,27 @@ def render_markdown(report: ProbeReport) -> str:
     )
 
     if report.phase2 is None:
-        if n_signal == 0:
+        reason = report.phase2_skip_reason
+        if reason == "no_signal" or (reason is None and n_signal == 0):
             lines.append(
                 "No SIGNAL cells — Phase 2 skipped. Probe predicts the adoption gate "
                 "would return DO_NOT_ADOPT."
             )
-        else:
+        elif reason == "user_disabled":
             lines.append("Phase 2 disabled by --no-composite — composite verdict not computed.")
+        elif reason == "no_pooled_signal":
+            lines.append(
+                "Per-year SIGNAL only — no pooled SIGNAL — Phase 2 skipped per default "
+                "gating. Pass --force-composite to run Phase 2 unconditionally (e.g., to "
+                "test whether a non-Ridge --model class extracts signal Phase 1's Ridge "
+                "screen missed)."
+            )
+        else:
+            # Defensive fallback for an unexpected None+SIGNAL combo without
+            # a skip reason set. Should not happen via main(), but the
+            # dataclass default is None so a hand-built ProbeReport could
+            # land here.
+            lines.append("Phase 2 skipped — composite verdict not computed.")
         lines.append("")
     else:
         lines.append("Phase 2 fired.")
@@ -613,6 +654,12 @@ def _get_production_columns_and_stats(
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Force utf-8 stdout so Δ (ΔRMSE) and — (em dash) in the markdown render
+    # cleanly when redirected to a file on Windows. Without this, cp1252's
+    # default stdout codec raises UnicodeEncodeError on Phase 2 output.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     args = parse_args(argv)
     seasons_range = range(args.seasons[0], args.seasons[1] + 1)
     holdout_years = tuple(range(args.holdout_years[0], args.holdout_years[1] + 1))
@@ -687,7 +734,19 @@ def main(argv: list[str] | None = None) -> None:
             )
         )
 
-    fire_phase2 = phase1_should_fire_phase2(phase1_all) and args.composite
+    has_pooled_signal = phase1_should_fire_phase2(phase1_all)
+    has_any_signal = any(v.verdict == "SIGNAL" for v in phase1_all)
+    fire_phase2 = args.composite and (args.force_composite or has_pooled_signal)
+
+    phase2_skip_reason: str | None
+    if fire_phase2:
+        phase2_skip_reason = None
+    elif not args.composite:
+        phase2_skip_reason = "user_disabled"
+    elif not has_any_signal:
+        phase2_skip_reason = "no_signal"
+    else:
+        phase2_skip_reason = "no_pooled_signal"
 
     if fire_phase2:
         # Derive composite fpts inline: production scoring/score.py is row-by-row;
@@ -736,6 +795,7 @@ def main(argv: list[str] | None = None) -> None:
         drop_columns=tuple(args.drop),
         phase1=phase1_all,
         phase2=phase2_all if fire_phase2 else None,
+        phase2_skip_reason=phase2_skip_reason,
     )
 
     sys.stdout.write(render_markdown(report))

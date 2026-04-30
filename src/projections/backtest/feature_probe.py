@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -74,8 +74,20 @@ class PerStatVerdict:
 
 @dataclass(frozen=True, slots=True)
 class ProbeReport:
-    """Bundled probe report for rendering. ``phase2`` is None iff Phase 1
-    returned no SIGNAL cell or the user passed ``--no-composite``."""
+    """Bundled probe report for rendering.
+
+    ``phase2`` is None iff Phase 2 was skipped, in which case
+    ``phase2_skip_reason`` is one of:
+
+    - ``"no_signal"`` — no SIGNAL cells in Phase 1 at all; probe predicts
+      DO_NOT_ADOPT.
+    - ``"no_pooled_signal"`` — at least one SIGNAL cell, but only at the
+      per-year level. Default gating skips Phase 2 because the adoption gate
+      operates on pooled statistics; pass ``--force-composite`` to run Phase 2
+      anyway (e.g., to test a non-Ridge model class on the same feature set).
+    - ``"user_disabled"`` — user passed ``--no-composite``.
+    - ``None`` — Phase 2 ran (``phase2`` is non-None).
+    """
 
     candidate_name: str
     model_class: str
@@ -84,6 +96,7 @@ class ProbeReport:
     drop_columns: tuple[str, ...]
     phase1: list[PerStatVerdict]
     phase2: list[PositionVerdict] | None
+    phase2_skip_reason: str | None = None
 
 
 def phase1_should_fire_phase2(verdicts: list[PerStatVerdict]) -> bool:
@@ -308,17 +321,37 @@ def probe_per_stat(
 
 
 def _loosened_features_schema(base: type[pa.DataFrameModel]) -> type[pa.DataFrameModel]:
-    """Return a DataFrameModel subclass of ``base`` with ``Config.strict = False``.
+    """Return a DataFrameModel subclass of ``base`` with all column-existence
+    checks relaxed:
 
-    Production schemas use ``strict="filter"``, which silently drops columns
-    not declared in the schema. The probe needs candidate columns (which are
-    not declared) to survive validation, so it swaps in a loosened schema for
-    the duration of one probe invocation. The production schema is untouched.
+    - ``Config.strict = False`` so undeclared candidate columns survive
+      validation (production schemas use ``strict="filter"``, which silently
+      drops them).
+    - All declared columns become ``required=False`` so a frame from which a
+      column has been ``--drop``'d still validates. This is load-bearing for
+      Phase 2 swap-mode runs: ``_build_factory_with_columns`` overrides the
+      model's ``feature_columns`` to the candidate set, but the model still
+      calls ``feature_schema.validate(features)`` on the post-drop frame.
+      Without optional columns, swap-mode Phase 2 errors at validate time on
+      every column the user dropped.
+
+    Type/check constraints on columns that ARE present are preserved — only
+    column-existence is loosened.
+
+    The production schema is untouched.
     """
 
     class _Loosened(base):  # type: ignore[misc, valid-type]
         class Config(base.Config):  # type: ignore[name-defined, misc]
             strict = False
+
+        @classmethod
+        def to_schema(cls) -> pa.DataFrameSchema:
+            schema = super().to_schema()
+            updates = {name: {"required": False} for name in schema.columns}
+            # update_columns returns DataFrameSchema; pandera lacks a precise
+            # type stub, so cast to silence the mypy any-return check.
+            return cast(pa.DataFrameSchema, schema.update_columns(updates))
 
     return _Loosened
 

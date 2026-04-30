@@ -59,6 +59,8 @@ Mechanism interpretation (full discussion in spec §6 "mechanism interpretation"
 
 Each is a separate plan candidate. None is queued.
 
+**Update 2026-04-30 (option C re-evaluation):** Direction (2) — different model class — closed via 8 lightgbm-nb composite probes against the existing override parquets (4 positions × {swap, augment}, `--force-composite` flag). All 8 cells DO_NOT_ADOPT; lightgbm-nb does not systematically extract more signal than baseline. Position-by-position changes are within the per-cell noise floor (~0.08 fpts) — WR swap goes regression→null, TE swap goes null→regression, others are essentially unchanged. EPA-residual feature is closed across model classes; do not revisit. Reports under `reports/feature_probe_plan9_lgbnb_*.{md,csv}`. Directions (1) and (3) remain open as separate candidates.
+
 **Workflow for each candidate:** generate an override parquet (one column per candidate), run `scripts/probe_feature_signal.py`. Only proceed to a full plan if the probe returns pooled SIGNAL on at least one (position, stat) cell. See `docs/superpowers/specs/2026-04-30-feature-signal-probe-design.md`.
 
 ### 3c. Remaining PBP-derived feature plans (open)

@@ -139,6 +139,47 @@ def test_parse_args_no_composite_flag() -> None:
         ]
     )
     assert args.composite is False
+    assert args.force_composite is False
+
+
+def test_parse_args_force_composite_flag() -> None:
+    args = parse_args(
+        [
+            "--candidate-name",
+            "x",
+            "--drop",
+            "y",
+            "--force-composite",
+        ]
+    )
+    assert args.composite is True
+    assert args.force_composite is True
+
+
+def test_parse_args_force_composite_default_false() -> None:
+    args = parse_args(
+        [
+            "--candidate-name",
+            "x",
+            "--drop",
+            "y",
+        ]
+    )
+    assert args.force_composite is False
+
+
+def test_parse_args_force_composite_mutex_with_no_composite() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--candidate-name",
+                "x",
+                "--drop",
+                "y",
+                "--no-composite",
+                "--force-composite",
+            ]
+        )
 
 
 def test_parse_args_model_choice() -> None:
@@ -464,6 +505,108 @@ def test_render_csv_phase1_only_omits_phase2_rows() -> None:
     assert "phase2" not in df["phase"].unique()
 
 
+def _per_year_signal_pooled_null_phase1() -> list[PerStatVerdict]:
+    """Phase 1 result set with a per-year SIGNAL on QB passing_yards 2023 but
+    a pooled NULL — exactly the QB swap retro shape that motivated
+    --force-composite. Used by the no_pooled_signal render tests."""
+    return [
+        PerStatVerdict(
+            position=Position.QB,
+            stat=Stat.PASSING_YARDS,
+            year_or_pooled=2023,
+            n_paired=552,
+            rmse_delta=BootstrapDelta(
+                point=-0.29, lo_95=-0.53, hi_95=-0.05, n_paired_rows=552, n_bootstrap=1000
+            ),
+            r_squared_delta=0.001,
+            verdict="SIGNAL",
+        ),
+        PerStatVerdict(
+            position=Position.QB,
+            stat=Stat.PASSING_YARDS,
+            year_or_pooled="pooled",
+            n_paired=2223,
+            rmse_delta=BootstrapDelta(
+                point=-0.07, lo_95=-0.14, hi_95=0.01, n_paired_rows=2223, n_bootstrap=1000
+            ),
+            r_squared_delta=0.001,
+            verdict="NULL",
+        ),
+    ]
+
+
+def test_render_markdown_no_pooled_signal_skip_reason_suggests_force_composite() -> None:
+    """Per-year SIGNAL only (no pooled) under default gating renders a hint
+    about --force-composite, not the misleading 'disabled by --no-composite'."""
+    report = ProbeReport(
+        candidate_name="x",
+        model_class="baseline",
+        baseline_features_path="data/features",
+        override_paths=("/tmp/o.parquet",),
+        drop_columns=(),
+        phase1=_per_year_signal_pooled_null_phase1(),
+        phase2=None,
+        phase2_skip_reason="no_pooled_signal",
+    )
+    md = render_markdown(report)
+    assert "--force-composite" in md
+    assert "disabled by --no-composite" not in md
+
+
+def test_render_markdown_no_signal_skip_reason() -> None:
+    """No SIGNAL cells → render says 'No SIGNAL cells', predicts DO_NOT_ADOPT."""
+    psv_null = PerStatVerdict(
+        position=Position.QB,
+        stat=Stat.PASSING_YARDS,
+        year_or_pooled="pooled",
+        n_paired=2223,
+        rmse_delta=BootstrapDelta(
+            point=0.001, lo_95=-0.01, hi_95=0.01, n_paired_rows=2223, n_bootstrap=1000
+        ),
+        r_squared_delta=0.0,
+        verdict="NULL",
+    )
+    report = ProbeReport(
+        candidate_name="x",
+        model_class="baseline",
+        baseline_features_path="data/features",
+        override_paths=("/tmp/o.parquet",),
+        drop_columns=(),
+        phase1=[psv_null],
+        phase2=None,
+        phase2_skip_reason="no_signal",
+    )
+    md = render_markdown(report)
+    assert "No SIGNAL cells" in md
+
+
+def test_render_markdown_user_disabled_skip_reason() -> None:
+    """--no-composite with a SIGNAL hit renders the user-disabled message."""
+    psv_signal = PerStatVerdict(
+        position=Position.QB,
+        stat=Stat.PASSING_YARDS,
+        year_or_pooled="pooled",
+        n_paired=2223,
+        rmse_delta=BootstrapDelta(
+            point=-0.30, lo_95=-0.50, hi_95=-0.10, n_paired_rows=2223, n_bootstrap=1000
+        ),
+        r_squared_delta=0.001,
+        verdict="SIGNAL",
+    )
+    report = ProbeReport(
+        candidate_name="x",
+        model_class="baseline",
+        baseline_features_path="data/features",
+        override_paths=("/tmp/o.parquet",),
+        drop_columns=(),
+        phase1=[psv_signal],
+        phase2=None,
+        phase2_skip_reason="user_disabled",
+    )
+    md = render_markdown(report)
+    assert "disabled by --no-composite" in md
+
+
 # ----------------------------------------------------------------------
 # Integration tests for main() — Task 3.2
 # ----------------------------------------------------------------------
@@ -684,6 +827,39 @@ def test_main_no_composite_skips_phase2(
     # but --no-composite suppresses execution. No "## Phase 2" composite table.
     assert "## Phase 2 — composite ΔRMSE" not in captured.out
     assert "Phase 2 disabled by --no-composite" in captured.out or "Phase 2 skipped" in captured.out
+
+
+def test_main_force_composite_runs_phase2_without_pooled_signal(
+    monkeypatch_probe_universe: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--force-composite runs Phase 2 even when Phase 1 finds no pooled SIGNAL.
+
+    Drops a column that doesn't exist in baseline so the transform is a no-op:
+    baseline_cols == candidate_cols, Phase 1 returns all-NULL, default gating
+    would skip Phase 2. --force-composite overrides the gate.
+    """
+    main(
+        [
+            "--candidate-name",
+            "force_composite_test",
+            "--baseline-features",
+            str(monkeypatch_probe_universe["features_root"]),
+            "--drop",
+            "nonexistent_column",
+            "--position",
+            "QB",
+            "--seasons",
+            "2018-2022",
+            "--holdout-years",
+            "2021-2022",
+            "--n-bootstrap",
+            "200",
+            "--force-composite",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert "## Phase 2 — composite ΔRMSE" in captured.out
 
 
 def test_main_swap_mode_drop_baseline_column(

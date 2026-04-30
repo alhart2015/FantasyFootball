@@ -301,6 +301,11 @@ The probe is a screening tool, not a substitute for the adoption gate. SIGNAL is
 - `--coverage-threshold 0.80` for overrides with structural NaN patterns (e.g., bye-week trailing-window features). Default 0.95.
 - `--effect-size-floor 0.10` for noisier domains where 0.05 fpts effects are too small to act on. Default 0.05; Plan 8's measured per-cell noise floor was ~0.08 fpts.
 
+**Phase 2 gating:**
+- Default: Phase 2 runs iff Phase 1 finds a pooled SIGNAL.
+- `--no-composite`: skip Phase 2 even on a Phase-1 SIGNAL.
+- `--force-composite`: run Phase 2 unconditionally. Use when `--model` is not the Ridge regressor used in Phase 1 — Phase 2's production-model fit may detect signal Phase 1's Ridge screen missed (e.g., trees on a feature Ridge can't use). Adds ~3–10 min per position depending on model class.
+
 ## Adding a new pandera schema
 
 Schemas live in `src/projections/schemas.py` (single source of truth). Append your schema after the existing ones.
