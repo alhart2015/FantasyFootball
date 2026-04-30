@@ -52,6 +52,13 @@ def _build_training_features(
         dc = read_partition(raw_root, "depth_charts", season=season)
         ngs = read_partition(raw_root, ngs_table, season=season)
         sch = read_partition(raw_root, "schedules", season=season)
+        # Plan 9: PBP for opp-defensive EPA features. Degrade gracefully if a
+        # season's partition doesn't exist (e.g., pre-Plan-9 ingest hasn't run);
+        # builders accept an empty frame and emit NaN-filled values.
+        try:
+            pbp = read_partition(raw_root, "pbp", season=season)
+        except FileNotFoundError:
+            pbp = pd.DataFrame()
         truth_frames.append(ws)
 
         weeks = sorted(dc["week"].unique())
@@ -63,6 +70,7 @@ def _build_training_features(
                 "schedules": sch,
                 "season": int(season),
                 "as_of_week": int(week),
+                "pbp": pbp,
                 ngs_kwarg: ngs,
             }
             f = builder(**kwargs)

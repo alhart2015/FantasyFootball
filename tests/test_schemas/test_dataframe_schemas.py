@@ -13,6 +13,7 @@ from projections.schemas import (
     NgsPassingSchema,
     NgsReceivingSchema,
     NgsRushingSchema,
+    PbpSchema,
     ProjectionWeeklySchema,
     QbFeaturesSchema,
     RbFeaturesSchema,
@@ -646,3 +647,76 @@ def test_te_features_schema_rejects_target_share_over_one() -> None:
     )
     with pytest.raises(SchemaError):
         TeFeaturesSchema.validate(df)
+
+
+def test_pbp_schema_validates_minimal_row() -> None:
+    """A row with required fields and nullable extras passes."""
+    df = pd.DataFrame(
+        {
+            "play_id": [1],
+            "game_id": ["2024_03_KC_ATL"],
+            "season": [2024],
+            "week": [3],
+            "posteam": pd.array(["KC"], dtype=pd.StringDtype("pyarrow")),
+            "defteam": pd.array(["ATL"], dtype=pd.StringDtype("pyarrow")),
+            "play_type": pd.array(["pass"], dtype=pd.StringDtype("pyarrow")),
+            "qb_dropback": [1.0],
+            "qb_scramble": [0.0],
+            "sack": [0.0],
+            "rush_attempt": [0.0],
+            "pass_attempt": [1.0],
+            "epa": [0.42],
+            "wpa": [0.05],
+            "success": [1.0],
+            "air_yards": [12.0],
+            "yards_after_catch": [3.0],
+            "complete_pass": [1.0],
+            "xpass": [0.65],
+            "pass_oe": [0.10],
+            "down": [1.0],
+            "ydstogo": [10],
+            "yardline_100": [75.0],
+            "half_seconds_remaining": [1200.0],
+            "passer_player_id": pd.array(["00-0034857"], dtype=pd.StringDtype("pyarrow")),
+            "rusher_player_id": pd.array([None], dtype=pd.StringDtype("pyarrow")),
+            "receiver_player_id": pd.array(["00-0036322"], dtype=pd.StringDtype("pyarrow")),
+        }
+    )
+    PbpSchema.validate(df)
+
+
+def test_pbp_schema_rejects_invalid_team_code() -> None:
+    """defteam must be in canonical Team enum (alias 'JAX' should fail)."""
+    df = pd.DataFrame(
+        {
+            "play_id": [1],
+            "game_id": ["x"],
+            "season": [2024],
+            "week": [3],
+            "posteam": pd.array(["KC"], dtype=pd.StringDtype("pyarrow")),
+            "defteam": pd.array(["JAX"], dtype=pd.StringDtype("pyarrow")),
+            "play_type": pd.array(["pass"], dtype=pd.StringDtype("pyarrow")),
+            "qb_dropback": [1.0],
+            "qb_scramble": [0.0],
+            "sack": [0.0],
+            "rush_attempt": [0.0],
+            "pass_attempt": [1.0],
+            "epa": [0.0],
+            "wpa": [0.0],
+            "success": [0.0],
+            "air_yards": [0.0],
+            "yards_after_catch": [0.0],
+            "complete_pass": [0.0],
+            "xpass": [0.5],
+            "pass_oe": [0.0],
+            "down": [1.0],
+            "ydstogo": [10],
+            "yardline_100": [75.0],
+            "half_seconds_remaining": [1200.0],
+            "passer_player_id": pd.array([None], dtype=pd.StringDtype("pyarrow")),
+            "rusher_player_id": pd.array([None], dtype=pd.StringDtype("pyarrow")),
+            "receiver_player_id": pd.array([None], dtype=pd.StringDtype("pyarrow")),
+        }
+    )
+    with pytest.raises(SchemaError):
+        PbpSchema.validate(df)

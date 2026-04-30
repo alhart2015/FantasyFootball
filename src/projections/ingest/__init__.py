@@ -5,6 +5,7 @@ from __future__ import annotations
 from projections.ingest.depth_charts import refresh_depth_charts
 from projections.ingest.id_map import build_id_map
 from projections.ingest.ngs import refresh_ngs
+from projections.ingest.pbp import refresh_pbp
 from projections.ingest.refresh import refresh
 from projections.ingest.schedules import refresh_schedules
 from projections.ingest.snap_counts import refresh_snap_counts
@@ -15,6 +16,7 @@ __all__ = [
     "refresh",
     "refresh_depth_charts",
     "refresh_ngs",
+    "refresh_pbp",
     "refresh_schedules",
     "refresh_snap_counts",
     "refresh_weekly_stats",

@@ -15,6 +15,7 @@ def test_build_qb_features_returns_validated_frame(
     qb_depth_charts: pd.DataFrame,
     qb_ngs_passing: pd.DataFrame,
     qb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     out = build_qb_features(
         weekly_stats=qb_weekly_stats,
@@ -22,6 +23,7 @@ def test_build_qb_features_returns_validated_frame(
         depth_charts=qb_depth_charts,
         ngs_passing=qb_ngs_passing,
         schedules=qb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -34,6 +36,7 @@ def test_build_qb_features_one_row_per_rostered_qb(
     qb_depth_charts: pd.DataFrame,
     qb_ngs_passing: pd.DataFrame,
     qb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     out = build_qb_features(
         weekly_stats=qb_weekly_stats,
@@ -41,6 +44,7 @@ def test_build_qb_features_one_row_per_rostered_qb(
         depth_charts=qb_depth_charts,
         ngs_passing=qb_ngs_passing,
         schedules=qb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -55,6 +59,7 @@ def test_build_qb_features_pass_attempts_per_game_l4_correct(
     qb_depth_charts: pd.DataFrame,
     qb_ngs_passing: pd.DataFrame,
     qb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Mahomes weeks 1-4: 36/38/40/42 → mean = 39.0."""
     out = build_qb_features(
@@ -63,6 +68,7 @@ def test_build_qb_features_pass_attempts_per_game_l4_correct(
         depth_charts=qb_depth_charts,
         ngs_passing=qb_ngs_passing,
         schedules=qb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -76,6 +82,7 @@ def test_build_qb_features_rushing_qb_false_for_pocket_qbs(
     qb_depth_charts: pd.DataFrame,
     qb_ngs_passing: pd.DataFrame,
     qb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Both fixture QBs have 0 carries → rushing_qb == False."""
     out = build_qb_features(
@@ -84,6 +91,7 @@ def test_build_qb_features_rushing_qb_false_for_pocket_qbs(
         depth_charts=qb_depth_charts,
         ngs_passing=qb_ngs_passing,
         schedules=qb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -96,6 +104,7 @@ def test_build_qb_features_rushing_qb_true_above_threshold(
     qb_depth_charts: pd.DataFrame,
     qb_ngs_passing: pd.DataFrame,
     qb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Inject 6 carries/game over weeks 1-4 for Mahomes (24 trailing-4 / 4 = 6.0 ≥ 5.0)."""
     ws = qb_weekly_stats.copy()
@@ -108,6 +117,7 @@ def test_build_qb_features_rushing_qb_true_above_threshold(
         depth_charts=qb_depth_charts,
         ngs_passing=qb_ngs_passing,
         schedules=qb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -121,6 +131,7 @@ def test_build_qb_features_implied_team_total_from_schedules(
     qb_depth_charts: pd.DataFrame,
     qb_ngs_passing: pd.DataFrame,
     qb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """KC @ CHI, total=51, spread_line=-7.5 (KC away favored).
     KC implied = (51 - (-7.5))/2 = 29.25; KC spread = +(-7.5) = -7.5."""
@@ -130,6 +141,7 @@ def test_build_qb_features_implied_team_total_from_schedules(
         depth_charts=qb_depth_charts,
         ngs_passing=qb_ngs_passing,
         schedules=qb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -145,6 +157,7 @@ def test_build_qb_features_ngs_aggressiveness_propagates(
     qb_depth_charts: pd.DataFrame,
     qb_ngs_passing: pd.DataFrame,
     qb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """The latest NGS snapshot's `aggressiveness` is propagated as `aggressiveness_std`."""
     out = build_qb_features(
@@ -153,6 +166,7 @@ def test_build_qb_features_ngs_aggressiveness_propagates(
         depth_charts=qb_depth_charts,
         ngs_passing=qb_ngs_passing,
         schedules=qb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )

@@ -17,6 +17,7 @@ def _baseline(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> pd.DataFrame:
     return build_te_features(
         weekly_stats=te_weekly_stats,
@@ -24,6 +25,7 @@ def _baseline(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -35,9 +37,15 @@ def test_no_leakage_from_weekly_stats(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        te_weekly_stats, te_snap_counts, te_depth_charts, te_ngs_receiving, te_schedules
+        te_weekly_stats,
+        te_snap_counts,
+        te_depth_charts,
+        te_ngs_receiving,
+        te_schedules,
+        fake_pbp_df,
     )
     leaky = te_weekly_stats.copy()
     mask_future = (leaky["gsis_id"] == "00-0030506") & (leaky["week"] >= _AS_OF_WEEK)
@@ -50,6 +58,7 @@ def test_no_leakage_from_weekly_stats(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -62,9 +71,15 @@ def test_no_leakage_from_snap_counts(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        te_weekly_stats, te_snap_counts, te_depth_charts, te_ngs_receiving, te_schedules
+        te_weekly_stats,
+        te_snap_counts,
+        te_depth_charts,
+        te_ngs_receiving,
+        te_schedules,
+        fake_pbp_df,
     )
     leaky = te_snap_counts.copy()
     mask_future = leaky["week"] >= _AS_OF_WEEK
@@ -76,6 +91,7 @@ def test_no_leakage_from_snap_counts(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -88,9 +104,15 @@ def test_no_leakage_from_ngs_receiving(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        te_weekly_stats, te_snap_counts, te_depth_charts, te_ngs_receiving, te_schedules
+        te_weekly_stats,
+        te_snap_counts,
+        te_depth_charts,
+        te_ngs_receiving,
+        te_schedules,
+        fake_pbp_df,
     )
     extra = pd.DataFrame(
         [
@@ -122,6 +144,7 @@ def test_no_leakage_from_ngs_receiving(
         depth_charts=te_depth_charts,
         ngs_receiving=leaky,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -134,9 +157,15 @@ def test_no_leakage_from_depth_charts_other_weeks(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        te_weekly_stats, te_snap_counts, te_depth_charts, te_ngs_receiving, te_schedules
+        te_weekly_stats,
+        te_snap_counts,
+        te_depth_charts,
+        te_ngs_receiving,
+        te_schedules,
+        fake_pbp_df,
     )
     extra_weeks = pd.concat(
         [
@@ -152,6 +181,7 @@ def test_no_leakage_from_depth_charts_other_weeks(
         depth_charts=leaky,
         ngs_receiving=te_ngs_receiving,
         schedules=te_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -164,9 +194,15 @@ def test_no_leakage_from_schedules_other_weeks(
     te_depth_charts: pd.DataFrame,
     te_ngs_receiving: pd.DataFrame,
     te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        te_weekly_stats, te_snap_counts, te_depth_charts, te_ngs_receiving, te_schedules
+        te_weekly_stats,
+        te_snap_counts,
+        te_depth_charts,
+        te_ngs_receiving,
+        te_schedules,
+        fake_pbp_df,
     )
     extra_weeks = te_schedules.assign(week=6, total_line=99.0, spread_line=99.0)
     leaky = pd.concat([te_schedules, extra_weeks], ignore_index=True)
@@ -176,6 +212,7 @@ def test_no_leakage_from_schedules_other_weeks(
         depth_charts=te_depth_charts,
         ngs_receiving=te_ngs_receiving,
         schedules=leaky,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )

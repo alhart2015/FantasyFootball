@@ -4,6 +4,87 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Plan 9 — PBP ingest + opp-adjusted EPA features — feature change DO_NOT_ADOPT (4/4 positions); plumbing ships (2026-04-29, on branch `feat/plan-9-pbp-ingest-opp-epa`)
+
+**Status:** all 7 phases shipped. Verification gates green: 291+ pytest pass / 9 skipped (network only) / 0 fail; mypy 147 source files clean; ruff check + format clean. Snapshot regression check PASS (400 metrics within tolerance). **Zero per-position routing changes shipped** per the §6 zero-position-adopt branch — feature change reverted at commit `941b96c`. PBP plumbing ships unconditionally.
+
+### Diagnosis recap
+
+Plan 9 was the first feature-class plan after the post-Plan-8 pivot. Bundled PBP ingest with one feature consumer (`opp_epa_allowed_residual` — schedule-of-strength-adjusted EPA-per-play residual replacing v1 `opp_allowed_<pos>_fppg_l4`) per Plan 2a's "ingest + first feature builder" precedent. Adoption gate verdict: **DO_NOT_ADOPT for all 4 positions.** QB / RB / TE returned null results (RMSE + Spearman 95% CIs both bracket zero). WR returned a small but statistically significant **regression** on both RMSE (+0.0083 fpts) and Spearman (-0.0013).
+
+The post-Plan-3e brainstorm hypothesized 5–15% RMSE improvement from PBP-derived features. The empirical result at the BaselineModel level is essentially flat. Three plausible mechanisms: (1) Ridge baseline is feature-saturated — opp signal partially captured by `implied_team_total`, `spread`, NGS metrics, v1 fppg; (2) the v1 fppg implicitly encodes some schedule-of-strength signal even without explicit residual computation; (3) WR-specific noise — opp-strength is more variable game-to-game for WR than other positions. Per Plan 8's lesson: don't chase noise floor; revert and pivot.
+
+### What shipped (all 7 phases)
+
+**Plumbing kept (per spec §6 step 6 zero-position-adopt branch):**
+- `src/projections/ingest/pbp.py` — `refresh_pbp` covering `nfl_data_py.import_pbp_data` for 2018-2024 with a curated 27-column subset.
+- `PbpSchema` in `src/projections/schemas.py`.
+- Opt-in `--run-network` PBP smoke at `tests/test_ingest/test_api_drift.py::test_pbp_api_columns_and_schema`.
+- `tests/test_ingest/test_pbp.py` — 6 ingest tests against the synthetic `fake_pbp_df` fixture.
+- `tests/conftest.py::fake_pbp_df` (49 rows × 27 cols, all 9 `play_type` values + sacks + scrambles + posteam=NaN + epa=NaN edge cases) and `_build_synthetic_pbp` helper.
+- `pbp` keyword arg threaded through 4 direct-builder scripts (`refresh_features.py`, `train_baseline.py`, `predict_2024.py`, `sanity_check_baseline.py`) and through every per-position `build_<pos>_features` signature with `_EMPTY_PBP` default — currently unused, reserved for the next PBP-driven feature plan.
+- `scripts/adoption_gate.py` extended with `--baseline-run` / `--candidate-run` dual-run mode (cross-run pairing for feature-set vs feature-set comparisons) — load-bearing for every future feature-class plan.
+
+**Reverted (per spec §6 step 6):**
+- `src/projections/features/_opponent.py` — restored v1 `opp_allowed_fppg` + `_row_to_statline`. `opp_epa_allowed_residual` deleted.
+- 4 FeaturesSchemas in `schemas.py` — `opp_allowed_<pos>_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)` restored.
+- 4 per-position builder bodies — restored to v1 `opp_allowed_fppg(...)` calls + v1 merge.
+- 4 `_<POS>_FEATURE_COLUMNS` in `models/baseline.py` — restored old column names.
+- `tests/test_features/test_opponent.py` — bit-identical to v1 (8 new EPA-residual tests removed).
+- `test_no_leakage_from_pbp_other_weeks` deleted from each per-position leakage file.
+
+**Real-data drift caught at first ingest:** `nfl_data_py.import_pbp_data` "Downcasts floats" to float32 for memory; PbpSchema's `Series[float]` requires float64. The synthetic fixture used Python floats (which are float64 by default) so didn't surface this. 16 indicator/numeric columns now coerced to float64 in `_normalize_one_season` via the module-level `_FLOAT64_COLS` tuple. Real-data-drift item logged on TODO #16's running list.
+
+**Performance:** the helper's per-(defteam, last_week) iteration over the prior_mask'd PBP was too slow at real-data scale (~7-10s per builder cell × ~600 cells = ~90 min for refresh_features). Optimization landed at commit `60458cb`: builder pre-filters PBP to just the trailing window weeks before the helper call, reducing iterations ~5× (per spec §9 follow-up). Regenerated feature cache in ~3-4 min. (The optimization was reverted with the helper deletion at `941b96c` since the helper itself is gone now; the broader pre-filter idiom can be re-applied if a future plan re-introduces a similar helper.)
+
+### Phase 6 verdicts (run dispatched 2026-04-29 21:04)
+
+Paired bootstrap, n_bootstrap=1000, seed=42. Baseline-run = pre-Plan-9 BaselineModel; candidate-run = post-Plan-9 BaselineModel (same model class, only `opp_allowed_<pos>_fppg_l4` → `opp_pass_epa_allowed_l4` / `opp_run_epa_allowed_l4` swapped). Pairing key `(gsis_id, season, week, position)`.
+
+| Position | Verdict | RMSE delta (95% CI) | Spearman delta (95% CI) | n_paired |
+|---|---|---|---|---:|
+| QB | DO_NOT_ADOPT | +0.0005 ([-0.0125, +0.0144]) | -0.0001 ([-0.0029, +0.0024]) | 2676 |
+| RB | DO_NOT_ADOPT | +0.0001 ([-0.0110, +0.0111]) | +0.0006 ([-0.0014, +0.0027]) | 5273 |
+| TE | DO_NOT_ADOPT | -0.0037 ([-0.0121, +0.0050]) | +0.0000 ([-0.0028, +0.0027]) | 4257 |
+| WR | DO_NOT_ADOPT | +0.0083 ([+0.0043, +0.0124]) | -0.0013 ([-0.0021, -0.0004]) | 8460 |
+
+Per-year breakdowns: `reports/adoption_gate_plan9.csv`. Markdown report: `reports/adoption_gate_plan9.md`. Spec §6 carries the verdict + interpretation tables for record-of-decision.
+
+### Per-position routing changes shipped
+
+| Position | Pre-Plan-9 default | Post-Plan-9 default | Reason |
+|----------|--------------------|---------------------|--------|
+| QB       | lightgbm-nb        | lightgbm-nb         | No change. Plan 9 evaluated baseline-only; Plan 8's QB routing untouched. |
+| RB       | baseline           | baseline            | No change. DO_NOT_ADOPT verdict reverted feature swap. |
+| TE       | baseline           | baseline            | No change. DO_NOT_ADOPT verdict reverted feature swap. |
+| WR       | ensemble           | ensemble            | No change. Plan 9 evaluated baseline-only; Plan 8's WR routing untouched. |
+
+### Decision-log entries (Plan 9)
+
+| Date | Decision | Rationale |
+|---|---|---|
+| 2026-04-29 | PBP storage shape: raw per-play parquet, per-season partition, ~27-column curated subset | Mirrors `weekly_stats.py` template; future feature plans extend `_KEEP` additively without forcing a re-ingest. Total ~340K rows × 27 cols × 7 seasons ≈ 30-50 MB. |
+| 2026-04-29 | "Opp-adjusted" interpretation = schedule-of-strength residual (per-play residual = EPA - offense's overall mean EPA in the same trailing window) | Standard nfl-stats formulation; the v1 fppg's flaw was lack of schedule adjustment, so any non-residual formulation would have shipped a renamed v1. |
+| 2026-04-29 | Replace v1 fppg directly rather than running side-by-side | Side-by-side muddles the experiment (Ridge sees both, can't attribute the lift). Adoption gate decides per-position; revert is a one-commit undo. |
+| 2026-04-29 | Adoption-gate CLI extended with `--baseline-run` / `--candidate-run` dual-run mode | Plan 8's CLI assumed model-class-vs-model-class within ONE run; Plan 9 needs feature-set-vs-feature-set across two runs. Same paired-bootstrap math, different inputs. Amortizes across every future feature-class plan. |
+| 2026-04-29 | All 4 positions DO_NOT_ADOPT for opp-adjusted EPA-residual feature on BaselineModel | QB/RB/TE null results, WR significant regression. Per spec §6 step 6 zero-position-adopt branch: revert feature, ship plumbing. |
+| 2026-04-29 | Builders keep `pbp: pd.DataFrame = _EMPTY_PBP` keyword arg post-revert | Lets Task 10's caller plumbing continue passing `pbp=` without script changes; reserves the threading for the next PBP-driven feature plan. `_EMPTY_PBP` module-level singleton avoids ruff B008. |
+| 2026-04-29 | nfl_data_py float32 → float64 coercion added to `_normalize_one_season` | Real-data drift caught at first ingest in Phase 6: nfl_data_py "Downcasts floats" but PbpSchema's `Series[float]` is float64. Synthetic fixture used Python floats and didn't surface this. 16 columns now in `_FLOAT64_COLS`. Real-data drift entry on TODO #16. |
+
+### Next track after Plan 9
+
+PBP plumbing (Plan 9's TODO #3a) is shipped and validated. The next PBP-derived feature slice to brainstorm is one of TODO #3c's candidates:
+
+1. **Pace** (plays per 60 min, neutral) — multiplies through volume features.
+2. **PROE** (pass rate over expected, game-state adjusted) — per offense team.
+3. **Player-level air yards / aDOT distributions** — richer downfield-target signal than NGS's season-to-date snapshot.
+
+Plan 9's negative result on opp-EPA-residual at the BaselineModel level argues for evaluating these against multiple model classes (LightGBM, ensemble) in addition to BaselineModel — model class may dominate over feature class for marginal signals.
+
+The remaining TODO #3c PBP-feature candidates (pressure rate, redzone usage shares, etc.) stay queued.
+
+---
+
 ## Plan 8 — Adoption gate redesign — complete; ready for PR (2026-04-29, on branch `feat/plan-8-gate-redesign`)
 
 **Status:** all 7 phases shipped. Final verification gates green: 464 pytest pass / 13 skipped (opt-in only) / 0 fail; mypy 145 source files clean; ruff check + format clean across 154 files. **Two production routing changes shipped** (QB → lightgbm-nb; WR → ensemble) per Phase 4 verdicts below.

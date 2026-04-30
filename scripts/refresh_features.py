@@ -79,6 +79,16 @@ def _refresh_one(
     ngs_full = _read_raw_with_prior(raw_root, ngs_table, season)
     dc = read_partition(raw_root, "depth_charts", season=season)
     sch = read_partition(raw_root, "schedules", season=season)
+    # Plan 9: PBP for opp-defensive EPA features. Degrade gracefully if a
+    # season's partition doesn't exist (e.g., pre-Plan-9 ingest hasn't run);
+    # builders accept an empty frame and emit NaN-filled values.
+    pbp_frames: list[pd.DataFrame] = []
+    for s in (season - 1, season):
+        try:
+            pbp_frames.append(read_partition(raw_root, "pbp", season=s))
+        except FileNotFoundError:
+            pass
+    pbp = pd.concat(pbp_frames, ignore_index=True) if pbp_frames else pd.DataFrame()
 
     weeks = sorted(int(w) for w in dc["week"].unique())
     written = 0
@@ -91,6 +101,7 @@ def _refresh_one(
             "schedules": sch,
             "season": season,
             "as_of_week": week,
+            "pbp": pbp,
             ngs_kwarg: ngs_full,
         }
         feats = builder(**kwargs)

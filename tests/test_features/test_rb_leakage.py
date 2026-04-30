@@ -17,6 +17,7 @@ def _baseline(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> pd.DataFrame:
     return build_rb_features(
         weekly_stats=rb_weekly_stats,
@@ -24,6 +25,7 @@ def _baseline(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -35,9 +37,15 @@ def test_no_leakage_from_weekly_stats(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing, rb_schedules
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
     )
     leaky = rb_weekly_stats.copy()
     mask_future = (leaky["gsis_id"] == "00-0034796") & (leaky["week"] >= _AS_OF_WEEK)
@@ -50,6 +58,7 @@ def test_no_leakage_from_weekly_stats(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -62,9 +71,15 @@ def test_no_leakage_from_snap_counts(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing, rb_schedules
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
     )
     leaky = rb_snap_counts.copy()
     mask_future = leaky["week"] >= _AS_OF_WEEK
@@ -76,6 +91,7 @@ def test_no_leakage_from_snap_counts(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -88,9 +104,15 @@ def test_no_leakage_from_ngs_rushing(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing, rb_schedules
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
     )
     extra = pd.DataFrame(
         [
@@ -120,6 +142,7 @@ def test_no_leakage_from_ngs_rushing(
         depth_charts=rb_depth_charts,
         ngs_rushing=leaky,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -132,9 +155,15 @@ def test_no_leakage_from_depth_charts_other_weeks(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing, rb_schedules
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
     )
     extra_weeks = pd.concat(
         [
@@ -150,6 +179,7 @@ def test_no_leakage_from_depth_charts_other_weeks(
         depth_charts=leaky,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -162,9 +192,15 @@ def test_no_leakage_from_schedules_other_weeks(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing, rb_schedules
+        rb_weekly_stats,
+        rb_snap_counts,
+        rb_depth_charts,
+        rb_ngs_rushing,
+        rb_schedules,
+        fake_pbp_df,
     )
     extra_weeks = rb_schedules.assign(week=6, total_line=99.0, spread_line=99.0)
     leaky = pd.concat([rb_schedules, extra_weeks], ignore_index=True)
@@ -174,6 +210,7 @@ def test_no_leakage_from_schedules_other_weeks(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=leaky,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )

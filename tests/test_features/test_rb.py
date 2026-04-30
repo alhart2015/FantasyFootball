@@ -14,6 +14,7 @@ def test_build_rb_features_returns_validated_frame(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     out = build_rb_features(
         weekly_stats=rb_weekly_stats,
@@ -21,6 +22,7 @@ def test_build_rb_features_returns_validated_frame(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -33,6 +35,7 @@ def test_build_rb_features_one_row_per_rostered_rb(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     out = build_rb_features(
         weekly_stats=rb_weekly_stats,
@@ -40,6 +43,7 @@ def test_build_rb_features_one_row_per_rostered_rb(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -53,6 +57,7 @@ def test_build_rb_features_carries_per_game_l4_correct(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Saquon weeks 1-4: 20 carries/game uniformly → mean = 20.0."""
     out = build_rb_features(
@@ -61,6 +66,7 @@ def test_build_rb_features_carries_per_game_l4_correct(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -74,6 +80,7 @@ def test_build_rb_features_rush_share_l4_solo_rb_is_one(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Each fixture team has only one RB in the fixture → rush_share_l4 = 1.0."""
     out = build_rb_features(
@@ -82,6 +89,7 @@ def test_build_rb_features_rush_share_l4_solo_rb_is_one(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -94,6 +102,7 @@ def test_build_rb_features_passing_down_back_true_above_threshold(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """CMC has 6 targets/game → passing_down_back == True (>=4.0)."""
     out = build_rb_features(
@@ -102,6 +111,7 @@ def test_build_rb_features_passing_down_back_true_above_threshold(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -115,6 +125,7 @@ def test_build_rb_features_passing_down_back_false_below_threshold(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Saquon has 2 targets/game → passing_down_back == False."""
     out = build_rb_features(
@@ -123,6 +134,7 @@ def test_build_rb_features_passing_down_back_false_below_threshold(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
@@ -136,6 +148,7 @@ def test_build_rb_features_target_share_against_full_pass_catching_group(
     rb_depth_charts: pd.DataFrame,
     rb_ngs_rushing: pd.DataFrame,
     rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """target_share denominator must include WR + RB + TE on the team.
     The fixture has only RB rows; if no other receivers, RB target_share = 1.0
@@ -146,6 +159,7 @@ def test_build_rb_features_target_share_against_full_pass_catching_group(
         depth_charts=rb_depth_charts,
         ngs_rushing=rb_ngs_rushing,
         schedules=rb_schedules,
+        pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )

@@ -26,6 +26,7 @@ def _baseline(
     wr_depth_charts: pd.DataFrame,
     wr_ngs_receiving: pd.DataFrame,
     wr_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> pd.DataFrame:
     return build_wr_features(
         weekly_stats=wr_weekly_stats,
@@ -33,6 +34,7 @@ def _baseline(
         depth_charts=wr_depth_charts,
         ngs_receiving=wr_ngs_receiving,
         schedules=wr_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -44,9 +46,15 @@ def test_no_leakage_from_weekly_stats(
     wr_depth_charts: pd.DataFrame,
     wr_ngs_receiving: pd.DataFrame,
     wr_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        wr_weekly_stats, wr_snap_counts, wr_depth_charts, wr_ngs_receiving, wr_schedules
+        wr_weekly_stats,
+        wr_snap_counts,
+        wr_depth_charts,
+        wr_ngs_receiving,
+        wr_schedules,
+        fake_pbp_df,
     )
 
     # Inject implausible weeks 5-8: Jefferson records 1000 receiving yards every week
@@ -63,6 +71,7 @@ def test_no_leakage_from_weekly_stats(
         depth_charts=wr_depth_charts,
         ngs_receiving=wr_ngs_receiving,
         schedules=wr_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -75,9 +84,15 @@ def test_no_leakage_from_snap_counts(
     wr_depth_charts: pd.DataFrame,
     wr_ngs_receiving: pd.DataFrame,
     wr_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        wr_weekly_stats, wr_snap_counts, wr_depth_charts, wr_ngs_receiving, wr_schedules
+        wr_weekly_stats,
+        wr_snap_counts,
+        wr_depth_charts,
+        wr_ngs_receiving,
+        wr_schedules,
+        fake_pbp_df,
     )
 
     leaky = wr_snap_counts.copy()
@@ -91,6 +106,7 @@ def test_no_leakage_from_snap_counts(
         depth_charts=wr_depth_charts,
         ngs_receiving=wr_ngs_receiving,
         schedules=wr_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -103,9 +119,15 @@ def test_no_leakage_from_ngs_receiving(
     wr_depth_charts: pd.DataFrame,
     wr_ngs_receiving: pd.DataFrame,
     wr_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     baseline = _baseline(
-        wr_weekly_stats, wr_snap_counts, wr_depth_charts, wr_ngs_receiving, wr_schedules
+        wr_weekly_stats,
+        wr_snap_counts,
+        wr_depth_charts,
+        wr_ngs_receiving,
+        wr_schedules,
+        fake_pbp_df,
     )
 
     # Inject NGS rows for week 5+ (the fixture only goes through week 4).
@@ -140,6 +162,7 @@ def test_no_leakage_from_ngs_receiving(
         depth_charts=wr_depth_charts,
         ngs_receiving=leaky,
         schedules=wr_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -152,11 +175,17 @@ def test_no_leakage_from_depth_charts_other_weeks(
     wr_depth_charts: pd.DataFrame,
     wr_ngs_receiving: pd.DataFrame,
     wr_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Depth chart from OTHER weeks must not affect the as_of_week=5 build -
     we read only the target-week snapshot."""
     baseline = _baseline(
-        wr_weekly_stats, wr_snap_counts, wr_depth_charts, wr_ngs_receiving, wr_schedules
+        wr_weekly_stats,
+        wr_snap_counts,
+        wr_depth_charts,
+        wr_ngs_receiving,
+        wr_schedules,
+        fake_pbp_df,
     )
 
     extra_weeks = pd.concat(
@@ -176,6 +205,7 @@ def test_no_leakage_from_depth_charts_other_weeks(
         depth_charts=leaky,
         ngs_receiving=wr_ngs_receiving,
         schedules=wr_schedules,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )
@@ -188,10 +218,16 @@ def test_no_leakage_from_schedules_other_weeks(
     wr_depth_charts: pd.DataFrame,
     wr_ngs_receiving: pd.DataFrame,
     wr_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Schedule rows from OTHER weeks must not affect the as_of_week=5 build."""
     baseline = _baseline(
-        wr_weekly_stats, wr_snap_counts, wr_depth_charts, wr_ngs_receiving, wr_schedules
+        wr_weekly_stats,
+        wr_snap_counts,
+        wr_depth_charts,
+        wr_ngs_receiving,
+        wr_schedules,
+        fake_pbp_df,
     )
 
     extra_weeks = wr_schedules.assign(week=6, total_line=99.0, spread_line=99.0)
@@ -203,6 +239,7 @@ def test_no_leakage_from_schedules_other_weeks(
         depth_charts=wr_depth_charts,
         ngs_receiving=wr_ngs_receiving,
         schedules=leaky,
+        pbp=fake_pbp_df,
         season=_SEASON,
         as_of_week=_AS_OF_WEEK,
     )

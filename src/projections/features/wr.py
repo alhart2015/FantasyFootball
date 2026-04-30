@@ -24,6 +24,10 @@ from projections.schemas import (
     WrFeaturesSchema,
 )
 
+# Module-level singleton for the unused `pbp` builder kwarg. Per ruff B008,
+# we cannot put `pd.DataFrame()` directly in the function default.
+_EMPTY_PBP: Final[pd.DataFrame] = pd.DataFrame()
+
 _DESIGNED_RUSHER_THRESHOLD: Final = 1.5  # carries/game over trailing 4
 
 # Columns that represent rolling-window per-game means; rookies with no prior
@@ -49,6 +53,9 @@ def build_wr_features(
     schedules: pd.DataFrame,
     season: int,
     as_of_week: int,
+    # pbp: reserved plumbing for future PBP-driven features (Plan 9 Phase 6
+    # negative result, kept threaded for future plans). Currently unused.
+    pbp: pd.DataFrame = _EMPTY_PBP,
 ) -> pd.DataFrame:
     """Build the WR feature DataFrame for week `as_of_week` of `season`.
 

@@ -518,6 +518,7 @@ def baseline_features_wr(baseline_weekly_stats_wr: pd.DataFrame) -> pd.DataFrame
     schedules["home_moneyline"] = schedules["home_moneyline"].astype(pd.Int64Dtype())
     schedules["away_moneyline"] = schedules["away_moneyline"].astype(pd.Int64Dtype())
 
+    pbp = _build_synthetic_pbp()
     feat_frames: list[pd.DataFrame] = []
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
@@ -527,6 +528,7 @@ def baseline_features_wr(baseline_weekly_stats_wr: pd.DataFrame) -> pd.DataFrame
                 depth_charts=depth,
                 ngs_receiving=ngs,
                 schedules=schedules,
+                pbp=pbp,
                 season=season,
                 as_of_week=week,
             )
@@ -890,12 +892,68 @@ def _build_position_supporting_frames(
     }
 
 
+def _build_synthetic_pbp() -> pd.DataFrame:
+    """Per-play frame for the synthetic KC-vs-MIN universe (Plan 9).
+
+    Generates 8 plays per (season, week) — 4 KC-vs-MIN passes, 4 KC-vs-MIN
+    runs, with deterministic non-zero EPA so `opp_epa_allowed_residual`
+    produces a finite (not all-NaN) value for both defenses across the
+    2024 weeks 1-8 + 2025 weeks 1-4 window. The exact residual magnitude
+    is irrelevant to baseline-model fit tests; what matters is that the
+    column has finite values so RidgeCV can learn a coefficient.
+    """
+    rows: list[dict[str, object]] = []
+    play_id = 1
+    for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
+        for week in weeks:
+            # Each posteam → defteam pairing produces 2 pass + 2 run plays; the outer loop
+            # iterates both (KC, MIN) and (MIN, KC) so both teams appear as offense and defense.
+            for posteam, defteam in [("KC", "MIN"), ("MIN", "KC")]:
+                for play_kind in ("pass", "pass", "run", "run"):
+                    rows.append(
+                        {
+                            "play_id": play_id,
+                            "game_id": f"{season}_{week:02d}_KC_MIN",
+                            "season": season,
+                            "week": week,
+                            "posteam": posteam,
+                            "defteam": defteam,
+                            "play_type": play_kind,
+                            "qb_dropback": 1.0 if play_kind == "pass" else 0.0,
+                            "qb_scramble": 0.0,
+                            "sack": 0.0,
+                            "rush_attempt": 1.0 if play_kind == "run" else 0.0,
+                            "pass_attempt": 1.0 if play_kind == "pass" else 0.0,
+                            # Vary EPA slightly by week + offense so residuals are
+                            # non-zero but bounded.
+                            "epa": 0.05 - 0.02 * (week % 3) + (0.03 if posteam == "KC" else -0.03),
+                            "wpa": 0.0,
+                            "success": 1.0,
+                            "air_yards": 8.0 if play_kind == "pass" else None,
+                            "yards_after_catch": 3.0 if play_kind == "pass" else None,
+                            "complete_pass": 1.0 if play_kind == "pass" else 0.0,
+                            "xpass": 0.55 if play_kind == "pass" else 0.45,
+                            "pass_oe": 0.0,
+                            "down": 1.0,
+                            "ydstogo": 10,
+                            "yardline_100": 50.0,
+                            "half_seconds_remaining": 1200.0,
+                            "passer_player_id": None,
+                            "rusher_player_id": None,
+                            "receiver_player_id": None,
+                        }
+                    )
+                    play_id += 1
+    return pd.DataFrame(rows)
+
+
 @pytest.fixture
 def baseline_features_qb(baseline_weekly_stats_qb: pd.DataFrame) -> pd.DataFrame:
     """QB feature rows produced by build_qb_features for every (season, week)."""
     from projections.features import build_qb_features
 
     aux = _build_position_supporting_frames(baseline_weekly_stats_qb, "QB")
+    pbp = _build_synthetic_pbp()
     feat_frames: list[pd.DataFrame] = []
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
@@ -905,6 +963,7 @@ def baseline_features_qb(baseline_weekly_stats_qb: pd.DataFrame) -> pd.DataFrame
                 depth_charts=aux["depth_charts"],
                 ngs_passing=aux["ngs"],
                 schedules=aux["schedules"],
+                pbp=pbp,
                 season=season,
                 as_of_week=week,
             )
@@ -919,6 +978,7 @@ def baseline_features_rb(baseline_weekly_stats_rb: pd.DataFrame) -> pd.DataFrame
     from projections.features import build_rb_features
 
     aux = _build_position_supporting_frames(baseline_weekly_stats_rb, "RB")
+    pbp = _build_synthetic_pbp()
     feat_frames: list[pd.DataFrame] = []
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
@@ -928,6 +988,7 @@ def baseline_features_rb(baseline_weekly_stats_rb: pd.DataFrame) -> pd.DataFrame
                 depth_charts=aux["depth_charts"],
                 ngs_rushing=aux["ngs"],
                 schedules=aux["schedules"],
+                pbp=pbp,
                 season=season,
                 as_of_week=week,
             )
@@ -942,6 +1003,7 @@ def baseline_features_te(baseline_weekly_stats_te: pd.DataFrame) -> pd.DataFrame
     from projections.features import build_te_features
 
     aux = _build_position_supporting_frames(baseline_weekly_stats_te, "TE")
+    pbp = _build_synthetic_pbp()
     feat_frames: list[pd.DataFrame] = []
     for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
         for week in weeks:
@@ -951,9 +1013,386 @@ def baseline_features_te(baseline_weekly_stats_te: pd.DataFrame) -> pd.DataFrame
                 depth_charts=aux["depth_charts"],
                 ngs_receiving=aux["ngs"],
                 schedules=aux["schedules"],
+                pbp=pbp,
                 season=season,
                 as_of_week=week,
             )
             if not f.empty:
                 feat_frames.append(f)
     return pd.concat(feat_frames, ignore_index=True) if feat_frames else pd.DataFrame()
+
+
+@pytest.fixture
+def fake_pbp_df() -> pd.DataFrame:
+    """Mimics `nfl_data_py.import_pbp_data([2024])` — handcrafted plays.
+
+    Two offense/defense pairs (KC-vs-BUF, NYG-vs-MIA), each pair playing only
+    each other across 5 weeks, plus 9 edge rows covering every `play_type`
+    that appears in upstream data. Includes sacks, scrambles, and rows with
+    `posteam=NaN` / `epa=NaN` to exercise the ingest filter.
+
+    Note: each defense plays exactly one offense, so any
+    `opp_epa_allowed_residual` computed from this fixture is structurally
+    zero. The fixture's purpose is to flow through the ingest + per-position
+    feature pipeline (Tasks 3, 6-9). Algorithmic residual cases (a)/(b)/(c)
+    from spec §7 are exercised by inline fixtures in Task 5's residual unit
+    tests, not this fixture.
+    """
+    rows: list[dict[str, object]] = []
+
+    # KC (strong offense) plays BUF (good defense) every week 1-5; KC's EPA
+    # against BUF is below KC's overall mean (BUF defense lowers it).
+    # NYG (weak offense) plays MIA every week 1-5; NYG's EPA against MIA is
+    # below NYG's overall mean (MIA also a competent defense), but MIA's
+    # schedule-of-strength is much weaker than BUF's.
+    week_epa_kc_vs_buf = [0.05, -0.10, 0.02, -0.08, 0.00]  # near zero
+    week_epa_nyg_vs_mia = [-0.20, -0.30, -0.15, -0.25, -0.10]  # negative
+
+    play_id = 1
+    for w_idx, week in enumerate([1, 2, 3, 4, 5]):
+        # KC offense vs BUF defense — 4 plays per week (2 pass, 2 run).
+        for play_kind in ("pass", "pass", "run", "run"):
+            rows.append(
+                {
+                    "play_id": play_id,
+                    "game_id": f"2024_{week:02d}_KC_BUF",
+                    "season": 2024,
+                    "week": week,
+                    "posteam": "KC",
+                    "defteam": "BUF",
+                    "play_type": play_kind,
+                    "qb_dropback": 1.0 if play_kind == "pass" else 0.0,
+                    "qb_scramble": 0.0,
+                    "sack": 0.0,
+                    "rush_attempt": 1.0 if play_kind == "run" else 0.0,
+                    "pass_attempt": 1.0 if play_kind == "pass" else 0.0,
+                    "epa": week_epa_kc_vs_buf[w_idx],
+                    "wpa": 0.0,
+                    "success": 1.0,
+                    "air_yards": 8.0 if play_kind == "pass" else None,
+                    "yards_after_catch": 3.0 if play_kind == "pass" else None,
+                    "complete_pass": 1.0 if play_kind == "pass" else 0.0,
+                    "xpass": 0.55 if play_kind == "pass" else 0.45,
+                    "pass_oe": 0.0,
+                    "down": 1.0,
+                    "ydstogo": 10,
+                    "yardline_100": float(((play_id * 5) % 95) + 1),
+                    "half_seconds_remaining": 1200.0,
+                    "passer_player_id": "00-0034857" if play_kind == "pass" else None,
+                    "rusher_player_id": "00-0030506" if play_kind == "run" else None,
+                    "receiver_player_id": "00-0036322" if play_kind == "pass" else None,
+                }
+            )
+            play_id += 1
+
+        # NYG offense vs MIA defense — 4 plays per week (2 pass, 2 run).
+        for play_kind in ("pass", "pass", "run", "run"):
+            rows.append(
+                {
+                    "play_id": play_id,
+                    "game_id": f"2024_{week:02d}_NYG_MIA",
+                    "season": 2024,
+                    "week": week,
+                    "posteam": "NYG",
+                    "defteam": "MIA",
+                    "play_type": play_kind,
+                    "qb_dropback": 1.0 if play_kind == "pass" else 0.0,
+                    "qb_scramble": 0.0,
+                    "sack": 0.0,
+                    "rush_attempt": 1.0 if play_kind == "run" else 0.0,
+                    "pass_attempt": 1.0 if play_kind == "pass" else 0.0,
+                    "epa": week_epa_nyg_vs_mia[w_idx],
+                    "wpa": 0.0,
+                    "success": 0.0,
+                    "air_yards": 6.0 if play_kind == "pass" else None,
+                    "yards_after_catch": 1.0 if play_kind == "pass" else None,
+                    "complete_pass": 1.0 if play_kind == "pass" else 0.0,
+                    "xpass": 0.55 if play_kind == "pass" else 0.45,
+                    "pass_oe": 0.0,
+                    "down": 1.0,
+                    "ydstogo": 10,
+                    "yardline_100": 75.0,
+                    "half_seconds_remaining": 1200.0,
+                    "passer_player_id": None,
+                    "rusher_player_id": None,
+                    "receiver_player_id": None,
+                }
+            )
+            play_id += 1
+
+    # Edge-case rows (week 1 only) — sack, scramble, kickoff, no_play.
+    edge_rows: list[dict[str, object]] = [
+        # Sack — pass-classified.
+        {
+            "play_id": play_id,
+            "game_id": "2024_01_KC_BUF",
+            "season": 2024,
+            "week": 1,
+            "posteam": "KC",
+            "defteam": "BUF",
+            "play_type": "pass",
+            "qb_dropback": 1.0,
+            "qb_scramble": 0.0,
+            "sack": 1.0,
+            "rush_attempt": 0.0,
+            "pass_attempt": 0.0,
+            "epa": -1.5,
+            "wpa": 0.0,
+            "success": 0.0,
+            "air_yards": None,
+            "yards_after_catch": None,
+            "complete_pass": 0.0,
+            "xpass": 0.55,
+            "pass_oe": 0.0,
+            "down": 3.0,
+            "ydstogo": 10,
+            "yardline_100": 30.0,
+            "half_seconds_remaining": 600.0,
+            "passer_player_id": "00-0034857",
+            "rusher_player_id": None,
+            "receiver_player_id": None,
+        },
+        # Scramble — pass-classified.
+        {
+            "play_id": play_id + 1,
+            "game_id": "2024_01_NYG_MIA",
+            "season": 2024,
+            "week": 1,
+            "posteam": "NYG",
+            "defteam": "MIA",
+            "play_type": "run",  # nfl_data_py marks scrambles play_type=run + qb_scramble=1
+            "qb_dropback": 1.0,
+            "qb_scramble": 1.0,
+            "sack": 0.0,
+            "rush_attempt": 1.0,
+            "pass_attempt": 0.0,
+            "epa": 0.30,
+            "wpa": 0.0,
+            "success": 1.0,
+            "air_yards": None,
+            "yards_after_catch": None,
+            "complete_pass": 0.0,
+            "xpass": 0.55,
+            "pass_oe": 0.0,
+            "down": 2.0,
+            "ydstogo": 5,
+            "yardline_100": 50.0,
+            "half_seconds_remaining": 900.0,
+            "passer_player_id": None,
+            "rusher_player_id": "00-0030506",
+            "receiver_player_id": None,
+        },
+        # Kickoff — has posteam=NaN per nfl_data_py.
+        {
+            "play_id": play_id + 2,
+            "game_id": "2024_01_KC_BUF",
+            "season": 2024,
+            "week": 1,
+            "posteam": None,
+            "defteam": None,
+            "play_type": "kickoff",
+            "qb_dropback": 0.0,
+            "qb_scramble": 0.0,
+            "sack": 0.0,
+            "rush_attempt": 0.0,
+            "pass_attempt": 0.0,
+            "epa": None,
+            "wpa": None,
+            "success": None,
+            "air_yards": None,
+            "yards_after_catch": None,
+            "complete_pass": None,
+            "xpass": None,
+            "pass_oe": None,
+            "down": None,
+            "ydstogo": None,
+            "yardline_100": None,
+            "half_seconds_remaining": None,
+            "passer_player_id": None,
+            "rusher_player_id": None,
+            "receiver_player_id": None,
+        },
+        # no_play — epa=NaN, filtered at feature time.
+        {
+            "play_id": play_id + 3,
+            "game_id": "2024_01_KC_BUF",
+            "season": 2024,
+            "week": 1,
+            "posteam": "KC",
+            "defteam": "BUF",
+            "play_type": "no_play",
+            "qb_dropback": None,
+            "qb_scramble": None,
+            "sack": None,
+            "rush_attempt": None,
+            "pass_attempt": None,
+            "epa": None,
+            "wpa": None,
+            "success": None,
+            "air_yards": None,
+            "yards_after_catch": None,
+            "complete_pass": None,
+            "xpass": None,
+            "pass_oe": None,
+            "down": None,
+            "ydstogo": None,
+            "yardline_100": None,
+            "half_seconds_remaining": None,
+            "passer_player_id": None,
+            "rusher_player_id": None,
+            "receiver_player_id": None,
+        },
+        # Punt — special teams, posteam/defteam set, epa=None.
+        {
+            "play_id": play_id + 4,
+            "game_id": "2024_01_KC_BUF",
+            "season": 2024,
+            "week": 1,
+            "posteam": "KC",
+            "defteam": "BUF",
+            "play_type": "punt",
+            "qb_dropback": 0.0,
+            "qb_scramble": 0.0,
+            "sack": 0.0,
+            "rush_attempt": 0.0,
+            "pass_attempt": 0.0,
+            "epa": None,
+            "wpa": None,
+            "success": None,
+            "air_yards": None,
+            "yards_after_catch": None,
+            "complete_pass": None,
+            "xpass": None,
+            "pass_oe": None,
+            "down": 4.0,
+            "ydstogo": 8,
+            "yardline_100": 60.0,
+            "half_seconds_remaining": 300.0,
+            "passer_player_id": None,
+            "rusher_player_id": None,
+            "receiver_player_id": None,
+        },
+        # Field goal — special teams.
+        {
+            "play_id": play_id + 5,
+            "game_id": "2024_01_NYG_MIA",
+            "season": 2024,
+            "week": 1,
+            "posteam": "NYG",
+            "defteam": "MIA",
+            "play_type": "field_goal",
+            "qb_dropback": 0.0,
+            "qb_scramble": 0.0,
+            "sack": 0.0,
+            "rush_attempt": 0.0,
+            "pass_attempt": 0.0,
+            "epa": None,
+            "wpa": None,
+            "success": None,
+            "air_yards": None,
+            "yards_after_catch": None,
+            "complete_pass": None,
+            "xpass": None,
+            "pass_oe": None,
+            "down": 4.0,
+            "ydstogo": 5,
+            "yardline_100": 25.0,
+            "half_seconds_remaining": 60.0,
+            "passer_player_id": None,
+            "rusher_player_id": None,
+            "receiver_player_id": None,
+        },
+        # Extra point — special teams.
+        {
+            "play_id": play_id + 6,
+            "game_id": "2024_01_KC_BUF",
+            "season": 2024,
+            "week": 1,
+            "posteam": "KC",
+            "defteam": "BUF",
+            "play_type": "extra_point",
+            "qb_dropback": 0.0,
+            "qb_scramble": 0.0,
+            "sack": 0.0,
+            "rush_attempt": 0.0,
+            "pass_attempt": 0.0,
+            "epa": None,
+            "wpa": None,
+            "success": None,
+            "air_yards": None,
+            "yards_after_catch": None,
+            "complete_pass": None,
+            "xpass": None,
+            "pass_oe": None,
+            "down": None,
+            "ydstogo": None,
+            "yardline_100": 15.0,
+            "half_seconds_remaining": 0.0,
+            "passer_player_id": None,
+            "rusher_player_id": None,
+            "receiver_player_id": None,
+        },
+        # qb_kneel — counted as not-pass / not-run by the classifier.
+        {
+            "play_id": play_id + 7,
+            "game_id": "2024_01_KC_BUF",
+            "season": 2024,
+            "week": 1,
+            "posteam": "KC",
+            "defteam": "BUF",
+            "play_type": "qb_kneel",
+            "qb_dropback": 0.0,
+            "qb_scramble": 0.0,
+            "sack": 0.0,
+            "rush_attempt": 0.0,
+            "pass_attempt": 0.0,
+            "epa": -0.5,
+            "wpa": -0.01,
+            "success": 0.0,
+            "air_yards": None,
+            "yards_after_catch": None,
+            "complete_pass": None,
+            "xpass": None,
+            "pass_oe": None,
+            "down": 1.0,
+            "ydstogo": 10,
+            "yardline_100": 50.0,
+            "half_seconds_remaining": 5.0,
+            "passer_player_id": "00-0034857",
+            "rusher_player_id": None,
+            "receiver_player_id": None,
+        },
+        # qb_spike — also not-pass / not-run.
+        {
+            "play_id": play_id + 8,
+            "game_id": "2024_01_NYG_MIA",
+            "season": 2024,
+            "week": 1,
+            "posteam": "NYG",
+            "defteam": "MIA",
+            "play_type": "qb_spike",
+            "qb_dropback": 0.0,
+            "qb_scramble": 0.0,
+            "sack": 0.0,
+            "rush_attempt": 0.0,
+            "pass_attempt": 0.0,
+            "epa": -0.3,
+            "wpa": -0.005,
+            "success": 0.0,
+            "air_yards": None,
+            "yards_after_catch": None,
+            "complete_pass": None,
+            "xpass": None,
+            "pass_oe": None,
+            "down": 1.0,
+            "ydstogo": 10,
+            "yardline_100": 40.0,
+            "half_seconds_remaining": 30.0,
+            "passer_player_id": None,
+            "rusher_player_id": None,
+            "receiver_player_id": None,
+        },
+    ]
+    rows.extend(edge_rows)
+
+    return pd.DataFrame(rows)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Final
+
 import pandas as pd
 
 from projections.features._opponent import opp_allowed_fppg
@@ -18,6 +20,10 @@ from projections.schemas import (
     Stat,
     TeFeaturesSchema,
 )
+
+# Module-level singleton for the unused `pbp` builder kwarg. Per ruff B008,
+# we cannot put `pd.DataFrame()` directly in the function default.
+_EMPTY_PBP: Final[pd.DataFrame] = pd.DataFrame()
 
 _PASS_CATCHING_POSITIONS: tuple[str, ...] = (
     Position.WR.value,
@@ -46,6 +52,9 @@ def build_te_features(
     schedules: pd.DataFrame,
     season: int,
     as_of_week: int,
+    # pbp: reserved plumbing for future PBP-driven features (Plan 9 Phase 6
+    # negative result, kept threaded for future plans). Currently unused.
+    pbp: pd.DataFrame = _EMPTY_PBP,
 ) -> pd.DataFrame:
     """Build the TE feature DataFrame for week `as_of_week` of `season`."""
     ws = weekly_stats[prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
