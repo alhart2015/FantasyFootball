@@ -410,7 +410,7 @@ def test_wr_features_schema_accepts_valid_row() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
-            "opp_pass_epa_allowed_l4": [-0.05],
+            "opp_allowed_wr_fppg_l4": [22.5],
         }
     )
     WrFeaturesSchema.validate(df)
@@ -445,7 +445,7 @@ def test_wr_features_schema_rejects_target_share_over_one() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
-            "opp_pass_epa_allowed_l4": [-0.05],
+            "opp_allowed_wr_fppg_l4": [22.5],
         }
     )
     with pytest.raises(SchemaError):
@@ -479,7 +479,7 @@ def test_qb_features_schema_accepts_valid_row() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
-            "opp_pass_epa_allowed_l4": [-0.05],
+            "opp_allowed_qb_fppg_l4": [18.5],
         }
     )
     QbFeaturesSchema.validate(df)
@@ -512,7 +512,7 @@ def test_qb_features_schema_rejects_negative_pass_attempts() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
-            "opp_pass_epa_allowed_l4": [-0.05],
+            "opp_allowed_qb_fppg_l4": [18.5],
         }
     )
     with pytest.raises(SchemaError):
@@ -546,7 +546,7 @@ def test_rb_features_schema_accepts_valid_row() -> None:
             "spread": [-2.5],
             "is_home": [False],
             "roof_dome": [False],
-            "opp_run_epa_allowed_l4": [-0.05],
+            "opp_allowed_rb_fppg_l4": [20.5],
         }
     )
     RbFeaturesSchema.validate(df)
@@ -579,7 +579,7 @@ def test_rb_features_schema_rejects_rush_share_over_one() -> None:
             "spread": [-2.5],
             "is_home": [False],
             "roof_dome": [False],
-            "opp_run_epa_allowed_l4": [-0.05],
+            "opp_allowed_rb_fppg_l4": [20.5],
         }
     )
     with pytest.raises(SchemaError):
@@ -611,7 +611,7 @@ def test_te_features_schema_accepts_valid_row() -> None:
             "spread": [-1.5],
             "is_home": [True],
             "roof_dome": [False],
-            "opp_pass_epa_allowed_l4": [-0.05],
+            "opp_allowed_te_fppg_l4": [10.5],
         }
     )
     TeFeaturesSchema.validate(df)
@@ -642,7 +642,7 @@ def test_te_features_schema_rejects_target_share_over_one() -> None:
             "spread": [-1.5],
             "is_home": [True],
             "roof_dome": [False],
-            "opp_pass_epa_allowed_l4": [-0.05],
+            "opp_allowed_te_fppg_l4": [10.5],
         }
     )
     with pytest.raises(SchemaError):

@@ -6,7 +6,7 @@ from typing import Final
 
 import pandas as pd
 
-from projections.features._opponent import opp_epa_allowed_residual
+from projections.features._opponent import opp_allowed_fppg
 from projections.features._rolling import (
     latest_ngs_snapshot,
     trailing_4_per_player,
@@ -17,8 +17,13 @@ from projections.schemas import (
     _PYARROW_STR,
     Position,
     RbFeaturesSchema,
+    Ruleset,
     Stat,
 )
+
+# Module-level singleton for the unused `pbp` builder kwarg. Per ruff B008,
+# we cannot put `pd.DataFrame()` directly in the function default.
+_EMPTY_PBP: Final[pd.DataFrame] = pd.DataFrame()
 
 _PASSING_DOWN_BACK_THRESHOLD: Final = 4.0  # targets/game over trailing 4
 
@@ -48,16 +53,13 @@ def build_rb_features(
     depth_charts: pd.DataFrame,
     ngs_rushing: pd.DataFrame,
     schedules: pd.DataFrame,
-    pbp: pd.DataFrame,
     season: int,
     as_of_week: int,
+    # pbp: reserved plumbing for future PBP-driven features (Plan 9 Phase 6
+    # negative result, kept threaded for future plans). Currently unused.
+    pbp: pd.DataFrame = _EMPTY_PBP,
 ) -> pd.DataFrame:
-    """Build the RB feature DataFrame for week `as_of_week` of `season`.
-
-    `pbp` is the play-by-play frame produced by `ingest.pbp` (PbpSchema).
-    It feeds the schedule-of-strength-adjusted opponent run-EPA residual
-    (Plan 9), which replaces the v1 ``opp_allowed_rb_fppg_l4``.
-    """
+    """Build the RB feature DataFrame for week `as_of_week` of `season`."""
     ws = weekly_stats[prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
     sc = snap_counts[prior_mask(snap_counts, season=season, as_of_week=as_of_week)].copy()
     ngs = ngs_rushing[prior_mask(ngs_rushing, season=season, as_of_week=as_of_week)].copy()
@@ -168,22 +170,14 @@ def build_rb_features(
             }
         )
 
-    # --- Game environment from schedules ---------------------------------
+    # --- Game environment + opponent strength -----------------------------
     game_env = build_game_environment(sch)
-
-    # --- Opponent strength: opp-adjusted run-EPA residual (Plan 9) -------
-    # Filter to just the trailing window weeks before passing to the helper
-    # (see qb.py for rationale).
-    n_pbp_weeks = 4
-    pbp_window = pbp[
-        (pbp["season"] == season)
-        & (pbp["week"] >= as_of_week - n_pbp_weeks)
-        & (pbp["week"] < as_of_week)
-    ].copy()
-    opp_proxy_full = opp_epa_allowed_residual(pbp_window, play_type="run", n_weeks=n_pbp_weeks)
+    opp_proxy_full = opp_allowed_fppg(
+        ws_rb, position=Position.RB, ruleset=Ruleset.espn_ppr(), n_weeks=4
+    )
     opp_proxy = opp_proxy_full[
         (opp_proxy_full["season"] == season) & (opp_proxy_full["week"] == as_of_week)
-    ].rename(columns={"opp_epa_allowed_residual": "opp_run_epa_allowed_l4"})
+    ].rename(columns={"opp_allowed_fppg": "opp_allowed_rb_fppg_l4"})
 
     # --- Assemble ---------------------------------------------------------
     out = rb_dc[["gsis_id", "season", "week", "team", "depth_rank"]].copy()
@@ -202,7 +196,7 @@ def build_rb_features(
     out = out.merge(snap_l4, on="gsis_id", how="left")
     out = out.merge(ngs_cols, on="gsis_id", how="left")
     out = out.merge(
-        opp_proxy[["season", "week", "opp_team", "opp_run_epa_allowed_l4"]].rename(
+        opp_proxy[["season", "week", "opp_team", "opp_allowed_rb_fppg_l4"]].rename(
             columns={"opp_team": "opponent"}
         ),
         on=["season", "week", "opponent"],

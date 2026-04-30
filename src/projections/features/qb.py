@@ -9,15 +9,20 @@ from typing import Final
 
 import pandas as pd
 
-from projections.features._opponent import opp_epa_allowed_residual
+from projections.features._opponent import opp_allowed_fppg
 from projections.features._rolling import latest_ngs_snapshot, trailing_4_per_player
 from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
 from projections.schemas import (
     _PYARROW_STR,
     Position,
     QbFeaturesSchema,
+    Ruleset,
     Stat,
 )
+
+# Module-level singleton for the unused `pbp` builder kwarg. Per ruff B008,
+# we cannot put `pd.DataFrame()` directly in the function default.
+_EMPTY_PBP: Final[pd.DataFrame] = pd.DataFrame()
 
 _RUSHING_QB_THRESHOLD: Final = 5.0  # carries/game over trailing 4
 
@@ -40,16 +45,13 @@ def build_qb_features(
     depth_charts: pd.DataFrame,
     ngs_passing: pd.DataFrame,
     schedules: pd.DataFrame,
-    pbp: pd.DataFrame,
     season: int,
     as_of_week: int,
+    # pbp: reserved plumbing for future PBP-driven features (Plan 9 Phase 6
+    # negative result, kept threaded for future plans). Currently unused.
+    pbp: pd.DataFrame = _EMPTY_PBP,
 ) -> pd.DataFrame:
-    """Build the QB feature DataFrame for week `as_of_week` of `season`.
-
-    `pbp` is the play-by-play frame produced by `ingest.pbp` (PbpSchema).
-    It feeds the schedule-of-strength-adjusted opponent pass-EPA residual
-    (Plan 9), which replaces the v1 ``opp_allowed_qb_fppg_l4``.
-    """
+    """Build the QB feature DataFrame for week `as_of_week` of `season`."""
     # --- Leakage-safe input filtering -------------------------------------
     ws = weekly_stats[prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
     sc = snap_counts[prior_mask(snap_counts, season=season, as_of_week=as_of_week)].copy()
@@ -161,21 +163,13 @@ def build_qb_features(
     # --- Game environment from schedules ---------------------------------
     game_env = build_game_environment(sch)
 
-    # --- Opponent strength: opp-adjusted pass-EPA residual (Plan 9) -------
-    # Filter to just the trailing window weeks before passing to the helper:
-    # the helper iterates per (defteam, last_week) and we only need the row
-    # for target_week == as_of_week. Without this filter, the helper iterates
-    # over all prior weeks (~22 per call) and the builder discards 21/22.
-    n_pbp_weeks = 4
-    pbp_window = pbp[
-        (pbp["season"] == season)
-        & (pbp["week"] >= as_of_week - n_pbp_weeks)
-        & (pbp["week"] < as_of_week)
-    ].copy()
-    opp_proxy_full = opp_epa_allowed_residual(pbp_window, play_type="pass", n_weeks=n_pbp_weeks)
+    # --- Opponent strength proxy ------------------------------------------
+    opp_proxy_full = opp_allowed_fppg(
+        ws_qb, position=Position.QB, ruleset=Ruleset.espn_ppr(), n_weeks=4
+    )
     opp_proxy = opp_proxy_full[
         (opp_proxy_full["season"] == season) & (opp_proxy_full["week"] == as_of_week)
-    ].rename(columns={"opp_epa_allowed_residual": "opp_pass_epa_allowed_l4"})
+    ].rename(columns={"opp_allowed_fppg": "opp_allowed_qb_fppg_l4"})
 
     # --- Assemble: depth chart drives the row set, join everything else ---
     out = qb_dc[["gsis_id", "season", "week", "team", "depth_rank"]].copy()
@@ -193,7 +187,7 @@ def build_qb_features(
     out = out.merge(snap_l4, on="gsis_id", how="left")
     out = out.merge(ngs_cols, on="gsis_id", how="left")
     out = out.merge(
-        opp_proxy[["season", "week", "opp_team", "opp_pass_epa_allowed_l4"]].rename(
+        opp_proxy[["season", "week", "opp_team", "opp_allowed_qb_fppg_l4"]].rename(
             columns={"opp_team": "opponent"}
         ),
         on=["season", "week", "opponent"],

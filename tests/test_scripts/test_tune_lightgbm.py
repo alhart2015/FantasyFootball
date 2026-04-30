@@ -50,7 +50,7 @@ _WR_FEAT_COLUMNS: tuple[str, ...] = (
     "spread",
     "is_home",
     "roof_dome",
-    "opp_pass_epa_allowed_l4",
+    "opp_allowed_wr_fppg_l4",
 )
 
 # Real WR target stats — needed in the joined frame because _run_one_study

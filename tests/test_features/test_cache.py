@@ -42,7 +42,7 @@ def _minimal_wr_features_row(week: int) -> dict[str, object]:
         "spread": -3.0,
         "is_home": True,
         "roof_dome": False,
-        "opp_pass_epa_allowed_l4": -0.05,
+        "opp_allowed_wr_fppg_l4": 35.0,
         "opponent": "GB",
     }
 

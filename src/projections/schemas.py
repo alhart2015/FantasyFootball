@@ -505,10 +505,8 @@ class WrFeaturesSchema(pa.DataFrameModel):
     is_home: Series[bool]
     roof_dome: Series[bool]
 
-    # Opponent strength: schedule-of-strength-adjusted pass-EPA residual
-    # (Plan 9). Negative = defense better than expected vs. offenses faced;
-    # positive = worse. No ge=0 bound — residuals can be negative.
-    opp_pass_epa_allowed_l4: Series[float] = pa.Field(nullable=True)
+    # Opponent strength (proxy: opp's allowed WR fantasy points/game over trailing 4)
+    opp_allowed_wr_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
 
     class Config:
         strict = "filter"
@@ -561,10 +559,8 @@ class QbFeaturesSchema(pa.DataFrameModel):
     is_home: Series[bool]
     roof_dome: Series[bool]
 
-    # Opponent strength: schedule-of-strength-adjusted pass-EPA residual
-    # (Plan 9). Negative = defense better than expected vs. offenses faced;
-    # positive = worse. No ge=0 bound — residuals can be negative.
-    opp_pass_epa_allowed_l4: Series[float] = pa.Field(nullable=True)
+    # Opponent strength proxy
+    opp_allowed_qb_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
 
     class Config:
         strict = "filter"
@@ -611,10 +607,8 @@ class RbFeaturesSchema(pa.DataFrameModel):
     is_home: Series[bool]
     roof_dome: Series[bool]
 
-    # Opponent strength: schedule-of-strength-adjusted run-EPA residual
-    # (Plan 9). Negative = defense better than expected vs. offenses faced;
-    # positive = worse. No ge=0 bound — residuals can be negative.
-    opp_run_epa_allowed_l4: Series[float] = pa.Field(nullable=True)
+    # Opponent strength proxy
+    opp_allowed_rb_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
 
     class Config:
         strict = "filter"
@@ -660,10 +654,8 @@ class TeFeaturesSchema(pa.DataFrameModel):
     is_home: Series[bool]
     roof_dome: Series[bool]
 
-    # Opponent strength: schedule-of-strength-adjusted pass-EPA-allowed
-    # residual over a trailing 4-game window (Plan 9). Residual is centered
-    # near zero and can be negative — no ge=0.
-    opp_pass_epa_allowed_l4: Series[float] = pa.Field(nullable=True)
+    # Opponent strength proxy
+    opp_allowed_te_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
 
     class Config:
         strict = "filter"

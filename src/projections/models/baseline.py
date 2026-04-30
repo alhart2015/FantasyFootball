@@ -284,7 +284,7 @@ _WR_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "spread",
     "is_home",
     "roof_dome",
-    "opp_pass_epa_allowed_l4",
+    "opp_allowed_wr_fppg_l4",
 )
 
 
@@ -328,7 +328,7 @@ _QB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "spread",
     "is_home",
     "roof_dome",
-    "opp_pass_epa_allowed_l4",
+    "opp_allowed_qb_fppg_l4",
 )
 
 
@@ -370,7 +370,7 @@ _RB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "spread",
     "is_home",
     "roof_dome",
-    "opp_run_epa_allowed_l4",
+    "opp_allowed_rb_fppg_l4",
 )
 
 
@@ -411,7 +411,7 @@ _TE_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "spread",
     "is_home",
     "roof_dome",
-    "opp_pass_epa_allowed_l4",
+    "opp_allowed_te_fppg_l4",
 )
 
 

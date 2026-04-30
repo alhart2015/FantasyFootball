@@ -402,6 +402,40 @@ This section will be filled in with concrete verdicts at gate-run time. The proc
 
 7. **Final snapshot update.** After all per-position revert decisions are applied (step 5/6), re-run `scripts/refresh_features.py` to regenerate the cache for the surviving feature change, then run `scripts/backtest.py --model baseline --update-snapshot` once. The committed `tests/backtest/model_metrics.json` reflects the final (possibly mixed-adoption) state, not the all-positions-changed gate-input run from step 2.
 
+### §6 verdicts (run dispatched 2026-04-29 21:04)
+
+Paired bootstrap, n_bootstrap=1000, seed=42. Baseline-run = pre-Plan-9 BaselineModel predictions; candidate-run = post-Plan-9 BaselineModel predictions (same model class, only `opp_allowed_<pos>_fppg_l4` → `opp_pass_epa_allowed_l4` / `opp_run_epa_allowed_l4` feature column swapped). Pairing key `(gsis_id, season, week, position)`.
+
+| Position | Verdict | RMSE delta (95% CI) | Spearman delta (95% CI) | n_paired |
+|---|---|---|---|---:|
+| QB | DO_NOT_ADOPT | +0.0005 ([-0.0125, +0.0144]) | -0.0001 ([-0.0029, +0.0024]) | 2676 |
+| RB | DO_NOT_ADOPT | +0.0001 ([-0.0110, +0.0111]) | +0.0006 ([-0.0014, +0.0027]) | 5273 |
+| TE | DO_NOT_ADOPT | -0.0037 ([-0.0121, +0.0050]) | +0.0000 ([-0.0028, +0.0027]) | 4257 |
+| WR | DO_NOT_ADOPT | +0.0083 ([+0.0043, +0.0124]) | -0.0013 ([-0.0021, -0.0004]) | 8460 |
+
+Per-year breakdowns: `reports/adoption_gate_plan9.csv`. Markdown report: `reports/adoption_gate_plan9.md`.
+
+**All four positions DO_NOT_ADOPT.** QB / RB / TE are null results — RMSE and Spearman CIs both bracket zero. WR is a small but statistically significant **regression**: RMSE +0.0083 fpts (CI strictly above 0); Spearman -0.0013 (CI strictly below 0). Triggers the §6 step 6 "zero-position-adopt branch": revert the per-position feature changes and the `_opponent.py` rewrite; ship the plumbing (PBP ingest, `PbpSchema`, network smoke, `pbp` arg threading, adoption-gate CLI dual-run extension) for future feature plans.
+
+### §6 routing changes shipped
+
+| Position | Pre-Plan-9 feature column | Post-Plan-9 feature column | Reason |
+|----------|---------------------------|----------------------------|--------|
+| QB | `opp_allowed_qb_fppg_l4` | `opp_allowed_qb_fppg_l4` (reverted) | DO_NOT_ADOPT — null RMSE delta. |
+| RB | `opp_allowed_rb_fppg_l4` | `opp_allowed_rb_fppg_l4` (reverted) | DO_NOT_ADOPT — null RMSE delta. |
+| TE | `opp_allowed_te_fppg_l4` | `opp_allowed_te_fppg_l4` (reverted) | DO_NOT_ADOPT — point estimate negative but CI brackets 0. |
+| WR | `opp_allowed_wr_fppg_l4` | `opp_allowed_wr_fppg_l4` (reverted) | DO_NOT_ADOPT — small but significant RMSE regression (+0.0083 fpts) AND Spearman regression (-0.0013, CI strictly below 0). |
+
+### §6 mechanism interpretation
+
+The post-Plan-3e brainstorm hypothesized 5–15% RMSE improvement from PBP-derived features. The empirical result is essentially flat at the BaselineModel level. Three plausible explanations:
+
+1. **Ridge model is feature-saturated.** Adding/swapping one column doesn't move the needle when the baseline already integrates `implied_team_total`, `spread`, `opp_allowed_<pos>_fppg_l4`, NGS metrics, and snap-rate history. The opponent-strength signal is partially captured by the existing features.
+2. **Schedule-of-strength residual is a mild upgrade in expectation.** The v1 `opp_allowed_fppg_l4` is a fpts-weighted summary that implicitly encodes some opponent-strength signal even without explicit schedule adjustment. The marginal gain from explicit residual computation is small.
+3. **WR-specific noise.** The new feature regresses WR by ~0.5% RMSE. Possible mechanisms: WR opponent-strength is more variable game-to-game than other positions; the schedule-of-strength baseline's offense-mean has higher variance for low-volume offenses; or v1 fppg's PPR weighting captures something the EPA residual doesn't (e.g., target volume opportunity).
+
+The plan's §1.3 gate correctly identifies this as not-an-improvement, regardless of which mechanism dominates. Per Plan 8's lesson, don't chase noise floor: revert and pivot to either a fundamentally different feature class (PBP-derived but volume-oriented: pace, PROE, air-yards distributions) or a different model class that benefits from the residual feature (LightGBM, ensemble) — both deferred to follow-up plans on top of Plan 9's plumbing.
+
 ---
 
 ## 7. Tests
