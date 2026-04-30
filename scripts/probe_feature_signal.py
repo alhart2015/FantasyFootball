@@ -41,13 +41,29 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
-from projections.backtest.feature_probe import PerStatVerdict, ProbeReport
+from projections.backtest.adoption_gate import PositionVerdict
+from projections.backtest.feature_probe import (
+    PerStatVerdict,
+    ProbeReport,
+    _build_factory_with_columns,
+    _loosened_features_schema,
+    phase1_should_fire_phase2,
+    probe_composite,
+    probe_per_stat,
+)
+from projections.models import POSITION_DISPATCH
+from projections.models.base import Model
+from projections.models.baseline import BaselineModel
+from projections.models.lightgbm import LightGBMModel
+from projections.schemas import Position, Ruleset, Stat
 from projections.store import read_partition
 
 _VALID_POSITIONS = ("QB", "RB", "WR", "TE")
@@ -506,9 +522,204 @@ def render_csv(report: ProbeReport) -> str:
     return buf.getvalue()
 
 
-def main(argv: list[str] | None = None) -> None:  # pragma: no cover — wired up in Task 3.1
-    """Entry point. Implemented in Task 3.1."""
-    raise NotImplementedError("main() implemented in Task 3.1")
+def features_baseline_columns_set(
+    joined: pd.DataFrame, production_columns: tuple[str, ...]
+) -> set[str]:
+    """Helper: which columns of the joined frame came from baseline (vs override)?
+
+    ``production_columns`` is the canonical list of feature columns from
+    ``POSITION_DISPATCH[position].factories[model].feature_columns``. Anything in
+    ``joined`` that is also in ``production_columns`` is baseline; anything else
+    (modulo identity columns) is override-supplied or schema-extra.
+    """
+    return set(joined.columns) & set(production_columns)
+
+
+def _add_composite_fpts_column(weekly_stats: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
+    """Vectorized composite fpts under ``ruleset`` — formula matches
+    ``src/projections/scoring/score.py:score()`` exactly.
+
+    Returns a copy of ``weekly_stats`` with an added ``fpts`` column. Missing
+    stat columns are treated as zero (e.g., a QB-only frame has no
+    ``receptions`` column — that contributes nothing to fpts).
+    """
+    out = weekly_stats.copy()
+
+    def _col(name: str) -> pd.Series:
+        return out[name] if name in out.columns else pd.Series(0.0, index=out.index)
+
+    fpts = (
+        _col("passing_yards") / ruleset.passing_yds_per_pt
+        + _col("passing_tds") * ruleset.passing_td_pts
+        + _col("interceptions") * ruleset.interception_pts
+        + _col("passing_2pt_conversions") * ruleset.two_pt_pts
+        + _col("rushing_yards") / ruleset.rushing_yds_per_pt
+        + _col("rushing_tds") * ruleset.rushing_td_pts
+        + _col("rushing_2pt_conversions") * ruleset.two_pt_pts
+        + _col("receptions") * ruleset.reception_pts
+        + _col("receiving_yards") / ruleset.receiving_yds_per_pt
+        + _col("receiving_tds") * ruleset.receiving_td_pts
+        + _col("receiving_2pt_conversions") * ruleset.two_pt_pts
+        + _col("fumbles_lost") * ruleset.fumble_lost_pts
+        + _col("return_tds") * ruleset.return_td_pts
+    )
+    out["fpts"] = fpts.astype(np.float64)
+    return out
+
+
+def _get_production_columns_and_stats(
+    model: Model,
+) -> tuple[tuple[str, ...], tuple[Stat, ...]]:
+    """Return ``(feature_columns, target_stats)`` from a production model
+    instance, branching on the concrete model class.
+
+    ``BaselineModel`` exposes both as direct dataclass attributes;
+    ``LightGBMModel`` (and subclasses, including ``LightGBMNbModel``) stores
+    ``feature_columns`` inside ``self._config`` and exposes ``target_stats``
+    as a property — we read both via ``self._config`` for symmetry.
+
+    Raises ``NotImplementedError`` for unknown model classes so the probe
+    fails loud rather than silently misreading an attribute that doesn't exist.
+    """
+    if isinstance(model, BaselineModel):
+        return model.feature_columns, model.target_stats
+    if isinstance(model, LightGBMModel):
+        return model._config.feature_columns, model._config.target_stats
+    raise NotImplementedError(
+        f"feature-column / target-stat extraction is not implemented for "
+        f"{type(model).__name__}; extend _get_production_columns_and_stats "
+        "to handle this model class."
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    seasons_range = range(args.seasons[0], args.seasons[1] + 1)
+    holdout_years = tuple(range(args.holdout_years[0], args.holdout_years[1] + 1))
+
+    # weekly_stats is shared across positions.
+    weekly_stats_frames = [
+        read_partition(Path("data/raw"), "weekly_stats", season=s) for s in seasons_range
+    ]
+    weekly_stats = pd.concat(weekly_stats_frames, ignore_index=True)
+
+    phase1_all: list[PerStatVerdict] = []
+    phase2_all: list[PositionVerdict] = []
+    candidate_columns_per_position: dict[Position, tuple[str, ...]] = {}
+    baseline_columns_per_position: dict[Position, tuple[str, ...]] = {}
+    features_per_position: dict[Position, pd.DataFrame] = {}
+    features_baseline_per_position: dict[Position, pd.DataFrame] = {}
+
+    for pos_value in args.position:
+        position = Position(pos_value)
+        production_factory = POSITION_DISPATCH[position].factories[args.model]
+        production_columns, target_stats = _get_production_columns_and_stats(production_factory())
+        baseline_cols = tuple(c for c in production_columns if c not in args.drop)
+
+        features_joined = load_features_with_overrides(
+            position=pos_value,
+            features_root=args.baseline_features,
+            override_paths=args.override,
+            drop_columns=args.drop,
+            seasons=seasons_range,
+            baseline_columns=production_columns,
+        )
+
+        # Determine added candidate columns (those that came from the overrides
+        # and are not present in the baseline column list).
+        if args.override:
+            override_added = sorted(
+                {
+                    c
+                    for c in features_joined.columns
+                    if c not in features_baseline_columns_set(features_joined, production_columns)
+                }
+                - {"gsis_id", "season", "week", "team", "opponent", "position"}
+                - set(args.drop)
+            )
+        else:
+            override_added = []
+        candidate_cols = baseline_cols + tuple(c for c in override_added if c not in baseline_cols)
+
+        candidate_columns_per_position[position] = candidate_cols
+        baseline_columns_per_position[position] = baseline_cols
+
+        # For probe_per_stat, baseline frame uses baseline_cols (which is post-drop);
+        # candidate frame uses candidate_cols.
+        features_per_position[position] = features_joined
+        # For Phase 2, both factories use the same joined frame; the column
+        # selection is via feature_columns on each model instance.
+        features_baseline_per_position[position] = features_joined
+
+        phase1_all.extend(
+            probe_per_stat(
+                position=position,
+                features_baseline_cols=baseline_cols,
+                features_candidate_cols=candidate_cols,
+                features=features_joined,
+                weekly_stats=weekly_stats,
+                target_stats=target_stats,
+                holdout_years=holdout_years,
+                n_bootstrap=args.n_bootstrap,
+                seed=args.seed,
+            )
+        )
+
+    fire_phase2 = phase1_should_fire_phase2(phase1_all) and args.composite
+
+    if fire_phase2:
+        # Derive composite fpts inline: production scoring/score.py is row-by-row;
+        # here we vectorize it (matching score()'s formula) and add a `fpts` column
+        # to weekly_stats. The default Ruleset() matches scoring/score.py defaults.
+        ruleset = Ruleset()
+        weekly_stats = _add_composite_fpts_column(weekly_stats, ruleset)
+        composite_truth_col = "fpts"
+
+        for pos_value in args.position:
+            position = Position(pos_value)
+            base_schema = POSITION_DISPATCH[position].feature_schema
+            loose_schema = _loosened_features_schema(base_schema)
+            factory_baseline = _build_factory_with_columns(
+                position=position,
+                model_class=args.model,
+                columns=baseline_columns_per_position[position],
+                feature_schema=loose_schema,
+            )
+            factory_candidate = _build_factory_with_columns(
+                position=position,
+                model_class=args.model,
+                columns=candidate_columns_per_position[position],
+                feature_schema=loose_schema,
+            )
+            verdict = probe_composite(
+                position=position,
+                factory_baseline=factory_baseline,
+                factory_candidate=factory_candidate,
+                features_baseline=features_baseline_per_position[position],
+                features_candidate=features_per_position[position],
+                weekly_stats=weekly_stats,
+                composite_truth_column=composite_truth_col,
+                holdout_years=holdout_years,
+                ruleset=ruleset,
+                n_bootstrap=args.n_bootstrap,
+                seed=args.seed,
+            )
+            phase2_all.append(verdict)
+
+    report = ProbeReport(
+        candidate_name=args.candidate_name,
+        model_class=args.model,
+        baseline_features_path=str(args.baseline_features),
+        override_paths=tuple(str(p) for p in args.override),
+        drop_columns=tuple(args.drop),
+        phase1=phase1_all,
+        phase2=phase2_all if fire_phase2 else None,
+    )
+
+    sys.stdout.write(render_markdown(report))
+    if args.csv_out is not None:
+        args.csv_out.parent.mkdir(parents=True, exist_ok=True)
+        args.csv_out.write_text(render_csv(report), encoding="utf-8")
 
 
 if __name__ == "__main__":  # pragma: no cover
