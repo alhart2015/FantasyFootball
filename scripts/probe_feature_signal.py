@@ -39,12 +39,15 @@ Spec: docs/superpowers/specs/2026-04-30-feature-signal-probe-design.md
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 
+from projections.backtest.feature_probe import PerStatVerdict, ProbeReport
 from projections.store import read_partition
 
 _VALID_POSITIONS = ("QB", "RB", "WR", "TE")
@@ -315,6 +318,192 @@ def load_features_with_overrides(
         threshold=coverage_threshold,
     )
     return joined
+
+
+def _format_paths_or_none(paths: tuple[str, ...]) -> str:
+    return ", ".join(paths) if paths else "(none)"
+
+
+def render_markdown(report: ProbeReport) -> str:
+    """Render the probe report as markdown to a string."""
+    lines: list[str] = []
+    lines.append(f"# Feature signal probe — {report.candidate_name}")
+    lines.append("")
+    lines.append(f"Baseline features: {report.baseline_features_path}")
+    lines.append(f"Overrides:        {_format_paths_or_none(report.override_paths)}")
+    lines.append(f"Drops:            {_format_paths_or_none(report.drop_columns)}")
+    lines.append(f"Model class:      {report.model_class}")
+    lines.append("")
+    lines.append("## Phase 1 — per-stat screening")
+    lines.append("")
+
+    by_pos: dict[str, list[PerStatVerdict]] = {}
+    for v in report.phase1:
+        by_pos.setdefault(v.position.value, []).append(v)
+
+    for pos in ("QB", "RB", "WR", "TE"):
+        if pos not in by_pos:
+            continue
+        lines.append(f"### {pos}")
+        lines.append("")
+        lines.append(
+            "| stat | year | n_paired | rmse_delta | ci_lo | ci_hi | r_squared_delta | verdict |"
+        )
+        lines.append("|---|---|---:|---:|---:|---:|---:|---|")
+        for v in by_pos[pos]:
+            lines.append(
+                f"| {v.stat.value} | {v.year_or_pooled} | {v.n_paired} | "
+                f"{v.rmse_delta.point:+.4f} | {v.rmse_delta.lo_95:+.4f} | "
+                f"{v.rmse_delta.hi_95:+.4f} | {v.r_squared_delta:+.4f} | {v.verdict} |"
+            )
+        lines.append("")
+
+    n_signal = sum(1 for v in report.phase1 if v.verdict == "SIGNAL")
+    n_null = sum(1 for v in report.phase1 if v.verdict == "NULL")
+    n_regression = sum(1 for v in report.phase1 if v.verdict == "REGRESSION")
+    n_total = len(report.phase1)
+    lines.append("## Phase 1 verdict")
+    lines.append("")
+    lines.append(
+        f"{n_signal}/{n_total} cells SIGNAL, {n_null}/{n_total} NULL, "
+        f"{n_regression}/{n_total} REGRESSION."
+    )
+
+    if report.phase2 is None:
+        if n_signal == 0:
+            lines.append(
+                "No SIGNAL cells — Phase 2 skipped. Probe predicts the adoption gate "
+                "would return DO_NOT_ADOPT."
+            )
+        else:
+            lines.append("Phase 2 disabled by --no-composite — composite verdict not computed.")
+        lines.append("")
+    else:
+        lines.append("Phase 2 fired.")
+        lines.append("")
+        lines.append("## Phase 2 — composite ΔRMSE")
+        lines.append("")
+        lines.append(
+            "| Position | Verdict | RMSE delta (95% CI) | Spearman delta (95% CI) | n_paired |"
+        )
+        lines.append("|---|---|---|---|---:|")
+        for pv in report.phase2:
+            lines.append(
+                f"| {pv.position.value} | {pv.verdict} | "
+                f"{pv.rmse_delta.point:+.4f} ([{pv.rmse_delta.lo_95:+.4f}, "
+                f"{pv.rmse_delta.hi_95:+.4f}]) | "
+                f"{pv.spearman_delta.point:+.4f} ([{pv.spearman_delta.lo_95:+.4f}, "
+                f"{pv.spearman_delta.hi_95:+.4f}]) | {pv.rmse_delta.n_paired_rows} |"
+            )
+        lines.append("")
+
+    n_adopt = sum(1 for pv in (report.phase2 or []) if pv.verdict == "ADOPT")
+    n_positions_run = len(report.phase2) if report.phase2 else 0
+    lines.append("## Probe verdict")
+    lines.append("")
+    lines.append(f"Phase 1: {n_signal}/{n_total} cells SIGNAL.")
+    if report.phase2 is None:
+        lines.append("Phase 2: not run.")
+    else:
+        lines.append(f"Phase 2: {n_adopt}/{n_positions_run} positions ADOPT.")
+    lines.append("")
+    lines.append(
+        "**This probe is a screen, not the gate.** The adoption gate is the final "
+        "word on whether a feature change ships; SIGNAL is necessary but not "
+        "sufficient. Run the full backtest + adoption gate before any production "
+        "routing change."
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_csv(report: ProbeReport) -> str:
+    """Render the probe report as a long-format CSV string.
+
+    Columns: phase, position, stat_or_composite, year_or_pooled,
+    metric_name, point, lo_95, hi_95, n_paired, verdict, reason.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "phase",
+            "position",
+            "stat_or_composite",
+            "year_or_pooled",
+            "metric_name",
+            "point",
+            "lo_95",
+            "hi_95",
+            "n_paired",
+            "verdict",
+            "reason",
+        ]
+    )
+    for v in report.phase1:
+        writer.writerow(
+            [
+                "phase1",
+                v.position.value,
+                v.stat.value,
+                v.year_or_pooled,
+                "rmse_delta",
+                v.rmse_delta.point,
+                v.rmse_delta.lo_95,
+                v.rmse_delta.hi_95,
+                v.n_paired,
+                v.verdict,
+                "",
+            ]
+        )
+        writer.writerow(
+            [
+                "phase1",
+                v.position.value,
+                v.stat.value,
+                v.year_or_pooled,
+                "r_squared_delta",
+                v.r_squared_delta,
+                "",
+                "",
+                v.n_paired,
+                v.verdict,
+                "",
+            ]
+        )
+    if report.phase2 is not None:
+        for pv in report.phase2:
+            writer.writerow(
+                [
+                    "phase2",
+                    pv.position.value,
+                    "composite",
+                    "pooled",
+                    "rmse_delta",
+                    pv.rmse_delta.point,
+                    pv.rmse_delta.lo_95,
+                    pv.rmse_delta.hi_95,
+                    pv.rmse_delta.n_paired_rows,
+                    pv.verdict,
+                    pv.reason,
+                ]
+            )
+            writer.writerow(
+                [
+                    "phase2",
+                    pv.position.value,
+                    "composite",
+                    "pooled",
+                    "spearman_delta",
+                    pv.spearman_delta.point,
+                    pv.spearman_delta.lo_95,
+                    pv.spearman_delta.hi_95,
+                    pv.spearman_delta.n_paired_rows,
+                    pv.verdict,
+                    pv.reason,
+                ]
+            )
+    return buf.getvalue()
 
 
 def main(argv: list[str] | None = None) -> None:  # pragma: no cover — wired up in Task 3.1

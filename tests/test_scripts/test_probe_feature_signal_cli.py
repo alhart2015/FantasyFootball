@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import numpy as np
@@ -13,10 +14,14 @@ from scripts.probe_feature_signal import (
     OverrideCoverageError,
     load_features_with_overrides,
     parse_args,
+    render_csv,
+    render_markdown,
     validate_override_coverage,
 )
 
-from projections.schemas import _PYARROW_STR
+from projections.backtest.adoption_gate import BootstrapDelta, PositionVerdict
+from projections.backtest.feature_probe import PerStatVerdict, ProbeReport
+from projections.schemas import _PYARROW_STR, Position, Stat
 
 
 def test_parse_args_minimum_required_args() -> None:
@@ -314,3 +319,117 @@ def test_load_features_with_overrides_collision_allowed_when_dropped(
     )
     # The override value survives.
     assert (df["base_x1"] == 99.0).all()
+
+
+def _build_sample_report(*, with_phase2: bool) -> ProbeReport:
+    psv_signal = PerStatVerdict(
+        position=Position.QB,
+        stat=Stat.PASSING_YARDS,
+        year_or_pooled=2024,
+        n_paired=670,
+        rmse_delta=BootstrapDelta(
+            point=-0.42, lo_95=-0.71, hi_95=-0.13, n_paired_rows=670, n_bootstrap=1000
+        ),
+        r_squared_delta=0.0023,
+        verdict="SIGNAL",
+    )
+    psv_null = PerStatVerdict(
+        position=Position.QB,
+        stat=Stat.PASSING_YARDS,
+        year_or_pooled="pooled",
+        n_paired=2676,
+        rmse_delta=BootstrapDelta(
+            point=0.005, lo_95=-0.10, hi_95=0.11, n_paired_rows=2676, n_bootstrap=1000
+        ),
+        r_squared_delta=0.0001,
+        verdict="NULL",
+    )
+    pv = PositionVerdict(
+        position=Position.QB,
+        incumbent_class="_baseline_features",
+        candidate_class="_candidate_features",
+        rmse_delta=BootstrapDelta(
+            point=-0.04, lo_95=-0.18, hi_95=0.10, n_paired_rows=2676, n_bootstrap=1000
+        ),
+        spearman_delta=BootstrapDelta(
+            point=0.001, lo_95=-0.003, hi_95=0.005, n_paired_rows=2676, n_bootstrap=1000
+        ),
+        verdict="DO_NOT_ADOPT",
+        reason="RMSE inconclusive",
+        per_year_breakdown=pd.DataFrame(
+            {
+                "year": [2024],
+                "n_paired": [670],
+                "rmse_delta_point": [-0.04],
+                "rmse_delta_lo": [-0.18],
+                "rmse_delta_hi": [0.10],
+                "spearman_delta_point": [0.001],
+                "spearman_delta_lo": [-0.003],
+                "spearman_delta_hi": [0.005],
+            }
+        ),
+    )
+    return ProbeReport(
+        candidate_name="example_candidate",
+        model_class="baseline",
+        baseline_features_path="data/features",
+        override_paths=("data/features_probe/x.parquet",),
+        drop_columns=("opp_allowed_qb_fppg_l4",),
+        phase1=[psv_signal, psv_null],
+        phase2=[pv] if with_phase2 else None,
+    )
+
+
+def test_render_markdown_phase1_only() -> None:
+    md = render_markdown(_build_sample_report(with_phase2=False))
+    assert "# Feature signal probe — example_candidate" in md
+    assert "Baseline features: data/features" in md
+    assert "data/features_probe/x.parquet" in md
+    assert "opp_allowed_qb_fppg_l4" in md
+    assert "Model class:      baseline" in md
+    assert "## Phase 1 — per-stat screening" in md
+    assert "### QB" in md
+    assert "passing_yards" in md
+    assert "SIGNAL" in md
+    assert "NULL" in md
+    assert "## Phase 1 verdict" in md
+    # Phase 2 not run, so no Phase 2 section.
+    assert "## Phase 2" not in md
+    assert "## Probe verdict" in md
+    assert "Phase 2 skipped" in md or "Phase 2: not run" in md or "no Phase 2" in md.lower()
+
+
+def test_render_markdown_phase1_and_phase2() -> None:
+    md = render_markdown(_build_sample_report(with_phase2=True))
+    assert "## Phase 2 — composite ΔRMSE" in md
+    assert "DO_NOT_ADOPT" in md
+    assert "## Probe verdict" in md
+
+
+def test_render_csv_long_format() -> None:
+    csv_text = render_csv(_build_sample_report(with_phase2=True))
+    df = pd.read_csv(io.StringIO(csv_text))
+    assert set(df.columns) >= {
+        "phase",
+        "position",
+        "stat_or_composite",
+        "year_or_pooled",
+        "metric_name",
+        "point",
+        "lo_95",
+        "hi_95",
+        "n_paired",
+        "verdict",
+    }
+    # Phase 1 rows for SIGNAL + NULL + Phase 2 row(s).
+    assert "phase1" in df["phase"].unique()
+    assert "phase2" in df["phase"].unique()
+    qb_rows = df[df["position"] == "QB"]
+    assert "passing_yards" in qb_rows["stat_or_composite"].unique()
+    assert "composite" in qb_rows["stat_or_composite"].unique()
+
+
+def test_render_csv_phase1_only_omits_phase2_rows() -> None:
+    csv_text = render_csv(_build_sample_report(with_phase2=False))
+    df = pd.read_csv(io.StringIO(csv_text))
+    assert "phase2" not in df["phase"].unique()
