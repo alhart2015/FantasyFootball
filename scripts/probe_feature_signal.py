@@ -39,11 +39,24 @@ Spec: docs/superpowers/specs/2026-04-30-feature-signal-probe-design.md
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
+
+from projections.store import read_partition
+
 _VALID_POSITIONS = ("QB", "RB", "WR", "TE")
 _VALID_MODELS = ("baseline", "lightgbm-nb")
+
+
+class OverrideCoverageError(ValueError):
+    """Raised when an override parquet's row coverage falls below the threshold."""
+
+
+class OverrideCollisionError(ValueError):
+    """Raised when an override column shadows a baseline column without --drop."""
 
 
 @dataclass
@@ -181,6 +194,127 @@ def parse_args(argv: list[str] | None = None) -> ProbeArgs:
         csv_out=ns.csv_out,
         composite=ns.composite,
     )
+
+
+def validate_override_coverage(
+    *,
+    baseline: pd.DataFrame,
+    joined: pd.DataFrame,
+    candidate_columns: tuple[str, ...],
+    threshold: float,
+) -> None:
+    """Raise OverrideCoverageError if the fraction of joined rows where ANY
+    candidate column is non-null falls below ``threshold``.
+
+    Coverage is computed against the baseline row count, not the joined count
+    (so a missed join is a failure, not a silent drop).
+    """
+    n_baseline = len(baseline)
+    if n_baseline == 0:
+        raise OverrideCoverageError("baseline frame is empty — nothing to probe")
+    for col in candidate_columns:
+        if col not in joined.columns:
+            raise OverrideCollisionError(
+                f"override candidate column {col!r} not present after join — "
+                f"likely a bad join key or empty override"
+            )
+        n_covered = int(joined[col].notna().sum())
+        coverage = n_covered / n_baseline
+        if coverage < threshold:
+            raise OverrideCoverageError(
+                f"candidate column {col!r}: only {coverage:.0%} of {n_baseline} "
+                f"baseline rows have a non-null override value (threshold "
+                f"{threshold:.0%}). Probe results would be biased by silent NaN "
+                f"imputation; fix the override generator and retry."
+            )
+
+
+def load_features_with_overrides(
+    *,
+    position: str,
+    features_root: Path,
+    override_paths: Sequence[Path],
+    drop_columns: Sequence[str],
+    seasons: Iterable[int],
+    baseline_columns: tuple[str, ...],
+    coverage_threshold: float = 0.95,
+) -> pd.DataFrame:
+    """Load cached features for ``(position, seasons)``, left-join overrides
+    on ``(gsis_id, season, week)``, validate coverage, and return the joined
+    frame.
+
+    The frame is NOT pandera-validated against the production FeaturesSchema
+    here — the probe uses a loosened schema downstream so undeclared candidate
+    columns survive. Schema validation happens inside ``probe_per_stat`` /
+    ``probe_composite`` if at all.
+    """
+    table = position.lower()
+    season_frames: list[pd.DataFrame] = []
+    for season in seasons:
+        season_frames.append(read_partition(features_root, table, season=season))
+    if not season_frames:
+        raise FileNotFoundError(
+            f"No baseline features under {features_root}/{table}/ for the requested seasons."
+        )
+    baseline = pd.concat(season_frames, ignore_index=True)
+
+    # Detect collisions before joining: every override column that is NOT
+    # gsis_id/season/week must be either (a) absent from baseline, or
+    # (b) listed in drop_columns.
+    drop_set = set(drop_columns)
+    candidate_columns: list[str] = []
+    overrides_combined: pd.DataFrame | None = None
+    for path in override_paths:
+        ov = pd.read_parquet(path)
+        for required in ("gsis_id", "season", "week"):
+            if required not in ov.columns:
+                raise ValueError(f"override {path}: missing required column {required!r}")
+        ov_candidate_cols = [c for c in ov.columns if c not in ("gsis_id", "season", "week")]
+        if not ov_candidate_cols:
+            raise ValueError(f"override {path}: no candidate columns (only key columns present)")
+        for col in ov_candidate_cols:
+            if col in baseline.columns and col not in drop_set:
+                raise OverrideCollisionError(
+                    f"override column {col!r} collides with an existing baseline "
+                    f"feature column. Either rename the override column, or "
+                    f"add {col!r} to --drop to make the swap explicit."
+                )
+            if col in baseline_columns and col not in drop_set:
+                # Same condition; double-check against the explicit baseline_columns
+                # list passed by the caller (covers test cases where baseline.columns
+                # contains identity cols beyond features).
+                raise OverrideCollisionError(
+                    f"override column {col!r} collides with baseline feature column. "
+                    f"Add {col!r} to --drop to make the swap explicit."
+                )
+            candidate_columns.append(col)
+        if overrides_combined is None:
+            overrides_combined = ov
+        else:
+            overrides_combined = overrides_combined.merge(
+                ov, on=["gsis_id", "season", "week"], how="outer"
+            )
+
+    # Drop dropped columns from the baseline before joining (a column listed
+    # in drop is removed from baseline regardless of whether an override
+    # replaces it).
+    baseline_post_drop = baseline.drop(columns=[c for c in drop_columns if c in baseline.columns])
+
+    if overrides_combined is None:
+        # Drop-only mode: no overrides, just return baseline minus drops.
+        return baseline_post_drop
+
+    joined = baseline_post_drop.merge(
+        overrides_combined, on=["gsis_id", "season", "week"], how="left"
+    )
+
+    validate_override_coverage(
+        baseline=baseline,
+        joined=joined,
+        candidate_columns=tuple(candidate_columns),
+        threshold=coverage_threshold,
+    )
+    return joined
 
 
 def main(argv: list[str] | None = None) -> None:  # pragma: no cover — wired up in Task 3.1
