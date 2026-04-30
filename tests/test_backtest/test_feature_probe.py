@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import cast
 
 import numpy as np
@@ -339,6 +340,9 @@ def test_build_factory_with_columns_overrides_feature_columns_and_schema() -> No
         feature_schema=loose,
     )
     model = factory()
+    # The factory's return type is the Model Protocol; narrow to the concrete
+    # BaselineModel before reading dataclass fields the Protocol doesn't expose.
+    assert isinstance(model, BaselineModel)
     assert model.feature_columns == candidate_cols
     assert model.feature_schema is loose
     assert model.position is Position.QB
@@ -366,6 +370,79 @@ def test_build_factory_with_columns_returns_fresh_instances() -> None:
     a = factory()
     b = factory()
     assert a is not b
+    # Narrow to the concrete BaselineModel for attribute access — the factory
+    # return type is the Model Protocol.
+    assert isinstance(a, BaselineModel)
+    assert isinstance(b, BaselineModel)
     # Mutating one's feature_columns should not affect the other.
     a.feature_columns = ("mutated",)
     assert b.feature_columns == ("base_x1",)
+
+    # Symmetric: feature_schema mutation on `a` must not bleed into `b`.
+    class _OtherSchema:
+        pass
+
+    a.feature_schema = _OtherSchema  # type: ignore[assignment]
+    assert b.feature_schema is loose
+
+
+def test_build_factory_with_columns_lightgbm_nb_overrides_config() -> None:
+    """For LightGBMNbModel (and its parents), the override must update the
+    inner _LightGBMConfig — NOT just set stray attributes on the instance,
+    which the model methods would never read."""
+    from projections.models.lightgbm_nb import LightGBMNbModel
+
+    base_schema = POSITION_DISPATCH[Position.QB].feature_schema
+    loose = _loosened_features_schema(base_schema)
+    candidate_cols = ("base_x1", "base_x2", "extra_signal_col")
+    factory = _build_factory_with_columns(
+        position=Position.QB,
+        model_class="lightgbm-nb",
+        columns=candidate_cols,
+        feature_schema=loose,
+    )
+    model = factory()
+    assert isinstance(model, LightGBMNbModel)
+    # The override must reach the inner config — that's where the model reads from.
+    assert model._config.feature_columns == candidate_cols
+    assert model._config.feature_schema is loose
+    # Production factory must be unmodified.
+    fresh = POSITION_DISPATCH[Position.QB].factories["lightgbm-nb"]()
+    assert isinstance(fresh, LightGBMNbModel)
+    assert fresh._config.feature_columns != candidate_cols
+    assert fresh._config.feature_schema is base_schema
+
+
+def test_build_factory_with_columns_unknown_model_class_raises() -> None:
+    """Hypothetical future model class that the helper doesn't know how to
+    override must raise NotImplementedError, not silently produce a model
+    with the production feature set."""
+    # Construct a fake factory directly and run the same closure path.
+    # We can't easily inject an unknown model_class string into POSITION_DISPATCH,
+    # so we exercise this by invoking the helper with a custom monkey-patched
+    # factory that returns an unfitted instance of an unrelated class.
+
+    class _UnknownModel:
+        position = Position.QB
+
+    base_schema = POSITION_DISPATCH[Position.QB].feature_schema
+    loose = _loosened_features_schema(base_schema)
+    # POSITION_DISPATCH[Position.QB].factories is typed as Mapping but is
+    # backed by a mutable dict in the production registry. Cast to the
+    # concrete type so we can add and remove a fake entry for this test only.
+    qb_factories = cast(
+        "dict[str, Callable[[], object]]",
+        POSITION_DISPATCH[Position.QB].factories,
+    )
+    qb_factories["_test_unknown"] = _UnknownModel
+    try:
+        factory = _build_factory_with_columns(
+            position=Position.QB,
+            model_class="_test_unknown",
+            columns=("x",),
+            feature_schema=loose,
+        )
+        with pytest.raises(NotImplementedError, match="_UnknownModel"):
+            factory()
+    finally:
+        del qb_factories["_test_unknown"]

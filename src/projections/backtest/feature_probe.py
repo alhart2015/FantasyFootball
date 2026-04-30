@@ -19,7 +19,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, cast
+from dataclasses import replace as dataclass_replace
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -32,7 +33,9 @@ from projections.backtest.adoption_gate import (
     paired_bootstrap_rmse_delta,
 )
 from projections.models import POSITION_DISPATCH
+from projections.models.base import Model
 from projections.models.baseline import BaselineModel
+from projections.models.lightgbm import LightGBMModel
 from projections.schemas import Position, Stat
 
 # Same alpha grid as BaselineModel.fit (src/projections/models/baseline.py:528).
@@ -298,28 +301,47 @@ def _build_factory_with_columns(
     model_class: str,
     columns: tuple[str, ...],
     feature_schema: type[pa.DataFrameModel],
-) -> Callable[[], BaselineModel]:
+) -> Callable[[], Model]:
     """Return a zero-arg factory that produces an unfitted production model
     with overridden ``feature_columns`` and ``feature_schema``.
 
     The base factory is ``POSITION_DISPATCH[position].factories[model_class]``.
     Each call to the returned factory builds a fresh instance — no shared
     mutable state across calls or with the production factory.
+
+    Branches on the concrete model class because each one stores feature
+    metadata differently:
+
+    - ``BaselineModel``: ``feature_columns`` and ``feature_schema`` are direct
+      mutable attributes on the (non-frozen) dataclass; assign them directly.
+    - ``LightGBMModel`` (and its subclasses ``LightGBMTunedModel``,
+      ``LightGBMNbModel``): both fields live inside a frozen
+      ``_LightGBMConfig`` at ``self._config``. Use ``dataclasses.replace`` to
+      produce a new config with the overrides and reassign ``self._config``.
+
+    Other model classes raise ``NotImplementedError``. Keeping this loud
+    rather than silently no-op-ing prevents the Phase 2 probe from returning
+    misleading near-zero ΔRMSE on a model whose feature set didn't actually
+    change.
     """
     base_factory = POSITION_DISPATCH[position].factories[model_class]
 
-    def _factory() -> BaselineModel:
-        # Cast: factories[model_class] is typed as Callable[[], Model] (the
-        # Protocol), but every concrete model class in this codebase carries
-        # `feature_columns` and `feature_schema` as mutable @dataclass fields.
-        # We pin to BaselineModel for the type signature; LightGBMModel et al.
-        # share the same attribute shape so the override works identically.
-        model = cast(BaselineModel, base_factory())
-        # Concrete models are non-frozen dataclasses; the override pattern
-        # deliberately exercises that mutability so the probe can swap in
-        # candidate feature_columns / a loosened schema without subclassing.
-        model.feature_columns = columns
-        model.feature_schema = feature_schema
-        return model
+    def _factory() -> Model:
+        model = base_factory()
+        if isinstance(model, BaselineModel):
+            model.feature_columns = columns
+            model.feature_schema = feature_schema
+            return model
+        if isinstance(model, LightGBMModel):
+            model._config = dataclass_replace(
+                model._config,
+                feature_columns=columns,
+                feature_schema=feature_schema,
+            )
+            return model
+        raise NotImplementedError(
+            f"feature-column override is not implemented for {type(model).__name__}; "
+            "extend _build_factory_with_columns to handle this model class."
+        )
 
     return _factory
