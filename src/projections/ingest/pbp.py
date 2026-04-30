@@ -50,6 +50,28 @@ _KEEP: tuple[str, ...] = (
 
 _GSIS_RE = re.compile(rf"^{GSIS_ID_PATTERN}$")
 
+# float64 coercion list: nfl_data_py "Downcasts floats" (returns float32);
+# PbpSchema's Series[float] fields require float64. Real-data drift caught
+# in Plan 9 Phase 6 (synthetic fixture used Python floats which are float64).
+_FLOAT64_COLS: tuple[str, ...] = (
+    "qb_dropback",
+    "qb_scramble",
+    "sack",
+    "rush_attempt",
+    "pass_attempt",
+    "epa",
+    "wpa",
+    "success",
+    "air_yards",
+    "yards_after_catch",
+    "complete_pass",
+    "xpass",
+    "pass_oe",
+    "down",
+    "yardline_100",
+    "half_seconds_remaining",
+)
+
 
 def _fetch_raw_pbp(seasons: list[int]) -> pd.DataFrame:
     """Thin wrapper around nfl_data_py; tests monkey-patch this."""
@@ -74,14 +96,24 @@ def _coerce_player_id(v: object) -> str | None:
 def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
     df = raw.copy()
 
-    # Coerce season/week/play_id to int64.
+    # Coerce season/week/play_id to int64. nfl_data_py returns play_id as
+    # float32 (it "Downcasts floats" for memory) and week as int32; both
+    # need to be int64 for PbpSchema's Series[int] non-nullable fields.
     for int_col in ("season", "week", "play_id"):
         if int_col in df.columns:
             df[int_col] = df[int_col].astype("int64")
 
     # ydstogo: nullable Int64 (PbpSchema field is Series[int] with nullable=True).
+    # nfl_data_py returns this as float32 with NaN for special-teams plays.
     if "ydstogo" in df.columns:
         df["ydstogo"] = df["ydstogo"].astype("Int64")
+
+    # Numeric float columns: nfl_data_py downcasts to float32; PbpSchema
+    # expects float64. Coerce explicitly. (Covers every `Series[float]`
+    # field in PbpSchema.)
+    for float_col in _FLOAT64_COLS:
+        if float_col in df.columns:
+            df[float_col] = df[float_col].astype("float64")
 
     # Team codes — nullable string (kickoffs/punts have NaN posteam/defteam).
     for team_col in ("posteam", "defteam"):
