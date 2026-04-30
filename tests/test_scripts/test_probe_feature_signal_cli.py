@@ -169,6 +169,31 @@ def test_parse_args_rejects_unknown_model() -> None:
         )
 
 
+def test_parse_args_coverage_threshold_default_and_override() -> None:
+    """The --coverage-threshold flag defaults to 0.95 and accepts a custom value."""
+    args = parse_args(
+        [
+            "--candidate-name",
+            "x",
+            "--drop",
+            "y",
+        ]
+    )
+    assert args.coverage_threshold == 0.95
+
+    args = parse_args(
+        [
+            "--candidate-name",
+            "x",
+            "--drop",
+            "y",
+            "--coverage-threshold",
+            "0.80",
+        ]
+    )
+    assert args.coverage_threshold == 0.80
+
+
 @pytest.fixture
 def synthetic_baseline_features(tmp_path: Path) -> Path:
     """Tiny baseline features cache: 1 position (QB) x 100 rows."""

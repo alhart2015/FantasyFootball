@@ -95,6 +95,7 @@ class ProbeArgs:
     seed: int
     csv_out: Path | None
     composite: bool
+    coverage_threshold: float
 
 
 def _parse_year_range(raw: str) -> tuple[int, int]:
@@ -169,6 +170,14 @@ def parse_args(argv: list[str] | None = None) -> ProbeArgs:
     p.add_argument("--n-bootstrap", type=int, default=1000)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--csv-out", type=Path, default=None)
+    p.add_argument(
+        "--coverage-threshold",
+        type=float,
+        default=0.95,
+        help="Minimum non-null coverage of override candidate columns vs baseline rows. "
+        "Default 0.95. Lower (e.g., 0.80) for overrides with structural NaN patterns "
+        "like bye-week trailing-window features.",
+    )
     composite_grp = p.add_mutually_exclusive_group()
     composite_grp.add_argument(
         "--composite",
@@ -212,6 +221,7 @@ def parse_args(argv: list[str] | None = None) -> ProbeArgs:
         seed=ns.seed,
         csv_out=ns.csv_out,
         composite=ns.composite,
+        coverage_threshold=ns.coverage_threshold,
     )
 
 
@@ -623,6 +633,7 @@ def main(argv: list[str] | None = None) -> None:
             drop_columns=args.drop,
             seasons=seasons_range,
             baseline_columns=production_columns,
+            coverage_threshold=args.coverage_threshold,
         )
 
         # Determine added candidate columns (those that came from the overrides
