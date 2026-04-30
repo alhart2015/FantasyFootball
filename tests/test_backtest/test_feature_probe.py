@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
@@ -19,6 +20,7 @@ from projections.backtest.feature_probe import (
     _loosened_features_schema,
     _verdict_for_per_stat,
     phase1_should_fire_phase2,
+    probe_composite,
     probe_per_stat,
 )
 from projections.models import POSITION_DISPATCH, BaselineModel
@@ -446,3 +448,129 @@ def test_build_factory_with_columns_unknown_model_class_raises() -> None:
             factory()
     finally:
         del qb_factories["_test_unknown"]
+
+
+@dataclass
+class _MockModel:
+    """Test double — fit() records the seasons it saw; predict_distribution()
+    returns a deterministic per-row predicted mean derived from the input
+    features."""
+
+    feature_columns: tuple[str, ...]
+    train_seasons_seen: tuple[int, ...] = ()
+    multiplier: float = 1.0  # baseline=1.0; candidate=0.5 -> smaller residuals -> SIGNAL
+
+    def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:
+        self.train_seasons_seen = tuple(sorted(features["season"].unique().tolist()))
+
+    def predict_distribution(self, features: pd.DataFrame, ruleset: object) -> pd.DataFrame:
+        # Predict mean = multiplier * sum(feature_columns); other ProjectionWeeklySchema
+        # fields are zero/dummy. Probe code reads only `gsis_id`, `season`, `week`, `mean`.
+        out = features[["gsis_id", "season", "week"]].copy()
+        out["mean"] = self.multiplier * features[list(self.feature_columns)].sum(axis=1).to_numpy()
+        out["p10"] = out["mean"] - 1.0
+        out["p50"] = out["mean"]
+        out["p90"] = out["mean"] + 1.0
+        out["position"] = "QB"
+        out["team"] = "KC"
+        out["opponent"] = "BUF"
+        return out
+
+
+def test_probe_composite_walk_forward_order(
+    probe_synthetic_dataset: tuple[pd.DataFrame, pd.DataFrame],
+) -> None:
+    """Each year's training set is exactly [min_season, year-1] and prediction
+    is on the year itself."""
+    features, weekly_stats = probe_synthetic_dataset
+    # Build fpts truth: composite is just the target stat for the mock test.
+    weekly_stats = weekly_stats.copy()
+    weekly_stats["fpts"] = weekly_stats["passing_yards"]
+
+    seen_per_year_baseline: list[tuple[int, ...]] = []
+    seen_per_year_candidate: list[tuple[int, ...]] = []
+
+    def factory_baseline() -> _MockModel:
+        m = _MockModel(feature_columns=("base_x1", "base_x2", "base_x3"))
+        # Wrap fit to capture the seen seasons after each call.
+        original_fit = m.fit
+
+        def wrapped(f: pd.DataFrame, w: pd.DataFrame) -> None:
+            original_fit(f, w)
+            seen_per_year_baseline.append(m.train_seasons_seen)
+
+        # Deliberate test-double pattern: replace the bound `fit` method on
+        # this dataclass instance with a wrapper that records call args.
+        # mypy's [method-assign] doesn't cover dataclass instance attribute
+        # rebinding here — narrow to the actual [assignment] code.
+        m.fit = wrapped  # type: ignore[assignment]
+        return m
+
+    def factory_candidate() -> _MockModel:
+        m = _MockModel(
+            feature_columns=("base_x1", "base_x2", "base_x3", "cand_signal"),
+            multiplier=0.5,  # smaller residuals than baseline since cand_signal is in y
+        )
+        original_fit = m.fit
+
+        def wrapped(f: pd.DataFrame, w: pd.DataFrame) -> None:
+            original_fit(f, w)
+            seen_per_year_candidate.append(m.train_seasons_seen)
+
+        # Same test-double pattern as factory_baseline above.
+        m.fit = wrapped  # type: ignore[assignment]
+        return m
+
+    verdict = probe_composite(
+        position=Position.QB,
+        factory_baseline=factory_baseline,
+        factory_candidate=factory_candidate,
+        features_baseline=features,
+        features_candidate=features,
+        weekly_stats=weekly_stats,
+        composite_truth_column="fpts",
+        holdout_years=(2021, 2022),
+        ruleset=object(),  # ignored by mock
+    )
+    # Walk-forward: 2021 trains on 2018-2020; 2022 trains on 2018-2021.
+    assert seen_per_year_baseline == [(2018, 2019, 2020), (2018, 2019, 2020, 2021)]
+    assert seen_per_year_candidate == [(2018, 2019, 2020), (2018, 2019, 2020, 2021)]
+    # Sanity check that the verdict object is well-formed (the next test
+    # asserts the full structure).
+    assert verdict.position is Position.QB
+
+
+def test_probe_composite_returns_position_verdict_with_per_year_breakdown(
+    probe_synthetic_dataset: tuple[pd.DataFrame, pd.DataFrame],
+) -> None:
+    features, weekly_stats = probe_synthetic_dataset
+    weekly_stats = weekly_stats.copy()
+    weekly_stats["fpts"] = weekly_stats["passing_yards"]
+
+    def factory_baseline() -> _MockModel:
+        return _MockModel(feature_columns=("base_x1", "base_x2", "base_x3"))
+
+    def factory_candidate() -> _MockModel:
+        return _MockModel(
+            feature_columns=("base_x1", "base_x2", "base_x3", "cand_signal"),
+            multiplier=0.5,
+        )
+
+    verdict = probe_composite(
+        position=Position.QB,
+        factory_baseline=factory_baseline,
+        factory_candidate=factory_candidate,
+        features_baseline=features,
+        features_candidate=features,
+        weekly_stats=weekly_stats,
+        composite_truth_column="fpts",
+        holdout_years=(2021, 2022),
+        ruleset=object(),
+    )
+    assert verdict.position is Position.QB
+    assert verdict.incumbent_class == "_baseline_features"
+    assert verdict.candidate_class == "_candidate_features"
+    assert verdict.verdict in {"ADOPT", "MARGINAL", "DO_NOT_ADOPT"}
+    assert isinstance(verdict.per_year_breakdown, pd.DataFrame)
+    assert len(verdict.per_year_breakdown) == 2
+    assert set(verdict.per_year_breakdown["year"]) == {2021, 2022}

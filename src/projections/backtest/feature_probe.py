@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -31,6 +31,8 @@ from projections.backtest.adoption_gate import (
     BootstrapDelta,
     PositionVerdict,
     paired_bootstrap_rmse_delta,
+    paired_bootstrap_spearman_delta,
+    verdict_for_position,
 )
 from projections.models import POSITION_DISPATCH
 from projections.models.base import Model
@@ -345,3 +347,197 @@ def _build_factory_with_columns(
         )
 
     return _factory
+
+
+# Synthetic class labels for the per-feature-set comparison. Underscore-prefixed
+# so they cannot collide with real production model_class values.
+_FEATURE_PROBE_INCUMBENT = "_baseline_features"
+_FEATURE_PROBE_CANDIDATE = "_candidate_features"
+
+
+def _per_year_breakdown(
+    *,
+    actual: np.ndarray,
+    predicted_inc: np.ndarray,
+    predicted_cand: np.ndarray,
+    year: np.ndarray,
+    n_bootstrap: int,
+    seed: int,
+) -> pd.DataFrame:
+    """Per-year (informational) breakdown rows mirroring adoption_gate's CSV shape.
+
+    Columns: year, n_paired, rmse_delta_point, rmse_delta_lo, rmse_delta_hi,
+    spearman_delta_point, spearman_delta_lo, spearman_delta_hi.
+
+    Years with fewer than 100 paired rows (the bootstrap floor) emit a
+    single NaN-filled row rather than raising — informational breakdown
+    must not abort the whole probe just because one year is sparse.
+    """
+    years = np.unique(year)
+    rows: list[dict[str, object]] = []
+    for y in years:
+        mask = year == y
+        if mask.sum() < 100:  # _MIN_PAIRED_ROWS in adoption_gate
+            rows.append(
+                {
+                    "year": int(y),
+                    "n_paired": int(mask.sum()),
+                    "rmse_delta_point": float("nan"),
+                    "rmse_delta_lo": float("nan"),
+                    "rmse_delta_hi": float("nan"),
+                    "spearman_delta_point": float("nan"),
+                    "spearman_delta_lo": float("nan"),
+                    "spearman_delta_hi": float("nan"),
+                }
+            )
+            continue
+        rmse = paired_bootstrap_rmse_delta(
+            (actual[mask] - predicted_inc[mask]),
+            (actual[mask] - predicted_cand[mask]),
+            n_bootstrap=n_bootstrap,
+            seed=seed,
+        )
+        # Per-year Spearman uses a single-group "grouping" (the year itself).
+        spearman = paired_bootstrap_spearman_delta(
+            predicted_inc[mask],
+            predicted_cand[mask],
+            actual[mask],
+            year[mask],
+            n_bootstrap=n_bootstrap,
+            seed=seed,
+        )
+        rows.append(
+            {
+                "year": int(y),
+                "n_paired": rmse.n_paired_rows,
+                "rmse_delta_point": rmse.point,
+                "rmse_delta_lo": rmse.lo_95,
+                "rmse_delta_hi": rmse.hi_95,
+                "spearman_delta_point": spearman.point,
+                "spearman_delta_lo": spearman.lo_95,
+                "spearman_delta_hi": spearman.hi_95,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def probe_composite(
+    *,
+    position: Position,
+    factory_baseline: Callable[[], Any],
+    factory_candidate: Callable[[], Any],
+    features_baseline: pd.DataFrame,
+    features_candidate: pd.DataFrame,
+    weekly_stats: pd.DataFrame,
+    composite_truth_column: str,
+    holdout_years: tuple[int, ...],
+    ruleset: Any,
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+) -> PositionVerdict:
+    """Walk-forward composite-fpts ΔRMSE bootstrap for one position.
+
+    For each holdout year, fit ``factory_baseline()`` on ``features_baseline``
+    rows in ``[min_season, year - 1]`` and predict on rows in ``year``;
+    repeat for ``factory_candidate()`` on ``features_candidate``. The per-year
+    prediction frames are concatenated and paired with ``weekly_stats``'s
+    ``composite_truth_column`` on ``(gsis_id, season, week)``. The pooled
+    bootstrap returns a single ``PositionVerdict`` matching the shape produced
+    by ``scripts/adoption_gate.py``.
+
+    ``factory_baseline`` and ``factory_candidate`` are zero-arg callables that
+    produce an unfitted model. The model must implement
+    ``fit(features, weekly_stats)`` and ``predict_distribution(features, ruleset)``
+    returning a frame with at least ``gsis_id``, ``season``, ``week``, ``mean``
+    columns.
+
+    Args:
+        composite_truth_column: name of the per-row truth column in
+            ``weekly_stats`` (e.g., ``"fpts"`` for fantasy points under the
+            production ruleset).
+        ruleset: passed through to ``predict_distribution``; opaque to this
+            function.
+    """
+    min_season_baseline = int(features_baseline["season"].min())
+    min_season_candidate = int(features_candidate["season"].min())
+    if min_season_baseline != min_season_candidate:
+        raise ValueError(
+            f"baseline and candidate features must share the same min season; "
+            f"got {min_season_baseline} vs {min_season_candidate}"
+        )
+    min_season = min_season_baseline
+
+    baseline_preds: list[pd.DataFrame] = []
+    candidate_preds: list[pd.DataFrame] = []
+    for year in holdout_years:
+        train_mask_b = features_baseline["season"].between(min_season, year - 1)
+        test_mask_b = features_baseline["season"] == year
+        train_mask_c = features_candidate["season"].between(min_season, year - 1)
+        test_mask_c = features_candidate["season"] == year
+
+        m_baseline = factory_baseline()
+        m_baseline.fit(features_baseline[train_mask_b], weekly_stats)
+        baseline_preds.append(
+            m_baseline.predict_distribution(features_baseline[test_mask_b], ruleset)
+        )
+
+        m_candidate = factory_candidate()
+        m_candidate.fit(features_candidate[train_mask_c], weekly_stats)
+        candidate_preds.append(
+            m_candidate.predict_distribution(features_candidate[test_mask_c], ruleset)
+        )
+
+    base_pred_df = pd.concat(baseline_preds, ignore_index=True)
+    cand_pred_df = pd.concat(candidate_preds, ignore_index=True)
+
+    truth = weekly_stats[["gsis_id", "season", "week", composite_truth_column]].rename(
+        columns={composite_truth_column: "actual"}
+    )
+    base_paired = base_pred_df.merge(truth, on=["gsis_id", "season", "week"], how="inner")
+    cand_paired = cand_pred_df.merge(truth, on=["gsis_id", "season", "week"], how="inner")
+
+    keys = ["gsis_id", "season", "week"]
+    base_keys = base_paired[keys].sort_values(keys).reset_index(drop=True)
+    cand_keys = cand_paired[keys].sort_values(keys).reset_index(drop=True)
+    if not base_keys.equals(cand_keys):
+        raise ValueError(
+            "baseline and candidate prediction frames disagree on row coverage; "
+            "this should never happen if both feature frames have identical (gsis_id, "
+            "season, week) keys for the holdout years."
+        )
+
+    base_paired = base_paired.sort_values(keys).reset_index(drop=True)
+    cand_paired = cand_paired.sort_values(keys).reset_index(drop=True)
+
+    actual = base_paired["actual"].to_numpy(dtype=np.float64)
+    pred_inc = base_paired["mean"].to_numpy(dtype=np.float64)
+    pred_cand = cand_paired["mean"].to_numpy(dtype=np.float64)
+    year = base_paired["season"].to_numpy(dtype=np.int64)
+
+    rmse_delta = paired_bootstrap_rmse_delta(
+        actual - pred_inc, actual - pred_cand, n_bootstrap=n_bootstrap, seed=seed
+    )
+    spearman_delta = paired_bootstrap_spearman_delta(
+        pred_inc, pred_cand, actual, year, n_bootstrap=n_bootstrap, seed=seed
+    )
+    label, reason = verdict_for_position(rmse_delta, spearman_delta)
+
+    breakdown = _per_year_breakdown(
+        actual=actual,
+        predicted_inc=pred_inc,
+        predicted_cand=pred_cand,
+        year=year,
+        n_bootstrap=n_bootstrap,
+        seed=seed,
+    )
+
+    return PositionVerdict(
+        position=position,
+        incumbent_class=_FEATURE_PROBE_INCUMBENT,
+        candidate_class=_FEATURE_PROBE_CANDIDATE,
+        rmse_delta=rmse_delta,
+        spearman_delta=spearman_delta,
+        verdict=label,
+        reason=reason,
+        per_year_breakdown=breakdown,
+    )
