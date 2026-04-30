@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 import numpy as np
@@ -24,7 +25,7 @@ from projections.backtest.feature_probe import (
     probe_per_stat,
 )
 from projections.models import POSITION_DISPATCH, BaselineModel
-from projections.schemas import Position, Stat
+from projections.schemas import Position, Ruleset, Stat
 
 
 def test_per_stat_verdict_is_frozen_dataclass() -> None:
@@ -454,16 +455,29 @@ def test_build_factory_with_columns_unknown_model_class_raises() -> None:
 class _MockModel:
     """Test double — fit() records the seasons it saw; predict_distribution()
     returns a deterministic per-row predicted mean derived from the input
-    features."""
+    features.
+
+    Implements all 6 members of the Model Protocol (position, model_id, fit,
+    predict_distribution, save, load) so it can be passed via
+    Callable[[], Model] without casts. Stubs raise NotImplementedError for the
+    members the probe doesn't exercise (save, load, model_id property)."""
 
     feature_columns: tuple[str, ...]
     train_seasons_seen: tuple[int, ...] = ()
     multiplier: float = 1.0  # baseline=1.0; candidate=0.5 -> smaller residuals -> SIGNAL
 
+    @property
+    def position(self) -> Position:
+        return Position.QB
+
+    @property
+    def model_id(self) -> str:
+        raise NotImplementedError("test double — model_id not exercised by probe_composite")
+
     def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:
         self.train_seasons_seen = tuple(sorted(features["season"].unique().tolist()))
 
-    def predict_distribution(self, features: pd.DataFrame, ruleset: object) -> pd.DataFrame:
+    def predict_distribution(self, features: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
         # Predict mean = multiplier * sum(feature_columns); other ProjectionWeeklySchema
         # fields are zero/dummy. Probe code reads only `gsis_id`, `season`, `week`, `mean`.
         out = features[["gsis_id", "season", "week"]].copy()
@@ -475,6 +489,13 @@ class _MockModel:
         out["team"] = "KC"
         out["opponent"] = "BUF"
         return out
+
+    def save(self, path: Path) -> None:
+        raise NotImplementedError("test double — save not exercised by probe_composite")
+
+    @classmethod
+    def load(cls, path: Path) -> _MockModel:
+        raise NotImplementedError("test double — load not exercised by probe_composite")
 
 
 def test_probe_composite_walk_forward_order(
@@ -530,7 +551,7 @@ def test_probe_composite_walk_forward_order(
         weekly_stats=weekly_stats,
         composite_truth_column="fpts",
         holdout_years=(2021, 2022),
-        ruleset=object(),  # ignored by mock
+        ruleset=Ruleset(),  # ignored by mock
     )
     # Walk-forward: 2021 trains on 2018-2020; 2022 trains on 2018-2021.
     assert seen_per_year_baseline == [(2018, 2019, 2020), (2018, 2019, 2020, 2021)]
@@ -565,7 +586,7 @@ def test_probe_composite_returns_position_verdict_with_per_year_breakdown(
         weekly_stats=weekly_stats,
         composite_truth_column="fpts",
         holdout_years=(2021, 2022),
-        ruleset=object(),
+        ruleset=Ruleset(),
     )
     assert verdict.position is Position.QB
     assert verdict.incumbent_class == "_baseline_features"

@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
-from typing import Any, Literal
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -38,7 +38,7 @@ from projections.models import POSITION_DISPATCH
 from projections.models.base import Model
 from projections.models.baseline import BaselineModel
 from projections.models.lightgbm import LightGBMModel
-from projections.schemas import Position, Stat
+from projections.schemas import Position, Ruleset, Stat
 
 # Same alpha grid as BaselineModel.fit (src/projections/models/baseline.py:528).
 _RIDGE_ALPHAS = np.logspace(-3, 3, 13)
@@ -424,14 +424,14 @@ def _per_year_breakdown(
 def probe_composite(
     *,
     position: Position,
-    factory_baseline: Callable[[], Any],
-    factory_candidate: Callable[[], Any],
+    factory_baseline: Callable[[], Model],
+    factory_candidate: Callable[[], Model],
     features_baseline: pd.DataFrame,
     features_candidate: pd.DataFrame,
     weekly_stats: pd.DataFrame,
     composite_truth_column: str,
     holdout_years: tuple[int, ...],
-    ruleset: Any,
+    ruleset: Ruleset,
     n_bootstrap: int = 1000,
     seed: int = 42,
 ) -> PositionVerdict:
