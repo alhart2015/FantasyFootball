@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -13,6 +14,7 @@ from scripts.probe_feature_signal import (
     OverrideCollisionError,
     OverrideCoverageError,
     load_features_with_overrides,
+    main,
     parse_args,
     render_csv,
     render_markdown,
@@ -21,7 +23,9 @@ from scripts.probe_feature_signal import (
 
 from projections.backtest.adoption_gate import BootstrapDelta, PositionVerdict
 from projections.backtest.feature_probe import PerStatVerdict, ProbeReport
-from projections.schemas import _PYARROW_STR, Position, Stat
+from projections.models import POSITION_DISPATCH
+from projections.models.baseline import BaselineModel
+from projections.schemas import _PYARROW_STR, DistributionFamily, Position, Stat
 
 
 def test_parse_args_minimum_required_args() -> None:
@@ -433,3 +437,285 @@ def test_render_csv_phase1_only_omits_phase2_rows() -> None:
     csv_text = render_csv(_build_sample_report(with_phase2=False))
     df = pd.read_csv(io.StringIO(csv_text))
     assert "phase2" not in df["phase"].unique()
+
+
+# ----------------------------------------------------------------------
+# Integration tests for main() — Task 3.2
+# ----------------------------------------------------------------------
+
+
+class _MockBaseline(BaselineModel):
+    """Subclass of BaselineModel that overrides fit/predict_distribution to
+    skip schema validation and produce deterministic mock predictions, but
+    still satisfies isinstance(BaselineModel) so _get_production_columns_and_stats
+    and _build_factory_with_columns dispatch correctly."""
+
+    def fit(self, features: pd.DataFrame, weekly_stats: pd.DataFrame) -> None:
+        # No-op fit. Skips WeeklyStatsSchema and feature_schema validation
+        # that real BaselineModel.fit performs — the synthetic universe
+        # doesn't satisfy those schemas, and the integration test only
+        # cares about main()'s control-flow / IO wiring, not Ridge math.
+        return None
+
+    def predict_distribution(self, features: pd.DataFrame, ruleset: object) -> pd.DataFrame:
+        # Skip schema validation; produce a synthetic prediction frame
+        # matching the columns probe_composite reads (gsis_id, season, week, mean).
+        out = features[["gsis_id", "season", "week"]].copy()
+        out["mean"] = features[list(self.feature_columns)].sum(axis=1).to_numpy() / 25.0
+        out["p10"] = out["mean"] - 1.0
+        out["p50"] = out["mean"]
+        out["p90"] = out["mean"] + 1.0
+        out["position"] = self.position.value
+        out["team"] = "KC"
+        out["opponent"] = "BUF"
+        return out
+
+
+def _make_mock_baseline() -> _MockBaseline:
+    """Construct a _MockBaseline analogue of qb_baseline() for the synthetic
+    universe — BaselineModel subclass so the production isinstance() branches
+    in _get_production_columns_and_stats and _build_factory_with_columns
+    dispatch correctly."""
+    return _MockBaseline(
+        position=Position.QB,
+        target_stats=(Stat.PASSING_YARDS,),
+        feature_columns=("base_x1", "base_x2", "base_x3"),
+        dist_families={Stat.PASSING_YARDS: DistributionFamily.NORMAL},
+        feature_schema=POSITION_DISPATCH[Position.QB].feature_schema,
+        code_hash_files=(),
+    )
+
+
+@pytest.fixture
+def monkeypatch_probe_universe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, Path]:
+    """Set up a synthetic features cache + weekly_stats + override on disk.
+
+    Returns a dict of paths so the test can pass them to the CLI.
+    """
+    rng = np.random.default_rng(0)
+    n_players, seasons, weeks_per = 25, range(2018, 2023), range(1, 5)
+
+    rows: list[dict[str, object]] = []
+    for player_idx in range(n_players):
+        gsis_id = f"00-003{player_idx:04d}"
+        for season in seasons:
+            for week in weeks_per:
+                rows.append(
+                    {
+                        "gsis_id": gsis_id,
+                        "season": season,
+                        "week": week,
+                        "team": "KC",
+                        "opponent": "BUF",
+                        "position": "QB",
+                    }
+                )
+    base = pd.DataFrame(rows)
+    n = len(base)
+    base["base_x1"] = rng.normal(size=n)
+    base["base_x2"] = rng.normal(size=n)
+    base["base_x3"] = rng.normal(size=n)
+    cand_signal = rng.normal(size=n)
+
+    for col in ("gsis_id", "team", "opponent", "position"):
+        base[col] = base[col].astype(_PYARROW_STR)
+
+    # Write per-(season, week) parquet partitions to mimic the feature cache layout.
+    features_root = tmp_path / "features"
+    for season in seasons:
+        for week in weeks_per:
+            mask = (base["season"] == season) & (base["week"] == week)
+            part_dir = features_root / "qb" / f"season={season}" / f"week={week}"
+            part_dir.mkdir(parents=True, exist_ok=True)
+            base[mask].to_parquet(part_dir / "part.parquet")
+
+    # Override parquet (cand_signal column).
+    override_path = tmp_path / "override.parquet"
+    override_df = base[["gsis_id", "season", "week"]].copy()
+    override_df["cand_signal"] = cand_signal
+    override_df.to_parquet(override_path)
+
+    # weekly_stats partition with target stats. Synthetic passing_yards is a
+    # linear combination of the baseline features + a strong cand_signal term
+    # so the candidate model strictly improves CV-RMSE — i.e. Phase 1 SIGNAL
+    # should fire on the augment-mode test.
+    weekly_stats = base[["gsis_id", "season", "week", "position"]].copy()
+    weekly_stats["passing_yards"] = (
+        base["base_x1"] + 0.5 * base["base_x2"] + 1.0 * cand_signal + rng.normal(scale=0.5, size=n)
+    )
+    for stat_col in (
+        "passing_tds",
+        "interceptions",
+        "rushing_yards",
+        "rushing_tds",
+        "fumbles_lost",
+    ):
+        weekly_stats[stat_col] = 0.0
+    raw_root = tmp_path / "raw"
+    for season in seasons:
+        mask = weekly_stats["season"] == season
+        part_dir = raw_root / "weekly_stats" / f"season={season}"
+        part_dir.mkdir(parents=True, exist_ok=True)
+        weekly_stats[mask].to_parquet(part_dir / "part.parquet")
+
+    # Monkeypatch read_partition to redirect "data/raw" to our tmp_path/raw.
+    # main() hardcodes Path("data/raw") for weekly_stats; the redirector also
+    # passes through the (real tmp_path) features_root call unchanged.
+    import projections.store as store_mod
+
+    real_read = store_mod.read_partition
+    raw_data_root = Path("data/raw")
+
+    def _redirected_read(root: Path, table: str, **kwargs: Any) -> pd.DataFrame:
+        if Path(root) == raw_data_root:
+            return real_read(raw_root, table, **kwargs)
+        return real_read(root, table, **kwargs)
+
+    monkeypatch.setattr(store_mod, "read_partition", _redirected_read)
+    monkeypatch.setattr("scripts.probe_feature_signal.read_partition", _redirected_read)
+
+    # Monkeypatch POSITION_DISPATCH[QB].factories["baseline"] to our mock.
+    # The factories Mapping is in fact a plain dict (see models/__init__.py),
+    # so setitem works.
+    monkeypatch.setitem(POSITION_DISPATCH[Position.QB].factories, "baseline", _make_mock_baseline)
+
+    return {
+        "features_root": features_root,
+        "override": override_path,
+    }
+
+
+def test_main_augment_mode_runs_end_to_end(
+    monkeypatch_probe_universe: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    csv_out = tmp_path / "report.csv"
+    main(
+        [
+            "--candidate-name",
+            "augment_test",
+            "--baseline-features",
+            str(monkeypatch_probe_universe["features_root"]),
+            "--override",
+            str(monkeypatch_probe_universe["override"]),
+            "--position",
+            "QB",
+            "--seasons",
+            "2018-2022",
+            "--holdout-years",
+            "2021-2022",
+            "--n-bootstrap",
+            "200",
+            "--csv-out",
+            str(csv_out),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert "# Feature signal probe — augment_test" in captured.out
+    assert "### QB" in captured.out
+    assert "passing_yards" in captured.out
+    # The candidate column carries strong synthetic signal — Phase 2 typically
+    # fires, but on this small fixture the bootstrap CI may bracket zero.
+    # Accept either outcome — the probe ran end-to-end is the contract here.
+    assert (
+        "## Phase 2" in captured.out
+        or "Phase 2 skipped" in captured.out
+        or "Phase 2: not run" in captured.out
+    )
+    assert csv_out.exists()
+    df = pd.read_csv(csv_out)
+    assert "phase1" in df["phase"].unique()
+
+
+def test_main_no_composite_skips_phase2(
+    monkeypatch_probe_universe: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main(
+        [
+            "--candidate-name",
+            "no_composite_test",
+            "--baseline-features",
+            str(monkeypatch_probe_universe["features_root"]),
+            "--override",
+            str(monkeypatch_probe_universe["override"]),
+            "--position",
+            "QB",
+            "--seasons",
+            "2018-2022",
+            "--holdout-years",
+            "2021-2022",
+            "--n-bootstrap",
+            "200",
+            "--no-composite",
+        ]
+    )
+    captured = capsys.readouterr()
+    # Phase 2 disabled; either we never SIGNAL'd (Phase 2 skipped) or we did
+    # but --no-composite suppresses execution. No "## Phase 2" composite table.
+    assert "## Phase 2 — composite ΔRMSE" not in captured.out
+    assert "Phase 2 disabled by --no-composite" in captured.out or "Phase 2 skipped" in captured.out
+
+
+def test_main_swap_mode_drop_baseline_column(
+    monkeypatch_probe_universe: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Same override but with --drop base_x1 — i.e., swap the new column for
+    an existing one."""
+    main(
+        [
+            "--candidate-name",
+            "swap_test",
+            "--baseline-features",
+            str(monkeypatch_probe_universe["features_root"]),
+            "--override",
+            str(monkeypatch_probe_universe["override"]),
+            "--drop",
+            "base_x1",
+            "--position",
+            "QB",
+            "--seasons",
+            "2018-2022",
+            "--holdout-years",
+            "2021-2022",
+            "--n-bootstrap",
+            "200",
+            "--no-composite",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert "swap_test" in captured.out
+    # The drop column appears in the header.
+    assert "base_x1" in captured.out
+
+
+def test_main_ablation_mode_drop_only(
+    monkeypatch_probe_universe: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main(
+        [
+            "--candidate-name",
+            "ablation_test",
+            "--baseline-features",
+            str(monkeypatch_probe_universe["features_root"]),
+            "--drop",
+            "base_x1",
+            "--position",
+            "QB",
+            "--seasons",
+            "2018-2022",
+            "--holdout-years",
+            "2021-2022",
+            "--n-bootstrap",
+            "200",
+            "--no-composite",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert "ablation_test" in captured.out
