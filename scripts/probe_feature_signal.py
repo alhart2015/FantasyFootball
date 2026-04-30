@@ -96,6 +96,7 @@ class ProbeArgs:
     csv_out: Path | None
     composite: bool
     coverage_threshold: float
+    effect_size_floor: float
 
 
 def _parse_year_range(raw: str) -> tuple[int, int]:
@@ -178,6 +179,14 @@ def parse_args(argv: list[str] | None = None) -> ProbeArgs:
         "Default 0.95. Lower (e.g., 0.80) for overrides with structural NaN patterns "
         "like bye-week trailing-window features.",
     )
+    p.add_argument(
+        "--effect-size-floor",
+        type=float,
+        default=0.05,
+        help="Minimum |rmse_delta| for SIGNAL/REGRESSION verdict. Default 0.05 fpts; "
+        "Plan 8's per-cell noise floor was ~0.08 fpts. Lower (e.g., 0.01) for "
+        "high-precision probes; raise (e.g., 0.10) for noisier domains.",
+    )
     composite_grp = p.add_mutually_exclusive_group()
     composite_grp.add_argument(
         "--composite",
@@ -222,6 +231,7 @@ def parse_args(argv: list[str] | None = None) -> ProbeArgs:
         csv_out=ns.csv_out,
         composite=ns.composite,
         coverage_threshold=ns.coverage_threshold,
+        effect_size_floor=ns.effect_size_floor,
     )
 
 
@@ -673,6 +683,7 @@ def main(argv: list[str] | None = None) -> None:
                 holdout_years=holdout_years,
                 n_bootstrap=args.n_bootstrap,
                 seed=args.seed,
+                effect_size_floor=args.effect_size_floor,
             )
         )
 

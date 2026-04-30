@@ -125,6 +125,41 @@ def test_phase1_should_fire_phase2_truth_table() -> None:
         is True
     )
 
+    # NEW behavior: per-year SIGNAL cells do NOT fire Phase 2 — only pooled cells do.
+    per_year_signal = PerStatVerdict(
+        position=Position.QB,
+        stat=Stat.PASSING_YARDS,
+        year_or_pooled=2024,  # NOT "pooled"
+        n_paired=670,
+        rmse_delta=bd_signal,
+        r_squared_delta=0.0,
+        verdict="SIGNAL",
+    )
+    pooled_signal = PerStatVerdict(
+        position=Position.QB,
+        stat=Stat.PASSING_YARDS,
+        year_or_pooled="pooled",
+        n_paired=2676,
+        rmse_delta=bd_signal,
+        r_squared_delta=0.0,
+        verdict="SIGNAL",
+    )
+    # Per-year SIGNAL alone should NOT fire phase 2.
+    assert phase1_should_fire_phase2([per_year_signal]) is False
+    # Pooled SIGNAL DOES fire phase 2.
+    assert phase1_should_fire_phase2([pooled_signal]) is True
+    # Mixed: per-year SIGNAL + pooled NULL → no fire.
+    pooled_null = PerStatVerdict(
+        position=Position.QB,
+        stat=Stat.PASSING_YARDS,
+        year_or_pooled="pooled",
+        n_paired=2676,
+        rmse_delta=bd_null,
+        r_squared_delta=0.0,
+        verdict="NULL",
+    )
+    assert phase1_should_fire_phase2([per_year_signal, pooled_null]) is False
+
 
 def test_probe_per_stat_signal_on_orthogonal_signal_column(
     probe_synthetic_dataset: tuple[pd.DataFrame, pd.DataFrame],
@@ -284,6 +319,30 @@ def test_verdict_for_per_stat_signal_regression_null_boundaries() -> None:
         point=0.0, lo_95=-0.5, hi_95=0.0, n_paired_rows=500, n_bootstrap=1000
     )
     assert _verdict_for_per_stat(boundary_bd) == "NULL"
+
+    # NEW behavior: effect-size floor (default 0.05). Below-floor effects → NULL
+    # even when statistically significant.
+    noise_floor_signal_bd = BootstrapDelta(
+        point=-0.001,  # tiny effect, well below 0.05 floor
+        lo_95=-0.0018,
+        hi_95=-0.0001,  # CI strictly below 0 — statistically significant
+        n_paired_rows=3723,  # large sample
+        n_bootstrap=1000,
+    )
+    # Default floor (0.05): NULL despite CI<0
+    assert _verdict_for_per_stat(noise_floor_signal_bd) == "NULL"
+    # Explicit lower floor: SIGNAL recovers
+    assert _verdict_for_per_stat(noise_floor_signal_bd, effect_size_floor=0.0) == "SIGNAL"
+    # Effect just at the floor: SIGNAL (>= condition)
+    just_at_floor_bd = BootstrapDelta(
+        point=-0.05, lo_95=-0.10, hi_95=-0.001, n_paired_rows=2000, n_bootstrap=1000
+    )
+    assert _verdict_for_per_stat(just_at_floor_bd) == "SIGNAL"
+    # REGRESSION at noise floor: also NULL
+    noise_floor_regression_bd = BootstrapDelta(
+        point=0.001, lo_95=0.0001, hi_95=0.0018, n_paired_rows=3723, n_bootstrap=1000
+    )
+    assert _verdict_for_per_stat(noise_floor_regression_bd) == "NULL"
 
 
 def test_coerce_bools_converts_to_int8() -> None:

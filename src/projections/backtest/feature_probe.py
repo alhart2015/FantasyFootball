@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
-from typing import Literal
+from typing import Final, Literal
 
 import numpy as np
 import pandas as pd
@@ -42,6 +42,13 @@ from projections.schemas import Position, Ruleset, Stat
 
 # Same alpha grid as BaselineModel.fit (src/projections/models/baseline.py:528).
 _RIDGE_ALPHAS = np.logspace(-3, 3, 13)
+
+# Default effect-size floor for SIGNAL/REGRESSION verdicts (fpts). Plan 8
+# measured the per-cell RMSE noise floor at ~0.08 fpts; 0.05 is a conservative
+# threshold that catches all genuine effects while excluding the
+# noise-floor wobble that surfaced in Plan 9 retro (e.g., -0.0009 fpts on
+# n=3723, statistically significant but ~90x smaller than the noise floor).
+_DEFAULT_EFFECT_SIZE_FLOOR: Final[float] = 0.05
 
 PerStatLabel = Literal["SIGNAL", "NULL", "REGRESSION"]
 
@@ -80,24 +87,38 @@ class ProbeReport:
 
 
 def phase1_should_fire_phase2(verdicts: list[PerStatVerdict]) -> bool:
-    """Return True iff any per-cell or pooled verdict in the Phase-1 result
-    set is ``SIGNAL``. NULL and REGRESSION cells do not fire Phase 2 — the
-    probe runs Phase 2 only when there's plausibly a real effect to evaluate
-    at the composite level."""
-    return any(v.verdict == "SIGNAL" for v in verdicts)
+    """Return True iff any POOLED verdict (year_or_pooled == "pooled") in
+    the Phase-1 result set is ``SIGNAL``. Per-year cells are informational;
+    they do NOT fire Phase 2 because the adoption gate operates on pooled
+    statistics — a per-year SIGNAL on a single noisy year is exactly the
+    sampling-variation false positive Phase 2 is meant to filter out at the
+    composite level."""
+    return any(v.verdict == "SIGNAL" and v.year_or_pooled == "pooled" for v in verdicts)
 
 
-def _verdict_for_per_stat(rmse_delta: BootstrapDelta) -> PerStatLabel:
-    """SIGNAL if CI strictly below 0; REGRESSION if strictly above 0; NULL otherwise.
+def _verdict_for_per_stat(
+    rmse_delta: BootstrapDelta,
+    *,
+    effect_size_floor: float = _DEFAULT_EFFECT_SIZE_FLOOR,
+) -> PerStatLabel:
+    """SIGNAL iff CI strictly below 0 AND |point| >= effect_size_floor.
+    REGRESSION iff CI strictly above 0 AND |point| >= effect_size_floor.
+    NULL otherwise (CI brackets 0, OR effect size below noise floor, OR NaN).
 
-    NaN bootstraps (degenerate fits) downgrade to NULL — same conservative
-    fallback the adoption gate uses for NaN spearman.
+    The effect_size_floor (default 0.05 fpts) is an absolute-magnitude gate
+    that prevents tiny statistically-significant effects (often n>>1000 with
+    near-zero point estimates) from cluttering the SIGNAL verdict. Plan 8
+    measured the per-cell RMSE noise floor at ~0.08 fpts; the default 0.05
+    is a conservative threshold that catches all genuine effects while
+    excluding noise-floor wobble.
     """
     if (
         not np.isfinite(rmse_delta.point)
         or not np.isfinite(rmse_delta.lo_95)
         or not np.isfinite(rmse_delta.hi_95)
     ):
+        return "NULL"
+    if abs(rmse_delta.point) < effect_size_floor:
         return "NULL"
     if rmse_delta.hi_95 < 0.0:
         return "SIGNAL"
@@ -211,6 +232,7 @@ def probe_per_stat(
     holdout_years: tuple[int, ...],
     n_bootstrap: int = 1000,
     seed: int = 42,
+    effect_size_floor: float = _DEFAULT_EFFECT_SIZE_FLOOR,
 ) -> list[PerStatVerdict]:
     """Per-stat Ridge ΔRMSE bootstrap.
 
@@ -223,6 +245,10 @@ def probe_per_stat(
     Both feature sets are evaluated on the **same** post-dropna row set —
     a row that is NaN on the candidate but valid on the baseline is dropped
     from both sides so the bootstrap stays paired.
+
+    ``effect_size_floor`` (default 0.05 fpts) is the absolute |point|
+    threshold for SIGNAL/REGRESSION; below-floor effects collapse to NULL
+    even when statistically significant. See ``_verdict_for_per_stat``.
     """
     min_season = int(features["season"].min())
     out: list[PerStatVerdict] = []
@@ -249,7 +275,7 @@ def probe_per_stat(
                     n_paired=rmse_delta.n_paired_rows,
                     rmse_delta=rmse_delta,
                     r_squared_delta=r2_delta,
-                    verdict=_verdict_for_per_stat(rmse_delta),
+                    verdict=_verdict_for_per_stat(rmse_delta, effect_size_floor=effect_size_floor),
                 )
             )
 
@@ -275,7 +301,7 @@ def probe_per_stat(
                 n_paired=rmse_delta.n_paired_rows,
                 rmse_delta=rmse_delta,
                 r_squared_delta=r2_delta,
-                verdict=_verdict_for_per_stat(rmse_delta),
+                verdict=_verdict_for_per_stat(rmse_delta, effect_size_floor=effect_size_floor),
             )
         )
     return out
