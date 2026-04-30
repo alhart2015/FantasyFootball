@@ -41,26 +41,37 @@ A short written recommendation: pick one modeling approach (covariance / scenari
 
 **Status:** QB/RB/TE complete in Plan 2b (merged). K and DST split out into TODO #10.
 
-### 3. Play-by-play ingest (`nfl_data_py.import_pbp_data`) + PBP-derived features
+### 3a. Play-by-play ingest (PBP plumbing) — closed in Plan 9 (2026-04-29)
 
-Plan 3c backtest confirmed `opp_allowed_fppg_l4` is doing meaningful work but is a crude proxy for opponent strength. PBP unlocks a family of more discriminating signals at once and is one of the three model-improvement tracks identified in the post-Plan-3e brainstorm (2026-04-27).
+Closed. `src/projections/ingest/pbp.py` ships `refresh_pbp` covering `nfl_data_py.import_pbp_data` for 2018–2024 with a curated 27-column subset. `PbpSchema` lives in `schemas.py`. Opt-in `--run-network` smoke at `tests/test_ingest/test_api_drift.py::test_pbp_api_columns_and_schema` guards against upstream column-rename drift. Real-data ingest in Phase 6 surfaced one float32→float64 dtype drift (16 numeric columns), patched in `pbp.py:_FLOAT64_COLS`. `pbp` keyword arg is threaded through 4 direct-builder scripts (`refresh_features.py`, `train_baseline.py`, `predict_2024.py`, `sanity_check_baseline.py`) and through every per-position `build_<pos>_features` signature with `_EMPTY_PBP` default — currently unused by builders, reserved for the next PBP-driven feature plan.
 
-**Ingest scope:**
-- `nfl_data_py.import_pbp_data` partitioned per-season (large files — chunked write following the weekly_stats pattern)
-- New `PbpSchema` and ingest module mirroring `weekly_stats` shape
-- Opt-in network smoke (TODO #8 pattern) to catch column-rename drift on `nfl_data_py` upgrades
+`scripts/adoption_gate.py` extended with `--baseline-run` / `--candidate-run` dual-run mode (cross-run pairing for feature-set vs feature-set comparisons) — load-bearing for every future feature-class plan.
 
-**Derived features (each its own builder slice):**
-- Opponent-adjusted EPA-allowed by play type (pass / run; per route depth or direction if signal exists)
+### 3b. Opp-adjusted EPA-residual feature — DO_NOT_ADOPT (Plan 9 verdict, 2026-04-29)
+
+Plan 9's first PBP-derived feature attempt: schedule-of-strength-adjusted EPA-per-play residual, replacing v1 `opp_allowed_<pos>_fppg_l4`. Adoption gate verdict: **all 4 positions DO_NOT_ADOPT**. QB / RB / TE returned null results (RMSE + Spearman CIs bracket zero); WR returned a small but statistically significant **regression** (RMSE +0.0083 fpts, CI strictly above 0; Spearman -0.0013, CI strictly below 0). Per-position feature changes reverted at commit `941b96c`; PBP plumbing kept (see TODO #3a).
+
+Mechanism interpretation (full discussion in spec §6 "mechanism interpretation"): Ridge baseline is feature-saturated — opponent strength is partially captured by `implied_team_total`, `spread`, and v1 fppg. The marginal lift from explicit schedule-of-strength residual is below the per-cell noise floor. Three follow-up directions:
+
+1. **Different feature class**, not opponent-strength refinement. Volume-oriented PBP features (pace, PROE, air-yards / aDOT distributions, redzone usage shares) target a different signal axis and are more likely to move the needle.
+2. **Different model class** that benefits from the residual feature (LightGBM, ensemble) — Plan 9's gate only evaluated BaselineModel.
+3. **Compound feature** that combines opp-EPA-residual with another opp-strength signal (defensive personnel, Vegas line) so the per-cell signal-to-noise improves.
+
+Each is a separate plan candidate. None is queued.
+
+### 3c. Remaining PBP-derived feature plans (open)
+
+Planned slices on top of Plan 9's PBP plumbing, each its own (position, builder) extension:
+
 - Team pace (plays per 60 minutes neutral)
-- PROE (pass rate over expected adjusted for game state)
+- PROE (pass rate over expected, game-state adjusted)
 - Player-level air yards / aDOT / target depth distributions
 - Pressure rate allowed by O-line (proxy for QB sack risk and rushing-yardage-on-scramble)
 - Red-zone usage shares (separate from full-field share)
 
-Each derived feature is its own (position, builder) extension; can land incrementally rather than as one big plan. Brainstorm in a focused session before scoping.
+Brainstorm in a focused session before scoping. Plan 9's negative result on opp-EPA-residual at the BaselineModel level argues for evaluating these against LightGBM / ensemble in addition to BaselineModel, since model class may dominate over feature class for marginal signals.
 
-Estimated cumulative win: 5-15% RMSE on top of current Model A; replaces the weakest input the model has today.
+Estimated cumulative win: still potentially 5-15% RMSE if features compose well; treat each slice's individual gate result as the truth (per Plan 8 + Plan 9's lessons).
 
 ### 4. Feature parquet storage — closed in Plan 3c
 
