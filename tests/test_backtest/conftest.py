@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
+from projections.schemas import _PYARROW_STR
 from projections.store import write_partition
 
 
@@ -83,3 +85,70 @@ def synthetic_backtest_layout(
         )
 
     return {"raw_root": raw_root, "features_root": features_root}
+
+
+@pytest.fixture
+def probe_synthetic_dataset() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """500-row deterministic features + weekly_stats for probe testing.
+
+    Construction:
+      - 25 synthetic players x 5 seasons x 4 weeks = 500 rows.
+      - Baseline features: ``base_x1``, ``base_x2``, ``base_x3`` -- i.i.d. normal.
+      - Candidate features:
+          - ``cand_signal``  -- orthogonal noise that contributes ``+1.0 * cand_signal`` to
+            the synthetic target. Adding this column should produce SIGNAL.
+          - ``cand_null``    -- orthogonal noise that does NOT enter the target. Adding
+            this column should produce NULL.
+          - ``cand_redundant`` -- a copy of ``base_x1`` + small noise. Adding this column
+            should produce NULL (Ridge shrinks one of the two correlated columns).
+      - Target stat: ``passing_yards`` = ``base_x1 + 0.5*base_x2 + 1.0*cand_signal + eps``
+        (eps ~ N(0, 0.5)). Other target stats (``passing_tds``, etc.) are zero -- the
+        probe code path doesn't care.
+    """
+    rng = np.random.default_rng(42)
+    n_players, seasons, weeks_per_season = 25, range(2018, 2023), range(1, 5)
+
+    rows: list[dict[str, object]] = []
+    for player_idx in range(n_players):
+        gsis_id = f"00-003{player_idx:04d}"
+        for season in seasons:
+            for week in weeks_per_season:
+                rows.append(
+                    {
+                        "gsis_id": gsis_id,
+                        "season": season,
+                        "week": week,
+                        "position": "QB",
+                        "team": "KC",
+                        "opponent": "BUF",
+                    }
+                )
+    base = pd.DataFrame(rows)
+    n = len(base)
+    base["base_x1"] = rng.normal(size=n)
+    base["base_x2"] = rng.normal(size=n)
+    base["base_x3"] = rng.normal(size=n)
+    base["cand_signal"] = rng.normal(size=n)
+    base["cand_null"] = rng.normal(size=n)
+    base["cand_redundant"] = base["base_x1"] + rng.normal(scale=0.05, size=n)
+
+    weekly_stats = base[["gsis_id", "season", "week", "position"]].copy()
+    weekly_stats["passing_yards"] = (
+        base["base_x1"]
+        + 0.5 * base["base_x2"]
+        + 1.0 * base["cand_signal"]
+        + rng.normal(scale=0.5, size=n)
+    )
+    weekly_stats["passing_tds"] = 0.0
+    weekly_stats["interceptions"] = 0.0
+    weekly_stats["rushing_yards"] = 0.0
+    weekly_stats["rushing_tds"] = 0.0
+    weekly_stats["fumbles_lost"] = 0.0
+
+    for col in ("gsis_id", "team", "opponent", "position"):
+        if col in base.columns:
+            base[col] = base[col].astype(_PYARROW_STR)
+    weekly_stats["gsis_id"] = weekly_stats["gsis_id"].astype(_PYARROW_STR)
+    weekly_stats["position"] = weekly_stats["position"].astype(_PYARROW_STR)
+
+    return base, weekly_stats

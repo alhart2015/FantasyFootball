@@ -20,8 +20,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from projections.backtest.adoption_gate import BootstrapDelta, PositionVerdict
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import RidgeCV
+
+from projections.backtest.adoption_gate import (
+    BootstrapDelta,
+    PositionVerdict,
+    paired_bootstrap_rmse_delta,
+)
 from projections.schemas import Position, Stat
+
+# Same alpha grid as BaselineModel.fit (src/projections/models/baseline.py:528).
+_RIDGE_ALPHAS = np.logspace(-3, 3, 13)
 
 PerStatLabel = Literal["SIGNAL", "NULL", "REGRESSION"]
 
@@ -65,3 +76,193 @@ def phase1_should_fire_phase2(verdicts: list[PerStatVerdict]) -> bool:
     probe runs Phase 2 only when there's plausibly a real effect to evaluate
     at the composite level."""
     return any(v.verdict == "SIGNAL" for v in verdicts)
+
+
+def _verdict_for_per_stat(rmse_delta: BootstrapDelta) -> PerStatLabel:
+    """SIGNAL if CI strictly below 0; REGRESSION if strictly above 0; NULL otherwise.
+
+    NaN bootstraps (degenerate fits) downgrade to NULL — same conservative
+    fallback the adoption gate uses for NaN spearman.
+    """
+    if (
+        not np.isfinite(rmse_delta.point)
+        or not np.isfinite(rmse_delta.lo_95)
+        or not np.isfinite(rmse_delta.hi_95)
+    ):
+        return "NULL"
+    if rmse_delta.hi_95 < 0.0:
+        return "SIGNAL"
+    if rmse_delta.lo_95 > 0.0:
+        return "REGRESSION"
+    return "NULL"
+
+
+def _coerce_bools(frame: pd.DataFrame) -> pd.DataFrame:
+    """Mirror BaselineModel._x_frame_with_bool_coercion: bool → int8.
+
+    Probe-side coercion so synthetic candidate columns of dtype bool don't
+    poison the Ridge fit.
+    """
+    out = frame.copy()
+    for col in out.columns:
+        if out[col].dtype == bool:
+            out[col] = out[col].astype(np.int8)
+    return out
+
+
+def _fit_predict_residuals(
+    *,
+    train_x: np.ndarray,
+    train_y: np.ndarray,
+    test_x: np.ndarray,
+    test_y: np.ndarray,
+) -> tuple[np.ndarray, float]:
+    """Fit RidgeCV on (train_x, train_y), predict on test_x, return
+    (test residuals, in-sample R² on training set)."""
+    ridge = RidgeCV(alphas=_RIDGE_ALPHAS)
+    ridge.fit(train_x, train_y)
+    test_pred = ridge.predict(test_x).astype(np.float64)
+    test_residuals = test_y - test_pred
+    train_pred = ridge.predict(train_x).astype(np.float64)
+    train_resid = train_y - train_pred
+    train_y_var = float(((train_y - train_y.mean()) ** 2).sum())
+    if train_y_var == 0.0:
+        in_sample_r2 = 0.0
+    else:
+        in_sample_r2 = 1.0 - float((train_resid**2).sum()) / train_y_var
+    return test_residuals, in_sample_r2
+
+
+def _probe_one_stat_one_window(
+    *,
+    features: pd.DataFrame,
+    weekly_stats: pd.DataFrame,
+    position: Position,
+    stat: Stat,
+    baseline_cols: tuple[str, ...],
+    candidate_cols: tuple[str, ...],
+    train_seasons: tuple[int, ...],
+    test_seasons: tuple[int, ...],
+    n_bootstrap: int,
+    seed: int,
+) -> tuple[BootstrapDelta, float]:
+    """Inner kernel: inner-join, dropna on the union of candidate_cols and
+    {stat}, fit two Ridges, return (paired-bootstrap rmse delta, ΔR²).
+
+    ``train_seasons`` and ``test_seasons`` are the train/test season filters;
+    callers control whether this is single-year (e.g., test=(2022,)) or
+    pooled across multiple years."""
+    ws = weekly_stats[weekly_stats["position"] == position.value]
+    joined = features.merge(
+        ws[["gsis_id", "season", "week", stat.value]],
+        on=["gsis_id", "season", "week"],
+        how="inner",
+        validate="one_to_one",
+    )
+    needed_cols = list(set(candidate_cols) | {stat.value})
+    joined = joined.dropna(subset=needed_cols)
+
+    train_mask = joined["season"].isin(train_seasons).to_numpy()
+    test_mask = joined["season"].isin(test_seasons).to_numpy()
+
+    x_baseline = _coerce_bools(joined[list(baseline_cols)]).to_numpy(dtype=np.float64)
+    x_candidate = _coerce_bools(joined[list(candidate_cols)]).to_numpy(dtype=np.float64)
+    y = joined[stat.value].to_numpy(dtype=np.float64)
+
+    base_resid, base_r2 = _fit_predict_residuals(
+        train_x=x_baseline[train_mask],
+        train_y=y[train_mask],
+        test_x=x_baseline[test_mask],
+        test_y=y[test_mask],
+    )
+    cand_resid, cand_r2 = _fit_predict_residuals(
+        train_x=x_candidate[train_mask],
+        train_y=y[train_mask],
+        test_x=x_candidate[test_mask],
+        test_y=y[test_mask],
+    )
+    rmse_delta = paired_bootstrap_rmse_delta(
+        base_resid, cand_resid, n_bootstrap=n_bootstrap, seed=seed
+    )
+    return rmse_delta, cand_r2 - base_r2
+
+
+def probe_per_stat(
+    *,
+    position: Position,
+    features_baseline_cols: tuple[str, ...],
+    features_candidate_cols: tuple[str, ...],
+    features: pd.DataFrame,
+    weekly_stats: pd.DataFrame,
+    target_stats: tuple[Stat, ...],
+    holdout_years: tuple[int, ...],
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+) -> list[PerStatVerdict]:
+    """Per-stat Ridge ΔRMSE bootstrap.
+
+    For each (stat, holdout_year) and one ``year_or_pooled="pooled"`` row per
+    stat, fit Ridge on ``[min(features.season), holdout_year - 1]`` rows with
+    ``baseline_cols`` and again with ``candidate_cols``, predict on
+    ``holdout_year`` rows, and emit a paired-bootstrap CI on the per-stat
+    Δ-CV-RMSE. The pooled row resamples all ``holdout_years`` together.
+
+    Both feature sets are evaluated on the **same** post-dropna row set —
+    a row that is NaN on the candidate but valid on the baseline is dropped
+    from both sides so the bootstrap stays paired.
+    """
+    min_season = int(features["season"].min())
+    out: list[PerStatVerdict] = []
+    for stat in target_stats:
+        for holdout in holdout_years:
+            train_seasons = tuple(range(min_season, holdout))
+            rmse_delta, r2_delta = _probe_one_stat_one_window(
+                features=features,
+                weekly_stats=weekly_stats,
+                position=position,
+                stat=stat,
+                baseline_cols=features_baseline_cols,
+                candidate_cols=features_candidate_cols,
+                train_seasons=train_seasons,
+                test_seasons=(holdout,),
+                n_bootstrap=n_bootstrap,
+                seed=seed,
+            )
+            out.append(
+                PerStatVerdict(
+                    position=position,
+                    stat=stat,
+                    year_or_pooled=holdout,
+                    n_paired=rmse_delta.n_paired_rows,
+                    rmse_delta=rmse_delta,
+                    r_squared_delta=r2_delta,
+                    verdict=_verdict_for_per_stat(rmse_delta),
+                )
+            )
+
+        pooled_train_seasons = tuple(range(min_season, min(holdout_years)))
+        pooled_test_seasons = tuple(holdout_years)
+        rmse_delta, r2_delta = _probe_one_stat_one_window(
+            features=features,
+            weekly_stats=weekly_stats,
+            position=position,
+            stat=stat,
+            baseline_cols=features_baseline_cols,
+            candidate_cols=features_candidate_cols,
+            train_seasons=pooled_train_seasons,
+            test_seasons=pooled_test_seasons,
+            n_bootstrap=n_bootstrap,
+            seed=seed,
+        )
+        out.append(
+            PerStatVerdict(
+                position=position,
+                stat=stat,
+                year_or_pooled="pooled",
+                n_paired=rmse_delta.n_paired_rows,
+                rmse_delta=rmse_delta,
+                r_squared_delta=r2_delta,
+                verdict=_verdict_for_per_stat(rmse_delta),
+            )
+        )
+    return out
