@@ -388,6 +388,26 @@ def test_loosened_features_schema_keeps_candidate_column_through_validate(
     assert "candidate_extra" not in prod_validated.columns
 
 
+def test_loosened_features_schema_accepts_frame_missing_declared_column(
+    baseline_features_qb: pd.DataFrame,
+) -> None:
+    """Swap-mode flow: --drop removes a column from baseline, then the model
+    is asked to validate the post-drop frame. The loosened schema must accept
+    a frame missing one or more declared columns (so the probe's Phase 2 can
+    actually run in swap mode). The production schema rejects the same frame."""
+    base_schema = POSITION_DISPATCH[Position.QB].feature_schema
+    loose = _loosened_features_schema(base_schema)
+    dropped = baseline_features_qb.drop(columns=["opp_allowed_qb_fppg_l4"])
+    # Loose accepts the missing-column frame.
+    loose_validated = loose.validate(dropped)
+    assert "opp_allowed_qb_fppg_l4" not in loose_validated.columns
+    # Production rejects it.
+    import pandera.errors
+
+    with pytest.raises(pandera.errors.SchemaError):
+        base_schema.validate(dropped)
+
+
 def test_build_factory_with_columns_overrides_feature_columns_and_schema() -> None:
     """The factory returned by _build_factory_with_columns produces an
     unfitted model whose feature_columns and feature_schema are the candidate
