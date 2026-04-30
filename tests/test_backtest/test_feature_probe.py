@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -10,6 +11,8 @@ from projections.backtest.adoption_gate import BootstrapDelta
 from projections.backtest.feature_probe import (
     PerStatVerdict,
     ProbeReport,
+    _coerce_bools,
+    _verdict_for_per_stat,
     phase1_should_fire_phase2,
     probe_per_stat,
 )
@@ -228,3 +231,64 @@ def test_probe_per_stat_is_deterministic(
         assert va.rmse_delta.lo_95 == vb.rmse_delta.lo_95
         assert va.rmse_delta.hi_95 == vb.rmse_delta.hi_95
         assert va.verdict == vb.verdict
+
+
+def test_verdict_for_per_stat_nan_bootstrap_degrades_to_null() -> None:
+    """A degenerate fit (NaN bootstrap statistics) must NOT bubble through as
+    SIGNAL or REGRESSION — the conservative fallback is NULL, matching
+    adoption_gate.verdict_for_position's NaN handling."""
+    nan_bd = BootstrapDelta(
+        point=float("nan"),
+        lo_95=float("nan"),
+        hi_95=float("nan"),
+        n_paired_rows=500,
+        n_bootstrap=1000,
+    )
+    assert _verdict_for_per_stat(nan_bd) == "NULL"
+
+    partial_nan = BootstrapDelta(
+        point=-0.5,
+        lo_95=-0.9,
+        hi_95=float("nan"),  # NaN on hi_95 alone
+        n_paired_rows=500,
+        n_bootstrap=1000,
+    )
+    assert _verdict_for_per_stat(partial_nan) == "NULL"
+
+
+def test_verdict_for_per_stat_signal_regression_null_boundaries() -> None:
+    """Boundary cases for the SIGNAL/REGRESSION/NULL rule."""
+    # SIGNAL: hi_95 strictly below 0
+    signal_bd = BootstrapDelta(
+        point=-0.5, lo_95=-0.9, hi_95=-0.001, n_paired_rows=500, n_bootstrap=1000
+    )
+    assert _verdict_for_per_stat(signal_bd) == "SIGNAL"
+
+    # REGRESSION: lo_95 strictly above 0
+    regression_bd = BootstrapDelta(
+        point=0.5, lo_95=0.001, hi_95=0.9, n_paired_rows=500, n_bootstrap=1000
+    )
+    assert _verdict_for_per_stat(regression_bd) == "REGRESSION"
+
+    # NULL at exact-zero boundary (hi_95 == 0 doesn't satisfy strict-below)
+    boundary_bd = BootstrapDelta(
+        point=0.0, lo_95=-0.5, hi_95=0.0, n_paired_rows=500, n_bootstrap=1000
+    )
+    assert _verdict_for_per_stat(boundary_bd) == "NULL"
+
+
+def test_coerce_bools_converts_to_int8() -> None:
+    """_coerce_bools must convert bool columns to int8 and leave other dtypes alone."""
+    df = pd.DataFrame(
+        {
+            "bool_col": pd.array([True, False, True], dtype=bool),
+            "float_col": [1.0, 2.0, 3.0],
+            "int_col": [10, 20, 30],
+        }
+    )
+    out = _coerce_bools(df)
+    assert out["bool_col"].dtype == np.int8
+    assert out["float_col"].dtype == df["float_col"].dtype  # unchanged
+    assert out["int_col"].dtype == df["int_col"].dtype  # unchanged
+    # Original frame unmodified (defensive copy).
+    assert df["bool_col"].dtype == bool

@@ -146,8 +146,12 @@ def _probe_one_stat_one_window(
     n_bootstrap: int,
     seed: int,
 ) -> tuple[BootstrapDelta, float]:
-    """Inner kernel: inner-join, dropna on the union of candidate_cols and
-    {stat}, fit two Ridges, return (paired-bootstrap rmse delta, ΔR²).
+    """Inner kernel: inner-join, dropna, fit two Ridges, return
+    (paired-bootstrap rmse delta, ΔR²).
+
+    Drops rows with NaN in any baseline-or-candidate feature column or in the
+    target stat — both Ridge fits must train and predict on the identical
+    post-dropna row set so the bootstrap stays paired.
 
     ``train_seasons`` and ``test_seasons`` are the train/test season filters;
     callers control whether this is single-year (e.g., test=(2022,)) or
@@ -159,7 +163,7 @@ def _probe_one_stat_one_window(
         how="inner",
         validate="one_to_one",
     )
-    needed_cols = list(set(candidate_cols) | {stat.value})
+    needed_cols = sorted({*baseline_cols, *candidate_cols, stat.value})
     joined = joined.dropna(subset=needed_cols)
 
     train_mask = joined["season"].isin(train_seasons).to_numpy()

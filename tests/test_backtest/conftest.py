@@ -89,10 +89,14 @@ def synthetic_backtest_layout(
 
 @pytest.fixture
 def probe_synthetic_dataset() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """500-row deterministic features + weekly_stats for probe testing.
+    """600-row deterministic features + weekly_stats for probe testing.
 
     Construction:
-      - 25 synthetic players x 5 seasons x 4 weeks = 500 rows.
+      - 30 synthetic players x 5 seasons x 4 weeks = 600 rows. The 30-player
+        count gives 120 paired rows per holdout year — comfortable headroom
+        above ``paired_bootstrap_rmse_delta``'s ``_MIN_PAIRED_ROWS = 100``
+        floor so the bootstrap stays well-conditioned even if a single
+        candidate-column NaN drops a row.
       - Baseline features: ``base_x1``, ``base_x2``, ``base_x3`` -- i.i.d. normal.
       - Candidate features:
           - ``cand_signal``  -- orthogonal noise that contributes ``+1.0 * cand_signal`` to
@@ -106,7 +110,7 @@ def probe_synthetic_dataset() -> tuple[pd.DataFrame, pd.DataFrame]:
         probe code path doesn't care.
     """
     rng = np.random.default_rng(42)
-    n_players, seasons, weeks_per_season = 25, range(2018, 2023), range(1, 5)
+    n_players, seasons, weeks_per_season = 30, range(2018, 2023), range(1, 5)
 
     rows: list[dict[str, object]] = []
     for player_idx in range(n_players):
