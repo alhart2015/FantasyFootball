@@ -109,6 +109,28 @@ def phase1_should_fire_phase2(verdicts: list[PerStatVerdict]) -> bool:
     return any(v.verdict == "SIGNAL" and v.year_or_pooled == "pooled" for v in verdicts)
 
 
+def family_verdict_from_reports(reports: list[ProbeReport]) -> Literal["SIGNAL", "NULL"]:
+    """Family-level verdict across executed probe reports.
+
+    SIGNAL iff any pooled Phase-1 PerStatVerdict has verdict == "SIGNAL"
+    OR any Phase-2 PositionVerdict has verdict in ("ADOPT", "MARGINAL").
+    NULL otherwise — including when every Phase-1 cell is REGRESSION
+    (the family-level question is "is there orthogonal signal?", not
+    "does this hurt").
+
+    Spec: docs/superpowers/specs/2026-04-30-pbp-feature-family-probe-design.md §4.
+    """
+    for report in reports:
+        for psv in report.phase1:
+            if psv.year_or_pooled == "pooled" and psv.verdict == "SIGNAL":
+                return "SIGNAL"
+        if report.phase2 is not None:
+            for pv in report.phase2:
+                if pv.verdict in ("ADOPT", "MARGINAL"):
+                    return "SIGNAL"
+    return "NULL"
+
+
 def _verdict_for_per_stat(
     rmse_delta: BootstrapDelta,
     *,

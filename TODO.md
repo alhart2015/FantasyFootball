@@ -79,6 +79,8 @@ Estimated cumulative win: still potentially 5-15% RMSE if features compose well;
 
 **Workflow for each candidate:** before scoping a plan, generate an override parquet (one column per candidate) and run `scripts/probe_feature_signal.py`. Only proceed to a full plan if the probe returns pooled SIGNAL on at least one (position, stat) cell. See `docs/superpowers/specs/2026-04-30-feature-signal-probe-design.md`.
 
+**Update 2026-04-30 (PBP family probe, branch `feat/probe-pbp-family`):** First family-level probe shipped per `docs/superpowers/specs/2026-04-30-pbp-feature-family-probe-design.md`. Bundled four PBP team-level features (`pace_l4`, `proe_l4`, `team_ayps_l4`, `team_def_epa_resid_l4`) into a single override and probed in two modes (augment + swap) at the BaselineModel level. **Family verdict: `SIGNAL`** — Phase 1 pooled SIGNAL on `(RB, rushing_yards)` in both modes; Phase 2 ADOPT on RB in both modes (composite RMSE delta ~-0.012 fpts, CI strictly below 0). Signal concentrated on RB; QB regresses on `passing_yards` in augment mode (+0.45 fpts); WR/TE net-zero. Conditional lgb-nb runs skipped per spec §3.2 (baseline already returned SIGNAL). Greenlights a follow-up production-builder plan: RB-only integration first; WR/TE deferred to a separate refined-unit spec (player aDOT for receivers, per-position EPA-residual à la Plan 9). See `reports/feature_probe_pbp_family_summary.md` for the per-mode table and decision.
+
 ### 4. Feature parquet storage — closed in Plan 3c
 
 Closed 2026-04-26. `data/features/{position}/season=YYYY/week=WW/part.parquet`

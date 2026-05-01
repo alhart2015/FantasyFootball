@@ -306,6 +306,16 @@ The probe is a screening tool, not a substitute for the adoption gate. SIGNAL is
 - `--no-composite`: skip Phase 2 even on a Phase-1 SIGNAL.
 - `--force-composite`: run Phase 2 unconditionally. Use when `--model` is not the Ridge regressor used in Phase 1 — Phase 2's production-model fit may detect signal Phase 1's Ridge screen missed (e.g., trees on a feature Ridge can't use). Adds ~3–10 min per position depending on model class.
 
+### Regenerating the PBP family override
+
+The PBP family probe (spec `docs/superpowers/specs/2026-04-30-pbp-feature-family-probe-design.md`) consumes a four-column override parquet at `data/features_probe/pbp_family.parquet`. The output is regenerable from the live PBP partitions and is not committed. To regenerate:
+
+```bash
+python -m scripts.build_pbp_family_override --seasons 2018-2024
+```
+
+Pass `--force` to overwrite an existing parquet. The script needs `data/raw/pbp/`, `data/raw/depth_charts/`, and `data/raw/schedules/` populated (run the standard ingest refresh first if not). The player-team-week index is built from `depth_charts` (every rostered player per team-week) joined with `schedules` for opponents, matching the per-position feature builders' coverage.
+
 ## Adding a new pandera schema
 
 Schemas live in `src/projections/schemas.py` (single source of truth). Append your schema after the existing ones.

@@ -4,6 +4,20 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## PBP Feature Family Probe — verdict SIGNAL via RB; greenlights production-builder follow-up (2026-04-30, on branch `feat/probe-pbp-family`)
+
+**Status:** First family-level probe shipped per spec `docs/superpowers/specs/2026-04-30-pbp-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-04-30-pbp-feature-family-probe.md`. Implements 4 pure compute fns + assembler in `src/projections/features/pbp_team_features.py`, the `family_verdict_from_reports` helper in `src/projections/backtest/feature_probe.py`, and the `scripts/build_pbp_family_override.py` CLI. 14 synthetic-fixture tests pass; mypy strict + ruff + ruff format clean on touched files.
+
+**Verdict:** `SIGNAL`. Phase 1 pooled SIGNAL on `(RB, rushing_yards)` in both augment and swap modes; Phase 2 ADOPT on RB in both modes (composite RMSE delta ~-0.012 fpts, CI strictly below 0). Signal concentrated on RB. QB regresses on `passing_yards` (+0.45 fpts) in augment mode; WR/TE net-zero. Conditional lgb-nb runs skipped per spec §3.2 (baseline already returned SIGNAL).
+
+**What this greenlights:** A follow-up production-builder plan that integrates the PBP family into RB feature builders. RB-only first; verify which subset of the 4 features carries the rushing-yards signal under the production model class (ensemble Model D); WR/TE deferred to a separate spec with refined per-position units (player aDOT for receivers, per-position EPA-residual à la Plan 9). Do NOT integrate into QB without a swap-mode gate run.
+
+**What this closes:** TODO #3c's open question about the 5–15% family-level prior. The prior is real for RB; not for QB/WR/TE at the team-level granularity tested here. Single-feature follow-ups (e.g., `pace_l4` alone) and refined-unit follow-ups (player aDOT, per-position EPA-resid) remain open as separate specs.
+
+**Reports:** `reports/feature_probe_pbp_family_summary.md` (decision log) + 4 per-mode .md/.csv files (`feature_probe_pbp_family_{augment,swap}.{md,csv}`).
+
+---
+
 ## Plan 9 retro option C — EPA-residual on lightgbm-nb — DO_NOT_ADOPT (4/4 positions) (2026-04-30, on branch `feat/probe-plan9-tree-models`)
 
 **Status:** probe extended with `--force-composite` flag; 8 lightgbm-nb composite probes run against the existing Plan 9 override parquets (4 positions × {swap, augment}). All 8 cells DO_NOT_ADOPT. Plan 9's verdict (DO_NOT_ADOPT for the EPA-residual feature on baseline) generalizes to lightgbm-nb. Verification gates green: 51 probe tests pass; mypy / ruff / format clean.
