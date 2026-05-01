@@ -217,3 +217,44 @@ def test_no_leakage_from_schedules_other_weeks(
         as_of_week=_AS_OF_WEEK,
     )
     pd.testing.assert_frame_equal(baseline, after, check_like=True)
+
+
+def test_no_leakage_from_pbp_other_weeks(
+    qb_weekly_stats: pd.DataFrame,
+    qb_snap_counts: pd.DataFrame,
+    qb_depth_charts: pd.DataFrame,
+    qb_ngs_passing: pd.DataFrame,
+    qb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """build_qb_features must not leak future-week PBP rows into current-week features.
+
+    Note: Plan 9's opp_epa_allowed_residual helper was reverted at 941b96c, so the
+    QB builder currently accepts but does not use the ``pbp`` argument (per TODO #3a
+    plumbing). This test guards against a future regression where pbp starts being
+    consumed incorrectly: it injects an extreme-EPA row at a future week and asserts
+    bit-identical output against the same builder call without the row."""
+    baseline = _baseline(
+        qb_weekly_stats,
+        qb_snap_counts,
+        qb_depth_charts,
+        qb_ngs_passing,
+        qb_schedules,
+        fake_pbp_df,
+    )
+    extra = fake_pbp_df.iloc[[0]].copy()
+    extra.loc[:, "week"] = 6
+    extra.loc[:, "epa"] = 99.0
+    extra.loc[:, "play_id"] = int(fake_pbp_df["play_id"].max()) + 1
+    leaky = pd.concat([fake_pbp_df, extra], ignore_index=True)
+    after = build_qb_features(
+        weekly_stats=qb_weekly_stats,
+        snap_counts=qb_snap_counts,
+        depth_charts=qb_depth_charts,
+        ngs_passing=qb_ngs_passing,
+        schedules=qb_schedules,
+        pbp=leaky,
+        season=_SEASON,
+        as_of_week=_AS_OF_WEEK,
+    )
+    pd.testing.assert_frame_equal(baseline, after, check_like=True)

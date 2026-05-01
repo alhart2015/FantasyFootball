@@ -666,63 +666,60 @@ Append to `tests/test_features/test_pbp_team_features.py`:
 
 ```python
 def test_def_epa_residual_subtracts_schedule_strength() -> None:
-    """Two defenses allow identical raw EPA, but BAL faces top offenses
-    while CIN faces bottom offenses; BAL's residual should be NEGATIVE
-    (allowing less than expected against tough offenses) and CIN's
-    POSITIVE."""
+    """Two defenses allow identical raw EPA, but BAL faces a top offense
+    (KC, season-avg EPA = +0.3) while CIN faces a bottom offense (JAX,
+    season-avg EPA = -0.1). With both allowing +0.1 EPA per play, BAL's
+    residual is NEGATIVE (allowing less than expected against tough
+    offenses) and CIN's POSITIVE.
+
+    NOTE on data construction: PBP's ``epa`` is a single signed value per
+    play, the same value when read from either team's perspective. So the
+    "offense's season-average EPA" and "defense's per-game EPA-allowed"
+    necessarily share the same row sets. To make the math clean:
+    - BAL vs KC weeks 1-5: every play epa = +0.1 (BAL's def-allowed = 0.1
+      AND those 50 plays contribute to KC's season-avg as 0.1).
+    - KC vs LV (filler) weeks 11-15: every play epa = +0.5, chosen so
+      KC's full-season avg = (50*0.1 + 50*0.5)/100 = +0.3.
+    - CIN vs JAX weeks 1-5: every play epa = +0.1.
+    - JAX vs LV weeks 16-20: every play epa = -0.3, chosen so JAX's
+      full-season avg = (50*0.1 + 50*-0.3)/100 = -0.1.
+    """
     from projections.features.pbp_team_features import compute_team_def_epa_residual
 
     rows: list[dict[str, object]] = []
-    # Construct a 2024 season where:
-    #   - KC offense: mean EPA = +0.3 (top tier).
-    #   - JAX offense: mean EPA = -0.1 (bottom tier).
-    #   - BAL defense: faces KC every week, allows EPA = +0.1 each game (5 games).
-    #     Schedule-strength expectation = +0.3; residual = +0.1 - +0.3 = -0.2.
-    #   - CIN defense: faces JAX every week, allows EPA = +0.1 each game (5 games).
-    #     Schedule-strength expectation = -0.1; residual = +0.1 - -0.1 = +0.2.
-    def add_game(season: int, week: int, off: str, defn: str, off_epa: float, def_epa: float) -> None:
-        # 10 offensive plays for `off` against `defn` at off_epa; 10 defensive
-        # plays for `defn` (which is the same row set) at def_epa.
-        # Use TWO distinct sets of plays so off_epa != def_epa is meaningful.
+
+    def add_game(season: int, week: int, off: str, defn: str, epa: float) -> None:
         for i in range(10):
             rows.append({
                 "season": season, "week": week,
                 "posteam": off, "defteam": defn,
-                "epa": off_epa, "play_id": 10000 * week + i,
+                "epa": epa, "play_id": 100000 * week + i,
             })
 
-    # KC offense vs BAL defense, 5 weeks.
+    # BAL defense vs KC offense: BAL allows +0.1 each play, weeks 1-5.
     for wk in range(1, 6):
-        # KC's actual offensive EPA on these plays = +0.3 (their season tier).
-        # But against BAL, plays go for +0.1 (BAL is a tough defense).
-        # Resolve by treating "EPA" as DEFENSIVE-perspective EPA-allowed:
-        # for the residual fn, we sum/mean EPA per (defteam, season, week),
-        # so the rows above are already the def-allowed values. We separately
-        # need each offense's *own* season-average EPA — built from rows
-        # against a "league-avg" opponent.
-        add_game(2024, wk, off="KC", defn="BAL", off_epa=0.0, def_epa=0.1)
-    # KC offense vs LV (league-average filler) for season-strength signal.
+        add_game(2024, wk, off="KC", defn="BAL", epa=0.1)
+    # KC offense filler vs LV: weeks 11-15 at +0.5 → KC season-avg = +0.3.
     for wk in range(11, 16):
-        add_game(2024, wk, off="KC", defn="LV", off_epa=0.3, def_epa=0.3)
+        add_game(2024, wk, off="KC", defn="LV", epa=0.5)
 
-    # JAX offense vs CIN defense, 5 weeks (CIN allows +0.1 each).
+    # CIN defense vs JAX offense: CIN allows +0.1 each play, weeks 1-5.
     for wk in range(1, 6):
-        add_game(2024, wk, off="JAX", defn="CIN", off_epa=0.0, def_epa=0.1)
-    # JAX offense vs LV for season-strength signal.
-    for wk in range(11, 16):
-        add_game(2024, wk, off="JAX", defn="LV", off_epa=-0.1, def_epa=-0.1)
+        add_game(2024, wk, off="JAX", defn="CIN", epa=0.1)
+    # JAX offense filler vs LV: weeks 16-20 at -0.3 → JAX season-avg = -0.1.
+    for wk in range(16, 21):
+        add_game(2024, wk, off="JAX", defn="LV", epa=-0.3)
 
-    # Filler: enough LV games so its own residual isn't tested.
     pbp = _make_pbp_rows(rows)
     out = compute_team_def_epa_residual(pbp)
 
-    bal_late = out.query("team == 'BAL' and season == 2024 and week >= 5")
-    cin_late = out.query("team == 'CIN' and season == 2024 and week >= 5")
-    # BAL's trailing-4 residual: allowed +0.1 against KC (season EPA +0.3)
-    # → residual = +0.1 - +0.3 = -0.2 (4 games' mean).
-    assert bal_late["team_def_epa_resid_l4"].iloc[0] == pytest.approx(-0.2, abs=0.01)
-    # CIN's: allowed +0.1 against JAX (season EPA -0.1) → +0.2.
-    assert cin_late["team_def_epa_resid_l4"].iloc[0] == pytest.approx(+0.2, abs=0.01)
+    bal_wk5 = out.query("team == 'BAL' and season == 2024 and week == 5")
+    cin_wk5 = out.query("team == 'CIN' and season == 2024 and week == 5")
+    # BAL trailing-4 residual at wk5 = mean of wks 1-4's residuals.
+    # Each game: allowed +0.1 vs KC (season EPA +0.3) → residual = -0.2.
+    assert bal_wk5["team_def_epa_resid_l4"].iloc[0] == pytest.approx(-0.2, abs=0.01)
+    # CIN: allowed +0.1 vs JAX (season EPA -0.1) → residual = +0.2.
+    assert cin_wk5["team_def_epa_resid_l4"].iloc[0] == pytest.approx(+0.2, abs=0.01)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
