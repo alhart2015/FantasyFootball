@@ -28,6 +28,13 @@ def test_build_rb_features_returns_validated_frame(
         as_of_week=5,
     )
     RbFeaturesSchema.validate(out)
+    # The 4 PBP family cols (spec 2026-05-01) must appear in the output
+    # frame and be float-typed. The fake_pbp_df fixture has no PHI/SF/SEA
+    # plays, so the values themselves come back NaN — but the columns
+    # must exist.
+    for col in ("pace_l4", "proe_l4", "team_ayps_l4", "team_def_epa_resid_l4"):
+        assert col in out.columns, f"missing {col}"
+        assert out[col].dtype == float, f"{col} dtype is {out[col].dtype}, expected float"
 
 
 def test_build_rb_features_one_row_per_rostered_rb(
