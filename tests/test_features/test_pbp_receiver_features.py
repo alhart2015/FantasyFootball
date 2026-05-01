@@ -510,3 +510,55 @@ def test_attach_receiver_features_empty_pbp() -> None:
         "red_zone_target_share_l4",
     ):
         assert pd.isna(out[col].iloc[0])
+
+
+def test_build_receiver_overrides_canonical_gsis() -> None:
+    """Wrapper raises ValueError on malformed GSIS in the index."""
+    from projections.features.pbp_receiver_features import build_pbp_receiver_overrides
+
+    pbp = _make_pbp_rows([])
+    bad_index = pd.DataFrame(
+        [
+            {"gsis_id": "00-0000001", "season": 2024, "week": 5},  # valid
+            {"gsis_id": "garbage-id", "season": 2024, "week": 5},  # invalid
+        ]
+    )
+    with pytest.raises(ValueError, match="invalid gsis_id"):
+        build_pbp_receiver_overrides(pbp, bad_index)
+
+
+def test_build_receiver_overrides_dup_key() -> None:
+    """Wrapper raises ValueError on duplicate (gsis_id, season, week) keys."""
+    from projections.features.pbp_receiver_features import build_pbp_receiver_overrides
+
+    pbp = _make_pbp_rows([])
+    dup_index = pd.DataFrame(
+        [
+            {"gsis_id": "00-0000001", "season": 2024, "week": 5},
+            {"gsis_id": "00-0000001", "season": 2024, "week": 5},  # duplicate
+        ]
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        build_pbp_receiver_overrides(pbp, dup_index)
+
+
+def test_build_receiver_overrides_row_count_invariant() -> None:
+    """Wrapper output has exactly len(index) rows; column projection matches
+    spec §2.4."""
+    from projections.features.pbp_receiver_features import build_pbp_receiver_overrides
+
+    pbp = _make_pbp_rows([])  # empty PBP -> all-NaN values
+    index = pd.DataFrame(
+        [{"gsis_id": "00-0000001", "season": 2024, "week": w} for w in range(1, 6)]
+    )
+    out = build_pbp_receiver_overrides(pbp, index)
+    assert len(out) == len(index)
+    assert list(out.columns) == [
+        "gsis_id",
+        "season",
+        "week",
+        "aDOT_l4",
+        "deep_target_share_l4",
+        "yac_per_reception_l4",
+        "red_zone_target_share_l4",
+    ]

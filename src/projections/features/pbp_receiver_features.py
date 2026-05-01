@@ -297,3 +297,53 @@ def attach_pbp_receiver_features(
         )
 
     return out[["gsis_id", "season", "week", *_OUTPUT_COLUMNS]].reset_index(drop=True)
+
+
+def build_pbp_receiver_overrides(
+    pbp: pd.DataFrame,
+    receiver_index: pd.DataFrame,
+) -> pd.DataFrame:
+    """Public assembler. Returns the 4-column override frame ready to write.
+
+    Args:
+        pbp: PBP frame matching ``PbpSchema``. Must include the seasons
+            spanning the index plus one prior season for trailing-4 backfill.
+        receiver_index: ``(gsis_id, season, week)`` — one row per
+            receiver-week. Built by the override script from ``depth_charts``
+            filtered to ``position in {WR, TE}``.
+
+    Returns:
+        ``(gsis_id, season, week, aDOT_l4, deep_target_share_l4,
+        yac_per_reception_l4, red_zone_target_share_l4)`` — one row per
+        input index row.
+
+    Raises:
+        ValueError: gsis_id format violations or duplicate
+            (gsis_id, season, week) keys in the index.
+        AssertionError: row-count mismatch after merges (internal-invariant
+            violation; a future compute regression that introduces duplicate
+            (gsis_id, season, week) keys would trigger this).
+
+    Per-position coverage validation is the probe's responsibility; see
+    spec §1.3 criterion 1 + §3.3 step 2.
+    """
+    bad_ids = [g for g in receiver_index["gsis_id"].dropna() if not _GSIS_RE.match(str(g))]
+    if bad_ids:
+        raise ValueError(
+            f"invalid gsis_id format(s): {bad_ids[:3]} (and {max(0, len(bad_ids) - 3)} more)"
+        )
+
+    dup_mask = receiver_index.duplicated(subset=["gsis_id", "season", "week"], keep=False)
+    if dup_mask.any():
+        n_dup = int(dup_mask.sum())
+        raise ValueError(f"duplicate (gsis_id, season, week) keys in index: {n_dup} rows")
+
+    out = attach_pbp_receiver_features(receiver_index, pbp)
+
+    if len(out) != len(receiver_index):
+        raise AssertionError(
+            f"row count mismatch: input index had {len(receiver_index)} rows, "
+            f"output has {len(out)}; suggests a many-to-many merge regression"
+        )
+
+    return out[["gsis_id", "season", "week", *_OUTPUT_COLUMNS]].reset_index(drop=True)
