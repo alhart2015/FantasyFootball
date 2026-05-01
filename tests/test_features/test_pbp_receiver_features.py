@@ -416,3 +416,97 @@ def test_red_zone_target_share_yardline_threshold() -> None:
     per_game = compute_receiver_red_zone_target_share(pbp)
     assert len(per_game) == 1
     assert per_game.iloc[0]["red_zone_target_share_l4"] == pytest.approx(3 / 5)
+
+
+def test_attach_receiver_features_schema() -> None:
+    """Assembler output has the 4 new columns appended in spec order; row
+    count matches the input index."""
+    from projections.features.pbp_receiver_features import attach_pbp_receiver_features
+
+    gid = "00-0000001"
+    # 4 receiver-active games for the player so trailing-4 fires at week 5.
+    rows: list[dict[str, object]] = []
+    for wk in range(1, 5):
+        rows.append(
+            {
+                "season": 2024,
+                "week": wk,
+                "play_id": 1000 * wk,
+                "receiver_player_id": gid,
+                "pass_attempt": 1.0,
+                "complete_pass": 1.0,
+                "air_yards": 10.0,
+                "yards_after_catch": 5.0,
+                "yardline_100": 30.0,
+            }
+        )
+    pbp = _make_pbp_rows(rows)
+    index = pd.DataFrame([{"gsis_id": gid, "season": 2024, "week": w} for w in range(1, 7)])
+    out = attach_pbp_receiver_features(index, pbp)
+    assert list(out.columns) == [
+        "gsis_id",
+        "season",
+        "week",
+        "aDOT_l4",
+        "deep_target_share_l4",
+        "yac_per_reception_l4",
+        "red_zone_target_share_l4",
+    ]
+    assert len(out) == len(index)
+
+
+def test_attach_receiver_features_left_join_semantics() -> None:
+    """Index row for a receiver with no PBP rows yields NaN on all 4 columns."""
+    from projections.features.pbp_receiver_features import attach_pbp_receiver_features
+
+    # Player A has 4 weeks of PBP; player B has none.
+    rows: list[dict[str, object]] = []
+    for wk in range(1, 5):
+        rows.append(
+            {
+                "season": 2024,
+                "week": wk,
+                "play_id": 1000 * wk,
+                "receiver_player_id": "00-0000001",
+                "pass_attempt": 1.0,
+                "complete_pass": 1.0,
+                "air_yards": 10.0,
+                "yards_after_catch": 5.0,
+                "yardline_100": 30.0,
+            }
+        )
+    pbp = _make_pbp_rows(rows)
+    index = pd.DataFrame(
+        [
+            {"gsis_id": "00-0000001", "season": 2024, "week": 5},
+            {"gsis_id": "00-0000002", "season": 2024, "week": 5},
+        ]
+    )
+    out = attach_pbp_receiver_features(index, pbp)
+    b_row = out.query("gsis_id == '00-0000002'")
+    assert len(b_row) == 1
+    for col in (
+        "aDOT_l4",
+        "deep_target_share_l4",
+        "yac_per_reception_l4",
+        "red_zone_target_share_l4",
+    ):
+        assert pd.isna(b_row[col].iloc[0])
+
+
+def test_attach_receiver_features_empty_pbp() -> None:
+    """Empty PBP short-circuits to all-NaN columns (matches team-level fast
+    path)."""
+    from projections.features.pbp_receiver_features import attach_pbp_receiver_features
+
+    pbp = pd.DataFrame()
+    index = pd.DataFrame([{"gsis_id": "00-0000001", "season": 2024, "week": 5}])
+    out = attach_pbp_receiver_features(index, pbp)
+    assert len(out) == 1
+    for col in (
+        "aDOT_l4",
+        "deep_target_share_l4",
+        "yac_per_reception_l4",
+        "red_zone_target_share_l4",
+    ):
+        assert pd.isna(out[col].iloc[0])

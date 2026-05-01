@@ -228,3 +228,64 @@ def compute_receiver_red_zone_target_share(pbp: pd.DataFrame) -> pd.DataFrame:
         )
     )
     return per_game[["gsis_id", "season", "week", "red_zone_target_share_l4"]]
+
+
+_OUTPUT_COLUMNS: Final[tuple[str, ...]] = (
+    "aDOT_l4",
+    "deep_target_share_l4",
+    "yac_per_reception_l4",
+    "red_zone_target_share_l4",
+)
+
+
+def attach_pbp_receiver_features(
+    index: pd.DataFrame,
+    pbp: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach the 4 PBP receiver features to a (gsis_id, season, week) index.
+
+    Args:
+        index: ``(gsis_id, season, week)`` — one row per receiver-week.
+            Built from ``depth_charts`` filtered to position in {WR, TE}.
+        pbp: PBP frame matching ``PbpSchema``, projected to or wider than
+            the receiver-features column set. Must include the seasons
+            spanning the index plus one prior season for trailing-4 backfill.
+
+    Returns:
+        A copy of ``index`` with 4 columns appended in order:
+        ``aDOT_l4``, ``deep_target_share_l4``, ``yac_per_reception_l4``,
+        ``red_zone_target_share_l4``. Row count equals ``len(index)``.
+        All 4 columns are float64 (NaN where trailing-4 has fewer than 4
+        prior receiver-active games or the player has no PBP rows at all).
+
+    All four computes key on ``receiver_player_id``; no team / opponent
+    join required.
+
+    Empty ``pbp`` short-circuits to all-NaN columns — same shape as a
+    successful call where every row's trailing-4 has fewer than 4 prior
+    receiver-active games. Schema ``nullable=True`` covers this.
+    """
+    if pbp.empty:
+        out = index.copy()
+        for col in _OUTPUT_COLUMNS:
+            out[col] = float("nan")
+        return out.reset_index(drop=True)
+
+    pbp_proj = pbp[list(_PBP_COLUMNS_USED)]
+    adot_pg = compute_receiver_adot(pbp_proj)
+    deep_pg = compute_receiver_deep_target_share(pbp_proj)
+    yac_pg = compute_receiver_yac_per_reception(pbp_proj)
+    rz_pg = compute_receiver_red_zone_target_share(pbp_proj)
+
+    out = index.copy()
+    for per_game, col in (
+        (adot_pg, "aDOT_l4"),
+        (deep_pg, "deep_target_share_l4"),
+        (yac_pg, "yac_per_reception_l4"),
+        (rz_pg, "red_zone_target_share_l4"),
+    ):
+        attached = _trailing_4_per_player_asof(per_game, index, value_col=col, out_col=col)
+        # attached has len == len(index); merge it onto out 1:1 by position.
+        out = out.merge(attached, on=["gsis_id", "season", "week"], how="left")
+
+    return out.reset_index(drop=True)
