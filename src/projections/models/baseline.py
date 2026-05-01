@@ -371,6 +371,11 @@ _RB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "is_home",
     "roof_dome",
     "opp_allowed_rb_fppg_l4",
+    # PBP team-level family features (spec 2026-05-01).
+    "pace_l4",
+    "proe_l4",
+    "team_ayps_l4",
+    "team_def_epa_resid_l4",
 )
 
 
