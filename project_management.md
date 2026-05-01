@@ -4,6 +4,31 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## PBP Receiver Family Probe — verdict NULL (durable) for WR/TE; family closed at air-yards / aDOT cut (2026-05-01, on branch `feat/wr-te-pbp-features`)
+
+**Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-01-wr-te-pbp-receiver-features-design.md` and plan `docs/superpowers/plans/2026-05-01-wr-te-pbp-receiver-features.md`. Implements `_trailing_4_per_player_asof` as-of helper + 4 pure compute fns + assembler + validating wrapper in `src/projections/features/pbp_receiver_features.py`, the override-generator script `scripts/build_pbp_receiver_override.py`, 21 synthetic-fixture tests + 4 CLI tests. mypy strict + ruff + ruff format clean.
+
+**Verdict:** `NULL` (durable per spec §1.3 criterion 3 — both BaselineModel + lightgbm-nb tested at composite via `--force-composite`).
+
+- All 4 mode × model reports (baseline+lgb-nb × augment+swap, 2 positions, 12 stats each = 96 pooled cells): 0 pooled Phase 1 SIGNAL.
+- Phase 2 (composite, lgb-nb production model) on both modes: 0 ADOPT or MARGINAL across 8 verdict cells. All 8 DO_NOT_ADOPT.
+- Closest to SIGNAL: `WR swap composite RMSE -0.0052 fpts CI [-0.0118, +0.0013]` — point estimate favorable but CI brackets zero by +0.001 fpts.
+- Per-year REGRESSION on TE `receiving_yards` 2022 (~+0.15 fpts in augment mode) replicates across baseline + lgb-nb — informational; pooled bootstrap correctly washes it out.
+
+**What this closes:** TODO #3c's WR/TE refined-unit follow-up at the air-yards / aDOT cut. The four player-level PBP features tested (`aDOT_l4`, `deep_target_share_l4`, `yac_per_reception_l4`, `red_zone_target_share_l4`) do not carry orthogonal signal for receiver fantasy projections at the trailing-4-receiver-active-games unit, under either Ridge baseline or lgb-nb production model class.
+
+**Refined-unit candidates beyond air-yards / aDOT that remain unexplored:** per-route-concept distributions (data not in curated PBP), target-quality residuals (per-throw difficulty modeling not in PBP), in-line vs flexed alignment for TE (not in PBP). None queued; revisit only with independent evidence (published study, third-party benchmark) suggesting the unit choice was the binding constraint.
+
+**What remains open in TODO #3c:** Other PBP feature families at the *team* level not in PR #20's bundle — pressure rate allowed by O-line, red-zone usage shares (separate from this spec's receiver-level RZ target share), team pace alone (vs the bundled probe). Bundle 3-4 candidates per probe per the family-level prior.
+
+**Spec gap (caught + worked around, not fixed in spec):** Spec §3.2 prescribed lgb-nb runs without `--force-composite`, but Phase 1 is RidgeCV-only regardless of `--model`, so bare lgb-nb runs are tautological with baseline. Re-ran with `--force-composite` to actually test lgb-nb at composite. The same gap exists in PR #20's spec §3.2; not exercised then because RB returned baseline SIGNAL and the conditional path never fired. Future probe-with-conditional-lgb-nb specs should include `--force-composite`.
+
+**Coverage caveat:** 2018 coverage is structurally low (~50% non-null) because the curated PBP window starts in 2018 with no Y-1 backfill. 2019-2024 coverage is 75-87% per (position, season). Probe invoked with `--coverage-threshold 0.70`. The surviving-receiver row set is biased toward heavier-targeted WRs/TEs; bias is consistent across baseline + candidate sides so the comparison stays valid for the substantially-targeted subset.
+
+**Reports:** `reports/feature_probe_pbp_receiver_summary.md` (decision log + addendum on the `--force-composite` spec gap) + 4 per-(model, mode) .md/.csv files (`feature_probe_pbp_receiver_{,lgbnb_}{augment,swap}.{md,csv}`).
+
+---
+
 ## RB PBP Features Integration — verdict ADOPT on (BaselineModel, RB); shipped (2026-05-01, on branch `feat/rb-pbp-features`)
 
 **Status:** Shipped per spec `docs/superpowers/specs/2026-05-01-rb-pbp-features-design.md` and plan `docs/superpowers/plans/2026-05-01-rb-pbp-features.md`. Extends `RbFeaturesSchema` with 4 nullable-float cols (`pace_l4`, `proe_l4`, `team_ayps_l4`, `team_def_epa_resid_l4`) and wires `attach_pbp_family_features` (extracted from `build_pbp_family_overrides` in PR #20) into `build_rb_features`. RB feature cache refreshed for 2018–2024 (151 partitions); full backtest + dual-run gate clean on the binding `(BaselineModel, RB)` cell; mypy strict + ruff + ruff format clean.
@@ -1363,25 +1388,21 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Track 2A — WR / TE refined-unit PBP features (next plan).** The PBP family probe greenlit a refined-unit follow-up for WR / TE; team-level features carried RB but are deemed too coarse for receivers. Per the top-of-file RB-shipped entry the candidate refined units are:
+**WR/TE PBP receiver-level family closed.** The receiver-level family probe (this branch) returned `NULL` durable across BaselineModel + lgb-nb for both WR and TE. Player-level air-yards / aDOT distributions do not carry orthogonal signal at the trailing-4-receiver-active-games unit. Refined-unit candidates beyond air-yards / aDOT (per-route-concept, target-quality residuals, in-line vs flexed for TE) require ingest extensions not currently planned; none queued.
 
-- **WR**: player-level air-yards / aDOT distributions (e.g., trailing-N air-yards-per-target, target depth concentration, deep-target share)
-- **TE**: same player-level units as WR for receiving-targeted TEs; per-position EPA-residual à la Plan 9 may also apply on a smaller positional defense slice
-- **Q**: which subset of player-level PBP units actually carries signal vs the team-level cut that didn't move the needle for receivers? Probe before spec.
+**Track 2A — Other PBP feature families (next probe-only spec).** Per TODO #3c, the remaining team-level PBP feature candidates are:
 
-Apply the same probe → composite-gate workflow that worked for RB. Build override parquets for candidate refined units, run `scripts/probe_feature_signal.py` (with `--force-composite` if the binding evaluation is non-Ridge), then scope a production-builder spec only on positions / cells that ADOPT. QB explicitly excluded from this track (PR #20's augment-mode `passing_yards` regression confirms team-level PBP doesn't transfer to QB at this granularity).
+- Pressure rate allowed by O-line (proxy for QB sack risk and rushing-yardage-on-scramble)
+- Red-zone usage shares — *team-level* (separate from this spec's receiver-level RZ target share)
+- Team pace alone (vs the bundled probe; PR #20 tested pace bundled with PROE/AYPS/EPA-resid)
 
-This track is the next active plan — brainstorm + spec + plan + execute on `feat/wr-te-pbp-features`.
+Bundle 3-4 candidates per probe per the family-level prior. Brainstorm + spec + plan on a new branch. The probe → composite-gate workflow from PR #20 + this spec is the canonical pattern.
 
-**Possible parallel / follow-on tracks (queued, not blocking the WR/TE work):**
-
-1. **Other PBP feature families** (TODO #3c) — pressure rate allowed by O-line (proxy for QB sack risk and rushing-yardage-on-scramble), red-zone usage shares (separate from full-field share), team pace alone (vs the bundled probe). Bundle 3-4 candidates per probe per the family-level prior in TODO #3 ("don't probe one feature at a time"). Independent of the WR / TE refined-unit work.
-
-2. **RB PBP × other model classes** — gate the 4 new RB PBP cols against `lightgbm-tuned`, `lightgbm-nb`, and `ensemble`. Deferred during PR #21 per spec §1.3.5 because Optuna tuning + NB-2 dispersion fitting are 1+ hour each; the lightgbm family auto-picks-up the new cols (it derives features from the schema dynamically), so no model-layer change is needed — only the gate run. Informational, not gating, but answers whether the team-level PBP signal transfers to the tree-based model classes. Cheap to queue as a background informational pass.
+**Track 2B — RB PBP × other model classes (queued, informational).** Gate the 4 RB PBP cols against `lightgbm-tuned`, `lightgbm-nb`, and `ensemble`. Deferred during PR #21 per spec §1.3.5 because Optuna tuning + NB-2 dispersion fitting are 1+ hour each; the lightgbm family auto-picks-up the new cols dynamically. Informational, not gating, but answers whether the team-level PBP signal transfers to the tree-based model classes. Cheap to queue as a background informational pass.
 
 **Followup housekeeping (low-priority):** Model C-tuned is strictly dominated by Model C-NB on RMSE — TODO #29 captures the pruning when ready.
 
-After WR/TE PBP and the above tracks: Plan 4 (public API + CLI verbs + free-tier hosting), then Draft Hub.
+After Track 2A + the above tracks: Plan 4 (public API + CLI verbs + free-tier hosting), then Draft Hub.
 
 ---
 
