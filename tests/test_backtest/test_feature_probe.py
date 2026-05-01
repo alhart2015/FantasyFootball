@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from projections.backtest.adoption_gate import BootstrapDelta
+from projections.backtest.adoption_gate import BootstrapDelta, PositionVerdict
 from projections.backtest.feature_probe import (
     PerStatVerdict,
     ProbeReport,
@@ -20,6 +20,7 @@ from projections.backtest.feature_probe import (
     _coerce_bools,
     _loosened_features_schema,
     _verdict_for_per_stat,
+    family_verdict_from_reports,
     phase1_should_fire_phase2,
     probe_composite,
     probe_per_stat,
@@ -674,3 +675,81 @@ def test_probe_composite_returns_position_verdict_with_per_year_breakdown(
     assert isinstance(verdict.per_year_breakdown, pd.DataFrame)
     assert len(verdict.per_year_breakdown) == 2
     assert set(verdict.per_year_breakdown["year"]) == {2021, 2022}
+
+
+def _stub_pooled_psv(verdict: str) -> PerStatVerdict:
+    return PerStatVerdict(
+        position=Position.QB,
+        stat=Stat.PASSING_YARDS,
+        year_or_pooled="pooled",
+        n_paired=2676,
+        rmse_delta=BootstrapDelta(
+            point=-0.5 if verdict == "SIGNAL" else 0.0,
+            lo_95=-0.9 if verdict == "SIGNAL" else -0.1,
+            hi_95=-0.1 if verdict == "SIGNAL" else 0.1,
+            n_paired_rows=2676,
+            n_bootstrap=1000,
+        ),
+        r_squared_delta=0.0,
+        verdict=verdict,  # type: ignore[arg-type]
+    )
+
+
+def _stub_phase2_verdict(verdict: str) -> PositionVerdict:
+    """Minimal PositionVerdict with the right `verdict` field; numbers
+    don't matter for the family-verdict helper."""
+    bd_zero = BootstrapDelta(point=0.0, lo_95=-0.1, hi_95=0.1, n_paired_rows=100, n_bootstrap=1000)
+    return PositionVerdict(
+        position=Position.QB,
+        incumbent_class="_baseline_features",
+        candidate_class="_candidate_features",
+        rmse_delta=bd_zero,
+        spearman_delta=bd_zero,
+        verdict=verdict,  # type: ignore[arg-type]
+        reason="stub",
+        per_year_breakdown=pd.DataFrame(),
+    )
+
+
+def _stub_report(*, phase1_verdict: str, phase2_verdict: str | None) -> ProbeReport:
+    """Build a one-row Phase 1 report; Phase 2 either present or skipped."""
+    phase2 = [_stub_phase2_verdict(phase2_verdict)] if phase2_verdict is not None else None
+    return ProbeReport(
+        candidate_name="stub",
+        model_class="baseline",
+        baseline_features_path="data/features",
+        override_paths=("data/features_probe/x.parquet",),
+        drop_columns=(),
+        phase1=[_stub_pooled_psv(phase1_verdict)],
+        phase2=phase2,
+        phase2_skip_reason=None if phase2 is not None else "no_signal",
+    )
+
+
+def test_family_verdict_signal_via_phase1() -> None:
+    """Pooled Phase 1 SIGNAL on any report flips family to SIGNAL."""
+    reports = [
+        _stub_report(phase1_verdict="NULL", phase2_verdict=None),
+        _stub_report(phase1_verdict="SIGNAL", phase2_verdict="DO_NOT_ADOPT"),
+    ]
+    assert family_verdict_from_reports(reports) == "SIGNAL"
+
+
+def test_family_verdict_signal_via_phase2() -> None:
+    """Phase 2 ADOPT or MARGINAL anywhere flips family to SIGNAL even if all
+    Phase 1 cells are NULL."""
+    reports = [
+        _stub_report(phase1_verdict="NULL", phase2_verdict=None),
+        _stub_report(phase1_verdict="NULL", phase2_verdict="MARGINAL"),
+    ]
+    assert family_verdict_from_reports(reports) == "SIGNAL"
+
+
+def test_family_verdict_null_when_all_null() -> None:
+    """Family is NULL only when every pooled Phase 1 cell is NULL/REGRESSION
+    AND every Phase 2 cell is DO_NOT_ADOPT (or absent)."""
+    reports = [
+        _stub_report(phase1_verdict="NULL", phase2_verdict=None),
+        _stub_report(phase1_verdict="REGRESSION", phase2_verdict="DO_NOT_ADOPT"),
+    ]
+    assert family_verdict_from_reports(reports) == "NULL"
