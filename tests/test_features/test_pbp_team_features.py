@@ -231,3 +231,79 @@ def test_proe_drops_nan_pass_oe_rows() -> None:
     out = compute_team_proe(pbp)
     wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
     assert wk5["proe_l4"].iloc[0] == pytest.approx(10.0)
+
+
+def test_ayps_only_counts_pass_attempts() -> None:
+    """team_ayps_l4 averages air_yards over plays where pass_attempt == 1.0."""
+    from projections.features.pbp_team_features import compute_team_ayps
+
+    rows: list[dict[str, object]] = []
+    # KC wk1-5: each week, 10 pass attempts at air_yards=15.0 (mean=15.0)
+    #          + 50 rushing plays at air_yards=NaN, pass_attempt=0.0.
+    for wk in range(1, 6):
+        for i in range(10):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "pass_attempt": 1.0,
+                    "air_yards": 15.0,
+                    "play_type": "pass",
+                    "play_id": 1000 * wk + i,
+                }
+            )
+        for i in range(50):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "pass_attempt": 0.0,
+                    "air_yards": float("nan"),
+                    "play_type": "run",
+                    "play_id": 2000 * wk + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_ayps(pbp)
+    wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5["team_ayps_l4"].iloc[0] == pytest.approx(15.0)
+
+
+def test_ayps_drops_nan_air_yards_pass_attempts() -> None:
+    """A pass attempt with air_yards=NaN (sack, throw-away) is excluded."""
+    from projections.features.pbp_team_features import compute_team_ayps
+
+    rows: list[dict[str, object]] = []
+    # 10 valid pass attempts (air_yards=10.0) + 5 NaN-air-yards pass attempts
+    # per week. Mean should be 10.0, not (10*10 + 5*0) / 15 = 6.67.
+    for wk in range(1, 6):
+        for i in range(10):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "pass_attempt": 1.0,
+                    "air_yards": 10.0,
+                    "play_type": "pass",
+                    "play_id": 1000 * wk + i,
+                }
+            )
+        for i in range(5):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "pass_attempt": 1.0,
+                    "air_yards": float("nan"),
+                    "play_type": "pass",
+                    "play_id": 2000 * wk + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_ayps(pbp)
+    wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5["team_ayps_l4"].iloc[0] == pytest.approx(10.0)

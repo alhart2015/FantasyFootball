@@ -71,3 +71,19 @@ def compute_team_proe(pbp: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"posteam": "team", "pass_oe": "proe"})
     )
     return _trailing_4_mean(per_game, value_col="proe", out_col="proe_l4")
+
+
+def compute_team_ayps(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Team-level mean air yards per pass attempt, trailing 4 prior games.
+
+    Plays counted: rows where ``posteam == team``, ``pass_attempt == 1.0``,
+    and ``air_yards`` is non-NaN. Sacks and throw-aways have NaN air_yards
+    upstream and are excluded from the per-game mean.
+    """
+    plays = pbp[(pbp["pass_attempt"] == 1.0) & (pbp["air_yards"].notna())]
+    per_game = (
+        plays.groupby(["posteam", "season", "week"], as_index=False)["air_yards"]
+        .mean()
+        .rename(columns={"posteam": "team", "air_yards": "ayps"})
+    )
+    return _trailing_4_mean(per_game, value_col="ayps", out_col="team_ayps_l4")
