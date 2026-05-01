@@ -31,15 +31,22 @@ def _normalize_str(code: object) -> str:
 
 
 def _normalize_str_or_none(code: object) -> str | None:
-    """Normalize a team code, passing through None/NaN (kickoffs, punts).
+    """Normalize a team code, passing through missing values (kickoffs, punts).
 
     Used by the assembler to defensively normalize PBP's posteam/defteam
     before joining; PBP is already normalized in production-ingested data,
     so this is a no-op there.
+
+    Handles every flavor of "missing" pandas can hand us: None, float NaN,
+    and pd.NA (pyarrow-backed StringDtype's sentinel). pd.isna covers all
+    three; we still need a type-narrowing check beforehand because pd.isna
+    on an arbitrary string raises if it's also a non-scalar.
     """
-    if code is None or (isinstance(code, float) and pd.isna(code)):
+    if code is None:
         return None
-    if isinstance(code, str) and code == "":
+    if isinstance(code, str):
+        return None if code == "" else normalize_team_code(code).value
+    if pd.isna(code):
         return None
     return normalize_team_code(str(code)).value
 
