@@ -53,18 +53,33 @@ def _read_concat(raw_root: Path, table: str, seasons: Sequence[int]) -> pd.DataF
     return pd.concat(frames, ignore_index=True)
 
 
+_FANTASY_POSITIONS: tuple[str, ...] = ("QB", "RB", "WR", "TE")
+
+
 def _build_player_team_week_index(
-    weekly_stats: pd.DataFrame, schedules: pd.DataFrame, seasons: range
+    depth_charts: pd.DataFrame, schedules: pd.DataFrame, seasons: range
 ) -> pd.DataFrame:
-    """Inner-join weekly_stats and schedules to produce
-    ``(gsis_id, season, week, team, opp)``. Restrict to the target season range
-    so the override is keyed only to the seasons being probed."""
-    ws = weekly_stats[weekly_stats["season"].isin(seasons)][["gsis_id", "season", "week", "team"]]
+    """Inner-join depth_charts (filtered to fantasy-relevant positions) with
+    schedules to produce ``(gsis_id, season, week, team, opp)``.
+
+    The per-position feature parquets are built from ``depth_charts`` (every
+    rostered player per team-week, including ones who never played that week),
+    so the override must be keyed off the same source — using ``weekly_stats``
+    misses the backup-QB / inactive-roster rows that exist in baseline
+    features and produces ~50% coverage gaps at probe time.
+
+    Rows where the player's team has no schedule entry that week (bye weeks)
+    drop out of the inner join — matches the per-position feature builders'
+    bye-week filter (see e.g. ``features/qb.py``).
+    """
+    dc = depth_charts[
+        depth_charts["season"].isin(seasons) & depth_charts["position"].isin(_FANTASY_POSITIONS)
+    ][["gsis_id", "season", "week", "team"]].drop_duplicates(subset=["gsis_id", "season", "week"])
     sch = schedules[schedules["season"].isin(seasons)][["season", "week", "home_team", "away_team"]]
     home = sch.rename(columns={"home_team": "team", "away_team": "opp"})
     away = sch.rename(columns={"away_team": "team", "home_team": "opp"})
     team_opp = pd.concat([home, away], ignore_index=True)[["season", "week", "team", "opp"]]
-    return ws.merge(team_opp, on=["season", "week", "team"], how="inner")
+    return dc.merge(team_opp, on=["season", "week", "team"], how="inner")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -103,10 +118,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     pbp_seasons = range(seasons.start - 1, seasons.stop)  # +1 prior for backfill
 
     pbp = _read_concat(raw_root, "pbp", list(pbp_seasons))
-    weekly_stats = _read_concat(raw_root, "weekly_stats", list(seasons))
+    depth_charts = _read_concat(raw_root, "depth_charts", list(seasons))
     schedules = _read_concat(raw_root, "schedules", list(seasons))
 
-    idx = _build_player_team_week_index(weekly_stats, schedules, seasons)
+    idx = _build_player_team_week_index(depth_charts, schedules, seasons)
     overrides = build_pbp_family_overrides(pbp, idx)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
