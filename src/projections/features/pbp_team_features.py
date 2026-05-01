@@ -153,6 +153,57 @@ def compute_team_def_epa_residual(pbp: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def attach_pbp_family_features(
+    index: pd.DataFrame,
+    pbp: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach the 4 PBP family features to a player-team-week index.
+
+    Args:
+        index: ``(gsis_id, season, week, team, opp)`` — one row per
+            player-week. Team codes are assumed canonical per the ingest
+            schemas (``DepthChartsSchema`` / ``SchedulesSchema`` both validate
+            against ``_TEAM_VALUES``).
+        pbp: PBP frame matching ``PbpSchema``, projected to or wider than
+            ``_PBP_COLUMNS_USED``. Must include the seasons spanning the
+            index plus one prior season for trailing-4 backfill.
+
+    Returns:
+        A copy of ``index`` with 4 columns appended in order:
+        ``pace_l4``, ``proe_l4``, ``team_ayps_l4``, ``team_def_epa_resid_l4``.
+        Row count equals ``len(index)``; all 4 columns are float64
+        (NaN where trailing-4 has fewer than 4 prior games).
+
+    pace / proe / team_ayps join on the player's TEAM; team_def_epa_resid
+    joins on the player's OPPONENT.
+
+    Empty ``pbp`` short-circuits to all-NaN columns — same shape as a
+    successful call where every row's trailing-4 has fewer than 4 prior
+    games. Schema ``nullable=True`` covers this.
+    """
+    if pbp.empty:
+        out = index.copy()
+        for col in ("pace_l4", "proe_l4", "team_ayps_l4", "team_def_epa_resid_l4"):
+            out[col] = float("nan")
+        return out
+
+    pbp_proj = pbp[list(_PBP_COLUMNS_USED)]
+    pace = compute_team_pace(pbp_proj)
+    proe = compute_team_proe(pbp_proj)
+    ayps = compute_team_ayps(pbp_proj)
+    def_resid = compute_team_def_epa_residual(pbp_proj)
+
+    out = index.merge(pace, on=["team", "season", "week"], how="left")
+    out = out.merge(proe, on=["team", "season", "week"], how="left")
+    out = out.merge(ayps, on=["team", "season", "week"], how="left")
+    out = out.merge(
+        def_resid.rename(columns={"team": "opp"}),
+        on=["opp", "season", "week"],
+        how="left",
+    )
+    return out
+
+
 def build_pbp_family_overrides(
     pbp: pd.DataFrame,
     player_team_week_index: pd.DataFrame,
@@ -195,20 +246,7 @@ def build_pbp_family_overrides(
         n_dup = int(dup_mask.sum())
         raise ValueError(f"duplicate (gsis_id, season, week) keys in index: {n_dup} rows")
 
-    pbp_proj = pbp[list(_PBP_COLUMNS_USED)]
-    pace = compute_team_pace(pbp_proj)
-    proe = compute_team_proe(pbp_proj)
-    ayps = compute_team_ayps(pbp_proj)
-    def_resid = compute_team_def_epa_residual(pbp_proj)
-
-    out = player_team_week_index.merge(pace, on=["team", "season", "week"], how="left")
-    out = out.merge(proe, on=["team", "season", "week"], how="left")
-    out = out.merge(ayps, on=["team", "season", "week"], how="left")
-    out = out.merge(
-        def_resid.rename(columns={"team": "opp"}),
-        on=["opp", "season", "week"],
-        how="left",
-    )
+    out = attach_pbp_family_features(player_team_week_index, pbp)
 
     if len(out) != len(player_team_week_index):
         raise AssertionError(
