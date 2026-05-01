@@ -140,9 +140,10 @@ The function signature does not change. The unused `pbp` kwarg becomes load-bear
 In `src/projections/schemas.py`, append to `RbFeaturesSchema`:
 
 ```python
-# PBP team-level features (Plan 10 — RB PBP integration). Trailing 4
-# prior games; NaN for early-season weeks where fewer than 4 prior games
-# exist (notably 2018 weeks 1-4, the start of the curated PBP window).
+# PBP team-level features (PR #20 family probe + this spec's RB
+# integration). Trailing 4 prior games; NaN for early-season weeks
+# where fewer than 4 prior games exist (notably 2018 weeks 1-4, the
+# start of the curated PBP window).
 pace_l4: Series[float] = pa.Field(nullable=True)
 proe_l4: Series[float] = pa.Field(nullable=True)
 team_ayps_l4: Series[float] = pa.Field(ge=0, nullable=True)
