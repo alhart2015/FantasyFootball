@@ -26,7 +26,7 @@ Like PR #20, this spec is **probe-only**. It does not ship production feature bu
   - `compute_receiver_red_zone_target_share(pbp) -> pd.DataFrame` — `(gsis_id, season, week, red_zone_target_share_l4)`
   - `attach_pbp_receiver_features(index, pbp) -> pd.DataFrame` — assembler that calls the four computes and left-merges them onto a `(gsis_id, season, week)` index.
   - `build_pbp_receiver_overrides(pbp, receiver_index) -> pd.DataFrame` — public outer wrapper that adds GSIS-format / dup-key validation and the row-count invariant assertion (mirrors `build_pbp_family_overrides` in `pbp_team_features.py`). Returns `(gsis_id, season, week, aDOT_l4, deep_target_share_l4, yac_per_reception_l4, red_zone_target_share_l4)`.
-- New script `scripts/build_pbp_receiver_override.py`. Thin glue: load PBP partitions via `projections.store.read_partition`, build the receiver index from `weekly_stats` filtered to `position in {WR, TE}`, call the assembler, write `data/features_probe/pbp_receiver.parquet`. Manual-invoke; not part of CI; output not committed.
+- New script `scripts/build_pbp_receiver_override.py`. Thin glue: load PBP partitions via `projections.store.read_partition`, build the receiver index from `depth_charts` filtered to `position in {WR, TE}` (deduped to one row per `(gsis_id, season, week)`), call the assembler, write `data/features_probe/pbp_receiver.parquet`. Manual-invoke; not part of CI; output not committed.
 - New tests `tests/test_features/test_pbp_receiver_features.py` covering the four pure computes plus assembler integration on synthetic-PBP fixtures.
 - Two-to-four probe runs (each emitting 2 markdown + 2 CSV files, one per WR / TE; 4-to-8 committed files total under `reports/`):
   - `feature_probe_pbp_receiver_augment_{WR,TE}.{md,csv}` (always — baseline augment)
@@ -71,12 +71,12 @@ If any of these columns is missing in the loaded PBP, the spec is blocked (no si
 
 ### 2.2 Receiver index
 
-For each `(gsis_id, season, week)` row in the override, we need the receiver to have appeared in week W of season Y. Source:
+For each `(gsis_id, season, week)` row in the override, we need the receiver to be rostered per the depth chart in week W of season Y. Source:
 
-- `weekly_stats` ingest gives `(gsis_id, season, week, position)` directly.
-- Filter to `position in {WR, TE}`. One row per `(gsis_id, season, week)` for any WR/TE who appeared in week W of season Y (i.e., has a weekly_stats row).
+- `depth_charts` ingest gives `(gsis_id, season, week, position, team)` directly. **This is the same source the per-position WR/TE feature builders use** (`build_wr_features` / `build_te_features` filter `depth_charts` to `position in {WR, TE}` and use that as their row set). Using `depth_charts` ensures the override's row coverage matches the baseline feature parquet's row coverage; using `weekly_stats` instead would miss rostered-but-inactive WRs (WR3+) and produce coverage gaps at probe time (~50% in some seasons), tripping the 95% threshold.
+- Filter to `position in {WR, TE}`. Project to `(gsis_id, season, week)`. Dedupe on `(gsis_id, season, week)` (a player can be listed at multiple depth-chart slots in the same week, e.g., LWR + SWR — keep one row).
 
-Duplicate `(gsis_id, season, week)` keys in the index (which would arise from a player listed at both WR and TE in `weekly_stats` for the same week) are detected by the assembler's dup-key validation and raise `ValueError`. The synthetic fixtures cover this guardrail; real-data occurrences are vanishingly rare (a few historical data-entry errors in `nfl_data_py`'s upstream).
+Duplicate `(gsis_id, season, week)` keys in the index after dedupe should not exist; if any survive, the assembler's dup-key validation raises `ValueError`.
 
 ### 2.3 Trailing-window backfill rule
 
@@ -373,7 +373,7 @@ Argparse + I/O glue. Pattern matches `scripts/build_pbp_family_override.py`'s sh
 - `parse_args()` → `--seasons 2018-2024` (default), `--data-root data` (default), `--output data/features_probe/pbp_receiver.parquet` (default), `--force` (overwrite).
 - `main(argv=None)`:
   1. Load PBP via `projections.store.read_partition(raw_root, "pbp", season=s)` for `[args.seasons.start - 1, args.seasons.stop)` (one prior season for backfill).
-  2. Load `weekly_stats` for `[args.seasons.start, args.seasons.stop)`; build the receiver index by filtering to `position in {WR, TE}` and projecting `(gsis_id, season, week)`.
+  2. Load `depth_charts` for `[args.seasons.start, args.seasons.stop)`; build the receiver index by filtering to `position in {WR, TE}`, projecting `(gsis_id, season, week)`, and de-duping on the key (matches the team-level override script's pattern at `scripts/build_pbp_family_override.py:78-80`).
   3. Call `build_pbp_receiver_overrides(pbp, receiver_index)`.
   4. Write the resulting frame to `args.output` via `pyarrow.parquet`. Refuse to overwrite without `--force`.
 
