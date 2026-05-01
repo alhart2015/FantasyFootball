@@ -357,14 +357,14 @@ def _trailing_4_mean(per_game: pd.DataFrame, *, value_col: str, out_col: str) ->
     reflects the mean over W-4..W-1 (NOT W). min_periods=4 → fewer than 4
     prior games yield NaN. Input must have columns (team, season, week,
     value_col); output is (team, season, week, out_col).
+
+    Both the rolling AND the shift are within-team (via groupby+transform);
+    a global .shift(1) would leak the last row of one team into the first
+    row of the next.
     """
     sorted_df = per_game.sort_values(["team", "season", "week"]).reset_index(drop=True)
-    rolled = (
-        sorted_df.groupby("team", sort=False)[value_col]
-        .rolling(window=4, min_periods=4)
-        .mean()
-        .shift(1)  # row at index N reflects rolling mean of N-4..N-1
-        .reset_index(level=0, drop=True)
+    rolled = sorted_df.groupby("team", sort=False)[value_col].transform(
+        lambda s: s.rolling(window=4, min_periods=4).mean().shift(1)
     )
     sorted_df[out_col] = rolled
     return sorted_df[["team", "season", "week", out_col]]
