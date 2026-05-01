@@ -4,6 +4,24 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## RB PBP Features Integration — verdict ADOPT on (BaselineModel, RB); shipped (2026-05-01, on branch `feat/rb-pbp-features`)
+
+**Status:** Shipped per spec `docs/superpowers/specs/2026-05-01-rb-pbp-features-design.md` and plan `docs/superpowers/plans/2026-05-01-rb-pbp-features.md`. Extends `RbFeaturesSchema` with 4 nullable-float cols (`pace_l4`, `proe_l4`, `team_ayps_l4`, `team_def_epa_resid_l4`) and wires `attach_pbp_family_features` (extracted from `build_pbp_family_overrides` in PR #20) into `build_rb_features`. RB feature cache refreshed for 2018–2024 (151 partitions); full backtest + dual-run gate clean on the binding `(BaselineModel, RB)` cell; mypy strict + ruff + ruff format clean.
+
+**Verdict:** `(BaselineModel, RB)` = `ADOPT`. Composite RMSE delta **-0.0124 fpts** (95% CI [-0.0255, -0.0006]); Spearman delta +0.0021 (CI [-0.0003, +0.0044]). The probe (PR #20) predicted -0.0124 fpts CI [-0.0249, -0.0001] in augment mode — the production gate matched the point estimate to 4 decimal places.
+
+**Per-year breakdown (informational):** improvement concentrated in 2021 (-0.028 fpts, CI [-0.053, -0.005]) and 2022 (-0.021 fpts, CI [-0.046, +0.004]); 2023 flat (-0.004); 2024 mildly positive (+0.005, CI brackets zero). Pooled CI strictly negative because 2021–22 dominate the sample.
+
+**Other model classes (informational, not gating):** `lightgbm-tuned`, `lightgbm-nb`, `ensemble` deferred to a follow-up — Optuna + NB-2 fitting are 1+ hour each, and per spec §1.3.5 only `(BaselineModel, RB)` binds the ship/revert decision. The lightgbm family auto-picks-up the 4 new cols (it derives features from the schema dynamically); no model-layer change needed there.
+
+**Spec gap caught + fixed during execution:** the spec did not call out updating `src/projections/models/baseline.py:_RB_FEATURE_COLUMNS`, a hardcoded tuple the BaselineModel reads to know which schema cols to feed Ridge. Without the update, the gate measured all-zero deltas (candidate predictions identical to baseline). Fixed at commit `9895dee`. Future "add feature to position X" specs should include a model-feature-list checklist item.
+
+**What this closes:** Spec §1.3 criteria 1–5 for RB; TODO #3c's RB-only sub-question. WR / TE remain open for a separate refined-unit spec (player aDOT for receivers, per-position EPA-residual à la Plan 9). QB explicitly excluded — PR #20's augment-mode `passing_yards` regression (+0.45 fpts) means PBP team-features do not transfer to QB at the team-level granularity.
+
+**Reports:** `reports/rb_pbp_features_summary.md` (decision log + probe-vs-gate calibration table) + `reports/adoption_gate_rb_pbp_features_baseline.{md,csv}` (per-(model_class, RB) gate output).
+
+---
+
 ## PBP Feature Family Probe — verdict SIGNAL via RB; greenlights production-builder follow-up (2026-04-30, on branch `feat/probe-pbp-family`)
 
 **Status:** First family-level probe shipped per spec `docs/superpowers/specs/2026-04-30-pbp-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-04-30-pbp-feature-family-probe.md`. Implements 4 pure compute fns + assembler in `src/projections/features/pbp_team_features.py`, the `family_verdict_from_reports` helper in `src/projections/backtest/feature_probe.py`, and the `scripts/build_pbp_family_override.py` CLI. 14 synthetic-fixture tests pass; mypy strict + ruff + ruff format clean on touched files.
