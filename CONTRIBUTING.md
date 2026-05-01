@@ -304,7 +304,7 @@ The probe is a screening tool, not a substitute for the adoption gate. SIGNAL is
 **Phase 2 gating:**
 - Default: Phase 2 runs iff Phase 1 finds a pooled SIGNAL.
 - `--no-composite`: skip Phase 2 even on a Phase-1 SIGNAL.
-- `--force-composite`: run Phase 2 unconditionally. Use when `--model` is not the Ridge regressor used in Phase 1 — Phase 2's production-model fit may detect signal Phase 1's Ridge screen missed (e.g., trees on a feature Ridge can't use). Adds ~3–10 min per position depending on model class.
+- `--force-composite`: run Phase 2 unconditionally. Use when `--model` is not the Ridge regressor used in Phase 1 — Phase 2's production-model fit may detect signal Phase 1's Ridge screen missed (e.g., trees on a feature Ridge can't use). Adds ~3–10 min per position depending on model class. **Required whenever `--model` is non-default and you want lgb-nb (or any non-Ridge) to actually run.** Without this flag, Phase 1 (always RidgeCV regardless of `--model`) gates Phase 2; if Phase 1 returns no pooled SIGNAL, Phase 2 never fires and the `--model` setting has no effect — the run is tautological with the baseline-Ridge probe. This is the trap that consumed PR #22's WR/TE receiver-family probe before the lgb-nb runs were redone with `--force-composite`. Conditional-lgb-nb specs (per the family-probe pattern) should always include `--force-composite` on the lgb-nb runs.
 
 ### Regenerating the PBP family override
 
