@@ -285,7 +285,15 @@ def attach_pbp_receiver_features(
         (rz_pg, "red_zone_target_share_l4"),
     ):
         attached = _trailing_4_per_player_asof(per_game, index, value_col=col, out_col=col)
-        # attached has len == len(index); merge it onto out 1:1 by position.
-        out = out.merge(attached, on=["gsis_id", "season", "week"], how="left")
+        # `attached` has one row per index row, keyed by (gsis_id, season,
+        # week). The index is presumed unique on that key per the
+        # depth-chart-derived contract upstream; validate="one_to_one"
+        # converts that assumption into a runtime guard.
+        out = out.merge(
+            attached,
+            on=["gsis_id", "season", "week"],
+            how="left",
+            validate="one_to_one",
+        )
 
-    return out.reset_index(drop=True)
+    return out[["gsis_id", "season", "week", *_OUTPUT_COLUMNS]].reset_index(drop=True)
