@@ -5,6 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from projections.schemas import _PYARROW_STR
+
 
 def _make_pbp_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
     """Build a synthetic PBP frame with sane defaults for unspecified columns.
@@ -374,9 +376,9 @@ def test_def_epa_residual_subtracts_schedule_strength() -> None:
 def _make_player_team_week_index(rows: list[dict[str, object]]) -> pd.DataFrame:
     """Build a (gsis_id, season, week, team, opp) frame with GSIS-format IDs."""
     out = pd.DataFrame(rows)
-    out["gsis_id"] = out["gsis_id"].astype(pd.StringDtype("pyarrow"))
-    out["team"] = out["team"].astype(pd.StringDtype("pyarrow"))
-    out["opp"] = out["opp"].astype(pd.StringDtype("pyarrow"))
+    out["gsis_id"] = out["gsis_id"].astype(_PYARROW_STR)
+    out["team"] = out["team"].astype(_PYARROW_STR)
+    out["opp"] = out["opp"].astype(_PYARROW_STR)
     out["season"] = out["season"].astype("Int64")
     out["week"] = out["week"].astype("Int64")
     return out
@@ -560,85 +562,3 @@ def test_assembler_rejects_duplicate_keys() -> None:
 
     with pytest.raises(ValueError, match="duplicate"):
         build_pbp_family_overrides(pbp, idx)
-
-
-def test_assembler_normalizes_team_codes() -> None:
-    """Index using JAC (legacy) joins to PBP using JAX (canonical)."""
-    from projections.features.pbp_team_features import build_pbp_family_overrides
-
-    # Build PBP with canonical JAX team rows for trailing-4.
-    pbp_rows: list[dict[str, object]] = []
-    for wk in range(1, 6):
-        for i in range(20):
-            pbp_rows.append(
-                {
-                    "season": 2024,
-                    "week": wk,
-                    "posteam": "JAX",
-                    "defteam": "HOU",
-                    "play_type": "pass",
-                    "pass_attempt": 1.0,
-                    "air_yards": 7.0,
-                    "pass_oe": 2.0,
-                    "epa": 0.05,
-                    "play_id": 1000 * wk + i,
-                }
-            )
-    pbp = _make_pbp_rows(pbp_rows)
-
-    # Index uses JAC (legacy alias).
-    idx = _make_player_team_week_index(
-        [
-            {"gsis_id": "00-0011111", "season": 2024, "week": 5, "team": "JAC", "opp": "HOU"},
-        ]
-    )
-
-    out = build_pbp_family_overrides(pbp, idx)
-    # Player should pick up JAX's pass_oe mean (2.0) — not NaN.
-    assert out["proe_l4"].iloc[0] == pytest.approx(2.0)
-
-
-def test_assembler_handles_pyarrow_pd_na_in_pbp_team_columns() -> None:
-    """PBP loaded via read_partition uses pyarrow-backed StringDtype, where
-    missing values are pd.NA (not float NaN). The defensive PBP-side
-    normalization in build_pbp_family_overrides must pass these through to
-    None rather than crash on `Unknown team code: '<NA>'`."""
-    from projections.features.pbp_team_features import build_pbp_family_overrides
-
-    # Build PBP with one team-week of normal KC plays + a few rows with
-    # pd.NA posteam/defteam (e.g., timeouts, no-plays in real data).
-    pbp_rows: list[dict[str, object]] = []
-    for wk in range(1, 6):
-        for i in range(20):
-            pbp_rows.append(
-                {
-                    "season": 2024,
-                    "week": wk,
-                    "posteam": "KC",
-                    "defteam": "BAL",
-                    "play_type": "pass",
-                    "pass_attempt": 1.0,
-                    "air_yards": 8.0,
-                    "pass_oe": 5.0,
-                    "epa": 0.1,
-                    "play_id": 1000 * wk + i,
-                }
-            )
-    pbp = _make_pbp_rows(pbp_rows)
-    # Coerce posteam/defteam to pyarrow-backed StringDtype, then plant pd.NA
-    # in a few rows to mimic timeouts/no-plays.
-    pbp["posteam"] = pbp["posteam"].astype(pd.StringDtype("pyarrow"))
-    pbp["defteam"] = pbp["defteam"].astype(pd.StringDtype("pyarrow"))
-    pbp.loc[pbp.index[:3], "posteam"] = pd.NA
-    pbp.loc[pbp.index[3:6], "defteam"] = pd.NA
-
-    idx = _make_player_team_week_index(
-        [
-            {"gsis_id": "00-0011111", "season": 2024, "week": 5, "team": "KC", "opp": "BAL"},
-        ]
-    )
-
-    # Must not raise; the pd.NA rows should be silently skipped/passed-through.
-    out = build_pbp_family_overrides(pbp, idx)
-    assert len(out) == 1
-    assert out["proe_l4"].iloc[0] == pytest.approx(5.0)

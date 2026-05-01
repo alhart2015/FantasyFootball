@@ -23,6 +23,7 @@ from pathlib import Path
 import pandas as pd
 
 from projections.features.pbp_team_features import build_pbp_family_overrides
+from projections.schemas import Position
 from projections.store import read_partition
 
 _DEFAULT_OUTPUT = Path("data/features_probe/pbp_family.parquet")
@@ -53,7 +54,9 @@ def _read_concat(raw_root: Path, table: str, seasons: Sequence[int]) -> pd.DataF
     return pd.concat(frames, ignore_index=True)
 
 
-_FANTASY_POSITIONS: tuple[str, ...] = ("QB", "RB", "WR", "TE")
+_FANTASY_POSITIONS: tuple[str, ...] = tuple(
+    p.value for p in (Position.QB, Position.RB, Position.WR, Position.TE)
+)
 
 
 def _build_player_team_week_index(
@@ -83,8 +86,7 @@ def _build_player_team_week_index(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    assert __doc__ is not None  # module docstring is set at top of file
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0] if __doc__ else "")
     parser.add_argument(
         "--seasons",
         type=_parse_season_range,

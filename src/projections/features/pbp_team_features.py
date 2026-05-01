@@ -19,36 +19,21 @@ from typing import Final
 
 import pandas as pd
 
-from projections.schemas import GSIS_ID_PATTERN, normalize_team_code
+from projections.schemas import GSIS_ID_PATTERN
 
 _OFFENSIVE_PLAY_TYPES: Final[frozenset[str]] = frozenset({"pass", "run"})
 _GSIS_RE: Final[re.Pattern[str]] = re.compile(rf"^{GSIS_ID_PATTERN}$")
-
-
-def _normalize_str(code: object) -> str:
-    """Normalize a team code to its canonical string form. Raises on unknown."""
-    return normalize_team_code(str(code)).value
-
-
-def _normalize_str_or_none(code: object) -> str | None:
-    """Normalize a team code, passing through missing values (kickoffs, punts).
-
-    Used by the assembler to defensively normalize PBP's posteam/defteam
-    before joining; PBP is already normalized in production-ingested data,
-    so this is a no-op there.
-
-    Handles every flavor of "missing" pandas can hand us: None, float NaN,
-    and pd.NA (pyarrow-backed StringDtype's sentinel). pd.isna covers all
-    three; we still need a type-narrowing check beforehand because pd.isna
-    on an arbitrary string raises if it's also a non-scalar.
-    """
-    if code is None:
-        return None
-    if isinstance(code, str):
-        return None if code == "" else normalize_team_code(code).value
-    if pd.isna(code):
-        return None
-    return normalize_team_code(str(code)).value
+_PBP_COLUMNS_USED: Final[tuple[str, ...]] = (
+    "posteam",
+    "defteam",
+    "season",
+    "week",
+    "play_type",
+    "pass_oe",
+    "pass_attempt",
+    "air_yards",
+    "epa",
+)
 
 
 def _trailing_4_mean(per_game: pd.DataFrame, *, value_col: str, out_col: str) -> pd.DataFrame:
@@ -177,17 +162,23 @@ def build_pbp_family_overrides(
     Args:
         pbp: PBP frame matching ``PbpSchema``. Must include the seasons
             spanning the index plus one prior season for trailing-4 backfill.
+            Team codes (``posteam``, ``defteam``) are assumed canonical per
+            ``_TEAM_VALUES`` — schema validation at ingest is the contract.
         player_team_week_index: ``(gsis_id, season, week, team, opp)`` —
-            one row per player-week.
+            one row per player-week. Team codes are assumed canonical per the
+            ingest schemas (DepthChartsSchema / SchedulesSchema both validate
+            against ``_TEAM_VALUES``).
 
     Returns:
         ``(gsis_id, season, week, pace_l4, proe_l4, team_ayps_l4,
         team_def_epa_resid_l4)`` — one row per input index row.
 
     Raises:
-        ValueError: gsis_id format violations, duplicate
-            (gsis_id, season, week) keys, unknown team codes after
-            ``normalize_team_code``.
+        ValueError: gsis_id format violations or duplicate
+            (gsis_id, season, week) keys in the index.
+        AssertionError: row-count mismatch after merges (internal-invariant
+            violation; a future compute regression that introduces duplicate
+            (team, season, week) keys would trigger this).
 
     Per-position coverage validation is the probe's responsibility (the
     assembler has no access to the per-position feature parquets); see
@@ -204,29 +195,13 @@ def build_pbp_family_overrides(
         n_dup = int(dup_mask.sum())
         raise ValueError(f"duplicate (gsis_id, season, week) keys in index: {n_dup} rows")
 
-    idx = player_team_week_index.copy()
-    # normalize_team_code returns a Team enum; take .value for the canonical
-    # string form. Defensive normalization on both the index AND the PBP
-    # frame guarantees that any legacy alias (JAX/JAC, LA/LAR, STL, OAK, …)
-    # on either side joins correctly. PBP is already normalized post-ingest
-    # in production, so this is a no-op there.
-    idx["team"] = idx["team"].map(_normalize_str).astype(pd.StringDtype("pyarrow"))
-    idx["opp"] = idx["opp"].map(_normalize_str).astype(pd.StringDtype("pyarrow"))
+    pbp_proj = pbp[list(_PBP_COLUMNS_USED)]
+    pace = compute_team_pace(pbp_proj)
+    proe = compute_team_proe(pbp_proj)
+    ayps = compute_team_ayps(pbp_proj)
+    def_resid = compute_team_def_epa_residual(pbp_proj)
 
-    pbp_norm = pbp.copy()
-    pbp_norm["posteam"] = (
-        pbp_norm["posteam"].map(_normalize_str_or_none).astype(pd.StringDtype("pyarrow"))
-    )
-    pbp_norm["defteam"] = (
-        pbp_norm["defteam"].map(_normalize_str_or_none).astype(pd.StringDtype("pyarrow"))
-    )
-
-    pace = compute_team_pace(pbp_norm)
-    proe = compute_team_proe(pbp_norm)
-    ayps = compute_team_ayps(pbp_norm)
-    def_resid = compute_team_def_epa_residual(pbp_norm)
-
-    out = idx.merge(pace, on=["team", "season", "week"], how="left")
+    out = player_team_week_index.merge(pace, on=["team", "season", "week"], how="left")
     out = out.merge(proe, on=["team", "season", "week"], how="left")
     out = out.merge(ayps, on=["team", "season", "week"], how="left")
     out = out.merge(
@@ -235,13 +210,6 @@ def build_pbp_family_overrides(
         how="left",
     )
 
-    # Defensive invariant: each merge above is a left-join on a key the
-    # right-hand side claims to be unique on. If a future regression
-    # introduces a duplicate (team, season, week) or (opp, season, week)
-    # row in any compute output, the merge would multiply rows and the
-    # output would silently contain extras. AssertionError is the right
-    # signal here — this is an internal-invariant violation, not user
-    # input — so a programmer-error fail-fast is preferred to ValueError.
     if len(out) != len(player_team_week_index):
         raise AssertionError(
             f"row count mismatch: input index had {len(player_team_week_index)} rows, "
