@@ -14,11 +14,34 @@ Spec: docs/superpowers/specs/2026-04-30-pbp-feature-family-probe-design.md §6.1
 
 from __future__ import annotations
 
+import re
 from typing import Final
 
 import pandas as pd
 
+from projections.schemas import GSIS_ID_PATTERN, normalize_team_code
+
 _OFFENSIVE_PLAY_TYPES: Final[frozenset[str]] = frozenset({"pass", "run"})
+_GSIS_RE: Final[re.Pattern[str]] = re.compile(rf"^{GSIS_ID_PATTERN}$")
+
+
+def _normalize_str(code: object) -> str:
+    """Normalize a team code to its canonical string form. Raises on unknown."""
+    return normalize_team_code(str(code)).value
+
+
+def _normalize_str_or_none(code: object) -> str | None:
+    """Normalize a team code, passing through None/NaN (kickoffs, punts).
+
+    Used by the assembler to defensively normalize PBP's posteam/defteam
+    before joining; PBP is already normalized in production-ingested data,
+    so this is a no-op there.
+    """
+    if code is None or (isinstance(code, float) and pd.isna(code)):
+        return None
+    if isinstance(code, str) and code == "":
+        return None
+    return normalize_team_code(str(code)).value
 
 
 def _trailing_4_mean(per_game: pd.DataFrame, *, value_col: str, out_col: str) -> pd.DataFrame:
@@ -136,3 +159,83 @@ def compute_team_def_epa_residual(pbp: pd.DataFrame) -> pd.DataFrame:
         value_col="resid",
         out_col="team_def_epa_resid_l4",
     )
+
+
+def build_pbp_family_overrides(
+    pbp: pd.DataFrame,
+    player_team_week_index: pd.DataFrame,
+) -> pd.DataFrame:
+    """Public assembler. Returns the 4-column override frame ready to write.
+
+    Args:
+        pbp: PBP frame matching ``PbpSchema``. Must include the seasons
+            spanning the index plus one prior season for trailing-4 backfill.
+        player_team_week_index: ``(gsis_id, season, week, team, opp)`` —
+            one row per player-week.
+
+    Returns:
+        ``(gsis_id, season, week, pace_l4, proe_l4, team_ayps_l4,
+        team_def_epa_resid_l4)`` — one row per input index row.
+
+    Raises:
+        ValueError: gsis_id format violations, duplicate
+            (gsis_id, season, week) keys, unknown team codes after
+            ``normalize_team_code``.
+
+    Per-position coverage validation is the probe's responsibility (the
+    assembler has no access to the per-position feature parquets); see
+    spec §1.3 criterion 1 + §3.3 step 2.
+    """
+    bad_ids = [g for g in player_team_week_index["gsis_id"].dropna() if not _GSIS_RE.match(str(g))]
+    if bad_ids:
+        raise ValueError(
+            f"invalid gsis_id format(s): {bad_ids[:3]} (and {max(0, len(bad_ids) - 3)} more)"
+        )
+
+    dup_mask = player_team_week_index.duplicated(subset=["gsis_id", "season", "week"], keep=False)
+    if dup_mask.any():
+        n_dup = int(dup_mask.sum())
+        raise ValueError(f"duplicate (gsis_id, season, week) keys in index: {n_dup} rows")
+
+    idx = player_team_week_index.copy()
+    # normalize_team_code returns a Team enum; take .value for the canonical
+    # string form. Defensive normalization on both the index AND the PBP
+    # frame guarantees that any legacy alias (JAX/JAC, LA/LAR, STL, OAK, …)
+    # on either side joins correctly. PBP is already normalized post-ingest
+    # in production, so this is a no-op there.
+    idx["team"] = idx["team"].map(_normalize_str).astype(pd.StringDtype("pyarrow"))
+    idx["opp"] = idx["opp"].map(_normalize_str).astype(pd.StringDtype("pyarrow"))
+
+    pbp_norm = pbp.copy()
+    pbp_norm["posteam"] = (
+        pbp_norm["posteam"].map(_normalize_str_or_none).astype(pd.StringDtype("pyarrow"))
+    )
+    pbp_norm["defteam"] = (
+        pbp_norm["defteam"].map(_normalize_str_or_none).astype(pd.StringDtype("pyarrow"))
+    )
+
+    pace = compute_team_pace(pbp_norm)
+    proe = compute_team_proe(pbp_norm)
+    ayps = compute_team_ayps(pbp_norm)
+    def_resid = compute_team_def_epa_residual(pbp_norm)
+
+    out = idx.merge(pace, on=["team", "season", "week"], how="left")
+    out = out.merge(proe, on=["team", "season", "week"], how="left")
+    out = out.merge(ayps, on=["team", "season", "week"], how="left")
+    out = out.merge(
+        def_resid.rename(columns={"team": "opp"}),
+        on=["opp", "season", "week"],
+        how="left",
+    )
+
+    return out[
+        [
+            "gsis_id",
+            "season",
+            "week",
+            "pace_l4",
+            "proe_l4",
+            "team_ayps_l4",
+            "team_def_epa_resid_l4",
+        ]
+    ].reset_index(drop=True)

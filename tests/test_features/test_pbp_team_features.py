@@ -369,3 +369,143 @@ def test_def_epa_residual_subtracts_schedule_strength() -> None:
     assert bal_wk5["team_def_epa_resid_l4"].iloc[0] == pytest.approx(-0.2, abs=0.01)
     # CIN: allowed +0.1 vs JAX (season EPA -0.1) → residual = +0.2.
     assert cin_wk5["team_def_epa_resid_l4"].iloc[0] == pytest.approx(+0.2, abs=0.01)
+
+
+def _make_player_team_week_index(rows: list[dict[str, object]]) -> pd.DataFrame:
+    """Build a (gsis_id, season, week, team, opp) frame with GSIS-format IDs."""
+    out = pd.DataFrame(rows)
+    out["gsis_id"] = out["gsis_id"].astype(pd.StringDtype("pyarrow"))
+    out["team"] = out["team"].astype(pd.StringDtype("pyarrow"))
+    out["opp"] = out["opp"].astype(pd.StringDtype("pyarrow"))
+    out["season"] = out["season"].astype("Int64")
+    out["week"] = out["week"].astype("Int64")
+    return out
+
+
+def test_assembler_emits_4_columns_with_correct_join_sides() -> None:
+    """pace/proe/team_ayps join on the player's TEAM; team_def_epa_resid
+    joins on the player's OPPONENT."""
+    from projections.features.pbp_team_features import build_pbp_family_overrides
+
+    # KC plays, BAL plays, with PBP for trailing-4 history.
+    pbp_rows: list[dict[str, object]] = []
+    for team, oe, ay in [("KC", 5.0, 8.0), ("BAL", -3.0, 6.0)]:
+        for wk in range(1, 6):
+            for i in range(20):
+                pbp_rows.append(
+                    {
+                        "season": 2024,
+                        "week": wk,
+                        "posteam": team,
+                        "defteam": "BAL" if team == "KC" else "KC",
+                        "play_type": "pass",
+                        "pass_attempt": 1.0,
+                        "air_yards": ay,
+                        "pass_oe": oe,
+                        "epa": 0.1,
+                        "play_id": 1000 * wk + i + (50000 if team == "BAL" else 0),
+                    }
+                )
+
+    pbp = _make_pbp_rows(pbp_rows)
+
+    # One player on KC, one on BAL — both at week 5.
+    idx = _make_player_team_week_index(
+        [
+            {"gsis_id": "00-0011111", "season": 2024, "week": 5, "team": "KC", "opp": "BAL"},
+            {"gsis_id": "00-0022222", "season": 2024, "week": 5, "team": "BAL", "opp": "KC"},
+        ]
+    )
+
+    out = build_pbp_family_overrides(pbp, idx)
+
+    assert set(out.columns) == {
+        "gsis_id",
+        "season",
+        "week",
+        "pace_l4",
+        "proe_l4",
+        "team_ayps_l4",
+        "team_def_epa_resid_l4",
+    }
+    assert len(out) == 2
+
+    kc_player = out.query("gsis_id == '00-0011111'")
+    bal_player = out.query("gsis_id == '00-0022222'")
+
+    # KC player gets KC's offensive features.
+    assert kc_player["proe_l4"].iloc[0] == pytest.approx(5.0)
+    assert kc_player["team_ayps_l4"].iloc[0] == pytest.approx(8.0)
+
+    # BAL player gets BAL's offensive features.
+    assert bal_player["proe_l4"].iloc[0] == pytest.approx(-3.0)
+    assert bal_player["team_ayps_l4"].iloc[0] == pytest.approx(6.0)
+
+
+def test_assembler_rejects_invalid_gsis_id() -> None:
+    """build_pbp_family_overrides raises if any input gsis_id violates the
+    GSIS_ID_PATTERN."""
+    from projections.features.pbp_team_features import build_pbp_family_overrides
+
+    pbp = _make_pbp_rows([{"season": 2024, "week": 1, "posteam": "KC"}])
+    idx = _make_player_team_week_index(
+        [
+            {"gsis_id": "BOGUS_ID", "season": 2024, "week": 1, "team": "KC", "opp": "BAL"},
+        ]
+    )
+
+    with pytest.raises(ValueError, match="gsis_id"):
+        build_pbp_family_overrides(pbp, idx)
+
+
+def test_assembler_rejects_duplicate_keys() -> None:
+    """Two rows with the same (gsis_id, season, week) is a programmer
+    error in the index — assembler refuses."""
+    from projections.features.pbp_team_features import build_pbp_family_overrides
+
+    pbp = _make_pbp_rows([{"season": 2024, "week": 1, "posteam": "KC"}])
+    idx = _make_player_team_week_index(
+        [
+            {"gsis_id": "00-0011111", "season": 2024, "week": 5, "team": "KC", "opp": "BAL"},
+            {"gsis_id": "00-0011111", "season": 2024, "week": 5, "team": "BAL", "opp": "KC"},
+        ]
+    )
+
+    with pytest.raises(ValueError, match="duplicate"):
+        build_pbp_family_overrides(pbp, idx)
+
+
+def test_assembler_normalizes_team_codes() -> None:
+    """Index using JAC (legacy) joins to PBP using JAX (canonical)."""
+    from projections.features.pbp_team_features import build_pbp_family_overrides
+
+    # Build PBP with canonical JAX team rows for trailing-4.
+    pbp_rows: list[dict[str, object]] = []
+    for wk in range(1, 6):
+        for i in range(20):
+            pbp_rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "JAX",
+                    "defteam": "HOU",
+                    "play_type": "pass",
+                    "pass_attempt": 1.0,
+                    "air_yards": 7.0,
+                    "pass_oe": 2.0,
+                    "epa": 0.05,
+                    "play_id": 1000 * wk + i,
+                }
+            )
+    pbp = _make_pbp_rows(pbp_rows)
+
+    # Index uses JAC (legacy alias).
+    idx = _make_player_team_week_index(
+        [
+            {"gsis_id": "00-0011111", "season": 2024, "week": 5, "team": "JAC", "opp": "HOU"},
+        ]
+    )
+
+    out = build_pbp_family_overrides(pbp, idx)
+    # Player should pick up JAX's pass_oe mean (2.0) — not NaN.
+    assert out["proe_l4"].iloc[0] == pytest.approx(2.0)
