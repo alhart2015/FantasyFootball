@@ -53,3 +53,21 @@ def compute_team_pace(pbp: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"posteam": "team", "size": "plays"})
     )
     return _trailing_4_mean(per_game, value_col="plays", out_col="pace_l4")
+
+
+def compute_team_proe(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Team-level pass rate over expected, trailing 4 prior games.
+
+    Mean of ``pass_oe`` (nflfastR's pass-over-expected, percentage points)
+    across rows where ``posteam == team`` and ``pass_oe`` is non-NaN.
+    Upstream's xpass model already game-state-controls the per-play
+    pass_oe value, so the per-play mean is itself a properly-controlled
+    PROE — no further bucketing required here.
+    """
+    plays = pbp[pbp["pass_oe"].notna()]
+    per_game = (
+        plays.groupby(["posteam", "season", "week"], as_index=False)["pass_oe"]
+        .mean()
+        .rename(columns={"posteam": "team", "pass_oe": "proe"})
+    )
+    return _trailing_4_mean(per_game, value_col="proe", out_col="proe_l4")

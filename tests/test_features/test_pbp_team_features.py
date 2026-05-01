@@ -166,3 +166,68 @@ def test_pace_does_not_leak_across_team_boundaries() -> None:
     assert out.query("team == 'KC' and week == 5")["pace_l4"].iloc[0] == pytest.approx(10.0)
     # BAL week 5 must reflect BAL's history alone.
     assert out.query("team == 'BAL' and week == 5")["pace_l4"].iloc[0] == pytest.approx(100.0)
+
+
+def test_proe_uses_pass_oe_mean_directly() -> None:
+    """proe_l4 is the per-team rolling-4 mean of nflfastR's pass_oe column."""
+    from projections.features.pbp_team_features import compute_team_proe
+
+    # KC: 4 prior weeks with mean pass_oe = +5.0; week 5 should report +5.0.
+    # BAL: 4 prior weeks with mean pass_oe = -3.0; week 5 should report -3.0.
+    rows: list[dict[str, object]] = []
+    for team, oe in [("KC", 5.0), ("BAL", -3.0)]:
+        for wk in range(1, 6):
+            for i in range(20):
+                rows.append(
+                    {
+                        "season": 2024,
+                        "week": wk,
+                        "posteam": team,
+                        "pass_oe": oe,
+                        "play_type": "pass",
+                        "play_id": 1000 * wk + i,
+                    }
+                )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_proe(pbp)
+
+    kc_wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
+    bal_wk5 = out.query("team == 'BAL' and season == 2024 and week == 5")
+    assert kc_wk5["proe_l4"].iloc[0] == pytest.approx(5.0)
+    assert bal_wk5["proe_l4"].iloc[0] == pytest.approx(-3.0)
+
+
+def test_proe_drops_nan_pass_oe_rows() -> None:
+    """pass_oe NaN (e.g., kickoffs, no-plays) are excluded from the mean."""
+    from projections.features.pbp_team_features import compute_team_proe
+
+    rows: list[dict[str, object]] = []
+    # KC wk1-4: 10 plays with pass_oe=10.0, plus 90 plays with pass_oe=NaN.
+    # Mean over non-NaN should be 10.0.
+    for wk in range(1, 6):
+        for i in range(10):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "pass_oe": 10.0,
+                    "play_type": "pass",
+                    "play_id": 1000 * wk + i,
+                }
+            )
+        for i in range(90):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "pass_oe": float("nan"),
+                    "play_type": "kickoff",
+                    "play_id": 2000 * wk + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_proe(pbp)
+    wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5["proe_l4"].iloc[0] == pytest.approx(10.0)
