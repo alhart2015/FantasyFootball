@@ -13,6 +13,7 @@ from projections.features._rolling import (
     trailing_n_share_in_group,
 )
 from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
+from projections.features.pbp_team_features import attach_pbp_family_features
 from projections.schemas import (
     _PYARROW_STR,
     Position,
@@ -55,8 +56,9 @@ def build_rb_features(
     schedules: pd.DataFrame,
     season: int,
     as_of_week: int,
-    # pbp: reserved plumbing for future PBP-driven features (Plan 9 Phase 6
-    # negative result, kept threaded for future plans). Currently unused.
+    # pbp: PBP frame for the team-level family features (pace_l4, proe_l4,
+    # team_ayps_l4, team_def_epa_resid_l4). Empty frame yields NaN for those
+    # 4 columns via attach_pbp_family_features's empty-pbp short-circuit.
     pbp: pd.DataFrame = _EMPTY_PBP,
 ) -> pd.DataFrame:
     """Build the RB feature DataFrame for week `as_of_week` of `season`."""
@@ -200,6 +202,30 @@ def build_rb_features(
             columns={"opp_team": "opponent"}
         ),
         on=["season", "week", "opponent"],
+        how="left",
+    )
+
+    # --- PBP team-level family features (spec 2026-05-01) ----------------
+    # Build the (gsis_id, season, week, team, opp) index off the assembled
+    # frame's existing team + opponent columns, call the shared helper, and
+    # merge the 4 returned columns onto `out` on (gsis_id, season, week).
+    pbp_index = out[["gsis_id", "season", "week", "team", "opponent"]].rename(
+        columns={"opponent": "opp"}
+    )
+    pbp_features = attach_pbp_family_features(pbp_index, pbp)
+    out = out.merge(
+        pbp_features[
+            [
+                "gsis_id",
+                "season",
+                "week",
+                "pace_l4",
+                "proe_l4",
+                "team_ayps_l4",
+                "team_def_epa_resid_l4",
+            ]
+        ],
+        on=["gsis_id", "season", "week"],
         how="left",
     )
 

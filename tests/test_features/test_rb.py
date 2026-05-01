@@ -241,6 +241,15 @@ def _make_pbp_rows_for_join_side_test() -> pd.DataFrame:
     for wk in range(5, 10):
         _add(wk, posteam="KC", defteam="MIA", epa=0.5, pass_oe=5.0, air_yards=8.0)
         _add(wk, posteam="BAL", defteam="MIA", epa=0.0, pass_oe=-3.0, air_yards=6.0)
+        # MIA posteam vs BAL/KC defteam at epa=0 — gives BAL and KC def rows at
+        # weeks 5-9 so the trailing-4 shift in compute_team_def_epa_residual
+        # has a row at week 5 to land on. Without this, BAL has only weeks 1-4
+        # def rows, the shift drops the rolling-4 value, and the joined
+        # team_def_epa_resid_l4 at week 5 comes back NaN. MIA's epa=0 here
+        # makes its season-avg offensive EPA = 0, so BAL's residual at weeks
+        # 5-9 = (0 - 0) = 0 — outside the trailing-4 window at week 5 anyway.
+        _add(wk, posteam="MIA", defteam="BAL", epa=0.0, pass_oe=0.0, air_yards=5.0)
+        _add(wk, posteam="MIA", defteam="KC", epa=0.0, pass_oe=0.0, air_yards=5.0)
     return pd.DataFrame(rows)
 
 
