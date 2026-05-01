@@ -24,7 +24,7 @@ This spec is **probe-only**. It does not ship production feature builders, does 
   - `compute_team_ayps(pbp) -> pd.DataFrame`            (`team`, `season`, `week`, `team_ayps_l4`)
   - `compute_team_def_epa_residual(pbp) -> pd.DataFrame`(`team`, `season`, `week`, `team_def_epa_resid_l4`) — `team` here is the **defense's** team code; the joiner attaches each player's *opponent's* row.
   - `build_pbp_family_overrides(pbp, player_team_week_index) -> pd.DataFrame` — public assembler that calls the four computes, joins onto a per-player index, returns `(gsis_id, season, week, pace_l4, proe_l4, team_ayps_l4, team_def_epa_resid_l4)`.
-- New script `scripts/build_pbp_family_override.py`. Thin glue: load PBP partitions via `projections.ingest.pbp.read_pbp`, load the player-team-week index from `weekly_stats` + `schedules` ingest layer, call the assembler, write `data/features_probe/pbp_family.parquet`. Manual-invoke; not part of CI; output not committed.
+- New script `scripts/build_pbp_family_override.py`. Thin glue: load PBP / weekly_stats / schedules partitions via `projections.store.read_partition` (same reader pattern `scripts/refresh_features.py:88` uses), call the assembler, write `data/features_probe/pbp_family.parquet`. Manual-invoke; not part of CI; output not committed.
 - New tests `tests/test_features/test_pbp_team_features.py`. Synthetic-PBP fixtures, one test per pure function (correctness on hand-crafted small frames), one assembly test (coverage + output schema).
 - Two-to-four probe runs (each emitting 4 markdown + 4 CSV files, one per position; 16–32 committed files total under `reports/`):
   - `feature_probe_pbp_family_augment_{QB,RB,WR,TE}.{md,csv}` (always — baseline augment)
@@ -40,7 +40,7 @@ This spec is **probe-only**. It does not ship production feature builders, does 
 - **No production feature-builder integration.** If the probe returns `SIGNAL`, a follow-up plan adds per-position builders that may refine units (player aDOT for receivers; per-position EPA-allowed residual à la Plan 9). This spec stops at the probe verdict.
 - **No new probe machinery.** The probe (PR #18) and `--force-composite` flag (PR #19) are reused as-is. No new CLI flags.
 - **No new ingest source.** PBP ingest from Plan 9 is reused; if `nfl_data_py` columns required by these features turn out to be missing, the spec is blocked, not patched (a separate ingest-extension plan would be required).
-- **No PROE-model-fitting work.** PROE here is a simplified bucketed expectation (actual pass% minus league-avg pass% in matched down/distance/score-diff buckets) — not a fitted xpass model. If the probe returns `NULL` and we believe a fuller PROE definition would change the verdict, that is a *separate* spec; do not iterate on the PROE definition pre-probe.
+- **No PROE-model-fitting work.** PROE here uses upstream nflfastR's per-play `pass_oe` column directly (already a properly game-state-controlled xpass output). We do *not* refit our own xpass model. If the probe returns `NULL` and there is independent reason to believe a custom xpass model would change the verdict, that is a *separate* spec.
 - **No tuning of feature backfill policy beyond the trailing-4-needs-prior-season fallback.** If coverage falls below 95% on any (position, season) pair, the probe rejects with a clear error and the user fixes the override; the spec does not add silent-NaN-impute paths.
 - **No persistence under `data/` beyond the override parquet.** The override under `data/features_probe/pbp_family.parquet` is regenerable from PBP partitions; not committed (per probe spec §7.2).
 - **No multi-window probes.** Trailing window is fixed at l4 (matches the v1 convention and Plan 9). Sweeping l2/l4/l8 is a separate spec if it ever matters.
@@ -62,11 +62,13 @@ If any of (1)–(3) cannot be satisfied, the spec stops short of declaring a ver
 
 ### 2.1 PBP source
 
-`projections.ingest.pbp.read_pbp` (Plan 9) for seasons 2018–2024. Curated 27-column subset already covers the upstream columns this spec needs:
+PBP partitions read via `projections.store.read_partition(raw_root, "pbp", season=s)` (the same reader used by `scripts/refresh_features.py:88`). Seasons 2018–2024. The curated 27-column `PbpSchema` (Plan 9) covers the upstream columns this spec needs:
 
-- `season`, `week`, `posteam`, `defteam`, `play_type`, `qtr`, `wp`, `down`, `ydstogo`, `score_differential`, `air_yards`, `pass_attempt`, `epa`.
+- `season`, `week`, `posteam`, `defteam`, `play_type`, `pass_attempt`, `epa`, `air_yards`, `pass_oe` — all already in the curated subset.
 
 If any of these columns is missing in the loaded PBP, the spec is blocked (no silent imputation). The `--run-network` smoke at `tests/test_ingest/test_api_drift.py::test_pbp_api_columns_and_schema` already guards against upstream column-rename drift; if that smoke is green at spec-execution time, the curated subset is intact.
+
+**Note on neutral-script and qtr filters:** the curated subset deliberately excludes `wp`, `qtr`, and `score_differential` (Plan 9 chose a minimal subset). Pace and EPA-residual therefore use *all* offensive/defensive plays, not a neutral-script subset. PROE is already game-state-controlled by upstream `nflfastR`'s xpass model, so the per-play `pass_oe` mean is itself a properly-controlled PROE — no bucketing needed downstream of it.
 
 ### 2.2 Player-team-week index
 
@@ -232,9 +234,14 @@ Pure pandas. Imports `Team` from `projections.schemas` and `normalize_team_code`
 
 ```python
 def compute_team_pace(pbp: pd.DataFrame) -> pd.DataFrame:
-    """Team-level neutral-script plays per 60 min, trailing 4 prior games.
+    """Team-level plays per game, trailing 4 prior games.
 
-    Neutral script: WP ∈ [0.20, 0.80] and qtr ≤ 3.
+    Plays counted: every row in `pbp` where `posteam == team` and
+    `play_type` is in {'pass', 'run'} (excludes kickoffs, punts, FGs,
+    no-plays). No neutral-script filter — the curated PbpSchema does not
+    include `wp` / `qtr` / `score_differential`. Future expansion to a
+    neutral-only pace is a separate ingest-extension plan.
+
     Output: (team, season, week, pace_l4) — one row per (team, season, week)
     where the team has a scheduled game.
     """
@@ -243,20 +250,22 @@ def compute_team_pace(pbp: pd.DataFrame) -> pd.DataFrame:
 def compute_team_proe(pbp: pd.DataFrame) -> pd.DataFrame:
     """Team-level pass rate over expected, trailing 4 prior games.
 
-    Simplified bucketed expectation: actual pass% in neutral game state minus
-    league-avg pass% in matched (down, distance bucket, score-diff bucket)
-    buckets. Buckets:
-      - down ∈ {1, 2, 3, 4}
-      - ydstogo bucketed: short (1-3), medium (4-7), long (8+)
-      - score_differential bucketed: trailing big (-15 or worse), trailing
-        small (-14..-1), tied/leading small (0..7), leading big (+8 or
-        better)
+    Mean of `pass_oe` (pass over expected, in percentage points) across all
+    plays where `posteam == team` and `pass_oe` is non-NaN. nflfastR's
+    upstream xpass model already game-state-controls `pass_oe`, so the
+    per-play mean is itself a properly-controlled PROE — no further
+    bucketing required.
+
     Output: (team, season, week, proe_l4)
     """
 
 
 def compute_team_ayps(pbp: pd.DataFrame) -> pd.DataFrame:
     """Team-level mean air yards per pass attempt, trailing 4 prior games.
+
+    Plays counted: rows where `posteam == team`, `pass_attempt == 1.0`, and
+    `air_yards` is non-NaN. Sum air_yards / count of such plays per
+    (team, game) → mean across the trailing 4 games.
 
     Output: (team, season, week, team_ayps_l4)
     """
@@ -266,11 +275,12 @@ def compute_team_def_epa_residual(pbp: pd.DataFrame) -> pd.DataFrame:
     """Defensive EPA-allowed-per-play residual vs schedule strength,
     trailing 4 prior games.
 
-    Plain OLS residual: per (defteam, season, week), EPA-per-play across all
-    plays the defense was on the field for, residualized vs the offensive
-    opponents' season-average EPA-per-play (schedule strength). Same
-    machinery as Plan 9's per-position EPA-residual, but pooled across all
-    plays (not split by play type or downstream position).
+    Per (defteam, season, game): mean of `epa` across all plays where
+    `defteam == team` and `epa` is non-NaN. Then residualize each
+    (defteam, game)'s mean-EPA-allowed against the offensive opponent's
+    season-average mean-EPA-on-offense (schedule strength). Same machinery
+    as Plan 9's per-position EPA-residual, but pooled across all plays
+    (not split by play type or downstream position).
 
     Output: (team, season, week, team_def_epa_resid_l4) where `team` is the
     DEFENSE's team code; the joiner attaches each player's *opponent's* row.
