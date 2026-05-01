@@ -87,3 +87,52 @@ def compute_team_ayps(pbp: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"posteam": "team", "air_yards": "ayps"})
     )
     return _trailing_4_mean(per_game, value_col="ayps", out_col="team_ayps_l4")
+
+
+def compute_team_def_epa_residual(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Defensive EPA-allowed-per-play residual vs offensive-opponent
+    season-average EPA, trailing 4 prior games.
+
+    Per (defteam, season, week): mean of ``epa`` across rows where
+    ``defteam == team`` and ``epa`` is non-NaN. Per (posteam, season):
+    season-average mean of ``epa`` on offense (the opponent's strength
+    signal). Per-game residual = (mean def-allowed EPA) - (offensive
+    opponent's season-average EPA-on-offense). Then rolling-4 mean of
+    the residual series per team, shifted so row at week W reflects the
+    last 4 prior games.
+
+    Plain (non-regression) residual: subtracting the opp's season-avg
+    EPA from each game's def-allowed EPA gives the "above-or-below
+    expected" residual for that game. Same shape as Plan 9's per-position
+    EPA-residual but pooled across all plays.
+
+    Output schema: (team, season, week, team_def_epa_resid_l4) where
+    ``team`` is the DEFENSE's team code; the joiner attaches each
+    player's *opponent's* row.
+    """
+    epa_plays = pbp[pbp["epa"].notna()]
+
+    # Per (defteam, season, week): mean EPA allowed; first opponent
+    # (one opponent per defense per week in real NFL).
+    def_per_game = (
+        epa_plays.groupby(["defteam", "season", "week"], as_index=False)
+        .agg(def_epa_mean=("epa", "mean"), opp=("posteam", "first"))
+        .rename(columns={"defteam": "team"})
+    )
+
+    # Per (posteam, season): full-season average offensive EPA. The
+    # opponent's "strength expectation" for any game.
+    off_season_avg = (
+        epa_plays.groupby(["posteam", "season"], as_index=False)["epa"]
+        .mean()
+        .rename(columns={"posteam": "opp", "epa": "opp_season_off_epa"})
+    )
+
+    merged = def_per_game.merge(off_season_avg, on=["opp", "season"], how="left")
+    merged["resid"] = merged["def_epa_mean"] - merged["opp_season_off_epa"]
+
+    return _trailing_4_mean(
+        merged[["team", "season", "week", "resid"]],
+        value_col="resid",
+        out_col="team_def_epa_resid_l4",
+    )
