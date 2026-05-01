@@ -329,3 +329,65 @@ def test_deep_target_share_zero_targets_no_per_game_row() -> None:
     pbp = _make_pbp_rows(rows)
     per_game = compute_receiver_deep_target_share(pbp)
     assert len(per_game) == 0
+
+
+def test_yac_completions_only() -> None:
+    """YAC averages only over completions (complete_pass == 1.0); incompletions
+    excluded even when receiver_player_id is set."""
+    from projections.features.pbp_receiver_features import compute_receiver_yac_per_reception
+
+    gid = "00-0000001"
+    rows = [
+        # 3 completions with YAC 5, 10, 15.
+        {
+            "season": 2024,
+            "week": 1,
+            "play_id": 100,
+            "receiver_player_id": gid,
+            "pass_attempt": 1.0,
+            "complete_pass": 1.0,
+            "yards_after_catch": 5.0,
+        },
+        {
+            "season": 2024,
+            "week": 1,
+            "play_id": 101,
+            "receiver_player_id": gid,
+            "pass_attempt": 1.0,
+            "complete_pass": 1.0,
+            "yards_after_catch": 10.0,
+        },
+        {
+            "season": 2024,
+            "week": 1,
+            "play_id": 102,
+            "receiver_player_id": gid,
+            "pass_attempt": 1.0,
+            "complete_pass": 1.0,
+            "yards_after_catch": 15.0,
+        },
+        # 2 incompletions (NaN YAC). Should NOT contribute.
+        {
+            "season": 2024,
+            "week": 1,
+            "play_id": 103,
+            "receiver_player_id": gid,
+            "pass_attempt": 1.0,
+            "complete_pass": 0.0,
+            "yards_after_catch": float("nan"),
+        },
+        {
+            "season": 2024,
+            "week": 1,
+            "play_id": 104,
+            "receiver_player_id": gid,
+            "pass_attempt": 1.0,
+            "complete_pass": 0.0,
+            "yards_after_catch": float("nan"),
+        },
+    ]
+    pbp = _make_pbp_rows(rows)
+    per_game = compute_receiver_yac_per_reception(pbp)
+    # Mean of (5, 10, 15) = 10.0.
+    assert len(per_game) == 1
+    assert per_game.iloc[0]["yac_per_reception_l4"] == pytest.approx(10.0)

@@ -156,3 +156,37 @@ def compute_receiver_deep_target_share(pbp: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"receiver_player_id": "gsis_id", "_is_deep": "deep_target_share_l4"})
     )
     return per_game[["gsis_id", "season", "week", "deep_target_share_l4"]]
+
+
+def compute_receiver_yac_per_reception(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Per-receiver mean yards-after-catch per completion, per receiver-active
+    game.
+
+    Per (gsis_id, season, week): mean of ``yards_after_catch`` across rows
+    where ``receiver_player_id == gsis_id`` AND ``complete_pass == 1.0`` AND
+    ``yards_after_catch.notna()``. Filtered to completions — YAC only exists
+    when the ball is caught.
+
+    Receivers with no catches in a week contribute no per-game row.
+
+    Output: (gsis_id, season, week, yac_per_reception_l4) — one row per
+    receiver-active game.
+    """
+    completions = pbp[
+        (pbp["receiver_player_id"].notna())
+        & (pbp["complete_pass"] == 1.0)
+        & (pbp["yards_after_catch"].notna())
+    ]
+    per_game = (
+        completions.groupby(["receiver_player_id", "season", "week"], as_index=False)[
+            "yards_after_catch"
+        ]
+        .mean()
+        .rename(
+            columns={
+                "receiver_player_id": "gsis_id",
+                "yards_after_catch": "yac_per_reception_l4",
+            }
+        )
+    )
+    return per_game[["gsis_id", "season", "week", "yac_per_reception_l4"]]
