@@ -228,6 +228,19 @@ def build_pbp_family_overrides(
         how="left",
     )
 
+    # Defensive invariant: each merge above is a left-join on a key the
+    # right-hand side claims to be unique on. If a future regression
+    # introduces a duplicate (team, season, week) or (opp, season, week)
+    # row in any compute output, the merge would multiply rows and the
+    # output would silently contain extras. AssertionError is the right
+    # signal here — this is an internal-invariant violation, not user
+    # input — so a programmer-error fail-fast is preferred to ValueError.
+    if len(out) != len(player_team_week_index):
+        raise AssertionError(
+            f"row count mismatch: input index had {len(player_team_week_index)} rows, "
+            f"output has {len(out)}; suggests a many-to-many merge regression"
+        )
+
     return out[
         [
             "gsis_id",

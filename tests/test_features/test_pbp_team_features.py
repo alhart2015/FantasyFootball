@@ -384,32 +384,113 @@ def _make_player_team_week_index(rows: list[dict[str, object]]) -> pd.DataFrame:
 
 def test_assembler_emits_4_columns_with_correct_join_sides() -> None:
     """pace/proe/team_ayps join on the player's TEAM; team_def_epa_resid
-    joins on the player's OPPONENT."""
+    joins on the player's OPPONENT.
+
+    The fixture is constructed so KC and BAL have DISTINCT def-residuals
+    (-0.2 vs +0.2). A wrong-side join (on team instead of opp) would swap
+    them; an all-NaN merge regression (wrong key, dtype mismatch) would
+    fail both assertions. This is stronger than the prior fixture (every
+    play epa=0.1) under which both teams' residuals collapsed to 0.0 and
+    a wrong-side join would silently pass.
+
+    Construction:
+    - Weeks 1-5: KC posteam vs BAL defteam at epa=0.1 (20 plays/wk).
+    - Weeks 1-5: BAL posteam vs KC defteam at epa=0.4 (20 plays/wk).
+    - Weeks 6-10 (filler vs MIA): KC posteam at epa=0.5; BAL posteam at
+      epa=0.0. These pull each team's *season-avg* offensive EPA away
+      from its *def-allowed* mean, so the residuals are non-zero.
+
+    Math:
+    - KC season-avg posteam EPA = (100*0.1 + 100*0.5)/200 = 0.3
+    - BAL season-avg posteam EPA = (100*0.4 + 100*0.0)/200 = 0.2
+    - BAL def-allowed (weeks 1-5 vs KC) = 0.1; per-game residual = 0.1 - 0.3 = -0.2
+    - KC def-allowed (weeks 1-5 vs BAL) = 0.4; per-game residual = 0.4 - 0.2 = +0.2
+    - At week 5 (trailing-4 over weeks 1-4): both means are constant -0.2 / +0.2.
+    """
     from projections.features.pbp_team_features import build_pbp_family_overrides
 
-    # KC plays, BAL plays, with PBP for trailing-4 history.
     pbp_rows: list[dict[str, object]] = []
-    for team, oe, ay in [("KC", 5.0, 8.0), ("BAL", -3.0, 6.0)]:
-        for wk in range(1, 6):
-            for i in range(20):
-                pbp_rows.append(
-                    {
-                        "season": 2024,
-                        "week": wk,
-                        "posteam": team,
-                        "defteam": "BAL" if team == "KC" else "KC",
-                        "play_type": "pass",
-                        "pass_attempt": 1.0,
-                        "air_yards": ay,
-                        "pass_oe": oe,
-                        "epa": 0.1,
-                        "play_id": 1000 * wk + i + (50000 if team == "BAL" else 0),
-                    }
-                )
+
+    def _add_plays(
+        *,
+        season: int,
+        week: int,
+        posteam: str,
+        defteam: str,
+        epa: float,
+        pass_oe: float,
+        air_yards: float,
+        play_id_base: int,
+    ) -> None:
+        for i in range(20):
+            pbp_rows.append(
+                {
+                    "season": season,
+                    "week": week,
+                    "posteam": posteam,
+                    "defteam": defteam,
+                    "play_type": "pass",
+                    "pass_attempt": 1.0,
+                    "air_yards": air_yards,
+                    "pass_oe": pass_oe,
+                    "epa": epa,
+                    "play_id": play_id_base + i,
+                }
+            )
+
+    # Weeks 1-5: KC offense vs BAL defense at epa=0.1; pass_oe=5.0, air_yards=8.0.
+    # Weeks 1-5: BAL offense vs KC defense at epa=0.4; pass_oe=-3.0, air_yards=6.0.
+    for wk in range(1, 6):
+        _add_plays(
+            season=2024,
+            week=wk,
+            posteam="KC",
+            defteam="BAL",
+            epa=0.1,
+            pass_oe=5.0,
+            air_yards=8.0,
+            play_id_base=100_000 + 1000 * wk,
+        )
+        _add_plays(
+            season=2024,
+            week=wk,
+            posteam="BAL",
+            defteam="KC",
+            epa=0.4,
+            pass_oe=-3.0,
+            air_yards=6.0,
+            play_id_base=200_000 + 1000 * wk,
+        )
+
+    # Weeks 6-10 filler vs MIA. epa values pull each team's season-avg
+    # offensive EPA away from its def-allowed mean, making residuals non-zero.
+    # pass_oe / air_yards values here are outside the trailing-4 window at
+    # week 5, so they don't affect proe_l4 / team_ayps_l4 assertions below.
+    for wk in range(6, 11):
+        _add_plays(
+            season=2024,
+            week=wk,
+            posteam="KC",
+            defteam="MIA",
+            epa=0.5,
+            pass_oe=5.0,
+            air_yards=8.0,
+            play_id_base=300_000 + 1000 * wk,
+        )
+        _add_plays(
+            season=2024,
+            week=wk,
+            posteam="BAL",
+            defteam="MIA",
+            epa=0.0,
+            pass_oe=-3.0,
+            air_yards=6.0,
+            play_id_base=400_000 + 1000 * wk,
+        )
 
     pbp = _make_pbp_rows(pbp_rows)
 
-    # One player on KC, one on BAL — both at week 5.
+    # One player on KC, one on BAL — both at week 5 (trailing-4 over wks 1-4).
     idx = _make_player_team_week_index(
         [
             {"gsis_id": "00-0011111", "season": 2024, "week": 5, "team": "KC", "opp": "BAL"},
@@ -440,6 +521,12 @@ def test_assembler_emits_4_columns_with_correct_join_sides() -> None:
     # BAL player gets BAL's offensive features.
     assert bal_player["proe_l4"].iloc[0] == pytest.approx(-3.0)
     assert bal_player["team_ayps_l4"].iloc[0] == pytest.approx(6.0)
+
+    # KC player's def_resid is the OPPONENT's (BAL's) def-residual = -0.2.
+    # BAL player's def_resid is the OPPONENT's (KC's) def-residual = +0.2.
+    # A wrong-side join (on team instead of opp) would swap signs.
+    assert kc_player["team_def_epa_resid_l4"].iloc[0] == pytest.approx(-0.2, abs=1e-9)
+    assert bal_player["team_def_epa_resid_l4"].iloc[0] == pytest.approx(+0.2, abs=1e-9)
 
 
 def test_assembler_rejects_invalid_gsis_id() -> None:
