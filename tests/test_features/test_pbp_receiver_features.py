@@ -152,3 +152,118 @@ def test_trailing_4_asof_cross_season() -> None:
     # 2024 w2, 2024 w3) = mean(17, 1, 2, 3) = 5.75.
     w4 = out.query("season == 2024 and week == 4")
     assert w4["val_l4"].iloc[0] == pytest.approx(5.75)
+
+
+def test_adot_air_yards_only() -> None:
+    """aDOT averages only over rows with non-NaN air_yards (excludes sacks /
+    throwaways with NaN air_yards upstream)."""
+    from projections.features.pbp_receiver_features import compute_receiver_adot
+
+    rows: list[dict[str, object]] = []
+    # Build 4 prior weeks of receiver-active games for player A so trailing-4
+    # has a window. Each week: 5 targets with air_yards = 10, plus 1 sack
+    # (NaN air_yards). Mean over weeks 1-4 should be 10.0 (sacks excluded).
+    gid = "00-0000001"
+    for wk in range(1, 5):
+        for i in range(5):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "play_id": 1000 * wk + i,
+                    "receiver_player_id": gid,
+                    "pass_attempt": 1.0,
+                    "air_yards": 10.0,
+                }
+            )
+        # 1 sack on the same player (would not actually credit air_yards to
+        # receiver, but defensive: NaN air_yards excluded from mean).
+        rows.append(
+            {
+                "season": 2024,
+                "week": wk,
+                "play_id": 1000 * wk + 99,
+                "receiver_player_id": gid,
+                "pass_attempt": 0.0,  # not a target — sack
+                "air_yards": float("nan"),
+            }
+        )
+
+    pbp = _make_pbp_rows(rows)
+    per_game = compute_receiver_adot(pbp)
+    # per_game has rows for receiver-active games (weeks 1-4) but no rolling
+    # column attached — that's the helper's job. compute_receiver_adot returns
+    # the per-game-mean frame ready for _trailing_4_per_player_asof.
+    assert set(per_game.columns) == {"gsis_id", "season", "week", "aDOT_l4"}
+    # Per-game mean for week 1: 5 targets at 10 yards = mean 10.0.
+    wk1 = per_game.query("week == 1")
+    assert wk1["aDOT_l4"].iloc[0] == pytest.approx(10.0)
+
+
+def test_adot_trailing_4_within_player() -> None:
+    """6 receiver-active games for A and B; per-game means stay within gsis_id."""
+    from projections.features.pbp_receiver_features import compute_receiver_adot
+
+    rows: list[dict[str, object]] = []
+    for gid, base_yards in [("00-0000001", 5.0), ("00-0000002", 15.0)]:
+        for wk in range(1, 7):
+            for i in range(3):  # 3 targets per game
+                rows.append(
+                    {
+                        "season": 2024,
+                        "week": wk,
+                        "play_id": 1000 * wk + (0 if gid == "00-0000001" else 500) + i,
+                        "receiver_player_id": gid,
+                        "pass_attempt": 1.0,
+                        "air_yards": base_yards + wk,  # A: 6,7,...; B: 16,17,...
+                    }
+                )
+
+    pbp = _make_pbp_rows(rows)
+    per_game = compute_receiver_adot(pbp)
+    # per_game has 12 rows (6 weeks x 2 players).
+    assert len(per_game) == 12
+    # Per-game mean for player A, week 1: 5+1 = 6.0.
+    a_wk1 = per_game.query("gsis_id == '00-0000001' and week == 1")
+    assert a_wk1["aDOT_l4"].iloc[0] == pytest.approx(6.0)
+
+
+def test_adot_zero_air_yards_targets_no_per_game_row() -> None:
+    """If a receiver has zero non-NaN air_yards targets in a week, no per-game
+    row is emitted (the player has no per-game value for that week)."""
+    from projections.features.pbp_receiver_features import compute_receiver_adot
+
+    gid = "00-0000001"
+    # Week 1: 0 valid targets (only sacks). Week 2: 3 valid targets.
+    rows: list[dict[str, object]] = [
+        {
+            "season": 2024,
+            "week": 1,
+            "play_id": 100,
+            "receiver_player_id": gid,
+            "pass_attempt": 0.0,
+            "air_yards": float("nan"),
+        },
+        {
+            "season": 2024,
+            "week": 2,
+            "play_id": 200,
+            "receiver_player_id": gid,
+            "pass_attempt": 1.0,
+            "air_yards": 12.0,
+        },
+        {
+            "season": 2024,
+            "week": 2,
+            "play_id": 201,
+            "receiver_player_id": gid,
+            "pass_attempt": 1.0,
+            "air_yards": 18.0,
+        },
+    ]
+    pbp = _make_pbp_rows(rows)
+    per_game = compute_receiver_adot(pbp)
+    # No row for week 1 (no valid targets); one row for week 2.
+    assert len(per_game) == 1
+    assert per_game.iloc[0]["week"] == 2
+    assert per_game.iloc[0]["aDOT_l4"] == pytest.approx(15.0)

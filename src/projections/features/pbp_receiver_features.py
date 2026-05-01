@@ -94,3 +94,33 @@ def _trailing_4_per_player_asof(
     out = merged.sort_values("_orig_idx").drop(columns=["_t", "_orig_idx"])
     out = out.rename(columns={"_rolled": out_col})
     return out[["gsis_id", "season", "week", out_col]].reset_index(drop=True)
+
+
+def compute_receiver_adot(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Per-receiver mean depth of target, per receiver-active game.
+
+    Per (gsis_id, season, week): mean of ``air_yards`` across rows where
+    ``receiver_player_id == gsis_id`` AND ``pass_attempt == 1.0`` AND
+    ``air_yards.notna()``. NaN ``air_yards`` (sacks, throw-aways, no-plays)
+    excluded.
+
+    Output is the per-game mean frame, NOT the trailing-4 lookup. The
+    assembler ``attach_pbp_receiver_features`` calls
+    ``_trailing_4_per_player_asof`` to compute the trailing-4 against an
+    index. The output column is named ``aDOT_l4`` to match the final
+    override-column name; the helper preserves the name.
+
+    Output: (gsis_id, season, week, aDOT_l4) — one row per receiver-active
+    game (player had at least 1 valid target).
+    """
+    plays = pbp[
+        (pbp["receiver_player_id"].notna())
+        & (pbp["pass_attempt"] == 1.0)
+        & (pbp["air_yards"].notna())
+    ]
+    per_game = (
+        plays.groupby(["receiver_player_id", "season", "week"], as_index=False)["air_yards"]
+        .mean()
+        .rename(columns={"receiver_player_id": "gsis_id", "air_yards": "aDOT_l4"})
+    )
+    return per_game[["gsis_id", "season", "week", "aDOT_l4"]]
