@@ -129,4 +129,40 @@ def test_pace_returns_nan_for_first_4_weeks_when_no_prior_history() -> None:
     # Wk1 has 0 prior games, wk2 has 1, wk3 has 2 — all NaN under min_periods=4.
     for wk in (1, 2, 3):
         row = out.query(f"team == 'KC' and season == 2024 and week == {wk}")
-        assert row["pace_l4"].iloc[0] != row["pace_l4"].iloc[0]  # NaN check
+        assert pd.isna(row["pace_l4"].iloc[0])
+
+
+def test_pace_does_not_leak_across_team_boundaries() -> None:
+    """Two-team frame: each team's pace_l4 reflects only that team's history."""
+    from projections.features.pbp_team_features import compute_team_pace
+
+    rows: list[dict[str, object]] = []
+    for wk in range(1, 6):
+        for i in range(10):  # KC: 10 plays/wk
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "play_type": "pass",
+                    "play_id": 1000 * wk + i,
+                }
+            )
+        for i in range(100):  # BAL: 100 plays/wk
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "play_type": "pass",
+                    "play_id": 2000 * wk + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_pace(pbp)
+    # KC week 1 must be NaN — no prior KC history. Buggy global-shift impl yields 100.0.
+    assert pd.isna(out.query("team == 'KC' and week == 1")["pace_l4"].iloc[0])
+    # KC week 5 must reflect KC's history alone (mean of 10,10,10,10).
+    assert out.query("team == 'KC' and week == 5")["pace_l4"].iloc[0] == pytest.approx(10.0)
+    # BAL week 5 must reflect BAL's history alone.
+    assert out.query("team == 'BAL' and week == 5")["pace_l4"].iloc[0] == pytest.approx(100.0)
