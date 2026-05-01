@@ -190,3 +190,41 @@ def compute_receiver_yac_per_reception(pbp: pd.DataFrame) -> pd.DataFrame:
         )
     )
     return per_game[["gsis_id", "season", "week", "yac_per_reception_l4"]]
+
+
+def compute_receiver_red_zone_target_share(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Per-receiver share of targets at yardline_100 <= 20, per
+    receiver-active game.
+
+    Per (gsis_id, season, week):
+      total_targets = count rows where receiver_player_id == gsis_id AND
+                      pass_attempt == 1.0 AND yardline_100.notna()
+      rz_targets    = count rows where receiver_player_id == gsis_id AND
+                      pass_attempt == 1.0 AND yardline_100 <= 20
+      share         = rz_targets / total_targets
+
+    yardline_100 = 20 is the standard NFL red-zone definition (yards from
+    the opponent's goal line). This is the receiver's RZ target share, not
+    the team's RZ target rate; captures whether the player is the offense's
+    preferred end-zone target.
+
+    Output: (gsis_id, season, week, red_zone_target_share_l4) — one row per
+    receiver-active game.
+    """
+    targets = pbp[
+        (pbp["receiver_player_id"].notna())
+        & (pbp["pass_attempt"] == 1.0)
+        & (pbp["yardline_100"].notna())
+    ].copy()
+    targets["_is_rz"] = (targets["yardline_100"] <= _RED_ZONE_YARDLINE).astype("float64")
+    per_game = (
+        targets.groupby(["receiver_player_id", "season", "week"], as_index=False)["_is_rz"]
+        .mean()
+        .rename(
+            columns={
+                "receiver_player_id": "gsis_id",
+                "_is_rz": "red_zone_target_share_l4",
+            }
+        )
+    )
+    return per_game[["gsis_id", "season", "week", "red_zone_target_share_l4"]]

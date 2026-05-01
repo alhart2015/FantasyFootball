@@ -391,3 +391,28 @@ def test_yac_completions_only() -> None:
     # Mean of (5, 10, 15) = 10.0.
     assert len(per_game) == 1
     assert per_game.iloc[0]["yac_per_reception_l4"] == pytest.approx(10.0)
+
+
+def test_red_zone_target_share_yardline_threshold() -> None:
+    """yardline_100 <= 20 counts as red-zone; > 20 does not."""
+    from projections.features.pbp_receiver_features import (
+        compute_receiver_red_zone_target_share,
+    )
+
+    gid = "00-0000001"
+    yardlines = [5.0, 15.0, 20.0, 21.0, 50.0]  # 3 RZ (5, 15, 20), 2 non-RZ (21, 50).
+    rows = [
+        {
+            "season": 2024,
+            "week": 1,
+            "play_id": 100 + i,
+            "receiver_player_id": gid,
+            "pass_attempt": 1.0,
+            "yardline_100": yl,
+        }
+        for i, yl in enumerate(yardlines)
+    ]
+    pbp = _make_pbp_rows(rows)
+    per_game = compute_receiver_red_zone_target_share(pbp)
+    assert len(per_game) == 1
+    assert per_game.iloc[0]["red_zone_target_share_l4"] == pytest.approx(3 / 5)
