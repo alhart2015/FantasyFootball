@@ -24,9 +24,9 @@ This spec is **probe-only**. It does not ship production feature builders, does 
   - `compute_team_ayps(pbp) -> pd.DataFrame`            (`team`, `season`, `week`, `team_ayps_l4`)
   - `compute_team_def_epa_residual(pbp) -> pd.DataFrame`(`team`, `season`, `week`, `team_def_epa_resid_l4`) — `team` here is the **defense's** team code; the joiner attaches each player's *opponent's* row.
   - `build_pbp_family_overrides(pbp, player_team_week_index) -> pd.DataFrame` — public assembler that calls the four computes, joins onto a per-player index, returns `(gsis_id, season, week, pace_l4, proe_l4, team_ayps_l4, team_def_epa_resid_l4)`.
-- New script `scripts/build_pbp_family_override.py`. Thin glue: load PBP partitions via `projections.ingest.pbp.read_pbp`, load the player-team-week index from `weekly_stats` + `depth_charts` ingest layer, call the assembler, write `data/features_probe/pbp_family.parquet`. Manual-invoke; not part of CI; output not committed.
+- New script `scripts/build_pbp_family_override.py`. Thin glue: load PBP partitions via `projections.ingest.pbp.read_pbp`, load the player-team-week index from `weekly_stats` + `schedules` ingest layer, call the assembler, write `data/features_probe/pbp_family.parquet`. Manual-invoke; not part of CI; output not committed.
 - New tests `tests/test_features/test_pbp_team_features.py`. Synthetic-PBP fixtures, one test per pure function (correctness on hand-crafted small frames), one assembly test (coverage + output schema).
-- Two-to-four committed probe reports under `reports/`:
+- Two-to-four probe runs (each emitting 4 markdown + 4 CSV files, one per position; 16–32 committed files total under `reports/`):
   - `feature_probe_pbp_family_augment_{QB,RB,WR,TE}.{md,csv}` (always — baseline augment)
   - `feature_probe_pbp_family_swap_{QB,RB,WR,TE}.{md,csv}` (always — baseline swap)
   - `feature_probe_pbp_family_lgbnb_augment_{QB,RB,WR,TE}.{md,csv}` (conditional — only if the two baseline reports together return zero pooled `SIGNAL` cells AND zero Phase 2 `ADOPT/MARGINAL` verdicts)
@@ -83,10 +83,10 @@ Bye weeks (no schedule row) are dropped before the join — those rows are not i
 
 ### 2.3 Trailing-window backfill rule
 
-Trailing-4 means "the team's last 4 *completed games* prior to week W of season Y." Concretely:
+Trailing-4 means "the team's last 4 *completed regular-season games* prior to week W of season Y." Postseason games are excluded from the window — the model the probe consumes is trained on regular-season weekly_stats only, so the trailing context should match. Concretely:
 
-1. For each `(team, season, week)`, compute the four features over the rolling-4-games window ending at week W-1 of the same season.
-2. If fewer than 4 prior games exist in season Y (early-season weeks 1–4), prepend the last 4 games of season Y-1 (regardless of postseason) to the rolling window so the four-game requirement is met.
+1. For each `(team, season, week)`, compute the four features over the rolling-4-games window of regular-season games ending at week W-1 of the same season.
+2. If fewer than 4 prior regular-season games exist in season Y (early-season weeks 1–4), prepend the last regular-season games of season Y-1 (filling backward through weeks 18, 17, …) to the rolling window so the four-game requirement is met.
 3. If season Y is the team's first ingested season (Y == 2018, the start of the curated PBP window), the rows with fewer than 4 prior games are emitted with NaN values. The probe's coverage check then enforces the 95% threshold.
 
 For relocated teams, the canonical-team-code mapping (`normalize_team_code`) already collapses `STL`/`SD`/`OAK`/`WSH`/`LA`/`LAR`/`JAX`/`JAC` history per CLAUDE.md conventions; the rolling window follows the canonical code.
@@ -228,7 +228,7 @@ The summary report is committed alongside the per-probe reports in the same comm
 
 ### 6.1 New module `src/projections/features/pbp_team_features.py`
 
-Pure pandas. Imports from `projections.schemas` only the canonical types it needs (`Team`, `Stat` not used, no dataclasses). Imports `normalize_team_code` and `validate_gsis_id` per CLAUDE.md.
+Pure pandas. Imports `Team` from `projections.schemas` and `normalize_team_code`, `validate_gsis_id` per CLAUDE.md conventions (canonical IDs, never bare strings at boundaries). No new dataclasses; outputs are plain `pd.DataFrame`.
 
 ```python
 def compute_team_pace(pbp: pd.DataFrame) -> pd.DataFrame:
@@ -283,10 +283,14 @@ def build_pbp_family_overrides(
 ) -> pd.DataFrame:
     """Public assembler. Returns the 4-column override frame ready to write.
 
-    Validates: GSIS id format on every row; canonical team codes; coverage
-    >= 95% on every (season, position-via-weekly-stats) pair before return.
+    Validates: GSIS id format on every row; canonical team codes; no
+    duplicate (gsis_id, season, week) keys; output schema matches §2.4.
     Schema: (gsis_id, season, week, pace_l4, proe_l4, team_ayps_l4,
     team_def_epa_resid_l4).
+
+    Per-position coverage validation is the probe's responsibility (the
+    assembler has no access to the per-position feature parquets); see
+    §1.3 criterion 1 + §3.3 step 2.
     """
 ```
 
@@ -309,7 +313,7 @@ The script is not invoked in CI; the user runs it manually before each probe inv
 
 ```python
 def family_verdict_from_reports(
-    reports: Iterable[ProbeReport],
+    reports: list[ProbeReport],
 ) -> Literal["SIGNAL", "NULL"]:
     """Family-level verdict across executed probe reports.
 
@@ -355,10 +359,11 @@ Per §6.4 above. All run in CI under `pytest`; no network, no real data dependen
 1. Run `scripts/build_pbp_family_override.py --seasons 2018-2024`. Produces `data/features_probe/pbp_family.parquet`. Inspect coverage by position; fix backfill or escalate to spec-blocked if < 95%.
 2. Run baseline augment + baseline swap probes (§3.1). Commit the 8 markdown + 8 CSV reports to `reports/`.
 3. Compute family verdict via `family_verdict_from_reports([augment_report, swap_report])`.
-4. If `SIGNAL`: write the family summary report (§5.2), commit, transition to follow-up production-builder plan scoping.
-5. If `NULL`: run lgb-nb augment + lgb-nb swap probes (§3.2). Commit those reports. Recompute family verdict over all four reports.
-6. Whatever the verdict, write the family summary report (§5.2) and commit alongside the probe reports.
-7. Update `TODO.md` #3c + `project_management.md` decision log per §9.
+4. **If `SIGNAL`**: skip steps 5–6 below. Go directly to step 7: write the family summary report (§5.2), commit, then update docs (step 8).
+5. **If `NULL`**: run lgb-nb augment + lgb-nb swap probes (§3.2). Commit those 8 markdown + 8 CSV reports.
+6. Recompute family verdict via `family_verdict_from_reports([augment_baseline, swap_baseline, augment_lgbnb, swap_lgbnb])`. The recomputed verdict is durable per §1.3 criterion 3.
+7. Write the family summary report (§5.2) and commit alongside the probe reports for the verdict path actually taken (SIGNAL via step 4, or NULL/SIGNAL via step 6).
+8. Update `TODO.md` #3c + `project_management.md` decision log per §9.
 
 ### 7.3 Standard verification gates
 
