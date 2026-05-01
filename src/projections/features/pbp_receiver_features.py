@@ -124,3 +124,35 @@ def compute_receiver_adot(pbp: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"receiver_player_id": "gsis_id", "air_yards": "aDOT_l4"})
     )
     return per_game[["gsis_id", "season", "week", "aDOT_l4"]]
+
+
+def compute_receiver_deep_target_share(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Per-receiver share of targets with air_yards >= 20, per
+    receiver-active game.
+
+    Per (gsis_id, season, week):
+      total_valid_targets = count rows where receiver_player_id == gsis_id
+                            AND pass_attempt == 1.0 AND air_yards.notna()
+      deep_targets        = count rows where receiver_player_id == gsis_id
+                            AND pass_attempt == 1.0 AND air_yards >= 20.0
+      share               = deep_targets / total_valid_targets
+
+    A receiver with zero valid targets in a week contributes no per-game row
+    (no division-by-zero; the player simply doesn't appear in per_game for
+    that week). The 20-yard cutoff is the conventional "deep" threshold.
+
+    Output: (gsis_id, season, week, deep_target_share_l4) — one row per
+    receiver-active game.
+    """
+    valid = pbp[
+        (pbp["receiver_player_id"].notna())
+        & (pbp["pass_attempt"] == 1.0)
+        & (pbp["air_yards"].notna())
+    ].copy()
+    valid["_is_deep"] = (valid["air_yards"] >= _DEEP_AIR_YARDS).astype("float64")
+    per_game = (
+        valid.groupby(["receiver_player_id", "season", "week"], as_index=False)["_is_deep"]
+        .mean()
+        .rename(columns={"receiver_player_id": "gsis_id", "_is_deep": "deep_target_share_l4"})
+    )
+    return per_game[["gsis_id", "season", "week", "deep_target_share_l4"]]

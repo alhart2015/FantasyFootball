@@ -267,3 +267,65 @@ def test_adot_zero_air_yards_targets_no_per_game_row() -> None:
     assert len(per_game) == 1
     assert per_game.iloc[0]["week"] == 2
     assert per_game.iloc[0]["aDOT_l4"] == pytest.approx(15.0)
+
+
+def test_deep_target_share_threshold() -> None:
+    """Targets with air_yards >= 20 count as deep; < 20 do not. Throwaways
+    (pass_attempt=1.0 with NaN air_yards) excluded from both numerator and
+    denominator."""
+    from projections.features.pbp_receiver_features import compute_receiver_deep_target_share
+
+    gid = "00-0000001"
+    # 6 valid targets at depths 5/15/19/20/25/35 (3 deep, 3 shallow); plus
+    # 1 throwaway (pass_attempt=1.0 but NaN air_yards) that must be excluded
+    # from both numerator and denominator. Expected share: 3/6 = 0.5.
+    depths = [5.0, 15.0, 19.0, 20.0, 25.0, 35.0]
+    rows: list[dict[str, object]] = [
+        {
+            "season": 2024,
+            "week": 1,
+            "play_id": 100 + i,
+            "receiver_player_id": gid,
+            "pass_attempt": 1.0,
+            "air_yards": d,
+        }
+        for i, d in enumerate(depths)
+    ]
+    # Throwaway row — must be filtered out (NaN air_yards excluded), not
+    # treated as a 0-depth shallow target.
+    rows.append(
+        {
+            "season": 2024,
+            "week": 1,
+            "play_id": 200,
+            "receiver_player_id": gid,
+            "pass_attempt": 1.0,
+            "air_yards": float("nan"),
+        }
+    )
+    pbp = _make_pbp_rows(rows)
+    per_game = compute_receiver_deep_target_share(pbp)
+    assert len(per_game) == 1
+    # 3 deep (20, 25, 35) / 6 valid targets (throwaway excluded) = 0.5.
+    assert per_game.iloc[0]["deep_target_share_l4"] == pytest.approx(3 / 6)
+
+
+def test_deep_target_share_zero_targets_no_per_game_row() -> None:
+    """A receiver with 0 valid targets in a week contributes no per-game row."""
+    from projections.features.pbp_receiver_features import compute_receiver_deep_target_share
+
+    gid = "00-0000001"
+    # Only a sack (no valid targets).
+    rows = [
+        {
+            "season": 2024,
+            "week": 1,
+            "play_id": 100,
+            "receiver_player_id": gid,
+            "pass_attempt": 0.0,
+            "air_yards": float("nan"),
+        }
+    ]
+    pbp = _make_pbp_rows(rows)
+    per_game = compute_receiver_deep_target_share(pbp)
+    assert len(per_game) == 0
