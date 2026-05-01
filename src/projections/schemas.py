@@ -610,6 +610,15 @@ class RbFeaturesSchema(pa.DataFrameModel):
     # Opponent strength proxy
     opp_allowed_rb_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
 
+    # PBP team-level features (PR #20 family probe + 2026-05-01 RB
+    # integration spec). Trailing 4 prior games; NaN for early-season
+    # weeks where fewer than 4 prior games exist (notably 2018 weeks 1-4,
+    # the start of the curated PBP window).
+    pace_l4: Series[float] = pa.Field(nullable=True)
+    proe_l4: Series[float] = pa.Field(nullable=True)
+    team_ayps_l4: Series[float] = pa.Field(ge=0, nullable=True)
+    team_def_epa_resid_l4: Series[float] = pa.Field(nullable=True)
+
     class Config:
         strict = "filter"
         coerce = True  # see WrFeaturesSchema.Config for rationale
