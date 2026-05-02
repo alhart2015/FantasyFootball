@@ -4,6 +4,31 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## PBP Receiver Family Probe — verdict NULL (durable) for WR/TE; family closed at air-yards / aDOT cut (2026-05-01, on branch `feat/wr-te-pbp-features`)
+
+**Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-01-wr-te-pbp-receiver-features-design.md` and plan `docs/superpowers/plans/2026-05-01-wr-te-pbp-receiver-features.md`. Implements `_trailing_4_per_player_asof` as-of helper + 4 pure compute fns + assembler + validating wrapper in `src/projections/features/pbp_receiver_features.py`, the override-generator script `scripts/build_pbp_receiver_override.py`, 21 synthetic-fixture tests + 4 CLI tests. mypy strict + ruff + ruff format clean.
+
+**Verdict:** `NULL` (durable per spec §1.3 criterion 3 — both BaselineModel + lightgbm-nb tested at composite via `--force-composite`).
+
+- All 4 mode × model reports (baseline+lgb-nb × augment+swap, 2 positions, 12 stats each = 96 pooled cells): 0 pooled Phase 1 SIGNAL.
+- Phase 2 (composite, lgb-nb production model) on both modes: 0 ADOPT or MARGINAL across 8 verdict cells. All 8 DO_NOT_ADOPT.
+- Closest to SIGNAL: `WR swap composite RMSE -0.0052 fpts CI [-0.0118, +0.0013]` — point estimate favorable but CI brackets zero by +0.001 fpts.
+- Per-year REGRESSION on TE `receiving_yards` 2022 (~+0.15 fpts in augment mode) replicates across baseline + lgb-nb — informational; pooled bootstrap correctly washes it out.
+
+**What this closes:** TODO #3c's WR/TE refined-unit follow-up at the air-yards / aDOT cut. The four player-level PBP features tested (`aDOT_l4`, `deep_target_share_l4`, `yac_per_reception_l4`, `red_zone_target_share_l4`) do not carry orthogonal signal for receiver fantasy projections at the trailing-4-receiver-active-games unit, under either Ridge baseline or lgb-nb production model class.
+
+**Refined-unit candidates beyond air-yards / aDOT that remain unexplored:** per-route-concept distributions (data not in curated PBP), target-quality residuals (per-throw difficulty modeling not in PBP), in-line vs flexed alignment for TE (not in PBP). None queued; revisit only with independent evidence (published study, third-party benchmark) suggesting the unit choice was the binding constraint.
+
+**What remains open in TODO #3c:** Other PBP feature families at the *team* level not in PR #20's bundle — pressure rate allowed by O-line, red-zone usage shares (separate from this spec's receiver-level RZ target share), team pace alone (vs the bundled probe). Bundle 3-4 candidates per probe per the family-level prior.
+
+**Spec gap (caught + worked around, not fixed in spec):** Spec §3.2 prescribed lgb-nb runs without `--force-composite`, but Phase 1 is RidgeCV-only regardless of `--model`, so bare lgb-nb runs are tautological with baseline. Re-ran with `--force-composite` to actually test lgb-nb at composite. The same gap exists in PR #20's spec §3.2; not exercised then because RB returned baseline SIGNAL and the conditional path never fired. Future probe-with-conditional-lgb-nb specs should include `--force-composite`.
+
+**Coverage caveat:** 2018 coverage is structurally low (~50% non-null) because the curated PBP window starts in 2018 with no Y-1 backfill. 2019-2024 coverage is 75-87% per (position, season). Probe invoked with `--coverage-threshold 0.70`. The surviving-receiver row set is biased toward heavier-targeted WRs/TEs; bias is consistent across baseline + candidate sides so the comparison stays valid for the substantially-targeted subset.
+
+**Reports:** `reports/feature_probe_pbp_receiver_summary.md` (decision log + addendum on the `--force-composite` spec gap) + 4 per-(model, mode) .md/.csv files (`feature_probe_pbp_receiver_{,lgbnb_}{augment,swap}.{md,csv}`).
+
+---
+
 ## RB PBP Features Integration — verdict ADOPT on (BaselineModel, RB); shipped (2026-05-01, on branch `feat/rb-pbp-features`)
 
 **Status:** Shipped per spec `docs/superpowers/specs/2026-05-01-rb-pbp-features-design.md` and plan `docs/superpowers/plans/2026-05-01-rb-pbp-features.md`. Extends `RbFeaturesSchema` with 4 nullable-float cols (`pace_l4`, `proe_l4`, `team_ayps_l4`, `team_def_epa_resid_l4`) and wires `attach_pbp_family_features` (extracted from `build_pbp_family_overrides` in PR #20) into `build_rb_features`. RB feature cache refreshed for 2018–2024 (151 partitions); full backtest + dual-run gate clean on the binding `(BaselineModel, RB)` cell; mypy strict + ruff + ruff format clean.
@@ -1346,68 +1371,38 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ---
 
-## Current status (as of 2026-04-27)
+## Current status (as of 2026-05-01)
 
-**Projections Core — Plan 3e shipped state = Phase 0 + Phase 1; Phase 2 + Phase 3 attempted-and-reverted (infrastructure preserved). Branch ready for PR.** Phase 1 swapped 10 zero-inflated count stats from GAMMA to NB with conditional MLE dispersion fitting (weekly mean coverage 0.726 → 0.733; season mean 0.461 → 0.428). Phase 2 attempted Student-t for `*_yards` and was reverted after empirical coverage regressed (`ParametricStudentT` + codec branch + estimator preserved in-tree). Phase 3 wired per-tertile variance bucketing across all routed families and was reverted after empirical coverage regressed (-0.016 weekly mean / -0.062 season mean vs Plan 3d; bucketing helpers + widened `variance_params` type preserved as future infrastructure for quantile-based fitting). Snapshot returns bit-for-bit to Phase 1 baseline (commit `0078223`). TODO #22 closed against Plan 3e overall; follow-up plans documented under the Phase 3 revert block (ZIP for count cells, cross-week correlation, calibration-aware fitting).
+**Projections Core — RB PBP Features Integration shipped via PR #21 (`bc2dc8c`).** `RbFeaturesSchema` extended with 4 nullable-float PBP team-level columns (`pace_l4`, `proe_l4`, `team_ayps_l4`, `team_def_epa_resid_l4`); `attach_pbp_family_features` (extracted from PR #20's `build_pbp_family_overrides`) wired into `build_rb_features`. Adoption gate verdict on the binding `(BaselineModel, RB)` cell: **ADOPT** — composite RMSE delta -0.0124 fpts, CI [-0.0255, -0.0006]; probe predicted -0.0124 to 4 decimals. RB feature cache refreshed for 2018–2024 (151 partitions). See top-of-file entry for the full per-year breakdown and the spec-gap fix (`baseline.py:_RB_FEATURE_COLUMNS`).
 
-**Plan 3e Phase 0 (calibration diagnostic) complete on same branch.** Diagnostic CLI + research report committed.
+**Predecessors shipped since the previous 2026-04-27 status snapshot:**
+- **Plan 8** (adoption gate redesign) — replaced PR #10–#15-era §1.3 thresholds; weekly `[p10, p90]` calibration dropped as a gating metric (not load-bearing for planned downstream consumers).
+- **Plan 9** (PBP ingest plumbing + opp-adjusted EPA-residual feature) — PBP plumbing shipped (`src/projections/ingest/pbp.py`, `PbpSchema`, `pbp` kwarg threaded through builders); opp-EPA-residual feature DO_NOT_ADOPT 4/4 positions and reverted at `941b96c`.
+- **Plan 9 retro option C** (lightgbm-nb on EPA-residual) — DO_NOT_ADOPT 4/4 cells. Closed across model classes; do not revisit.
+- **Feature Signal Probe** — pre-spec screening tool (`scripts/probe_feature_signal.py`); canonical first step before any new feature plan.
+- **PBP Feature Family Probe** — bundled the 4 PBP team-features into one probe; verdict SIGNAL via RB. Greenlit RB-first integration; flagged WR / TE for refined-unit follow-up; QB excluded (augment-mode `passing_yards` regression).
+- **RB PBP Features Integration** — production builder + ADOPT for `(BaselineModel, RB)` (PR #21).
 
-**Plan 3d (real Monte Carlo season aggregation) merged to `main` at commit `fe55d5b` (PR #9).**
-
-**Predecessors:**
-- Plan 1 (Foundations) merged at `8f02a6c`.
-- Plan 2a merged at `7926090`; Plan 2b merged at `af325ea`.
-- Plan 3a (WR Model A baseline) merged at `598ab9c`.
-- Plan 3b (QB / RB / TE Model A baselines) merged at `c4a0401`.
-- Plan 3c (walk-forward backtest gate) merged at `3db71a6` (PR #8).
-
-**Plan 3e Phase 0 delivered (current branch, not yet merged):**
-- New `scripts/diagnose_calibration.py` CLI: loads the latest `data/backtest/run_<ts>/` per-row results, fits alternative distribution families (Student-t, lognormal, negative-binomial) against per-stat residuals, and emits a per-cell summary CSV + per-cell QQ/residual plots + a recommendation column.
-- New `tests/test_scripts/test_diagnose_calibration.py` (21 tests) covering the loader, residual extraction, summary stats, alternative-family fits (including the degenerate Student-t guardrail), recommendation logic, and a smoke test of `main()`.
-- Research report committed at `docs/superpowers/research/2026-04-26-calibration-diagnosis.md` identifying 3 root causes (zero-inflation under GAMMA, heavy tails on `*_yards`, pervasive heteroscedasticity).
-- TODO #22 (Plan 3e — calibration tightening) stays open; the diagnostic surfaces root causes but does not implement fixes.
-
-**Plan 3d delivered:**
-- New `src/projections/aggregation/season.py`: `aggregate_to_season` real Monte Carlo season aggregator (regenerates per-week samples from the per-row seed; modal-position resolution for traded players).
-- New `src/projections/distributions/codec.py`: `pack_per_stat_params` / `unpack_per_stat_params` codec for `ProjectionWeeklySchema.params`.
-- `derive_row_seed` in `src/projections/scoring/score_distribution.py`: stable 32-bit per-row seed via sha256 of `(gsis_id, season, week, ruleset.name)`. Consumed by both `predict_distribution` and `aggregate_to_season`.
-- `BaselineModel.predict_distribution` now writes per-row seeds + per-stat params blob.
-- New `DistributionFamily.SAMPLED_SUMMARY` enum value; new `ProjectionSeasonSchema`.
-- Season-calibration metrics (`season_calibration_p10p90`, `season_calibration_le_p90`) wired into the harness; pinned to `calibration_absolute` tolerance classifier. Snapshot expanded from 368 → 400 rows.
-- `scripts/backtest.py` writes per-row + per-player results to `data/backtest/run_<ts>/`.
-- Default-on smoke asserts season metrics are present and finite.
-- Full gate runtime: 292.73s. Drift on the 368 existing weekly rows is within tolerance for every cell (max abs delta 0.0084 vs 0.03 tolerance; max rel delta +0.165% vs 5% tolerance). Cause: per-row seed change reorders Monte Carlo draws; underlying regression math unchanged.
-- Season `[p10, p90]` coverage well below target (0.30–0.55 vs 0.80) — inherits 3c's weekly under-dispersion. Plan 3e is the calibration-tightening follow-up.
-- TODO #13 (per-row seeds), TODO #14 (SAMPLED_SUMMARY family), TODO #19 (gate non-determinism by demonstration) closed.
-- TODO #22 filed (Plan 3e — calibration tightening).
+**Predecessors (longer history):**
+- Plan 1 / Plan 2a / Plan 2b / Plan 3a / Plan 3b / Plan 3c / Plan 3d / Plan 3e (Phase 0 + Phase 1) / Plan 5 / Plan 5b / Plan 5c / Plan 6 / Plan 7. See per-plan blocks below.
 
 ## Next action
 
-**Plan 8 — adoption gate redesign — in progress on `feat/plan-8-gate-redesign`.**
-Diagnosis 2026-04-29 traced the PR-10-through-PR-15 model losing streak
-(Plans 3e / 5 / 5b / 5c / 7 / 6 — all failed §1.3) to two compounding causes:
-(1) §1.3 thresholds sit below the per-cell noise floor, so a model that's
-better in expectation routinely fails from sampling variation alone — Plan 6
-hit 12/16 RMSE wins but failed because TE 2024 was 0.24pp over the
-+1.0% no-regression line; (2) the weekly `[p10, p90]` calibration metric
-isn't load-bearing for any planned downstream consumer (Draft Hub,
-start/sit, DFS all consume mean and rank, not coverage). See the Plan 8
-entry at the top of this file for full context. Plan 8 ships a redesigned
-gate plus a re-evaluation of existing peers (C, C-tuned, C-NB, D) under it.
+**WR/TE PBP receiver-level family closed.** The receiver-level family probe (this branch) returned `NULL` durable across BaselineModel + lgb-nb for both WR and TE. Player-level air-yards / aDOT distributions do not carry orthogonal signal at the trailing-4-receiver-active-games unit. Refined-unit candidates beyond air-yards / aDOT (per-route-concept, target-quality residuals, in-line vs flexed for TE) require ingest extensions not currently planned; none queued.
 
-**Track 2 — feature-class work, starting with TODO #3 (PBP / EPA features).**
-Five model-class swaps on identical features extract the same signal and
-hit the same ceiling. The next real RMSE lift (estimated 5-15%) lives in
-features. TODO #3 covers play-by-play ingest + the family of opponent-
-adjusted EPA / pace / PROE / air-yards features it unlocks. Brainstorm and
-spec after Plan 8 lands.
+**Track 2A — Other PBP feature families (next probe-only spec).** Per TODO #3c, the remaining team-level PBP feature candidates are:
 
-**Followup housekeeping (low-priority):** Model C-tuned is strictly
-dominated by Model C-NB on RMSE — TODO #29 captures the pruning when
-ready.
+- Pressure rate allowed by O-line (proxy for QB sack risk and rushing-yardage-on-scramble)
+- Red-zone usage shares — *team-level* (separate from this spec's receiver-level RZ target share)
+- Team pace alone (vs the bundled probe; PR #20 tested pace bundled with PROE/AYPS/EPA-resid)
 
-After Plans 8 + the feature-class work: Plan 4 (public API + CLI verbs +
-free-tier hosting), then Draft Hub.
+Bundle 3-4 candidates per probe per the family-level prior. Brainstorm + spec + plan on a new branch. The probe → composite-gate workflow from PR #20 + this spec is the canonical pattern.
+
+**Track 2B — RB PBP × other model classes (queued, informational).** Gate the 4 RB PBP cols against `lightgbm-tuned`, `lightgbm-nb`, and `ensemble`. Deferred during PR #21 per spec §1.3.5 because Optuna tuning + NB-2 dispersion fitting are 1+ hour each; the lightgbm family auto-picks-up the new cols dynamically. Informational, not gating, but answers whether the team-level PBP signal transfers to the tree-based model classes. Cheap to queue as a background informational pass.
+
+**Followup housekeeping (low-priority):** Model C-tuned is strictly dominated by Model C-NB on RMSE — TODO #29 captures the pruning when ready.
+
+After Track 2A + the above tracks: Plan 4 (public API + CLI verbs + free-tier hosting), then Draft Hub.
 
 ---
 
