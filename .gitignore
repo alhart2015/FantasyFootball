@@ -191,6 +191,9 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# Claude Code local state (per-machine settings, scheduled-task locks)
+.claude/
+
 # PyPI configuration file
 .pypirc
 

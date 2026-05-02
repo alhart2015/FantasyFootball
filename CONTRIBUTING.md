@@ -316,6 +316,22 @@ python -m scripts.build_pbp_family_override --seasons 2018-2024
 
 Pass `--force` to overwrite an existing parquet. The script needs `data/raw/pbp/`, `data/raw/depth_charts/`, and `data/raw/schedules/` populated (run the standard ingest refresh first if not). The player-team-week index is built from `depth_charts` (every rostered player per team-week) joined with `schedules` for opponents, matching the per-position feature builders' coverage.
 
+### Regenerating the PBP red-zone override
+
+Sibling to "Regenerating the PBP family override" above. The red-zone
+family override at `data/features_probe/pbp_redzone.parquet` is not
+committed; regenerate when the spec needs it:
+
+```bash
+python -m scripts.build_pbp_redzone_override --seasons 2018-2024
+```
+
+Output: ~one row per (gsis_id, season, week) for every fantasy-position
+rostered player who had a scheduled game that week. Used as input to
+`scripts/probe_feature_signal.py --override
+data/features_probe/pbp_redzone.parquet ...`. Spec:
+`docs/superpowers/specs/2026-05-02-pbp-redzone-feature-family-probe-design.md`.
+
 ### Regenerating the PBP receiver override
 
 The receiver-level override parquet (`data/features_probe/pbp_receiver.parquet`)
