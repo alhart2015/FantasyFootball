@@ -549,3 +549,108 @@ def test_def_rz_pass_rate_allowed_filters_out_of_zone_plays() -> None:
     out = compute_team_def_rz_pass_rate_allowed(pbp)
     wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
     assert wk5_kc["team_def_rz_pass_rate_allowed_l4"].iloc[0] == pytest.approx(4.0 / 6.0)
+
+
+def _make_index_row(gsis_id: str, season: int, week: int, team: str, opp: str) -> dict[str, object]:
+    return {"gsis_id": gsis_id, "season": season, "week": week, "team": team, "opp": opp}
+
+
+def test_attach_offensive_features_join_on_team() -> None:
+    """team_rz_pace_l4 / team_rz_pass_rate_l4 attach via the player's
+    own team."""
+    from projections.features.pbp_redzone_features import attach_pbp_redzone_features
+
+    rows: list[dict[str, object]] = []
+    # 4 prior weeks for KC: 5 RZ plays/wk, all pass (pass_rate = 1.0).
+    for wk in range(1, 6):
+        for i in range(5):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "defteam": "BAL",
+                    "play_type": "pass",
+                    "pass_attempt": 1.0,
+                    "epa": 0.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    index = pd.DataFrame([_make_index_row("00-0011111", 2024, 5, "KC", "BAL")])
+    out = attach_pbp_redzone_features(index, pbp)
+    assert len(out) == 1
+    assert out["team_rz_pace_l4"].iloc[0] == pytest.approx(5.0)
+    assert out["team_rz_pass_rate_l4"].iloc[0] == pytest.approx(1.0)
+
+
+def test_attach_defensive_features_join_on_opp() -> None:
+    """team_def_rz_epa_allowed_l4 / team_def_rz_pass_rate_allowed_l4
+    attach via the player's *opponent's* team."""
+    from projections.features.pbp_redzone_features import attach_pbp_redzone_features
+
+    rows: list[dict[str, object]] = []
+    # 4 prior weeks: BAL defense allows EPA=0.7/play and pass_rate=0.5
+    # in RZ. KC plays BAL in wk5.
+    for wk in range(1, 6):
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "defteam": "BAL",
+                    "play_type": "pass",
+                    "pass_attempt": 1.0,
+                    "epa": 0.7,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "defteam": "BAL",
+                    "play_type": "run",
+                    "pass_attempt": 0.0,
+                    "epa": 0.7,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    # A BAL player faces KC in wk5 → joiner attaches BAL's def_rz_*
+    # via opp=KC; but here we want a KC player whose opp is BAL.
+    index = pd.DataFrame([_make_index_row("00-0011111", 2024, 5, "KC", "BAL")])
+    out = attach_pbp_redzone_features(index, pbp)
+    assert len(out) == 1
+    # BAL's def_rz_epa_allowed_l4 = 0.7; pass_rate_allowed_l4 = 0.5.
+    assert out["team_def_rz_epa_allowed_l4"].iloc[0] == pytest.approx(0.7)
+    assert out["team_def_rz_pass_rate_allowed_l4"].iloc[0] == pytest.approx(0.5)
+
+
+def test_attach_empty_pbp_short_circuits_to_nan() -> None:
+    """Empty PBP frame → all-NaN columns appended; row count preserved."""
+    from projections.features.pbp_redzone_features import attach_pbp_redzone_features
+
+    pbp = pd.DataFrame(columns=list(_make_pbp_rows([{"play_id": 1}]).columns))
+    pbp = pbp.iloc[0:0]  # truly empty
+    index = pd.DataFrame(
+        [
+            _make_index_row("00-0011111", 2024, 5, "KC", "BAL"),
+            _make_index_row("00-0022222", 2024, 5, "KC", "BAL"),
+        ]
+    )
+    out = attach_pbp_redzone_features(index, pbp)
+    assert len(out) == 2
+    for col in (
+        "team_rz_pace_l4",
+        "team_rz_pass_rate_l4",
+        "team_def_rz_epa_allowed_l4",
+        "team_def_rz_pass_rate_allowed_l4",
+    ):
+        assert out[col].isna().all()

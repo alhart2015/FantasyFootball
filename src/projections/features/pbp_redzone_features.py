@@ -140,3 +140,64 @@ def compute_team_def_rz_pass_rate_allowed(pbp: pd.DataFrame) -> pd.DataFrame:
         value_col="def_rz_pass_rate",
         out_col="team_def_rz_pass_rate_allowed_l4",
     )
+
+
+def attach_pbp_redzone_features(
+    index: pd.DataFrame,
+    pbp: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach the 4 RZ family features to a player-team-week index.
+
+    Args:
+        index: ``(gsis_id, season, week, team, opp)`` — one row per
+            player-week. Team codes are assumed canonical per the ingest
+            schemas.
+        pbp: PBP frame matching ``PbpSchema``, projected to or wider than
+            ``_PBP_COLUMNS_USED``. Must include the seasons spanning the
+            index plus one prior season for trailing-4 backfill.
+
+    Returns:
+        A copy of ``index`` with 4 columns appended in order:
+        ``team_rz_pace_l4``, ``team_rz_pass_rate_l4``,
+        ``team_def_rz_epa_allowed_l4``,
+        ``team_def_rz_pass_rate_allowed_l4``. Row count equals
+        ``len(index)``; all 4 columns are float64 (NaN where trailing-4
+        has fewer than 4 prior games).
+
+    pace / pass_rate join on the player's TEAM; def_rz_epa_allowed and
+    def_rz_pass_rate_allowed join on the player's OPPONENT.
+
+    Empty ``pbp`` short-circuits to all-NaN columns — same shape as a
+    successful call where every row's trailing-4 has fewer than 4 prior
+    games.
+    """
+    if pbp.empty:
+        out = index.copy()
+        for col in (
+            "team_rz_pace_l4",
+            "team_rz_pass_rate_l4",
+            "team_def_rz_epa_allowed_l4",
+            "team_def_rz_pass_rate_allowed_l4",
+        ):
+            out[col] = float("nan")
+        return out
+
+    pbp_proj = pbp[list(_PBP_COLUMNS_USED)]
+    pace = compute_team_rz_pace(pbp_proj)
+    pass_rate = compute_team_rz_pass_rate(pbp_proj)
+    def_epa = compute_team_def_rz_epa_allowed(pbp_proj)
+    def_pass_rate = compute_team_def_rz_pass_rate_allowed(pbp_proj)
+
+    out = index.merge(pace, on=["team", "season", "week"], how="left")
+    out = out.merge(pass_rate, on=["team", "season", "week"], how="left")
+    out = out.merge(
+        def_epa.rename(columns={"team": "opp"}),
+        on=["opp", "season", "week"],
+        how="left",
+    )
+    out = out.merge(
+        def_pass_rate.rename(columns={"team": "opp"}),
+        on=["opp", "season", "week"],
+        how="left",
+    )
+    return out
