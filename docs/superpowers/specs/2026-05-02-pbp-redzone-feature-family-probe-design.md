@@ -27,11 +27,11 @@ This spec is **probe-only**. It does not ship production feature builders, does 
   - `build_pbp_redzone_overrides(pbp, player_team_week_index) -> pd.DataFrame` — public assembler that calls the four computes, joins onto a per-player index via `attach_pbp_redzone_features`, returns `(gsis_id, season, week, team_rz_pace_l4, team_rz_pass_rate_l4, team_def_rz_epa_allowed_l4, team_def_rz_pass_rate_allowed_l4)`. Validates GSIS-id format + dup-key absence + row-count invariant after merges.
 - New script `scripts/build_pbp_redzone_override.py`. Thin glue: load PBP / weekly_stats / schedules partitions via `projections.store.read_partition`, build the `(gsis_id, season, week, team, opp)` index, call the assembler, write `data/features_probe/pbp_redzone.parquet`. Manual-invoke; not part of CI; output not committed.
 - New tests `tests/test_features/test_pbp_redzone_features.py` (synthetic-PBP fixtures, mirror PR #20's pattern) plus `tests/test_scripts/test_build_pbp_redzone_override_cli.py` (mirrors PR #20's CLI tests).
-- Two-to-four probe runs (each emitting 4 markdown + 4 CSV files, one per position; 16–32 committed files total under `reports/`):
-  - `feature_probe_pbp_redzone_augment_{QB,RB,WR,TE}.{md,csv}` (always — baseline augment)
-  - `feature_probe_pbp_redzone_swap_{QB,RB,WR,TE}.{md,csv}` (always — baseline swap)
-  - `feature_probe_pbp_redzone_lgbnb_augment_{QB,RB,WR,TE}.{md,csv}` (conditional — only if both baseline reports together return `NULL` per the §4 verdict rule; runs with `--force-composite`)
-  - `feature_probe_pbp_redzone_lgbnb_swap_{QB,RB,WR,TE}.{md,csv}` (conditional — same trigger; runs with `--force-composite`)
+- Two-to-four probe runs (each emitting one CSV via `--csv-out` and one markdown via stdout redirect, with all 4 positions rendered in long format inside each file; 4 always-run files + 4 conditional files = 4–8 committed files total under `reports/`):
+  - `feature_probe_pbp_redzone_augment.{md,csv}` (always — baseline augment, all 4 positions)
+  - `feature_probe_pbp_redzone_swap.{md,csv}` (always — baseline swap, all 4 positions)
+  - `feature_probe_pbp_redzone_lgbnb_augment.{md,csv}` (conditional — only if both baseline reports together return `NULL` per the §4 verdict rule; runs with `--force-composite`)
+  - `feature_probe_pbp_redzone_lgbnb_swap.{md,csv}` (conditional — same trigger; runs with `--force-composite`)
 - One committed summary report `reports/feature_probe_pbp_redzone_summary.md` consolidating the 2-or-4 underlying reports plus the family verdict and a mechanism-annotation paragraph (see §4).
 - `TODO.md` #3c update + `project_management.md` decision-log entry recording the verdict and what it greenlights or closes. `CONTRIBUTING.md` "Regenerating the PBP family override" subsection extended with a sibling "Regenerating the PBP red-zone override" entry.
 
@@ -127,17 +127,19 @@ python -m scripts.probe_feature_signal \
   --candidate-name pbp_redzone_augment \
   --model baseline \
   --override data/features_probe/pbp_redzone.parquet \
-  --csv-out reports/feature_probe_pbp_redzone_augment.csv
+  --csv-out reports/feature_probe_pbp_redzone_augment.csv \
+  > reports/feature_probe_pbp_redzone_augment.md
 
 python -m scripts.probe_feature_signal \
   --candidate-name pbp_redzone_swap \
   --model baseline \
   --override data/features_probe/pbp_redzone.parquet \
   --drop opp_allowed_qb_fppg_l4,opp_allowed_rb_fppg_l4,opp_allowed_wr_fppg_l4,opp_allowed_te_fppg_l4 \
-  --csv-out reports/feature_probe_pbp_redzone_swap.csv
+  --csv-out reports/feature_probe_pbp_redzone_swap.csv \
+  > reports/feature_probe_pbp_redzone_swap.md
 ```
 
-Each probe writes one markdown + one CSV per position (probe spec §5 convention) under `reports/`. Total: 8 markdown + 8 CSV files at minimum (4 positions × 2 modes).
+Each probe writes one CSV via `--csv-out` and one markdown via stdout redirect, with all 4 positions rendered in long format inside each file (probe CLI emits one markdown table + the CSV-equivalent rows; see `scripts/probe_feature_signal.py:790-804`). Total: 2 markdown + 2 CSV files for the always-run baseline modes (4 files), plus 2 markdown + 2 CSV more if the conditional lgb-nb runs fire (4 more files), for a worst-case total of 8 probe-output files.
 
 **On the swap-mode `--drop` set.** This drops only the v1 schedule-strength features (`opp_allowed_*_fppg_l4`). It does *not* drop PR #20's already-shipped RB columns (`pace_l4`, `proe_l4`, `team_ayps_l4`, `team_def_epa_resid_l4`) — those are in `RbFeaturesSchema` directly and are part of RB's current production feature set. The swap-mode probe therefore tests "does the RZ family carry orthogonal signal *beyond v1 + PR #20's bundle*?" for RB, and "does the RZ family carry orthogonal signal *beyond v1*?" for QB/WR/TE (none of which have the PR #20 columns). This is the right comparison: each position's swap-mode baseline is its current production feature set minus v1 fppg-based opp-strength.
 
@@ -153,7 +155,8 @@ python -m scripts.probe_feature_signal \
   --model lightgbm-nb \
   --force-composite \
   --override data/features_probe/pbp_redzone.parquet \
-  --csv-out reports/feature_probe_pbp_redzone_lgbnb_augment.csv
+  --csv-out reports/feature_probe_pbp_redzone_lgbnb_augment.csv \
+  > reports/feature_probe_pbp_redzone_lgbnb_augment.md
 
 python -m scripts.probe_feature_signal \
   --candidate-name pbp_redzone_lgbnb_swap \
@@ -161,7 +164,8 @@ python -m scripts.probe_feature_signal \
   --force-composite \
   --override data/features_probe/pbp_redzone.parquet \
   --drop opp_allowed_qb_fppg_l4,opp_allowed_rb_fppg_l4,opp_allowed_wr_fppg_l4,opp_allowed_te_fppg_l4 \
-  --csv-out reports/feature_probe_pbp_redzone_lgbnb_swap.csv
+  --csv-out reports/feature_probe_pbp_redzone_lgbnb_swap.csv \
+  > reports/feature_probe_pbp_redzone_lgbnb_swap.md
 ```
 
 `--force-composite` is mandatory on the conditional runs. Phase 1 is hardcoded RidgeCV regardless of `--model`, so without `--force-composite` the lgb-nb runs are tautological with the already-completed baseline runs (this gap was caught and worked around in PR #22; this spec fixes it upstream). The flag forces Phase 2 to run unconditionally on the lightgbm-nb model class.
@@ -212,9 +216,9 @@ This annotation is informational only — it does not change the SIGNAL/NULL ver
 
 ### 5.1 Per-probe reports (committed)
 
-The probe already writes one markdown + one CSV per position to `reports/`. Filenames follow the existing convention: `feature_probe_<candidate-name>_<POS>.{md,csv}`.
+Per probe run, the CLI writes one CSV via `--csv-out` and one markdown via stdout (captured with `> path.md`). Both files contain all 4 positions in long format. Filenames follow the existing convention: `feature_probe_<candidate-name>.{md,csv}`.
 
-For this spec, that is at minimum 16 files (8 markdown + 8 CSV) for the always-run baseline modes; up to 32 if lgb-nb is triggered.
+For this spec: 4 always-run files (2 markdown + 2 CSV across the 2 baseline modes); up to 8 total if the conditional lgb-nb runs fire (4 more files).
 
 ### 5.2 Family summary report (committed)
 
