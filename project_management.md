@@ -4,6 +4,31 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## PBP Red-Zone Family Probe — verdict NULL (durable) at RZ-broad cut, all 4 positions (2026-05-02, on branch `feat/probe-pbp-redzone`)
+
+**Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-02-pbp-redzone-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-05-02-pbp-redzone-feature-family-probe.md`. Implements 4 pure compute fns + attach helper + public assembler in `src/projections/features/pbp_redzone_features.py`, the override-generator script `scripts/build_pbp_redzone_override.py`, 19 synthetic-fixture tests + 4 CLI tests. mypy strict + ruff + ruff format clean. CONTRIBUTING.md updated with a "Regenerating the PBP red-zone override" subsection. .gitignore extended with `.claude/` (small chore folded into the branch).
+
+**Verdict:** `NULL` (durable per spec §1.3 criterion 3 — both BaselineModel + lgb-nb tested at composite via `--force-composite`).
+
+- All 4 mode × model reports (baseline + lgb-nb × augment + swap, 4 positions, 6 stats each = 96 pooled cells per mode × 4 modes): 0 pooled Phase 1 SIGNAL.
+- Phase 2 (composite, lgb-nb composite via `--force-composite`) on both modes: 0 ADOPT or MARGINAL across 8 verdict cells. All 8 DO_NOT_ADOPT.
+- Only directional Phase-2 cell: `QB augment lgb-nb composite RMSE +0.0268 fpts CI [+0.0082, +0.0449]` — strictly above 0, i.e. small but statistically-significant **regression** on QB when adding the 4 RZ features in augment mode under lgb-nb composite. The other 7 Phase 2 cells all bracket zero with point estimates near zero (RB/WR/TE flat).
+- Predicted mechanism (TD efficiency) **not observed** — no `*_tds` cell fires SIGNAL anywhere. The bundle was chosen specifically to drive `*_tds` (Plan 5c's noisiest unmoved cell) and didn't.
+
+**What this closes:** TODO #3c's "Red-zone usage shares (separate from full-field share)" candidate, at the team-level RZ-broad cut (`yardline_100 ≤ 20`). The four bundled features (`team_rz_pace_l4`, `team_rz_pass_rate_l4`, `team_def_rz_epa_allowed_l4`, `team_def_rz_pass_rate_allowed_l4`) do not carry orthogonal signal beyond v1 + already-shipped PBP team features under either Ridge baseline or lgb-nb production model class.
+
+**Refined-unit candidates beyond `yardline_100 ≤ 20` that remain unexplored:** goal-line (`yardline_100 ≤ 5`), per-stat splits (un-bundling reverses the family-level prior framework), RZ-restricted EPA-residual (correlates with already-shipped full-field `team_def_epa_resid_l4`). None queued; the durable NULL across both model classes argues against any of these clearing what RZ-broad couldn't, absent independent evidence.
+
+**What remains open in TODO #3c:** **Pressure rate allowed by O-line** — the third unexplored team-level family from TODO #3c. Different mechanism axis (offensive-line proxy via sack rate / scramble rate, not TD distribution). Curated PBP has `sack`, `qb_dropback`, `qb_scramble` so a pressure-proxy bundle is buildable without ingest extension. Natural next slot for a bundled probe under the same workflow.
+
+**Coverage caveat:** Probe invoked with `--coverage-threshold 0.90` because the probe's hardcoded check is *pooled* and the structural 2018 cold-start (no Y-1 backfill, 73-77% per-position coverage) drags pooled to 94.7%. Per-season 2019–2024 coverage is uniformly ≥96.9% across all 4 positions — the eval window itself satisfies spec §1.3 criterion 1 ("≥95% per (position, season) pair"). Same precedent gap as PR #22 (which used 0.70). Not blocking; documented in summary report.
+
+**Spec corrections caught + fixed during planning** (3 commits on the branch before implementation): §2.2 source switched from `weekly_stats` to `depth_charts` (matches PR #20's actual implementation; weekly_stats would produce ~50% coverage gaps from missing inactive-roster rows); §6.2 `read_pbp` (fictional function) replaced with `store.read_partition` per-season + `pd.concat` pattern; §6.4 CLI tests reframed as new coverage rather than "mirroring PR #20" (PR #20 shipped without CLI tests). Probe-output file count corrected from 16-32 files to 4-8 (probe writes one .csv + one .md per mode with all positions in long format, not per-position).
+
+**Reports:** `reports/feature_probe_pbp_redzone_summary.md` (decision log + per-mode table + mechanism annotation) + 4 per-(model, mode) .md/.csv files (`feature_probe_pbp_redzone_{,lgbnb_}{augment,swap}.{md,csv}`).
+
+---
+
 ## PBP Receiver Family Probe — verdict NULL (durable) for WR/TE; family closed at air-yards / aDOT cut (2026-05-01, on branch `feat/wr-te-pbp-features`)
 
 **Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-01-wr-te-pbp-receiver-features-design.md` and plan `docs/superpowers/plans/2026-05-01-wr-te-pbp-receiver-features.md`. Implements `_trailing_4_per_player_asof` as-of helper + 4 pure compute fns + assembler + validating wrapper in `src/projections/features/pbp_receiver_features.py`, the override-generator script `scripts/build_pbp_receiver_override.py`, 21 synthetic-fixture tests + 4 CLI tests. mypy strict + ruff + ruff format clean.
