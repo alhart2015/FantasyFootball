@@ -347,3 +347,104 @@ def test_qb_scramble_rate_excludes_non_dropback_plays() -> None:
     out = compute_team_qb_scramble_rate(pbp)
     wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
     assert wk5["team_qb_scramble_rate_l4"].iloc[0] == pytest.approx(0.30)
+
+
+def test_def_sack_rate_basic() -> None:
+    """Defensive sack rate = sum(sack) / sum(qb_dropback) grouped by defteam."""
+    from projections.features.pbp_pressure_features import compute_team_def_sack_rate
+
+    rows: list[dict[str, object]] = []
+    # KC defense plays BAL each week: 10 dropbacks/wk, 3 sacks → 0.30.
+    for wk in range(1, 6):
+        for i in range(3):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "qb_dropback": 1.0,
+                    "sack": 1.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(7):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "qb_dropback": 1.0,
+                    "sack": 0.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_def_sack_rate(pbp)
+    wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5_kc["team_def_sack_rate_l4"].iloc[0] == pytest.approx(0.30)
+
+
+def test_def_sack_rate_groups_by_defteam() -> None:
+    """Two defenses facing different offensive scripts produce different rates."""
+    from projections.features.pbp_pressure_features import compute_team_def_sack_rate
+
+    rows: list[dict[str, object]] = []
+    # KC defense gets 4 sacks per 10 dropbacks vs BAL.
+    # CIN defense gets 1 sack per 10 dropbacks vs CLE.
+    for wk in range(1, 6):
+        for i in range(4):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "qb_dropback": 1.0,
+                    "sack": 1.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(6):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "qb_dropback": 1.0,
+                    "sack": 0.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+        for i in range(1):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "CLE",
+                    "defteam": "CIN",
+                    "qb_dropback": 1.0,
+                    "sack": 1.0,
+                    "play_id": 200 * wk + i,
+                }
+            )
+        for i in range(9):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "CLE",
+                    "defteam": "CIN",
+                    "qb_dropback": 1.0,
+                    "sack": 0.0,
+                    "play_id": 200 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_def_sack_rate(pbp)
+    wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
+    wk5_cin = out.query("team == 'CIN' and season == 2024 and week == 5")
+    assert wk5_kc["team_def_sack_rate_l4"].iloc[0] == pytest.approx(0.40)
+    assert wk5_cin["team_def_sack_rate_l4"].iloc[0] == pytest.approx(0.10)
