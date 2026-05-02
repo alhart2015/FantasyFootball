@@ -671,3 +671,117 @@ def test_attach_empty_pbp_short_circuits_to_nan() -> None:
         "team_def_scramble_rate_l4",
     ):
         assert out[col].isna().all()
+
+
+def test_assembler_returns_4_feature_columns() -> None:
+    """Output schema matches the spec: gsis_id, season, week +
+    4 pressure feature columns in declared order."""
+    from projections.features.pbp_pressure_features import build_pbp_pressure_overrides
+
+    rows: list[dict[str, object]] = []
+    for wk in range(1, 6):
+        rows.append(
+            {
+                "season": 2024,
+                "week": wk,
+                "posteam": "KC",
+                "defteam": "BAL",
+                "qb_dropback": 1.0,
+                "qb_scramble": 0.0,
+                "sack": 0.0,
+                "play_id": 100 * wk,
+            }
+        )
+    pbp = _make_pbp_rows(rows)
+    index = pd.DataFrame([_make_index_row("00-0011111", 2024, 5, "KC", "BAL")])
+    out = build_pbp_pressure_overrides(pbp, index)
+    assert list(out.columns) == [
+        "gsis_id",
+        "season",
+        "week",
+        "team_sack_rate_allowed_l4",
+        "team_qb_scramble_rate_l4",
+        "team_def_sack_rate_l4",
+        "team_def_scramble_rate_l4",
+    ]
+
+
+def test_assembler_canonical_teams_pass_through() -> None:
+    """Canonical team codes (per normalize_team_code; e.g. JAX not JAC)
+    pass through cleanly. The assembler is a passive consumer — ingest
+    schemas validate canonical codes upstream."""
+    from projections.features.pbp_pressure_features import build_pbp_pressure_overrides
+
+    rows: list[dict[str, object]] = []
+    for wk in range(1, 6):
+        rows.append(
+            {
+                "season": 2024,
+                "week": wk,
+                "posteam": "JAC",
+                "defteam": "TEN",
+                "qb_dropback": 1.0,
+                "qb_scramble": 0.0,
+                "sack": 0.0,
+                "play_id": 100 * wk,
+            }
+        )
+    pbp = _make_pbp_rows(rows)
+    index = pd.DataFrame([_make_index_row("00-0011111", 2024, 5, "JAC", "TEN")])
+    out = build_pbp_pressure_overrides(pbp, index)
+    assert len(out) == 1
+
+
+def test_assembler_raises_on_invalid_gsis_id() -> None:
+    """Malformed gsis_id strings raise ValueError."""
+    from projections.features.pbp_pressure_features import build_pbp_pressure_overrides
+
+    pbp = _make_pbp_rows([{"season": 2024, "week": 1, "posteam": "KC"}])
+    index = pd.DataFrame([_make_index_row("not-a-real-id", 2024, 1, "KC", "BAL")])
+    with pytest.raises(ValueError, match="invalid gsis_id format"):
+        build_pbp_pressure_overrides(pbp, index)
+
+
+def test_assembler_raises_on_duplicate_keys() -> None:
+    """Duplicate (gsis_id, season, week) in the index raises ValueError."""
+    from projections.features.pbp_pressure_features import build_pbp_pressure_overrides
+
+    pbp = _make_pbp_rows([{"season": 2024, "week": 1, "posteam": "KC"}])
+    index = pd.DataFrame(
+        [
+            _make_index_row("00-0011111", 2024, 1, "KC", "BAL"),
+            _make_index_row("00-0011111", 2024, 1, "KC", "BAL"),  # dup
+        ]
+    )
+    with pytest.raises(ValueError, match="duplicate \\(gsis_id, season, week\\) keys"):
+        build_pbp_pressure_overrides(pbp, index)
+
+
+def test_assembler_preserves_row_count() -> None:
+    """Output row count matches the input index row count exactly."""
+    from projections.features.pbp_pressure_features import build_pbp_pressure_overrides
+
+    rows: list[dict[str, object]] = []
+    for wk in range(1, 6):
+        rows.append(
+            {
+                "season": 2024,
+                "week": wk,
+                "posteam": "KC",
+                "defteam": "BAL",
+                "qb_dropback": 1.0,
+                "qb_scramble": 0.0,
+                "sack": 0.0,
+                "play_id": 100 * wk,
+            }
+        )
+    pbp = _make_pbp_rows(rows)
+    index = pd.DataFrame(
+        [
+            _make_index_row("00-0011111", 2024, 5, "KC", "BAL"),
+            _make_index_row("00-0022222", 2024, 5, "KC", "BAL"),
+            _make_index_row("00-0033333", 2024, 5, "KC", "BAL"),
+        ]
+    )
+    out = build_pbp_pressure_overrides(pbp, index)
+    assert len(out) == 3
