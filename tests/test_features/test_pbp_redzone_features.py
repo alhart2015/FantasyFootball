@@ -178,3 +178,91 @@ def test_rz_pace_does_not_leak_across_team_boundaries() -> None:
     wk5_bal = out.query("team == 'BAL' and season == 2024 and week == 5")
     assert wk5_kc["team_rz_pace_l4"].iloc[0] == pytest.approx(3.0)
     assert wk5_bal["team_rz_pace_l4"].iloc[0] == pytest.approx(8.0)
+
+
+def test_rz_pass_rate_basic() -> None:
+    """Pass rate is mean of pass_attempt over RZ pass+run plays."""
+    from projections.features.pbp_redzone_features import compute_team_rz_pass_rate
+
+    rows: list[dict[str, object]] = []
+    # 4 prior weeks: 6 RZ plays/wk, 4 pass + 2 run → pass_rate = 4/6 ≈ 0.667.
+    for wk in range(1, 6):
+        for i in range(4):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "play_type": "pass",
+                    "pass_attempt": 1.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "play_type": "run",
+                    "pass_attempt": 0.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_rz_pass_rate(pbp)
+    wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5["team_rz_pass_rate_l4"].iloc[0] == pytest.approx(4.0 / 6.0)
+
+
+def test_rz_pass_rate_filters_out_of_zone_plays() -> None:
+    """Non-RZ plays do not affect the RZ pass-rate mean."""
+    from projections.features.pbp_redzone_features import compute_team_rz_pass_rate
+
+    rows: list[dict[str, object]] = []
+    # 4 prior weeks: 4 RZ pass + 2 RZ run + 100 non-RZ run plays per week.
+    # RZ-only pass_rate = 4/6; if the filter is broken, non-RZ runs would
+    # drag the mean toward 4/106.
+    for wk in range(1, 6):
+        for i in range(4):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "play_type": "pass",
+                    "pass_attempt": 1.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "play_type": "run",
+                    "pass_attempt": 0.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+        for i in range(100):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "play_type": "run",
+                    "pass_attempt": 0.0,
+                    "yardline_100": 50.0,  # non-RZ
+                    "play_id": 1000 * wk + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_rz_pass_rate(pbp)
+    wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5["team_rz_pass_rate_l4"].iloc[0] == pytest.approx(4.0 / 6.0)

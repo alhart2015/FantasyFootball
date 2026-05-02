@@ -71,3 +71,20 @@ def compute_team_rz_pace(pbp: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"posteam": "team", "size": "rz_plays"})
     )
     return _trailing_4_mean(per_game, value_col="rz_plays", out_col="team_rz_pace_l4")
+
+
+def compute_team_rz_pass_rate(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Team-level RZ pass rate, trailing 4 prior games.
+
+    Mean of ``pass_attempt`` (1.0/0.0) over rows where
+    ``play_type in {'pass', 'run'}`` AND ``yardline_100 <= 20``. The
+    play_type filter excludes special-teams plays where ``pass_attempt``
+    is undefined / NaN.
+    """
+    rz = pbp[pbp["play_type"].isin(_OFFENSIVE_PLAY_TYPES) & (pbp["yardline_100"] <= _RZ_THRESHOLD)]
+    per_game = (
+        rz.groupby(["posteam", "season", "week"], as_index=False)["pass_attempt"]
+        .mean()
+        .rename(columns={"posteam": "team", "pass_attempt": "rz_pass_rate"})
+    )
+    return _trailing_4_mean(per_game, value_col="rz_pass_rate", out_col="team_rz_pass_rate_l4")
