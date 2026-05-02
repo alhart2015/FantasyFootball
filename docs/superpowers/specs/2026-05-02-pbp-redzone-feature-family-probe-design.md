@@ -74,14 +74,16 @@ If any of these columns is missing in the loaded PBP, the spec is blocked (no si
 
 For each (gsis_id, season, week) row in the override, we need to know which `team` the player was on (for offensive features) and which `team` they faced (for defensive features). Source:
 
-- `weekly_stats` ingest gives `(gsis_id, season, week, team)` directly.
-- `schedules` ingest gives `(team, season, week, opponent)` directly.
+- `depth_charts` ingest gives `(gsis_id, season, week, team)` for every rostered player per team-week (including inactive players who didn't accumulate weekly_stats). This is the same source the per-position feature parquets are built from. Filtered to fantasy-relevant positions (`Position.QB`, `Position.RB`, `Position.WR`, `Position.TE`).
+- `schedules` ingest gives `(season, week, home_team, away_team)`; pivoted twice to `(team, opp)` rows so each game contributes both teams' perspectives.
 
-The override-builder script joins these to produce `(gsis_id, season, week, team, opp)`, then the assembler attaches the four feature columns by:
+**Why depth_charts and not weekly_stats:** the per-position feature parquets at `data/features/{pos}/season=Y/week=W/` are built from `depth_charts` — including backup-QB / inactive-roster rows that never appear in `weekly_stats`. Using `weekly_stats` as the index source would miss those rows and produce a ~50% coverage gap at probe time (per PR #20's `scripts/build_pbp_family_override.py:62-86` rationale). The override must be keyed off the same source as the baseline feature parquet.
+
+The override-builder script inner-joins these to produce `(gsis_id, season, week, team, opp)`, then the assembler attaches the four feature columns by:
 - `team_rz_pace_l4`, `team_rz_pass_rate_l4` ← join on `(team, season, week)` to the offensive-side computes.
 - `team_def_rz_epa_allowed_l4`, `team_def_rz_pass_rate_allowed_l4` ← join on `(opp, season, week)` to the defensive-side computes.
 
-Bye weeks (no schedule row) are dropped before the join — those rows are not in the player-team-week index in the first place. Players whose team has no schedule row in week W have no override row produced for week W; the probe's existing left-merge on `(gsis_id, season, week)` then leaves them with NaN on the four columns, and the post-dropna step removes them from the candidate-side training set. As long as ≥ 95% of baseline rows survive, the probe accepts.
+Bye weeks (no schedule row) drop out of the inner join — those rows are not in the player-team-week index in the first place. As long as ≥ 95% of baseline rows survive at probe time, the probe accepts.
 
 ### 2.3 Trailing-window backfill rule
 
@@ -332,10 +334,10 @@ Argparse + I/O glue. Pattern matches `scripts/build_pbp_family_override.py`'s sh
 
 - `parse_args()` → `--seasons 2018-2024` (default), `--data-root data` (default), `--output data/features_probe/pbp_redzone.parquet` (default), `--force` (overwrite).
 - `main(argv=None)`:
-  1. Load PBP via `projections.ingest.pbp.read_pbp(seasons=range(start, end+1), data_root=Path(args.data_root))`.
-  2. Load `weekly_stats` + `schedules` via the existing ingest helpers; build `player_team_week_index` by inner-joining on `(team, season, week)`.
+  1. Load PBP via `projections.store.read_partition(args.data_root / "raw", "pbp", season=s)` per-season + `pd.concat`. Span is `range(seasons.start - 1, seasons.stop)` to include the prior season for trailing-4 backfill at weeks 1–4. Skip seasons without a partition (matches PR #20's `_read_concat` helper).
+  2. Load `depth_charts` + `schedules` via the same `read_partition` per-season pattern; build `player_team_week_index` via the same `_build_player_team_week_index` shape PR #20 uses (filter depth_charts to fantasy positions, dedupe `(gsis_id, season, week)`, pivot schedules home/away into `(team, opp)` rows, inner-join on `(season, week, team)`).
   3. Call `build_pbp_redzone_overrides(pbp, player_team_week_index)`.
-  4. Write the resulting frame to `args.output` via `pyarrow.parquet`. Refuse to overwrite without `--force`.
+  4. Write the resulting frame to `args.output` via `df.to_parquet(args.output, index=False)`. Refuse to overwrite without `--force`.
 
 The script is not invoked in CI; the user runs it manually before each probe invocation. The "Regenerating the PBP red-zone override" subsection in `CONTRIBUTING.md` documents the invocation (added in §9).
 
@@ -364,12 +366,12 @@ The script is not invoked in CI; the user runs it manually before each probe inv
 - `test_assembler_invalid_gsis_raises` — malformed gsis_id → `ValueError`.
 - `test_assembler_row_count_invariant` — mock the merge to violate row count → `AssertionError`.
 
-`tests/test_scripts/test_build_pbp_redzone_override_cli.py` (mirrors PR #20's CLI tests):
+`tests/test_scripts/test_build_pbp_redzone_override_cli.py` (introduces CLI test coverage for the override-builder pattern; PR #20's `scripts/build_pbp_family_override.py` shipped without CLI tests, so this spec adds the missing coverage. The same tests would apply retroactively to PR #20's script if anyone wants to backfill, but that is out of scope here):
 
-- `test_parse_args_defaults` — happy-path arg parsing.
-- `test_parse_args_seasons_range_format` — `--seasons 2020-2022` parses correctly.
-- `test_main_writes_output` — integration test with monkeypatched ingest helpers; verify the parquet is written at the configured path.
-- `test_main_refuses_overwrite_without_force` — pre-existing output → exit non-zero with clear error.
+- `test_parse_args_defaults` — happy-path arg parsing produces the documented defaults.
+- `test_parse_args_seasons_range_format` — `--seasons 2020-2022` parses to `range(2020, 2023)`; `--seasons 2024` parses to `range(2024, 2025)`.
+- `test_main_writes_output` — integration test with monkeypatched `read_partition` returning small synthetic PBP / depth_charts / schedules; verify the parquet is written at the configured path with the expected row count.
+- `test_main_refuses_overwrite_without_force` — pre-existing output file → `argparse` parser-error exit (parser.error path).
 
 No new probe tests — `family_verdict_from_reports` already has full coverage from PR #20.
 
