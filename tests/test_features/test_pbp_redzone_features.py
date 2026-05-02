@@ -375,3 +375,177 @@ def test_def_rz_epa_allowed_excludes_special_teams() -> None:
     out = compute_team_def_rz_epa_allowed(pbp)
     wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
     assert wk5_kc["team_def_rz_epa_allowed_l4"].iloc[0] == pytest.approx(0.5)
+
+
+def test_def_rz_pass_rate_allowed_basic() -> None:
+    """Defensive RZ pass-rate-allowed = mean of pass_attempt grouped by
+    defteam over RZ pass+run plays."""
+    from projections.features.pbp_redzone_features import (
+        compute_team_def_rz_pass_rate_allowed,
+    )
+
+    rows: list[dict[str, object]] = []
+    # KC defense plays BAL each week: 6 RZ plays/wk → 4 pass + 2 run.
+    for wk in range(1, 6):
+        for i in range(4):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "pass",
+                    "pass_attempt": 1.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "run",
+                    "pass_attempt": 0.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_def_rz_pass_rate_allowed(pbp)
+    wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5_kc["team_def_rz_pass_rate_allowed_l4"].iloc[0] == pytest.approx(4.0 / 6.0)
+
+
+def test_def_rz_pass_rate_allowed_separates_defenses() -> None:
+    """Two defenses facing different offensive scripts should produce
+    different pass-rate-allowed values."""
+    from projections.features.pbp_redzone_features import (
+        compute_team_def_rz_pass_rate_allowed,
+    )
+
+    rows: list[dict[str, object]] = []
+    # KC faces a pass-heavy BAL: 5 pass + 1 run per RZ trip.
+    # CIN faces a run-heavy CLE: 1 pass + 5 run per RZ trip.
+    for wk in range(1, 6):
+        for i in range(5):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "pass",
+                    "pass_attempt": 1.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        rows.append(
+            {
+                "season": 2024,
+                "week": wk,
+                "posteam": "BAL",
+                "defteam": "KC",
+                "play_type": "run",
+                "pass_attempt": 0.0,
+                "yardline_100": 10.0,
+                "play_id": 100 * wk + 50,
+            }
+        )
+        rows.append(
+            {
+                "season": 2024,
+                "week": wk,
+                "posteam": "CLE",
+                "defteam": "CIN",
+                "play_type": "pass",
+                "pass_attempt": 1.0,
+                "yardline_100": 10.0,
+                "play_id": 200 * wk,
+            }
+        )
+        for i in range(5):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "CLE",
+                    "defteam": "CIN",
+                    "play_type": "run",
+                    "pass_attempt": 0.0,
+                    "yardline_100": 10.0,
+                    "play_id": 200 * wk + 10 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_def_rz_pass_rate_allowed(pbp)
+    wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
+    wk5_cin = out.query("team == 'CIN' and season == 2024 and week == 5")
+    assert wk5_kc["team_def_rz_pass_rate_allowed_l4"].iloc[0] == pytest.approx(5.0 / 6.0)
+    assert wk5_cin["team_def_rz_pass_rate_allowed_l4"].iloc[0] == pytest.approx(1.0 / 6.0)
+
+
+def test_def_rz_pass_rate_allowed_filters_out_of_zone_plays() -> None:
+    """Non-RZ plays do not affect the defensive RZ pass-rate-allowed mean.
+
+    Closes the gap noted in Task 3's code-quality review (M2): the same
+    yardline filter that's exercised on the offensive side
+    (test_rz_pass_rate_filters_out_of_zone_plays) needs an analogous
+    test on the defensive side. Without it, an inverted yardline filter
+    (e.g., yardline_100 >= 20) would not be caught by the defensive
+    test set."""
+    from projections.features.pbp_redzone_features import (
+        compute_team_def_rz_pass_rate_allowed,
+    )
+
+    rows: list[dict[str, object]] = []
+    # KC defense vs BAL: 4 RZ pass + 2 RZ run + 100 non-RZ run plays per week.
+    # RZ-only def_pass_rate_allowed = 4/6; if the filter is broken, non-RZ
+    # runs would drag the mean toward 4/106.
+    for wk in range(1, 6):
+        for i in range(4):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "pass",
+                    "pass_attempt": 1.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "run",
+                    "pass_attempt": 0.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+        for i in range(100):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "run",
+                    "pass_attempt": 0.0,
+                    "yardline_100": 50.0,  # non-RZ
+                    "play_id": 1000 * wk + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_def_rz_pass_rate_allowed(pbp)
+    wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5_kc["team_def_rz_pass_rate_allowed_l4"].iloc[0] == pytest.approx(4.0 / 6.0)

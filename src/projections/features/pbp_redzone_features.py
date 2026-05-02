@@ -115,3 +115,28 @@ def compute_team_def_rz_epa_allowed(pbp: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"defteam": "team", "epa": "def_rz_epa"})
     )
     return _trailing_4_mean(per_game, value_col="def_rz_epa", out_col="team_def_rz_epa_allowed_l4")
+
+
+def compute_team_def_rz_pass_rate_allowed(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Pass rate the defense forces opposing offenses to use in RZ,
+    trailing 4 prior games.
+
+    Mean of ``pass_attempt`` over rows where
+    ``play_type in {'pass', 'run'}`` AND ``yardline_100 <= 20``,
+    grouped by defteam. Same aggregation as ``compute_team_rz_pass_rate``
+    but grouped by defense rather than offense.
+
+    Output: (team, season, week, team_def_rz_pass_rate_allowed_l4)
+    where ``team`` is the DEFENSE's team code.
+    """
+    rz = pbp[pbp["play_type"].isin(_OFFENSIVE_PLAY_TYPES) & (pbp["yardline_100"] <= _RZ_THRESHOLD)]
+    per_game = (
+        rz.groupby(["defteam", "season", "week"], as_index=False)["pass_attempt"]
+        .mean()
+        .rename(columns={"defteam": "team", "pass_attempt": "def_rz_pass_rate"})
+    )
+    return _trailing_4_mean(
+        per_game,
+        value_col="def_rz_pass_rate",
+        out_col="team_def_rz_pass_rate_allowed_l4",
+    )
