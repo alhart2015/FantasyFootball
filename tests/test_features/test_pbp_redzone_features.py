@@ -266,3 +266,112 @@ def test_rz_pass_rate_filters_out_of_zone_plays() -> None:
     out = compute_team_rz_pass_rate(pbp)
     wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
     assert wk5["team_rz_pass_rate_l4"].iloc[0] == pytest.approx(4.0 / 6.0)
+
+
+def test_def_rz_epa_allowed_basic() -> None:
+    """Defensive RZ EPA allowed = mean of opponent's RZ EPA per game,
+    grouped by defteam."""
+    from projections.features.pbp_redzone_features import compute_team_def_rz_epa_allowed
+
+    rows: list[dict[str, object]] = []
+    # KC defense plays BAL each week: 5 RZ plays/wk with EPA = 0.5 each.
+    for wk in range(1, 6):
+        for i in range(5):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "pass",
+                    "epa": 0.5,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_def_rz_epa_allowed(pbp)
+    # KC's trailing-4 def_rz_epa_allowed_l4 at wk5 should be 0.5 (mean of wk1..wk4).
+    wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5_kc["team_def_rz_epa_allowed_l4"].iloc[0] == pytest.approx(0.5)
+
+
+def test_def_rz_epa_allowed_excludes_nan_epa() -> None:
+    """Plays with NaN EPA do not contribute to the per-game mean."""
+    from projections.features.pbp_redzone_features import compute_team_def_rz_epa_allowed
+
+    rows: list[dict[str, object]] = []
+    # 4 RZ plays per game, 2 with EPA=1.0 + 2 with NaN EPA.
+    # Per-game mean = mean of [1.0, 1.0] = 1.0, NOT mean of [1.0, NaN, 1.0, NaN].
+    for wk in range(1, 6):
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "pass",
+                    "epa": 1.0,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "pass",
+                    "epa": float("nan"),
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_def_rz_epa_allowed(pbp)
+    wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5_kc["team_def_rz_epa_allowed_l4"].iloc[0] == pytest.approx(1.0)
+
+
+def test_def_rz_epa_allowed_excludes_special_teams() -> None:
+    """Kickoff/punt/FG plays are excluded by play_type filter, even at
+    RZ yardlines and with non-NaN EPA."""
+    from projections.features.pbp_redzone_features import compute_team_def_rz_epa_allowed
+
+    rows: list[dict[str, object]] = []
+    # 5 RZ pass plays/wk with EPA=0.5 + 3 RZ FG plays/wk with EPA=2.0.
+    # If FG plays leaked in, per-game mean would be (5*0.5 + 3*2.0)/8 ≈ 1.06.
+    for wk in range(1, 6):
+        for i in range(5):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "pass",
+                    "epa": 0.5,
+                    "yardline_100": 10.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(3):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "play_type": "field_goal",
+                    "epa": 2.0,
+                    "yardline_100": 5.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_def_rz_epa_allowed(pbp)
+    wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5_kc["team_def_rz_epa_allowed_l4"].iloc[0] == pytest.approx(0.5)

@@ -88,3 +88,30 @@ def compute_team_rz_pass_rate(pbp: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"posteam": "team", "pass_attempt": "rz_pass_rate"})
     )
     return _trailing_4_mean(per_game, value_col="rz_pass_rate", out_col="team_rz_pass_rate_l4")
+
+
+def compute_team_def_rz_epa_allowed(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Defensive RZ EPA-per-play allowed, trailing 4 prior games.
+
+    Per (defteam, season, week): mean of ``epa`` across rows where
+    ``epa`` is non-NaN AND ``yardline_100 <= 20`` AND
+    ``play_type in {'pass', 'run'}``. Special-teams plays are excluded
+    (they have non-NaN EPA in nflfastR but are not pass/run scrimmage
+    plays). Then rolling-4 mean of the per-game series per team,
+    shifted so row at week W reflects the last 4 prior games.
+
+    Output: (team, season, week, team_def_rz_epa_allowed_l4) where
+    ``team`` is the DEFENSE's team code; the joiner attaches each
+    player's *opponent's* row.
+    """
+    rz_epa = pbp[
+        pbp["play_type"].isin(_OFFENSIVE_PLAY_TYPES)
+        & (pbp["yardline_100"] <= _RZ_THRESHOLD)
+        & pbp["epa"].notna()
+    ]
+    per_game = (
+        rz_epa.groupby(["defteam", "season", "week"], as_index=False)["epa"]
+        .mean()
+        .rename(columns={"defteam": "team", "epa": "def_rz_epa"})
+    )
+    return _trailing_4_mean(per_game, value_col="def_rz_epa", out_col="team_def_rz_epa_allowed_l4")
