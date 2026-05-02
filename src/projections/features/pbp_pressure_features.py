@@ -90,7 +90,8 @@ def compute_team_qb_scramble_rate(pbp: pd.DataFrame) -> pd.DataFrame:
     """Team-level offensive QB scramble rate, trailing 4 prior games.
 
     Per (posteam, season, week): sum(qb_scramble) / sum(qb_dropback) over
-    rows where posteam == team AND qb_dropback == 1.
+    rows where posteam == team AND qb_dropback == 1. Plays with
+    qb_dropback == 0 or NaN are excluded from both numerator and denominator.
 
     Output: (team, season, week, team_qb_scramble_rate_l4)
     """
@@ -123,3 +124,25 @@ def compute_team_def_sack_rate(pbp: pd.DataFrame) -> pd.DataFrame:
         out_col="def_sack_rate",
     )
     return _trailing_4_mean(per_game, value_col="def_sack_rate", out_col="team_def_sack_rate_l4")
+
+
+def compute_team_def_scramble_rate(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Defensive scramble rate forced, trailing 4 prior games.
+
+    Per (defteam, season, week): sum(qb_scramble) / sum(qb_dropback) over
+    rows where defteam == team AND qb_dropback == 1. Plays with
+    qb_dropback == 0 or NaN are excluded from both numerator and denominator.
+
+    Output: (team, season, week, team_def_scramble_rate_l4) where ``team``
+    is the DEFENSE's team code.
+    """
+    per_game = _per_game_rate(
+        pbp,
+        team_key="defteam",
+        num_col="qb_scramble",
+        denom_col="qb_dropback",
+        out_col="def_scramble_rate",
+    )
+    return _trailing_4_mean(
+        per_game, value_col="def_scramble_rate", out_col="team_def_scramble_rate_l4"
+    )

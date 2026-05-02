@@ -448,3 +448,88 @@ def test_def_sack_rate_groups_by_defteam() -> None:
     wk5_cin = out.query("team == 'CIN' and season == 2024 and week == 5")
     assert wk5_kc["team_def_sack_rate_l4"].iloc[0] == pytest.approx(0.40)
     assert wk5_cin["team_def_sack_rate_l4"].iloc[0] == pytest.approx(0.10)
+
+
+def test_def_scramble_rate_basic() -> None:
+    """Defensive scramble rate = sum(qb_scramble) / sum(qb_dropback) grouped by defteam."""
+    from projections.features.pbp_pressure_features import compute_team_def_scramble_rate
+
+    rows: list[dict[str, object]] = []
+    # KC defense forces opposing QBs to scramble at 0.20 rate.
+    for wk in range(1, 6):
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 1.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(8):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "BAL",
+                    "defteam": "KC",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 0.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_def_scramble_rate(pbp)
+    wk5_kc = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5_kc["team_def_scramble_rate_l4"].iloc[0] == pytest.approx(0.20)
+
+
+def test_trailing_4_crosses_season_boundary_via_concat() -> None:
+    """When the caller concats Y-1 + Y PBP, the trailing-4 helper carries
+    history forward by date order — week 1 of Y reflects the last 4 games
+    of Y-1 (matches PR #20's backfill semantics)."""
+    from projections.features.pbp_pressure_features import compute_team_sack_rate_allowed
+
+    rows: list[dict[str, object]] = []
+    # KC: weeks 14-17 of 2023 (4 prior games), then week 1 of 2024.
+    # 2023 sack rate is 0.20 each week; week 1 2024 trailing-4 should be 0.20.
+    for wk in range(14, 18):
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2023,
+                    "week": wk,
+                    "posteam": "KC",
+                    "qb_dropback": 1.0,
+                    "sack": 1.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(8):
+            rows.append(
+                {
+                    "season": 2023,
+                    "week": wk,
+                    "posteam": "KC",
+                    "qb_dropback": 1.0,
+                    "sack": 0.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    rows.append(
+        {
+            "season": 2024,
+            "week": 1,
+            "posteam": "KC",
+            "qb_dropback": 1.0,
+            "sack": 0.0,
+            "play_id": 1000,
+        }
+    )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_sack_rate_allowed(pbp)
+    wk1_2024 = out.query("team == 'KC' and season == 2024 and week == 1")
+    assert wk1_2024["team_sack_rate_allowed_l4"].iloc[0] == pytest.approx(0.20)
