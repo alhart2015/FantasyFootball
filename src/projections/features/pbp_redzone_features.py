@@ -201,3 +201,63 @@ def attach_pbp_redzone_features(
         how="left",
     )
     return out
+
+
+def build_pbp_redzone_overrides(
+    pbp: pd.DataFrame,
+    player_team_week_index: pd.DataFrame,
+) -> pd.DataFrame:
+    """Public assembler. Returns the 4-column override frame ready to write.
+
+    Args:
+        pbp: PBP frame matching ``PbpSchema``. Must include the seasons
+            spanning the index plus one prior season for trailing-4 backfill.
+            Team codes (``posteam``, ``defteam``) are assumed canonical per
+            ingest-schema validation upstream.
+        player_team_week_index: ``(gsis_id, season, week, team, opp)`` —
+            one row per player-week. Team codes are assumed canonical per
+            the ingest schemas (DepthChartsSchema / SchedulesSchema both
+            validate against the canonical team-code set).
+
+    Returns:
+        ``(gsis_id, season, week, team_rz_pace_l4, team_rz_pass_rate_l4,
+        team_def_rz_epa_allowed_l4, team_def_rz_pass_rate_allowed_l4)`` —
+        one row per input index row.
+
+    Raises:
+        ValueError: gsis_id format violations or duplicate
+            (gsis_id, season, week) keys in the index.
+        AssertionError: row-count mismatch after merges (internal-invariant
+            violation; a future compute regression that introduces duplicate
+            (team, season, week) keys would trigger this).
+    """
+    bad_ids = [g for g in player_team_week_index["gsis_id"].dropna() if not _GSIS_RE.match(str(g))]
+    if bad_ids:
+        raise ValueError(
+            f"invalid gsis_id format(s): {bad_ids[:3]} (and {max(0, len(bad_ids) - 3)} more)"
+        )
+
+    dup_mask = player_team_week_index.duplicated(subset=["gsis_id", "season", "week"], keep=False)
+    if dup_mask.any():
+        n_dup = int(dup_mask.sum())
+        raise ValueError(f"duplicate (gsis_id, season, week) keys in index: {n_dup} rows")
+
+    out = attach_pbp_redzone_features(player_team_week_index, pbp)
+
+    if len(out) != len(player_team_week_index):
+        raise AssertionError(
+            f"row count mismatch: input index had {len(player_team_week_index)} rows, "
+            f"output has {len(out)}; suggests a many-to-many merge regression"
+        )
+
+    return out[
+        [
+            "gsis_id",
+            "season",
+            "week",
+            "team_rz_pace_l4",
+            "team_rz_pass_rate_l4",
+            "team_def_rz_epa_allowed_l4",
+            "team_def_rz_pass_rate_allowed_l4",
+        ]
+    ].reset_index(drop=True)
