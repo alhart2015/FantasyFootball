@@ -707,7 +707,7 @@ def test_assembler_returns_4_feature_columns() -> None:
 
 
 def test_assembler_canonical_teams_pass_through() -> None:
-    """Canonical team codes (per normalize_team_code; e.g. JAX not JAC)
+    """Canonical team codes (per normalize_team_code; e.g. JAC not JAX)
     pass through cleanly. The assembler is a passive consumer — ingest
     schemas validate canonical codes upstream."""
     from projections.features.pbp_pressure_features import build_pbp_pressure_overrides
