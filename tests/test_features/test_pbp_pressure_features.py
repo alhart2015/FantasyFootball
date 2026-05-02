@@ -266,3 +266,84 @@ def test_trailing_4_within_team_boundary() -> None:
     wk5_bal = out.query("team == 'BAL' and season == 2024 and week == 5")
     assert wk5_kc["team_sack_rate_allowed_l4"].iloc[0] == pytest.approx(0.10)
     assert wk5_bal["team_sack_rate_allowed_l4"].iloc[0] == pytest.approx(0.40)
+
+
+def test_qb_scramble_rate_basic() -> None:
+    """QB scramble rate = sum(qb_scramble) / sum(qb_dropback)."""
+    from projections.features.pbp_pressure_features import compute_team_qb_scramble_rate
+
+    rows: list[dict[str, object]] = []
+    # 4 prior weeks: 10 dropbacks/wk, 3 of them scrambles → scramble_rate = 0.30.
+    for wk in range(1, 6):
+        for i in range(3):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 1.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(7):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 0.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_qb_scramble_rate(pbp)
+    wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5["team_qb_scramble_rate_l4"].iloc[0] == pytest.approx(0.30)
+
+
+def test_qb_scramble_rate_excludes_non_dropback_plays() -> None:
+    """qb_dropback=0 plays are excluded from both numerator and denominator."""
+    from projections.features.pbp_pressure_features import compute_team_qb_scramble_rate
+
+    rows: list[dict[str, object]] = []
+    # 10 dropbacks/wk (3 scrambles), 50 handoffs/wk (qb_dropback=0).
+    for wk in range(1, 6):
+        for i in range(3):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 1.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(7):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 0.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+        for i in range(50):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "qb_dropback": 0.0,
+                    "qb_scramble": 0.0,
+                    "play_id": 100 * wk + 200 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    out = compute_team_qb_scramble_rate(pbp)
+    wk5 = out.query("team == 'KC' and season == 2024 and week == 5")
+    assert wk5["team_qb_scramble_rate_l4"].iloc[0] == pytest.approx(0.30)
