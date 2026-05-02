@@ -60,7 +60,9 @@ def _per_game_rate(
 ) -> pd.DataFrame:
     """Compute per-game rate = sum(num_col) / sum(denom_col) where
     denom_col == 1, grouped by (team_key, season, week). Excludes NaN
-    denom_col rows. Output: (team, season, week, out_col)."""
+    denom_col rows. NaN values in num_col are skipped by pandas .sum()
+    (treated as 0); the row is still counted in the denominator if
+    denom_col == 1. Output: (team, season, week, out_col)."""
     valid = pbp[(pbp[denom_col] == 1.0) & pbp[denom_col].notna()]
     per_game = valid.groupby([team_key, "season", "week"], as_index=False).agg(
         num=(num_col, "sum"), denom=(denom_col, "sum")
