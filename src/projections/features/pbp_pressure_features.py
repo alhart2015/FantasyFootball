@@ -146,3 +146,63 @@ def compute_team_def_scramble_rate(pbp: pd.DataFrame) -> pd.DataFrame:
     return _trailing_4_mean(
         per_game, value_col="def_scramble_rate", out_col="team_def_scramble_rate_l4"
     )
+
+
+def attach_pbp_pressure_features(
+    index: pd.DataFrame,
+    pbp: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach the 4 pressure family features to a player-team-week index.
+
+    Args:
+        index: ``(gsis_id, season, week, team, opp)`` — one row per
+            player-week. Team codes are assumed canonical per the ingest
+            schemas.
+        pbp: PBP frame matching ``PbpSchema``, projected to or wider than
+            ``_PBP_COLUMNS_USED``. Must include the seasons spanning the
+            index plus one prior season for trailing-4 backfill.
+
+    Returns:
+        A copy of ``index`` with 4 columns appended in order:
+        ``team_sack_rate_allowed_l4``, ``team_qb_scramble_rate_l4``,
+        ``team_def_sack_rate_l4``, ``team_def_scramble_rate_l4``.
+        Row count equals ``len(index)``; all 4 columns are float64
+        (NaN where trailing-4 has fewer than 4 prior games).
+
+    sack_rate_allowed / qb_scramble_rate join on the player's TEAM;
+    def_sack_rate and def_scramble_rate join on the player's OPPONENT.
+
+    Empty ``pbp`` short-circuits to all-NaN columns — same shape as a
+    successful call where every row's trailing-4 has fewer than 4 prior
+    games.
+    """
+    if pbp.empty:
+        out = index.copy()
+        for col in (
+            "team_sack_rate_allowed_l4",
+            "team_qb_scramble_rate_l4",
+            "team_def_sack_rate_l4",
+            "team_def_scramble_rate_l4",
+        ):
+            out[col] = float("nan")
+        return out
+
+    pbp_proj = pbp[list(_PBP_COLUMNS_USED)]
+    sack_allowed = compute_team_sack_rate_allowed(pbp_proj)
+    scramble = compute_team_qb_scramble_rate(pbp_proj)
+    def_sack = compute_team_def_sack_rate(pbp_proj)
+    def_scramble = compute_team_def_scramble_rate(pbp_proj)
+
+    out = index.merge(sack_allowed, on=["team", "season", "week"], how="left")
+    out = out.merge(scramble, on=["team", "season", "week"], how="left")
+    out = out.merge(
+        def_sack.rename(columns={"team": "opp"}),
+        on=["opp", "season", "week"],
+        how="left",
+    )
+    out = out.merge(
+        def_scramble.rename(columns={"team": "opp"}),
+        on=["opp", "season", "week"],
+        how="left",
+    )
+    return out

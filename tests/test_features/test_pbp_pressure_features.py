@@ -533,3 +533,141 @@ def test_trailing_4_crosses_season_boundary_via_concat() -> None:
     out = compute_team_sack_rate_allowed(pbp)
     wk1_2024 = out.query("team == 'KC' and season == 2024 and week == 1")
     assert wk1_2024["team_sack_rate_allowed_l4"].iloc[0] == pytest.approx(0.20)
+
+
+def _make_index_row(gsis_id: str, season: int, week: int, team: str, opp: str) -> dict[str, object]:
+    return {"gsis_id": gsis_id, "season": season, "week": week, "team": team, "opp": opp}
+
+
+def test_attach_offensive_features_join_on_team() -> None:
+    """team_sack_rate_allowed_l4 / team_qb_scramble_rate_l4 attach via the player's
+    own team."""
+    from projections.features.pbp_pressure_features import attach_pbp_pressure_features
+
+    rows: list[dict[str, object]] = []
+    # 4 prior weeks for KC: 10 dropbacks/wk, 2 sacks + 3 scrambles per week.
+    # Expected: sack_rate=0.20, scramble_rate=0.30.
+    for wk in range(1, 6):
+        for i in range(2):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "defteam": "BAL",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 0.0,
+                    "sack": 1.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(3):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "defteam": "BAL",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 1.0,
+                    "sack": 0.0,
+                    "play_id": 100 * wk + 30 + i,
+                }
+            )
+        for i in range(5):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "defteam": "BAL",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 0.0,
+                    "sack": 0.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    index = pd.DataFrame([_make_index_row("00-0011111", 2024, 5, "KC", "BAL")])
+    out = attach_pbp_pressure_features(index, pbp)
+    assert len(out) == 1
+    assert out["team_sack_rate_allowed_l4"].iloc[0] == pytest.approx(0.20)
+    assert out["team_qb_scramble_rate_l4"].iloc[0] == pytest.approx(0.30)
+
+
+def test_attach_defensive_features_join_on_opp() -> None:
+    """team_def_sack_rate_l4 / team_def_scramble_rate_l4 attach via the
+    player's *opponent's* team."""
+    from projections.features.pbp_pressure_features import attach_pbp_pressure_features
+
+    rows: list[dict[str, object]] = []
+    # 4 prior weeks: BAL defense forces 0.40 sack rate and 0.10 scramble rate.
+    # KC plays BAL in wk5; the player's row should pick up BAL's def rates.
+    for wk in range(1, 6):
+        for i in range(4):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "defteam": "BAL",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 0.0,
+                    "sack": 1.0,
+                    "play_id": 100 * wk + i,
+                }
+            )
+        for i in range(1):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "defteam": "BAL",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 1.0,
+                    "sack": 0.0,
+                    "play_id": 100 * wk + 30 + i,
+                }
+            )
+        for i in range(5):
+            rows.append(
+                {
+                    "season": 2024,
+                    "week": wk,
+                    "posteam": "KC",
+                    "defteam": "BAL",
+                    "qb_dropback": 1.0,
+                    "qb_scramble": 0.0,
+                    "sack": 0.0,
+                    "play_id": 100 * wk + 50 + i,
+                }
+            )
+    pbp = _make_pbp_rows(rows)
+    index = pd.DataFrame([_make_index_row("00-0011111", 2024, 5, "KC", "BAL")])
+    out = attach_pbp_pressure_features(index, pbp)
+    assert len(out) == 1
+    assert out["team_def_sack_rate_l4"].iloc[0] == pytest.approx(0.40)
+    assert out["team_def_scramble_rate_l4"].iloc[0] == pytest.approx(0.10)
+
+
+def test_attach_empty_pbp_short_circuits_to_nan() -> None:
+    """Empty PBP frame → all-NaN columns appended; row count preserved."""
+    from projections.features.pbp_pressure_features import attach_pbp_pressure_features
+
+    pbp = _make_pbp_rows([{"play_id": 1}]).iloc[0:0]  # truly empty, schema preserved
+    index = pd.DataFrame(
+        [
+            _make_index_row("00-0011111", 2024, 5, "KC", "BAL"),
+            _make_index_row("00-0022222", 2024, 5, "KC", "BAL"),
+        ]
+    )
+    out = attach_pbp_pressure_features(index, pbp)
+    assert len(out) == 2
+    for col in (
+        "team_sack_rate_allowed_l4",
+        "team_qb_scramble_rate_l4",
+        "team_def_sack_rate_l4",
+        "team_def_scramble_rate_l4",
+    ):
+        assert out[col].isna().all()
