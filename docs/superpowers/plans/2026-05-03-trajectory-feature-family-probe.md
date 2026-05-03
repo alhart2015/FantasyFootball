@@ -2387,43 +2387,56 @@ Expected: prints "wrote N rows to data/features_probe/trajectory.parquet" where 
 
 - [ ] **Step 3: Run the 4 probes**
 
+The probe CLI takes `--override` (parquet path) + `--drop` (column list, only for swap mode) + `--csv-out` (CSV output path). The markdown report is written to stdout — redirect with `>` to capture it. Augment mode = override only; swap mode = override + drop with the same column names.
+
+The exact column list for `--drop` is the four candidate columns. Use shell variables for clarity:
+
+```bash
+COLS="age,is_rookie,volume_trend_l4_minus_prior_l4,snap_pct_change_l4_vs_prior_l4"
+
+# baseline × augment
+python -m scripts.probe_feature_signal \
+    --candidate-name trajectory_baseline_augment \
+    --override data/features_probe/trajectory.parquet \
+    --model baseline \
+    --csv-out reports/feature_probe_trajectory_augment.csv \
+    > reports/feature_probe_trajectory_augment.md
+
+# baseline × swap
+python -m scripts.probe_feature_signal \
+    --candidate-name trajectory_baseline_swap \
+    --override data/features_probe/trajectory.parquet \
+    --drop "$COLS" \
+    --model baseline \
+    --csv-out reports/feature_probe_trajectory_swap.csv \
+    > reports/feature_probe_trajectory_swap.md
+
+# lgb-nb × augment (force-composite — Phase 1 is RidgeCV-only, so without
+# --force-composite, Phase 2 never fires and the run is tautological with baseline)
+python -m scripts.probe_feature_signal \
+    --candidate-name trajectory_lgbnb_augment \
+    --override data/features_probe/trajectory.parquet \
+    --model lightgbm-nb \
+    --force-composite \
+    --csv-out reports/feature_probe_trajectory_lgbnb_augment.csv \
+    > reports/feature_probe_trajectory_lgbnb_augment.md
+
+# lgb-nb × swap
+python -m scripts.probe_feature_signal \
+    --candidate-name trajectory_lgbnb_swap \
+    --override data/features_probe/trajectory.parquet \
+    --drop "$COLS" \
+    --model lightgbm-nb \
+    --force-composite \
+    --csv-out reports/feature_probe_trajectory_lgbnb_swap.csv \
+    > reports/feature_probe_trajectory_lgbnb_swap.md
 ```
-python scripts/probe_feature_signal.py \
-    --override data/features_probe/trajectory.parquet \
-    --override-cols age is_rookie volume_trend_l4_minus_prior_l4 snap_pct_change_l4_vs_prior_l4 \
-    --mode augment --model baseline \
-    --positions QB RB WR TE --seasons 2021 2022 2023 2024 \
-    --output-md reports/feature_probe_trajectory_augment.md \
-    --output-csv reports/feature_probe_trajectory_augment.csv
 
-python scripts/probe_feature_signal.py \
-    --override data/features_probe/trajectory.parquet \
-    --override-cols age is_rookie volume_trend_l4_minus_prior_l4 snap_pct_change_l4_vs_prior_l4 \
-    --mode swap --model baseline \
-    --positions QB RB WR TE --seasons 2021 2022 2023 2024 \
-    --output-md reports/feature_probe_trajectory_swap.md \
-    --output-csv reports/feature_probe_trajectory_swap.csv
+Expected: each baseline run completes in ~1-2 minutes; each lgb-nb run ~10-15 minutes. If any run fails with an `OverrideCoverageError` (coverage below 0.95), retry that run with `--coverage-threshold 0.90` per spec §1.3 fallback. Document the relaxation in the summary report.
 
-python scripts/probe_feature_signal.py \
-    --override data/features_probe/trajectory.parquet \
-    --override-cols age is_rookie volume_trend_l4_minus_prior_l4 snap_pct_change_l4_vs_prior_l4 \
-    --mode augment --model lgbnb --force-composite \
-    --positions QB RB WR TE --seasons 2021 2022 2023 2024 \
-    --output-md reports/feature_probe_trajectory_lgbnb_augment.md \
-    --output-csv reports/feature_probe_trajectory_lgbnb_augment.csv
+Confirm the model name accepted by `--model`: PR #24's reports use the choice `lightgbm-nb` (per the probe's `_VALID_MODELS` set); if running interactively, `python -m scripts.probe_feature_signal --help` shows the current accepted choices.
 
-python scripts/probe_feature_signal.py \
-    --override data/features_probe/trajectory.parquet \
-    --override-cols age is_rookie volume_trend_l4_minus_prior_l4 snap_pct_change_l4_vs_prior_l4 \
-    --mode swap --model lgbnb --force-composite \
-    --positions QB RB WR TE --seasons 2021 2022 2023 2024 \
-    --output-md reports/feature_probe_trajectory_lgbnb_swap.md \
-    --output-csv reports/feature_probe_trajectory_lgbnb_swap.csv
-```
-
-Expected: each baseline run completes in ~1-2 minutes; each lgb-nb run ~10-15 minutes. If a run fails on coverage (`coverage<0.95`), retry with `--coverage-threshold 0.90` per spec §1.3 fallback.
-
-Verify the actual `--override-cols` / `--output-md` / `--output-csv` flag names by running `python scripts/probe_feature_signal.py --help` first — flag names may differ slightly from the above (mirror PR #24's invocation; commands here are illustrative).
+Position scope: `--position` defaults to all four (QB/RB/WR/TE) when omitted, which is what we want here — no need to pass it explicitly.
 
 - [ ] **Step 4: Write the summary report**
 
