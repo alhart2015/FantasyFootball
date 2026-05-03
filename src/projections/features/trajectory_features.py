@@ -373,6 +373,12 @@ def build_trajectory_overrides(
         n_dup = int(dup_mask.sum())
         raise ValueError(f"duplicate (gsis_id, season, week) keys in index: {n_dup} rows")
 
+    # TODO(Task 13): the index's gsis_id / season / week / team / opp columns
+    # inherit dtypes from the caller. The CLI override-builder script (Task 13)
+    # constructs the index — pin canonical dtypes there (StringDtype("pyarrow")
+    # for gsis_id/team/opp; Int64Dtype for season/week) before passing to this
+    # assembler. Without that, the override parquet will have object-dtype
+    # gsis_id columns despite the rest of the columns being properly nullable.
     chunks: list[pd.DataFrame] = []
     for pos in _FANTASY_POSITIONS_ENUM:
         idx_pos = player_team_week_index[player_team_week_index["position"] == pos.value]
@@ -383,16 +389,16 @@ def build_trajectory_overrides(
 
     if not chunks:
         return pd.DataFrame(
-            columns=[
-                "gsis_id",
-                "season",
-                "week",
-                "age",
-                "is_rookie",
-                "volume_trend_l4_minus_prior_l4",
-                "snap_pct_change_l4_vs_prior_l4",
-                "draft_year_inferred",
-            ]
+            {
+                "gsis_id": pd.array([], dtype=pd.StringDtype("pyarrow")),
+                "season": pd.array([], dtype=pd.Int64Dtype()),
+                "week": pd.array([], dtype=pd.Int64Dtype()),
+                "age": pd.array([], dtype=pd.Float64Dtype()),
+                "is_rookie": pd.array([], dtype=pd.Float64Dtype()),
+                "volume_trend_l4_minus_prior_l4": pd.array([], dtype=pd.Float64Dtype()),
+                "snap_pct_change_l4_vs_prior_l4": pd.array([], dtype=pd.Float64Dtype()),
+                "draft_year_inferred": pd.array([], dtype=pd.BooleanDtype()),
+            }
         )
 
     out = pd.concat(chunks, ignore_index=True)

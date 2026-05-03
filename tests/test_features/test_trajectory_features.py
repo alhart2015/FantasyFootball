@@ -811,3 +811,16 @@ def test_build_trajectory_overrides_handles_missing_position_in_index() -> None:
     out = build_trajectory_overrides(weekly_stats, snap_counts, lookup, index)
     # K not in fantasy positions for trajectory probe — dropped.
     assert out.empty
+    # Empty output must still carry canonical dtypes (regression guard for I-1).
+    expected_dtypes = {
+        "gsis_id": pd.StringDtype("pyarrow"),
+        "season": pd.Int64Dtype(),
+        "week": pd.Int64Dtype(),
+        "age": pd.Float64Dtype(),
+        "is_rookie": pd.Float64Dtype(),
+        "volume_trend_l4_minus_prior_l4": pd.Float64Dtype(),
+        "snap_pct_change_l4_vs_prior_l4": pd.Float64Dtype(),
+        "draft_year_inferred": pd.BooleanDtype(),
+    }
+    for col, dtype in expected_dtypes.items():
+        assert out[col].dtype == dtype, f"{col}: {out[col].dtype} != {dtype}"
