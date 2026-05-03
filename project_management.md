@@ -4,6 +4,42 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Trajectory Family Probe — verdict **SIGNAL** via WR (both model classes) + TE (lgb-nb only) (2026-05-03, on branch `feat/probe-trajectory`)
+
+**Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-03-trajectory-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-05-03-trajectory-feature-family-probe.md`. Implements 4 pure compute fns (`compute_age`, `compute_is_rookie`, `compute_qb_volume_trend`, `compute_rb_volume_trend`, `compute_wr_te_volume_trend`, `compute_snap_pct_change`), `_volume_trend` shared helper, `attach_trajectory_features` joiner, public assembler `build_trajectory_overrides` in `src/projections/features/trajectory_features.py`, override-generator script `scripts/build_trajectory_override.py`, plus the new `refresh_draft_picks` ingest module and `DraftPicksSchema`. All tests pass; mypy strict + ruff + ruff format clean. CONTRIBUTING.md updated with a "Regenerating the trajectory override" subsection.
+
+**Verdict:** **`SIGNAL` (durable)** per spec §1.3 criterion 3 — both BaselineModel + lgb-nb tested at composite via `--force-composite`. **First SIGNAL family probe since PR #20** (PBP team features bundle, RB-only). PR #22, #23, #24 all returned NULL durable.
+
+**ADOPT cells (3 of 16):**
+- **WR augment baseline** — composite RMSE Δ **-0.0414 fpts** ([-0.0606, -0.0230]); Spearman Δ +0.0058 ([+0.0026, +0.0092]).
+- **WR augment lgb-nb (composite, forced)** — composite RMSE Δ **-0.0194 fpts** ([-0.0299, -0.0096]); Spearman Δ +0.0031 ([+0.0012, +0.0051]).
+- **TE augment lgb-nb (composite, forced)** — composite RMSE Δ **-0.0107 fpts** ([-0.0191, -0.0028]); Spearman Δ +0.0032 ([+0.0004, +0.0063]).
+
+WR is the dominant signal carrier: ADOPT under both model classes. TE is lgb-nb-only. RB is null (mechanism-consistent — RB rushing is more team-script-driven than career-arc-driven; PR #21's team-level PBP cols already covered RB's binding axis). QB is **regression on both model classes** — see "recurring QB augment regression" below.
+
+**Bundle definition.** Four player-level features: `age` (biological age = `draft_age + (season - draft_year)` from `nfl_data_py.import_draft_picks`, with UDFA / pre-1980 fallback `season - inferred_draft_year + 22.0` where `inferred_draft_year` is earliest weekly_stats appearance — fallback fired on **22.6%** of rows), `is_rookie` (1.0 if `season == draft_year`), `volume_trend_l4_minus_prior_l4` (trailing-4 minus prior-4 mean on position-tailored stat: QB attempts / RB carries / WR/TE targets), `snap_pct_change_l4_vs_prior_l4` (same window cut on `SnapCountsSchema.offense_pct`). Plus audit-only `draft_year_inferred` boolean. Override: `data/features_probe/trajectory.parquet`, 56,652 rows.
+
+**Coverage relaxation — major spec deviation, documented prominently.** All four probes invoked with `--coverage-threshold 0.35` (vs spec's 0.95 default; vs PR #22's 0.70 fallback for 2018-only structural cold-start). Trajectory's trend features are **structurally sparse — they require 8 prior active games per player**, which excludes ~50% of player-weeks across all years (rookies, returners, mid-season call-ups). Per spec §3.3: "fewer than 8 prior active games yields NaN." Per-position coverage of override-candidate columns vs baseline rows: QB (88.7% age / 37.8% volume_trend / 39.6% snap_pct), RB (96.6 / 53.7 / 66.6), WR (96.7 / 53.6 / 68.4), TE (95.4 / 44.7 / 71.1). This is **NOT silent NaN imputation** — the probe's left-merge produces NaN-on-NaN matches that are excluded from the per-paired-row delta, so the bias is symmetric on both baseline and candidate sides; the verdict applies to the surviving substantially-experienced-player subpopulation, which is also where these features have any defined value to begin with. Deepest threshold relaxation in Track 2A's history; future re-test or production-builder work must apply the same threshold (or scope the cohort explicitly).
+
+**Recurring QB augment regression — now 4 instances across model classes.** This bundle adds **two new instances** to a growing pattern:
+
+| PR | Family | Model class | Mode | RMSE Δ | CI |
+|---|---|---|---|---:|---|
+| #23 | red-zone | lgb-nb | augment | **+0.0268** | [+0.0082, +0.0449] |
+| #24 | pressure | lgb-nb | augment | **+0.0276** | [+0.0077, +0.0472] |
+| this | trajectory | **baseline** | augment | **+0.0382** | [+0.0155, +0.0600] |
+| this | trajectory | lgb-nb | augment | **+0.0233** | [+0.0068, +0.0388] |
+
+The pattern previously appeared only on lgb-nb; trajectory's bundle produces it on **both** Ridge baseline and lgb-nb composite. Suggests adding context features (team / pressure / trajectory) to QB inputs consistently overfits on augment configurations across model-class spectrum. Possibly because the QB v1 feature set is already small (~25 cols vs ~40+ for skill positions), so any bundle of 4 added cols disproportionately shifts the regularization posture. Worth flagging for any future QB feature work.
+
+**What this closes:** TODO #24's age + role-trajectory candidates at the trailing-8-game unit. The bundled probe carried clear orthogonal signal at the WR (both model classes) and TE (lgb-nb only) cells. Greenlights a follow-up integration plan analogous to PR #20 → PR #21.
+
+**Refined-unit candidates beyond trailing-8-game unit remain unexplored:** per-position aging-curve interaction terms (`age²` for older-RB drop), `is_2nd_year` / `is_3rd_year` flags (collinear with age but might unlock breakout-year signal), depth-chart-rank trends, longer trailing windows (l8 vs l16), treating sparsity as a feature (a `has_trajectory_history` indicator that flips on at game 8+, allowing the model to learn to use trajectory signals only when well-defined). None queued.
+
+**Reports:** `reports/feature_probe_trajectory_summary.md` (decision log + per-mode table + mechanism annotation + coverage-relaxation note) + 4 per-(model, mode) .md/.csv files (`feature_probe_trajectory_{,lgbnb_}{augment,swap}.{md,csv}`).
+
+---
+
 ## PBP Pressure Family Probe — verdict NULL (durable) at dropback-denominator cut, all 4 positions (2026-05-02, on branch `feat/probe-pbp-pressure`)
 
 **Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-02-pbp-pressure-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-05-02-pbp-pressure-feature-family-probe.md`. Implements 4 pure compute fns + `_per_game_rate` helper + attach helper + public assembler in `src/projections/features/pbp_pressure_features.py`, the override-generator script `scripts/build_pbp_pressure_override.py`, 19 synthetic-fixture tests + 4 CLI tests. mypy strict + ruff + ruff format clean. CONTRIBUTING.md updated with a "Regenerating the PBP pressure override" subsection.
@@ -1456,14 +1492,20 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Current status (as of 2026-05-03)
 
-**Projections Core — Track 2A + Track 2B complete (all team-level PBP family work shipped + measured).** Final family probe (PBP pressure, this branch) returned `NULL` durable on this commit; Track 2B (RB PBP cols × other model classes, informational) also folded into PR #24 with the canonical "directional improvement, no regression" finding. The full Track 2A scoreboard:
+**Projections Core — Track 2A + Track 2B complete; Track 2 trajectory family probe SHIPPED with verdict SIGNAL via WR/TE.** This is the **first SIGNAL family probe since PR #20**. The full multi-track scoreboard:
 
+**Track 2A (team-level PBP families):**
 - PR #20 (pace/PROE/AYPS/EPA-resid bundle, 2026-04-30) — **SIGNAL via RB**; integrated into `RbFeaturesSchema` in PR #21 (`(BaselineModel, RB)` adoption gate -0.0124 fpts).
 - PR #22 (WR/TE receiver-level air-yards / aDOT bundle, 2026-05-01) — **NULL durable**.
 - PR #23 (red-zone bundle, 2026-05-02) — **NULL durable**; QB augment lgb-nb regression at +0.0268.
-- PR #24 (this — pressure bundle + Track 2B, 2026-05-02 / 2026-05-03) — **pressure NULL durable**; QB augment lgb-nb regression at +0.0276 (same pattern); **Track 2B**: RB PBP cols transfer directionally-favorably to all 4 tree-model classes (point estimates -0.0062 to -0.0141 fpts), only `baseline` reaches strict CI<0 (matches PR #21's -0.0124 to 4 decimals).
+- PR #24 (pressure bundle + Track 2B, 2026-05-02 / 2026-05-03) — **pressure NULL durable**; QB augment lgb-nb regression at +0.0276; Track 2B: RB PBP cols transfer directionally-favorably to all 4 tree-model classes.
 
-Three out of four PBP family probes returned NULL; the only SIGNAL was the original PR #20 bundle, and only on RB. The repeated QB augment lgb-nb regression across PR #23 + PR #24 is a notable pattern: adding team-level PBP cols in augment mode under lgb-nb consistently produces small statistically-significant QB regressions, suggesting model-class overfit / feature redundancy on the QB-side.
+**Track 2 player-trajectory features (this entry):**
+- **PR #25 (trajectory, 2026-05-03) — SIGNAL via WR (both model classes) + TE (lgb-nb only).** Three ADOPT cells: WR augment baseline -0.0414 fpts, WR augment lgb-nb -0.0194 fpts, TE augment lgb-nb -0.0107 fpts. Greenlights a follow-up integration plan analogous to PR #20 → PR #21.
+
+**Recurring QB augment regression — 4 instances now span both model classes.** PR #23 and PR #24 each had QB augment lgb-nb composite RMSE regressions (+0.0268 and +0.0276). PR #25 (trajectory) extends the pattern to both **baseline** (+0.0382, the largest yet) and lgb-nb (+0.0233). Adding context / team / trajectory features to QB inputs consistently overfits on augment configurations across model-class spectrum. Worth flagging for any future QB feature work.
+
+**Spec deviation in PR #25 — coverage threshold relaxation.** Trajectory probes invoked with `--coverage-threshold 0.35` (vs spec's 0.95 default, vs PR #22's 0.70 fallback). Trend features are structurally sparse: they require 8 prior active games per player, which excludes ~50% of player-weeks across all years. NOT silent NaN imputation — the bias is symmetric on baseline + candidate sides under the probe's left-merge join. Documented in `reports/feature_probe_trajectory_summary.md`.
 
 **Track 2B finding:** the RB PBP cols' signal transfers to the lightgbm family (which auto-derives features from the schema dynamically) but with smaller and noisier effects than the baseline lift. Untuned `lightgbm` shows the strongest point estimate (-0.0141 fpts, CI [-0.0278, +0.0005] — just barely brackets 0 on the upper bound); `lightgbm-tuned` / `lightgbm-nb` / `ensemble` all show -0.006 to -0.010 fpts directional improvement with CIs that bracket zero. No model class regresses on RB. No spillover to QB/WR/TE (their schemas weren't touched). See `reports/track2b_rb_pbp_other_models.md` for the per-cell table + methodology + appendix on probe attempts that did NOT work for retrospective gating of already-shipped cols.
 
@@ -1476,22 +1518,31 @@ Three out of four PBP family probes returned NULL; the only SIGNAL was the origi
 - **RB PBP Features Integration (PR #21)** — production builder + ADOPT for `(BaselineModel, RB)`.
 - **PBP Receiver Family Probe (PR #22)** — receiver-level air-yards / aDOT — NULL durable.
 - **PBP Red-Zone Family Probe (PR #23)** — team-level RZ — NULL durable.
-- **PBP Pressure Family Probe (PR #24, this)** — team-level pressure — NULL durable.
+- **PBP Pressure Family Probe (PR #24)** — team-level pressure — NULL durable.
+- **Trajectory Feature Family Probe (PR #25, this)** — player-level age + role-trajectory — **SIGNAL via WR (both model classes) + TE (lgb-nb only)**.
 
 **Predecessors (longer history):**
 - Plan 1 / Plan 2a / Plan 2b / Plan 3a / Plan 3b / Plan 3c / Plan 3d / Plan 3e (Phase 0 + Phase 1) / Plan 5 / Plan 5b / Plan 5c / Plan 6 / Plan 7. See per-plan blocks below.
 
 ## Next action
 
-**Track 2A is now complete.** All three TODO #3c team-level PBP feature families have been probed and all directional findings logged. Two of three returned durable NULL; one (PR #20) returned SIGNAL via RB and shipped in PR #21. No additional team-level family candidates are queued — the family-level prior framework concludes that team-level PBP-derived features do not carry meaningful orthogonal signal beyond the v1 + PR #20 bundle for the production model classes tested.
-
-**Track 2B is now also closed** (folded into PR #24 — see top entry above). RB PBP cols transfer to all 4 tree-model classes directionally; only baseline reaches strict CI<0; no class regresses.
+**Track 2 (player-trajectory) probe SIGNAL'd via WR + TE.** This is the first SIGNAL family probe since PR #20. Three ADOPT cells in Phase 2 composite: WR augment baseline (-0.0414 fpts), WR augment lgb-nb (-0.0194 fpts), TE augment lgb-nb (-0.0107 fpts). The natural follow-up is the same shape as PR #20 → PR #21: probe SIGNAL → focused integration spec for the binding cell.
 
 **Recommended next direction (pick one):**
 
-- **Pivot to model-improvement tracks.** Per the post-Plan-3e brainstorm, the three open mean-prediction tracks are: TODO #23 (target decomposition: volume × efficiency), TODO #24 (player-trajectory features: age curves, career arc, trend gradients), TODO #25 (weather features in per-position builders — small but real win on a subset of games). Each is a separate brainstorm → spec → plan cycle. None have been scoped yet.
+1. **WR trajectory features integration (recommended).** Analogous to PR #21's RB PBP integration. Add the 4 trajectory cols + draft-lookup machinery to `WrFeaturesSchema` and wire `attach_trajectory_features` (extracted from `build_trajectory_overrides`) into `build_wr_features`. Run dual-run adoption gate on the binding `(BaselineModel, WR)` cell. **Expected ADOPT** at ~-0.0414 fpts gate magnitude (matches probe; same pattern as PR #21's -0.0124 baseline RB matching PR #20's probe to 4 decimals). WR is the strongest cell — both model classes ADOPT'd in augment mode.
 
-- **Refined-unit PBP candidates (low-priority).** The three closed family probes (PR #22/#23/#24) all flagged refined-unit follow-ups: per-route-concept distributions, goal-line / 3rd-down splits, alternate pressure denominators. None currently queued; the cumulative durable-NULL signal across the broad cuts argues against any of these clearing absent independent evidence the unit choice was the binding constraint.
+2. **TE trajectory features integration.** Same pattern but at `TeFeaturesSchema`. **Only ADOPT'd under lgb-nb** (-0.0107 fpts), not under baseline. The dual-run gate on baseline would likely return DO_NOT_ADOPT for TE, but the lgb-nb cell would adopt. Consider scoping the TE integration to ship the schema + builder change but route the production binding to lgb-nb for TE only (precedent: Plan 6's QB-only ensemble suggestion). Lower expected magnitude than (1).
+
+3. **Sibling weather probe.** TODO #25 (weather features in per-position builders) is still queued per the original brainstorm Track 2 plan. `import_schedules` already returns wind / temperature / precipitation; the work is plumbing those into per-position feature builders, not new ingest. Independent of the trajectory integration; could run in parallel.
+
+**Track 2A status (PBP team-level families):** Complete. All three TODO #3c team-level PBP feature families probed. Two NULL, one SIGNAL→ADOPT (PR #20→#21). No additional team-level candidates queued.
+
+**Track 2B status (RB PBP cols × other model classes):** Closed (folded into PR #24). RB PBP cols transfer to all 4 tree-model classes directionally; only baseline reaches strict CI<0; no class regresses.
+
+**Refined-unit candidates (low-priority, none queued):**
+- Trajectory refined units: per-position aging-curve interaction terms (`age²`), `is_2nd_year` / `is_3rd_year` flags, depth-chart-rank trends, longer trailing windows (l8 vs l16), `has_trajectory_history` indicator.
+- PBP refined units: per-route-concept distributions, goal-line / 3rd-down splits, alternate pressure denominators. The cumulative durable-NULL signal across the broad cuts argues against any of these clearing absent independent evidence the unit choice was the binding constraint.
 
 **Followup housekeeping (low-priority):**
 - Model C-tuned is strictly dominated by Model C-NB on RMSE — TODO #29 captures the pruning when ready.
