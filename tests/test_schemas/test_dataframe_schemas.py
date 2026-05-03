@@ -9,6 +9,7 @@ from pandera.errors import SchemaError
 from projections.schemas import (
     _PYARROW_STR,
     DepthChartsSchema,
+    DraftPicksSchema,
     IdMapSchema,
     NgsPassingSchema,
     NgsReceivingSchema,
@@ -728,3 +729,62 @@ def test_pbp_schema_rejects_invalid_team_code() -> None:
     )
     with pytest.raises(SchemaError):
         PbpSchema.validate(df)
+
+
+def test_draft_picks_schema_accepts_valid_row() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0033873"], dtype=_PYARROW_STR),
+            "draft_year": pd.array([2017], dtype=pd.Int64Dtype()),
+            "draft_round": pd.array([1], dtype=pd.Int64Dtype()),
+            "draft_overall_pick": pd.array([10], dtype=pd.Int64Dtype()),
+            "pfr_id": pd.array(["MahoPa00"], dtype=_PYARROW_STR),
+            "draft_age": pd.array([21.5], dtype=pd.Float64Dtype()),
+        }
+    )
+    validated = DraftPicksSchema.validate(df)
+    assert len(validated) == 1
+
+
+def test_draft_picks_schema_rejects_duplicate_gsis_id() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0033873", "00-0033873"], dtype=_PYARROW_STR),
+            "draft_year": pd.array([2017, 2018], dtype=pd.Int64Dtype()),
+            "draft_round": pd.array([1, 2], dtype=pd.Int64Dtype()),
+            "draft_overall_pick": pd.array([10, 50], dtype=pd.Int64Dtype()),
+            "pfr_id": pd.array([pd.NA, pd.NA], dtype=_PYARROW_STR),
+            "draft_age": pd.array([21.5, 22.0], dtype=pd.Float64Dtype()),
+        }
+    )
+    with pytest.raises(SchemaError):
+        DraftPicksSchema.validate(df)
+
+
+def test_draft_picks_schema_rejects_malformed_gsis_id() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["malformed-id"], dtype=_PYARROW_STR),
+            "draft_year": pd.array([2017], dtype=pd.Int64Dtype()),
+            "draft_round": pd.array([1], dtype=pd.Int64Dtype()),
+            "draft_overall_pick": pd.array([10], dtype=pd.Int64Dtype()),
+            "pfr_id": pd.array([pd.NA], dtype=_PYARROW_STR),
+            "draft_age": pd.array([21.5], dtype=pd.Float64Dtype()),
+        }
+    )
+    with pytest.raises(SchemaError):
+        DraftPicksSchema.validate(df)
+
+
+def test_draft_picks_schema_allows_nullable_optional_columns() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0033873"], dtype=_PYARROW_STR),
+            "draft_year": pd.array([2017], dtype=pd.Int64Dtype()),
+            "draft_round": pd.array([pd.NA], dtype=pd.Int64Dtype()),
+            "draft_overall_pick": pd.array([pd.NA], dtype=pd.Int64Dtype()),
+            "pfr_id": pd.array([pd.NA], dtype=_PYARROW_STR),
+            "draft_age": pd.array([float("nan")], dtype=pd.Float64Dtype()),
+        }
+    )
+    DraftPicksSchema.validate(df)
