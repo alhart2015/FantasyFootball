@@ -221,3 +221,8 @@ def _volume_trend(
 def compute_qb_volume_trend(weekly_stats: pd.DataFrame) -> pd.DataFrame:
     """QB volume trend on `attempts`, trailing-4 minus prior-4 (active games)."""
     return _volume_trend(weekly_stats, position=Position.QB, value_col="attempts")
+
+
+def compute_rb_volume_trend(weekly_stats: pd.DataFrame) -> pd.DataFrame:
+    """RB volume trend on `carries`, trailing-4 minus prior-4 (active games)."""
+    return _volume_trend(weekly_stats, position=Position.RB, value_col="carries")

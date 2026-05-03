@@ -333,3 +333,33 @@ def test_compute_qb_volume_trend_empty_input() -> None:
     assert out["season"].dtype == pd.Int64Dtype()
     assert out["week"].dtype == pd.Int64Dtype()
     assert out["volume_trend_l4_minus_prior_l4"].dtype == pd.Float64Dtype()
+
+
+def test_compute_rb_volume_trend_uses_carries() -> None:
+    from projections.features.trajectory_features import compute_rb_volume_trend
+
+    rows = []
+    carries_by_week = {1: 5, 2: 7, 3: 9, 4: 11, 5: 15, 6: 17, 7: 19, 8: 21, 9: 25}
+    for w, c in carries_by_week.items():
+        rows.append(_ws_row(gsis_id="00-0033873", season=2018, week=w, position="RB", carries=c))
+    weekly_stats = pd.DataFrame(rows)
+    out = compute_rb_volume_trend(weekly_stats)
+    week_9 = out[(out["season"] == 2018) & (out["week"] == 9)]
+    # l4 = mean(15,17,19,21) = 18; prior_l4 = mean(5,7,9,11) = 8; trend = 10.
+    assert week_9["volume_trend_l4_minus_prior_l4"].iloc[0] == pytest.approx(10.0)
+
+
+def test_compute_rb_volume_trend_filters_to_rb_only() -> None:
+    from projections.features.trajectory_features import compute_rb_volume_trend
+
+    rows = []
+    rows += [
+        _ws_row(gsis_id="00-0099001", season=2018, week=w, position="RB", carries=10)
+        for w in range(1, 10)
+    ]
+    rows += [
+        _ws_row(gsis_id="00-0099002", season=2018, week=w, position="QB", carries=2)
+        for w in range(1, 10)
+    ]
+    out = compute_rb_volume_trend(pd.DataFrame(rows))
+    assert set(out["gsis_id"].unique()) == {"00-0099001"}
