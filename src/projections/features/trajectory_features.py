@@ -231,3 +231,40 @@ def compute_rb_volume_trend(weekly_stats: pd.DataFrame) -> pd.DataFrame:
 def compute_wr_te_volume_trend(weekly_stats: pd.DataFrame) -> pd.DataFrame:
     """WR/TE volume trend on `targets`, trailing-4 minus prior-4 (active games)."""
     return _volume_trend(weekly_stats, position=(Position.WR, Position.TE), value_col="targets")
+
+
+def compute_snap_pct_change(snap_counts: pd.DataFrame) -> pd.DataFrame:
+    """Per-(player, season, week) change in offensive snap share, trailing-4
+    minus prior-4 (active games — where active = has a snap_counts row).
+
+    Output: (gsis_id, season, week, snap_pct_change_l4_vs_prior_l4).
+    Players inactive that week (no snap_counts row) are skipped (not 0).
+    """
+    if snap_counts.empty:
+        return pd.DataFrame(
+            {
+                "gsis_id": pd.array([], dtype=pd.StringDtype("pyarrow")),
+                "season": pd.array([], dtype=pd.Int64Dtype()),
+                "week": pd.array([], dtype=pd.Int64Dtype()),
+                "snap_pct_change_l4_vs_prior_l4": pd.array([], dtype=pd.Float64Dtype()),
+            }
+        )
+
+    sorted_df = snap_counts.sort_values(["gsis_id", "season", "week"]).reset_index(drop=True)
+    grouped = sorted_df.groupby("gsis_id", sort=False)["offense_pct"]
+    l4 = grouped.transform(
+        lambda s: s.astype(float).rolling(window=4, min_periods=4).mean().shift(1)
+    )
+    prior_l4 = grouped.transform(
+        lambda s: s.astype(float).rolling(window=4, min_periods=4).mean().shift(5)
+    )
+    sorted_df["snap_pct_change_l4_vs_prior_l4"] = l4 - prior_l4
+    out = sorted_df[["gsis_id", "season", "week", "snap_pct_change_l4_vs_prior_l4"]]
+    return out.astype(
+        {
+            "gsis_id": pd.StringDtype("pyarrow"),
+            "season": pd.Int64Dtype(),
+            "week": pd.Int64Dtype(),
+            "snap_pct_change_l4_vs_prior_l4": pd.Float64Dtype(),
+        }
+    ).reset_index(drop=True)

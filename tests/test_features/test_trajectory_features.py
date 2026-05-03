@@ -72,6 +72,38 @@ def _draft_lookup(*entries: tuple[str, int, float]) -> DraftLookup:
     return {gsis_id: (year, age) for gsis_id, year, age in entries}
 
 
+def _snap_row(
+    *,
+    gsis_id: str,
+    season: int,
+    week: int,
+    position: str = "WR",
+    team: str = "KC",
+    opponent: str = "BUF",
+    offense_snaps: int = 50,
+    offense_pct: float = 0.7,
+    defense_snaps: int = 0,
+    defense_pct: float = 0.0,
+    st_snaps: int = 0,
+    st_pct: float = 0.0,
+) -> dict[str, object]:
+    """Helper: one snap_counts row with sensible defaults."""
+    return {
+        "gsis_id": gsis_id,
+        "season": season,
+        "week": week,
+        "position": position,
+        "team": team,
+        "opponent": opponent,
+        "offense_snaps": offense_snaps,
+        "offense_pct": offense_pct,
+        "defense_snaps": defense_snaps,
+        "defense_pct": defense_pct,
+        "st_snaps": st_snaps,
+        "st_pct": st_pct,
+    }
+
+
 def test_module_imports() -> None:
     """Smoke: confirm the module loads cleanly."""
     from projections.features import trajectory_features  # noqa: F401
@@ -409,3 +441,109 @@ def test_compute_wr_te_volume_trend_excludes_rb() -> None:
     ]
     out = compute_wr_te_volume_trend(pd.DataFrame(rows))
     assert set(out["gsis_id"].unique()) == {"00-0099001"}
+
+
+def test_compute_snap_pct_change_basic() -> None:
+    from projections.features.trajectory_features import compute_snap_pct_change
+
+    # 9 weeks of offense_pct: weeks 1-4 = 0.5 (prior_l4 at week 9),
+    # weeks 5-8 = 0.7 (l4 at week 9). Change = 0.7 - 0.5 = 0.2.
+    pct_by_week = {1: 0.5, 2: 0.5, 3: 0.5, 4: 0.5, 5: 0.7, 6: 0.7, 7: 0.7, 8: 0.7, 9: 0.8}
+    snap_counts = pd.DataFrame(
+        [
+            _snap_row(gsis_id="00-0033873", season=2018, week=w, offense_pct=p)
+            for w, p in pct_by_week.items()
+        ]
+    )
+    out = compute_snap_pct_change(snap_counts)
+    week9 = out[(out["season"] == 2018) & (out["week"] == 9)][
+        "snap_pct_change_l4_vs_prior_l4"
+    ].iloc[0]
+    assert week9 == pytest.approx(0.2)
+    assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
+    assert out["season"].dtype == pd.Int64Dtype()
+    assert out["week"].dtype == pd.Int64Dtype()
+    assert out["snap_pct_change_l4_vs_prior_l4"].dtype == pd.Float64Dtype()
+
+
+def test_compute_snap_pct_change_nan_before_8_prior_games() -> None:
+    from projections.features.trajectory_features import compute_snap_pct_change
+
+    snap_counts = pd.DataFrame(
+        [
+            _snap_row(gsis_id="00-0033873", season=2018, week=w, offense_pct=0.5 + 0.01 * w)
+            for w in range(1, 10)
+        ]
+    )
+    out = compute_snap_pct_change(snap_counts).sort_values("week").reset_index(drop=True)
+    for w in range(1, 9):
+        val = out[out["week"] == w]["snap_pct_change_l4_vs_prior_l4"].iloc[0]
+        assert pd.isna(val)
+    val_w9 = out[out["week"] == 9]["snap_pct_change_l4_vs_prior_l4"].iloc[0]
+    assert pd.notna(val_w9)
+
+
+def test_compute_snap_pct_change_inactive_week_excluded_from_window() -> None:
+    from projections.features.trajectory_features import compute_snap_pct_change
+
+    # Player has rows for weeks 1-4 (0.5) and weeks 6-10 (0.8) but NOT week 5.
+    # Window operates over the 9 active games. Row at week 10:
+    #   l4 = mean(weeks 6,7,8,9) = 0.8; prior_l4 = mean(weeks 1-4) = 0.5; change = 0.3.
+    rows = []
+    for w in range(1, 5):
+        rows.append(_snap_row(gsis_id="00-0033873", season=2018, week=w, offense_pct=0.5))
+    for w in range(6, 11):
+        rows.append(_snap_row(gsis_id="00-0033873", season=2018, week=w, offense_pct=0.8))
+    snap_counts = pd.DataFrame(rows)
+    out = compute_snap_pct_change(snap_counts)
+    week10 = out[(out["season"] == 2018) & (out["week"] == 10)][
+        "snap_pct_change_l4_vs_prior_l4"
+    ].iloc[0]
+    assert week10 == pytest.approx(0.3)
+
+
+def test_compute_snap_pct_change_crosses_season_boundary() -> None:
+    from projections.features.trajectory_features import compute_snap_pct_change
+
+    # 4 games in 2018 (0.5), 4 games later in 2018 (0.7), 1 game in 2019 week 1 (0.8).
+    # Week 1 of 2019: l4 = 0.7, prior_l4 = 0.5, change = 0.2.
+    rows = []
+    for w in range(1, 5):
+        rows.append(_snap_row(gsis_id="00-0033873", season=2018, week=w, offense_pct=0.5))
+    for w in range(5, 9):
+        rows.append(_snap_row(gsis_id="00-0033873", season=2018, week=w, offense_pct=0.7))
+    rows.append(_snap_row(gsis_id="00-0033873", season=2019, week=1, offense_pct=0.8))
+    snap_counts = pd.DataFrame(rows)
+    out = compute_snap_pct_change(snap_counts)
+    val = out[(out["season"] == 2019) & (out["week"] == 1)]["snap_pct_change_l4_vs_prior_l4"].iloc[
+        0
+    ]
+    assert val == pytest.approx(0.2)
+
+
+def test_compute_snap_pct_change_empty_input() -> None:
+    from projections.features.trajectory_features import compute_snap_pct_change
+
+    snap_counts = pd.DataFrame(
+        columns=[
+            "gsis_id",
+            "season",
+            "week",
+            "position",
+            "team",
+            "opponent",
+            "offense_snaps",
+            "offense_pct",
+            "defense_snaps",
+            "defense_pct",
+            "st_snaps",
+            "st_pct",
+        ]
+    )
+    out = compute_snap_pct_change(snap_counts)
+    assert out.empty
+    assert set(out.columns) == {"gsis_id", "season", "week", "snap_pct_change_l4_vs_prior_l4"}
+    assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
+    assert out["season"].dtype == pd.Int64Dtype()
+    assert out["week"].dtype == pd.Int64Dtype()
+    assert out["snap_pct_change_l4_vs_prior_l4"].dtype == pd.Float64Dtype()
