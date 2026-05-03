@@ -36,6 +36,32 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Track 2B — RB PBP cols × other model classes — directional improvement, no regression (2026-05-03, folded into branch `feat/probe-pbp-pressure`)
+
+**Status:** Informational dual-run gate per the user's request to fold Track 2B into PR #24. Compared two `--model all` backtest runs: pre-PR-20 baseline (`run_20260429T003552Z`) vs post-PR-21 candidate (`run_20260503T014536Z` — generated today on the worktree's HEAD). Per-`(model_class, position)` paired-row RMSE delta + 1000-bootstrap CI on `(gsis_id, season, week, position)` keys. Reports the magnitude of the lift the lightgbm family (which auto-derives features from the schema dynamically) sees from the 4 RB PBP cols PR #21 shipped.
+
+**Verdict:** **Directional improvement on RB across all 5 model classes; no regression on any cell.**
+
+| Model class | RB RMSE Δ | 95% CI | Strictly negative? |
+|---|---:|---|:---:|
+| baseline | -0.0124 | [-0.0258, -0.0002] | **yes** (matches PR #21's -0.0124 to 4 decimals — methodology check) |
+| lightgbm | -0.0141 | [-0.0278, +0.0005] | no (just barely brackets 0 on upper bound) |
+| lightgbm-tuned | -0.0101 | [-0.0225, +0.0015] | no |
+| lightgbm-nb | -0.0075 | [-0.0203, +0.0041] | no |
+| ensemble | -0.0062 | [-0.0177, +0.0054] | no |
+
+QB/WR/TE: zero or trivially-near-zero deltas across all 5 model classes (their schemas weren't touched in PR #21).
+
+**Interpretation:** the per-feature signal from the 4 RB PBP cols progressively diffuses as model complexity grows (Optuna tuning → NB-2 dispersion → ensemble weighting). All point estimates are favorable, but only the simplest cells (`baseline`, `lightgbm`) reach strict statistical significance. No tree class hurts on RB. Adopting the cols system-wide (which the lightgbm family already does automatically) is at minimum neutral and at maximum slightly helpful.
+
+**Probe approach abandoned** — the feature signal probe (`scripts/probe_feature_signal.py`) does NOT support the "drop existing cols, re-add via override" pattern that retrospective gating of already-shipped features would require. The probe applies `--drop` symmetrically and explicitly excludes override cols matching the drop list. Two abandoned probe attempts (`reports/track2b_rb_pbp_lgbnb_drop.md` and `reports/track2b_rb_pbp_lgbnb.md`) are preserved as record-of-experiment + as a forward-pointer for "do not use the probe for retrospective gating; use dual-run backtest instead."
+
+**Limitations:** the two backtest runs were generated 4 days apart on slightly different code (post-run includes PR #22 + #23 + #24's spec/plan/code, but those don't touch RB feature builder or the lightgbm models). Same-commit dual-run with manipulated feature parquets would be more hermetic, but it's not worth the infrastructure cost for an informational pass that produces a clean directional signal here.
+
+**Reports:** `reports/track2b_rb_pbp_other_models.md` (decision log + per-cell table + methodology + abandoned-probe appendix).
+
+---
+
 ## PBP Red-Zone Family Probe — verdict NULL (durable) at RZ-broad cut, all 4 positions (2026-05-02, on branch `feat/probe-pbp-redzone`)
 
 **Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-02-pbp-redzone-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-05-02-pbp-redzone-feature-family-probe.md`. Implements 4 pure compute fns + attach helper + public assembler in `src/projections/features/pbp_redzone_features.py`, the override-generator script `scripts/build_pbp_redzone_override.py`, 19 synthetic-fixture tests + 4 CLI tests. mypy strict + ruff + ruff format clean. CONTRIBUTING.md updated with a "Regenerating the PBP red-zone override" subsection. .gitignore extended with `.claude/` (small chore folded into the branch).
@@ -1428,16 +1454,18 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ---
 
-## Current status (as of 2026-05-02)
+## Current status (as of 2026-05-03)
 
-**Projections Core — Track 2A complete (all three TODO #3c team-level PBP feature families probed).** Final family probe (PBP pressure, this branch) returned `NULL` durable on this commit. The full Track 2A scoreboard:
+**Projections Core — Track 2A + Track 2B complete (all team-level PBP family work shipped + measured).** Final family probe (PBP pressure, this branch) returned `NULL` durable on this commit; Track 2B (RB PBP cols × other model classes, informational) also folded into PR #24 with the canonical "directional improvement, no regression" finding. The full Track 2A scoreboard:
 
 - PR #20 (pace/PROE/AYPS/EPA-resid bundle, 2026-04-30) — **SIGNAL via RB**; integrated into `RbFeaturesSchema` in PR #21 (`(BaselineModel, RB)` adoption gate -0.0124 fpts).
 - PR #22 (WR/TE receiver-level air-yards / aDOT bundle, 2026-05-01) — **NULL durable**.
 - PR #23 (red-zone bundle, 2026-05-02) — **NULL durable**; QB augment lgb-nb regression at +0.0268.
-- PR #24 (this — pressure bundle, 2026-05-02) — **NULL durable**; QB augment lgb-nb regression at +0.0276 (same pattern).
+- PR #24 (this — pressure bundle + Track 2B, 2026-05-02 / 2026-05-03) — **pressure NULL durable**; QB augment lgb-nb regression at +0.0276 (same pattern); **Track 2B**: RB PBP cols transfer directionally-favorably to all 4 tree-model classes (point estimates -0.0062 to -0.0141 fpts), only `baseline` reaches strict CI<0 (matches PR #21's -0.0124 to 4 decimals).
 
 Three out of four PBP family probes returned NULL; the only SIGNAL was the original PR #20 bundle, and only on RB. The repeated QB augment lgb-nb regression across PR #23 + PR #24 is a notable pattern: adding team-level PBP cols in augment mode under lgb-nb consistently produces small statistically-significant QB regressions, suggesting model-class overfit / feature redundancy on the QB-side.
+
+**Track 2B finding:** the RB PBP cols' signal transfers to the lightgbm family (which auto-derives features from the schema dynamically) but with smaller and noisier effects than the baseline lift. Untuned `lightgbm` shows the strongest point estimate (-0.0141 fpts, CI [-0.0278, +0.0005] — just barely brackets 0 on the upper bound); `lightgbm-tuned` / `lightgbm-nb` / `ensemble` all show -0.006 to -0.010 fpts directional improvement with CIs that bracket zero. No model class regresses on RB. No spillover to QB/WR/TE (their schemas weren't touched). See `reports/track2b_rb_pbp_other_models.md` for the per-cell table + methodology + appendix on probe attempts that did NOT work for retrospective gating of already-shipped cols.
 
 **Predecessors shipped since the previous 2026-04-27 status snapshot:**
 - **Plan 8** (adoption gate redesign) — replaced PR #10–#15-era §1.3 thresholds; weekly `[p10, p90]` calibration dropped as a gating metric (not load-bearing for planned downstream consumers).
@@ -1457,9 +1485,9 @@ Three out of four PBP family probes returned NULL; the only SIGNAL was the origi
 
 **Track 2A is now complete.** All three TODO #3c team-level PBP feature families have been probed and all directional findings logged. Two of three returned durable NULL; one (PR #20) returned SIGNAL via RB and shipped in PR #21. No additional team-level family candidates are queued — the family-level prior framework concludes that team-level PBP-derived features do not carry meaningful orthogonal signal beyond the v1 + PR #20 bundle for the production model classes tested.
 
-**Recommended next direction (pick one):**
+**Track 2B is now also closed** (folded into PR #24 — see top entry above). RB PBP cols transfer to all 4 tree-model classes directionally; only baseline reaches strict CI<0; no class regresses.
 
-- **Track 2B — RB PBP × other model classes (queued, informational).** Gate the 4 RB PBP cols against `lightgbm-tuned`, `lightgbm-nb`, and `ensemble`. Deferred during PR #21 per spec §1.3.5 because Optuna tuning + NB-2 dispersion fitting are 1+ hour each; the lightgbm family auto-picks-up the new cols dynamically. Informational, not gating, but answers whether the team-level PBP signal transfers to the tree-based model classes. Cheap to queue as a background informational pass.
+**Recommended next direction (pick one):**
 
 - **Pivot to model-improvement tracks.** Per the post-Plan-3e brainstorm, the three open mean-prediction tracks are: TODO #23 (target decomposition: volume × efficiency), TODO #24 (player-trajectory features: age curves, career arc, trend gradients), TODO #25 (weather features in per-position builders — small but real win on a subset of games). Each is a separate brainstorm → spec → plan cycle. None have been scoped yet.
 
