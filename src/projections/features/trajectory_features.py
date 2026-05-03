@@ -373,12 +373,6 @@ def build_trajectory_overrides(
         n_dup = int(dup_mask.sum())
         raise ValueError(f"duplicate (gsis_id, season, week) keys in index: {n_dup} rows")
 
-    # TODO(Task 13): the index's gsis_id / season / week / team / opp columns
-    # inherit dtypes from the caller. The CLI override-builder script (Task 13)
-    # constructs the index — pin canonical dtypes there (StringDtype("pyarrow")
-    # for gsis_id/team/opp; Int64Dtype for season/week) before passing to this
-    # assembler. Without that, the override parquet will have object-dtype
-    # gsis_id columns despite the rest of the columns being properly nullable.
     chunks: list[pd.DataFrame] = []
     for pos in _FANTASY_POSITIONS_ENUM:
         idx_pos = player_team_week_index[player_team_week_index["position"] == pos.value]
