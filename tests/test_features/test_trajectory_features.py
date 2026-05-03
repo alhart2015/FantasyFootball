@@ -678,3 +678,136 @@ def test_attach_trajectory_features_preserves_dtypes_on_merge_miss() -> None:
     assert out["draft_year_inferred"].dtype == pd.BooleanDtype()
     assert out["age"].dtype == pd.Float64Dtype()
     assert out["is_rookie"].dtype == pd.Float64Dtype()
+
+
+def test_build_trajectory_overrides_dispatches_per_position() -> None:
+    from projections.features.trajectory_features import build_trajectory_overrides
+
+    weekly_stats = pd.DataFrame(
+        [
+            _ws_row(gsis_id="00-0033873", season=2018, week=w, position="QB", attempts=30)
+            for w in range(1, 10)
+        ]
+        + [
+            _ws_row(gsis_id="00-0099001", season=2018, week=w, position="WR", targets=8)
+            for w in range(1, 10)
+        ]
+    )
+    snap_counts = pd.DataFrame(
+        [
+            _snap_row(gsis_id=g, season=2018, week=w, position=pos, offense_pct=0.6)
+            for g, pos in [("00-0033873", "QB"), ("00-0099001", "WR")]
+            for w in range(1, 10)
+        ]
+    )
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5), ("00-0099001", 2016, 22.0))
+    index = pd.DataFrame(
+        [
+            {
+                "gsis_id": "00-0033873",
+                "season": 2018,
+                "week": 9,
+                "team": "KC",
+                "opp": "BUF",
+                "position": "QB",
+            },
+            {
+                "gsis_id": "00-0099001",
+                "season": 2018,
+                "week": 9,
+                "team": "BUF",
+                "opp": "KC",
+                "position": "WR",
+            },
+        ]
+    )
+    out = build_trajectory_overrides(weekly_stats, snap_counts, lookup, index)
+
+    assert set(out.columns) == {
+        "gsis_id",
+        "season",
+        "week",
+        "age",
+        "is_rookie",
+        "volume_trend_l4_minus_prior_l4",
+        "snap_pct_change_l4_vs_prior_l4",
+        "draft_year_inferred",
+    }
+    assert len(out) == 2
+
+
+def test_build_trajectory_overrides_rejects_malformed_gsis_id() -> None:
+    from projections.features.trajectory_features import build_trajectory_overrides
+
+    weekly_stats = pd.DataFrame([_ws_row(gsis_id="00-0033873", season=2018, week=1)])
+    snap_counts = pd.DataFrame([_snap_row(gsis_id="00-0033873", season=2018, week=1)])
+    lookup: DraftLookup = {}
+    bad_index = pd.DataFrame(
+        [
+            {
+                "gsis_id": "malformed",
+                "season": 2018,
+                "week": 1,
+                "team": "KC",
+                "opp": "BUF",
+                "position": "WR",
+            }
+        ]
+    )
+    with pytest.raises(ValueError, match="gsis_id"):
+        build_trajectory_overrides(weekly_stats, snap_counts, lookup, bad_index)
+
+
+def test_build_trajectory_overrides_rejects_duplicate_index_keys() -> None:
+    from projections.features.trajectory_features import build_trajectory_overrides
+
+    weekly_stats = pd.DataFrame([_ws_row(gsis_id="00-0033873", season=2018, week=1)])
+    snap_counts = pd.DataFrame([_snap_row(gsis_id="00-0033873", season=2018, week=1)])
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5))
+    dup_index = pd.DataFrame(
+        [
+            {
+                "gsis_id": "00-0033873",
+                "season": 2018,
+                "week": 1,
+                "team": "KC",
+                "opp": "BUF",
+                "position": "QB",
+            },
+            {
+                "gsis_id": "00-0033873",
+                "season": 2018,
+                "week": 1,
+                "team": "KC",
+                "opp": "BUF",
+                "position": "QB",
+            },
+        ]
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        build_trajectory_overrides(weekly_stats, snap_counts, lookup, dup_index)
+
+
+def test_build_trajectory_overrides_handles_missing_position_in_index() -> None:
+    """An index row whose position is not in {QB,RB,WR,TE} is dropped silently
+    (mirrors the behavior of the per-position feature builders)."""
+    from projections.features.trajectory_features import build_trajectory_overrides
+
+    weekly_stats = pd.DataFrame([_ws_row(gsis_id="00-0033873", season=2018, week=1)])
+    snap_counts = pd.DataFrame([_snap_row(gsis_id="00-0033873", season=2018, week=1)])
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5))
+    index = pd.DataFrame(
+        [
+            {
+                "gsis_id": "00-0033873",
+                "season": 2018,
+                "week": 1,
+                "team": "KC",
+                "opp": "BUF",
+                "position": "K",
+            }
+        ]
+    )
+    out = build_trajectory_overrides(weekly_stats, snap_counts, lookup, index)
+    # K not in fantasy positions for trajectory probe — dropped.
+    assert out.empty

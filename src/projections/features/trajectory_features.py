@@ -322,3 +322,89 @@ def attach_trajectory_features(
         )
 
     return out
+
+
+_FANTASY_POSITIONS_ENUM: Final[tuple[Position, ...]] = (
+    Position.QB,
+    Position.RB,
+    Position.WR,
+    Position.TE,
+)
+
+
+def build_trajectory_overrides(
+    weekly_stats: pd.DataFrame,
+    snap_counts: pd.DataFrame,
+    draft_lookup: DraftLookup,
+    player_team_week_index: pd.DataFrame,
+) -> pd.DataFrame:
+    """Public assembler. Returns the trajectory override frame ready to write.
+
+    Args:
+        weekly_stats: full multi-season weekly_stats frame matching
+            WeeklyStatsSchema. Must include the season(s) covered by the
+            index plus enough prior history for trailing-8-game windows.
+        snap_counts: full multi-season snap_counts frame matching
+            SnapCountsSchema. Same coverage requirement.
+        draft_lookup: gsis_id -> (draft_year, draft_age) lookup. Missing
+            keys route to inferred-draft-year fallback.
+        player_team_week_index: (gsis_id, season, week, team, opp, position)
+            — one row per player-week. Position values must be canonical
+            Position enum string values.
+
+    Returns:
+        (gsis_id, season, week, age, is_rookie,
+         volume_trend_l4_minus_prior_l4, snap_pct_change_l4_vs_prior_l4,
+         draft_year_inferred) — one row per fantasy-position index row.
+        Index rows with non-fantasy positions (K, DST, etc.) are dropped.
+
+    Raises:
+        ValueError: malformed gsis_id format or duplicate
+            (gsis_id, season, week) keys in the index.
+    """
+    bad_ids = [g for g in player_team_week_index["gsis_id"].dropna() if not _GSIS_RE.match(str(g))]
+    if bad_ids:
+        raise ValueError(
+            f"invalid gsis_id format(s): {bad_ids[:3]} (and {max(0, len(bad_ids) - 3)} more)"
+        )
+
+    dup_mask = player_team_week_index.duplicated(subset=["gsis_id", "season", "week"], keep=False)
+    if dup_mask.any():
+        n_dup = int(dup_mask.sum())
+        raise ValueError(f"duplicate (gsis_id, season, week) keys in index: {n_dup} rows")
+
+    chunks: list[pd.DataFrame] = []
+    for pos in _FANTASY_POSITIONS_ENUM:
+        idx_pos = player_team_week_index[player_team_week_index["position"] == pos.value]
+        if idx_pos.empty:
+            continue
+        chunk = attach_trajectory_features(idx_pos, weekly_stats, snap_counts, draft_lookup, pos)
+        chunks.append(chunk)
+
+    if not chunks:
+        return pd.DataFrame(
+            columns=[
+                "gsis_id",
+                "season",
+                "week",
+                "age",
+                "is_rookie",
+                "volume_trend_l4_minus_prior_l4",
+                "snap_pct_change_l4_vs_prior_l4",
+                "draft_year_inferred",
+            ]
+        )
+
+    out = pd.concat(chunks, ignore_index=True)
+    return out[
+        [
+            "gsis_id",
+            "season",
+            "week",
+            "age",
+            "is_rookie",
+            "volume_trend_l4_minus_prior_l4",
+            "snap_pct_change_l4_vs_prior_l4",
+            "draft_year_inferred",
+        ]
+    ].reset_index(drop=True)
