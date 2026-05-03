@@ -87,4 +87,15 @@ def compute_age(
     age_inferred = merged.apply(_age_row, axis=1, result_type="expand")
     age_inferred.columns = ["age", "draft_year_inferred"]
     out = pd.concat([merged[["gsis_id", "season"]].reset_index(drop=True), age_inferred], axis=1)
-    return out[["gsis_id", "season", "age", "draft_year_inferred"]].reset_index(drop=True)
+    return (
+        out[["gsis_id", "season", "age", "draft_year_inferred"]]
+        .astype(
+            {
+                "gsis_id": pd.StringDtype("pyarrow"),
+                "season": pd.Int64Dtype(),
+                "age": pd.Float64Dtype(),
+                "draft_year_inferred": bool,
+            }
+        )
+        .reset_index(drop=True)
+    )

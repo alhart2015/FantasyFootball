@@ -97,6 +97,9 @@ def test_compute_age_uses_draft_age_when_available() -> None:
     assert age_2018 == pytest.approx(22.5)  # 21.5 + (2018 - 2017)
     assert age_2024 == pytest.approx(28.5)  # 21.5 + (2024 - 2017)
     assert (~out["draft_year_inferred"]).all()
+    assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
+    assert out["season"].dtype == pd.Int64Dtype()
+    assert out["age"].dtype == pd.Float64Dtype()
 
 
 def test_compute_age_falls_back_for_udfa() -> None:
@@ -158,3 +161,6 @@ def test_compute_age_empty_input() -> None:
     out = compute_age(weekly_stats, lookup)
     assert out.empty
     assert set(out.columns) == {"gsis_id", "season", "age", "draft_year_inferred"}
+    assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
+    assert out["season"].dtype == pd.Int64Dtype()
+    assert out["age"].dtype == pd.Float64Dtype()
