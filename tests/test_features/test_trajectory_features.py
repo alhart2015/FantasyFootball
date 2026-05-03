@@ -10,8 +10,8 @@ from __future__ import annotations
 # added in subsequent tasks (Tasks 5-12); kept imported now so each task is
 # a pure addition without re-importing.
 import numpy as np  # noqa: F401  # used in subsequent tasks
-import pandas as pd  # noqa: F401  # used in subsequent tasks
-import pytest  # noqa: F401  # used in subsequent tasks
+import pandas as pd
+import pytest
 
 from projections.features.trajectory_features import (
     DraftLookup,
@@ -75,3 +75,86 @@ def _draft_lookup(*entries: tuple[str, int, float]) -> DraftLookup:
 def test_module_imports() -> None:
     """Smoke: confirm the module loads cleanly."""
     from projections.features import trajectory_features  # noqa: F401
+
+
+def test_compute_age_uses_draft_age_when_available() -> None:
+    from projections.features.trajectory_features import compute_age
+
+    weekly_stats = pd.DataFrame(
+        [
+            _ws_row(gsis_id="00-0033873", season=2018, week=1),
+            _ws_row(gsis_id="00-0033873", season=2018, week=2),
+            _ws_row(gsis_id="00-0033873", season=2024, week=1),
+        ]
+    )
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5))
+    out = compute_age(weekly_stats, lookup)
+    # One row per (gsis_id, season).
+    assert len(out) == 2
+    assert set(out.columns) == {"gsis_id", "season", "age", "draft_year_inferred"}
+    age_2018 = out[out["season"] == 2018]["age"].iloc[0]
+    age_2024 = out[out["season"] == 2024]["age"].iloc[0]
+    assert age_2018 == pytest.approx(22.5)  # 21.5 + (2018 - 2017)
+    assert age_2024 == pytest.approx(28.5)  # 21.5 + (2024 - 2017)
+    assert (~out["draft_year_inferred"]).all()
+
+
+def test_compute_age_falls_back_for_udfa() -> None:
+    from projections.features.trajectory_features import compute_age
+
+    weekly_stats = pd.DataFrame(
+        [
+            _ws_row(gsis_id="00-0099999", season=2020, week=1),
+            _ws_row(gsis_id="00-0099999", season=2024, week=1),
+        ]
+    )
+    # No entry in the lookup → UDFA path.
+    lookup: DraftLookup = {}
+    out = compute_age(weekly_stats, lookup)
+    assert len(out) == 2
+    age_2020 = out[out["season"] == 2020]["age"].iloc[0]
+    age_2024 = out[out["season"] == 2024]["age"].iloc[0]
+    # inferred_draft_year = 2020 (earliest); age = season - 2020 + 22.0
+    assert age_2020 == pytest.approx(22.0)
+    assert age_2024 == pytest.approx(26.0)
+    assert out["draft_year_inferred"].all()
+
+
+def test_compute_age_falls_back_when_draft_age_is_nan() -> None:
+    from projections.features.trajectory_features import compute_age
+
+    weekly_stats = pd.DataFrame(
+        [
+            _ws_row(gsis_id="00-0033873", season=2018, week=1),
+        ]
+    )
+    # Drafted but no draft_age — fall back to inferred path.
+    lookup = _draft_lookup(("00-0033873", 2017, float("nan")))
+    out = compute_age(weekly_stats, lookup)
+    age_2018 = out[out["season"] == 2018]["age"].iloc[0]
+    # inferred_draft_year = 2018 (earliest); 2018 - 2018 + 22 = 22.0
+    assert age_2018 == pytest.approx(22.0)
+    assert out["draft_year_inferred"].all()
+
+
+def test_compute_age_one_row_per_player_season() -> None:
+    from projections.features.trajectory_features import compute_age
+
+    weekly_stats = pd.DataFrame(
+        [_ws_row(gsis_id="00-0033873", season=2018, week=w) for w in range(1, 18)]
+    )
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5))
+    out = compute_age(weekly_stats, lookup)
+    assert len(out) == 1
+
+
+def test_compute_age_empty_input() -> None:
+    from projections.features.trajectory_features import compute_age
+
+    weekly_stats = pd.DataFrame(
+        columns=["gsis_id", "season", "week", "position", "team", "opponent"]
+    )
+    lookup: DraftLookup = {}
+    out = compute_age(weekly_stats, lookup)
+    assert out.empty
+    assert set(out.columns) == {"gsis_id", "season", "age", "draft_year_inferred"}

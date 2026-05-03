@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from typing import Final
 
-import pandas as pd  # noqa: F401  # used in subsequent tasks (compute_* fns)
+import pandas as pd
 
 from projections.schemas import (  # noqa: F401  # Position used in subsequent tasks
     GSIS_ID_PATTERN,
@@ -33,3 +33,58 @@ DraftLookup = dict[str, tuple[int, float]]
 
 _GSIS_RE: Final[re.Pattern[str]] = re.compile(rf"^{GSIS_ID_PATTERN}$")
 _AGE_OFFSET_FALLBACK: Final[float] = 22.0  # mean entry age for inferred path
+
+
+def compute_age(
+    weekly_stats: pd.DataFrame,
+    draft_lookup: DraftLookup,
+) -> pd.DataFrame:
+    """Per-(player, season) biological age in the target season.
+
+    Primary path: if gsis_id is in draft_lookup AND draft_age is finite,
+    age = draft_age + (season - draft_year).
+
+    Fallback path: missing key OR NaN draft_age → uses inferred_draft_year
+    (earliest weekly_stats season for the player); age = season -
+    inferred_draft_year + _AGE_OFFSET_FALLBACK. The draft_year_inferred
+    column is True for these rows so the override audit can track fallback
+    frequency.
+
+    Output: (gsis_id, season, age, draft_year_inferred).
+    One row per (player, season) where the player has at least one
+    weekly_stats row that season.
+    """
+    if weekly_stats.empty:
+        return pd.DataFrame(
+            {
+                "gsis_id": pd.array([], dtype=pd.StringDtype("pyarrow")),
+                "season": pd.array([], dtype=pd.Int64Dtype()),
+                "age": pd.array([], dtype=pd.Float64Dtype()),
+                "draft_year_inferred": pd.array([], dtype=bool),
+            }
+        )
+
+    # Earliest-season-played per player (for the fallback path).
+    earliest = (
+        weekly_stats.groupby("gsis_id", as_index=False, observed=True)["season"]
+        .min()
+        .rename(columns={"season": "inferred_draft_year"})
+    )
+
+    distinct = weekly_stats[["gsis_id", "season"]].drop_duplicates()
+    merged = distinct.merge(earliest, on="gsis_id", how="left")
+
+    def _age_row(row: pd.Series) -> tuple[float, bool]:
+        entry = draft_lookup.get(row["gsis_id"])
+        if entry is not None:
+            draft_year, draft_age = entry
+            if pd.notna(draft_age):
+                return float(draft_age) + (int(row["season"]) - int(draft_year)), False
+        # Fallback path.
+        inferred = int(row["inferred_draft_year"])
+        return float(row["season"]) - inferred + _AGE_OFFSET_FALLBACK, True
+
+    age_inferred = merged.apply(_age_row, axis=1, result_type="expand")
+    age_inferred.columns = ["age", "draft_year_inferred"]
+    out = pd.concat([merged[["gsis_id", "season"]].reset_index(drop=True), age_inferred], axis=1)
+    return out[["gsis_id", "season", "age", "draft_year_inferred"]].reset_index(drop=True)
