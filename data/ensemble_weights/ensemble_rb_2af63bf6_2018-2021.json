@@ -1,0 +1,21 @@
+{
+  "calibration_year": 2021,
+  "child_a_model_id": "baseline:rb:b5e1883f:2018-2021",
+  "child_b_model_id": "lightgbm-nb:rb:1c451a6f:2018-2021",
+  "fitted_at": "2026-05-03T03:11:59.541875+00:00",
+  "model_class": "ensemble",
+  "model_id": "ensemble:rb:2af63bf6:2018-2021",
+  "position": "RB",
+  "train_seasons": [
+    2018,
+    2021
+  ],
+  "weights": {
+    "fumbles_lost": 0.437021,
+    "receiving_tds": 0.552271,
+    "receiving_yards": 0.113675,
+    "receptions": 0.001398,
+    "rushing_tds": 0.355943,
+    "rushing_yards": 0.104148
+  }
+}

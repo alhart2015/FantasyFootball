@@ -4,6 +4,64 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## PBP Pressure Family Probe — verdict NULL (durable) at dropback-denominator cut, all 4 positions (2026-05-02, on branch `feat/probe-pbp-pressure`)
+
+**Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-02-pbp-pressure-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-05-02-pbp-pressure-feature-family-probe.md`. Implements 4 pure compute fns + `_per_game_rate` helper + attach helper + public assembler in `src/projections/features/pbp_pressure_features.py`, the override-generator script `scripts/build_pbp_pressure_override.py`, 19 synthetic-fixture tests + 4 CLI tests. mypy strict + ruff + ruff format clean. CONTRIBUTING.md updated with a "Regenerating the PBP pressure override" subsection.
+
+**Verdict:** `NULL` (durable per spec §1.3 criterion 3 — both BaselineModel + lgb-nb tested at composite via `--force-composite`).
+
+- All 4 mode × model reports (baseline + lgb-nb × augment + swap, 4 positions, 6 stats each = 120 pooled cells per mode × 4 modes = 480 total): 0 pooled Phase 1 SIGNAL.
+- Phase 2 (composite, lgb-nb composite via `--force-composite`) on both modes: 0 ADOPT or MARGINAL across 8 verdict cells. All 8 DO_NOT_ADOPT.
+- Two directional Phase-2 cells: **QB augment lgb-nb composite RMSE REGRESSION** at +0.0276 fpts CI [+0.0077, +0.0472] (CI strictly above 0 — same pattern as PR #23's red-zone QB augment regression at +0.0268); and **TE swap lgb-nb composite Spearman regression** at -0.0034 CI [-0.0067, -0.0002] (rank only; RMSE brackets zero so verdict is DO_NOT_ADOPT, not REGRESSION). The other 6 Phase 2 cells all bracket zero with point estimates near zero.
+- Predicted mechanism (QB-side pressure exposure → `passing_yards` / `sacks` / `rushing_yards`) **not observed** — no QB-side cell fires SIGNAL anywhere; the only QB Phase 2 directional movement is in the wrong direction.
+
+**What this closes:** TODO #3c's "Pressure rate allowed by O-line" candidate, at the dropback-denominator cut (`qb_dropback == 1`). The four bundled features do not carry orthogonal signal beyond v1 (or v1 + already-shipped PBP team features for RB) under either Ridge baseline or lgb-nb production model class.
+
+**This closes Track 2A — all three TODO #3c team-level PBP families have now been probed:**
+- PR #20 (pace/PROE/AYPS/EPA-resid bundle) — SIGNAL via RB; integrated into RB schema in PR #21 (-0.0124 fpts adoption gate).
+- PR #23 (red-zone bundle) — durable NULL.
+- PR #24 (this — pressure bundle) — durable NULL.
+
+**Refined-unit candidates beyond `qb_dropback == 1` remain unexplored** but are unlikely to clear what the broad cut couldn't, absent independent evidence: alternate denominators (`pass_attempts + sacks` only), goal-line / 3rd-down / two-minute pressure subsets. None queued.
+
+**Coverage:** default `--coverage-threshold 0.95` passed cleanly (pooled 96.6%; 2019–2024 uniformly 100%; 2018 cold-start 24.2% NaN, but eval window 2021–2024 unaffected). No threshold relaxation needed (PR #22 used 0.70, PR #23 used 0.90 — this probe didn't need either).
+
+**Carry-over follow-ups noted by reviewers** (low-priority cleanup PR candidates, none blocking):
+- Triplicate `_read_concat`, `_FANTASY_POSITIONS`, `_build_player_team_week_index`, `_parse_season_range` across 3 override scripts (PR #20, PR #23, PR #24) — extract to `scripts/_pbp_override_common.py`.
+- `_trailing_4_mean` triplicated across 3 sibling feature modules — extract to `src/projections/features/_pbp_common.py` (could pair with the script-level extraction).
+- Drop the redundant `& pbp[denom_col].notna()` clause in `_per_game_rate` (defensively redundant; `NaN == 1.0` is False).
+- CLI test `test_main_writes_output` doesn't actually exercise the prior-season backfill path; the unit-level cross-season test covers the underlying invariant.
+
+**Reports:** `reports/feature_probe_pbp_pressure_summary.md` (decision log + per-mode table + mechanism annotation) + 4 per-(model, mode) .md/.csv files (`feature_probe_pbp_pressure_{,lgbnb_}{augment,swap}.{md,csv}`).
+
+---
+
+## Track 2B — RB PBP cols × other model classes — directional improvement, no regression (2026-05-03, folded into branch `feat/probe-pbp-pressure`)
+
+**Status:** Informational dual-run gate per the user's request to fold Track 2B into PR #24. Compared two `--model all` backtest runs: pre-PR-20 baseline (`run_20260429T003552Z`) vs post-PR-21 candidate (`run_20260503T014536Z` — generated today on the worktree's HEAD). Per-`(model_class, position)` paired-row RMSE delta + 1000-bootstrap CI on `(gsis_id, season, week, position)` keys. Reports the magnitude of the lift the lightgbm family (which auto-derives features from the schema dynamically) sees from the 4 RB PBP cols PR #21 shipped.
+
+**Verdict:** **Directional improvement on RB across all 5 model classes; no regression on any cell.**
+
+| Model class | RB RMSE Δ | 95% CI | Strictly negative? |
+|---|---:|---|:---:|
+| baseline | -0.0124 | [-0.0258, -0.0002] | **yes** (matches PR #21's -0.0124 to 4 decimals — methodology check) |
+| lightgbm | -0.0141 | [-0.0278, +0.0005] | no (just barely brackets 0 on upper bound) |
+| lightgbm-tuned | -0.0101 | [-0.0225, +0.0015] | no |
+| lightgbm-nb | -0.0075 | [-0.0203, +0.0041] | no |
+| ensemble | -0.0062 | [-0.0177, +0.0054] | no |
+
+QB/WR/TE: zero or trivially-near-zero deltas across all 5 model classes (their schemas weren't touched in PR #21).
+
+**Interpretation:** the per-feature signal from the 4 RB PBP cols progressively diffuses as model complexity grows (Optuna tuning → NB-2 dispersion → ensemble weighting). All point estimates are favorable, but only the simplest cells (`baseline`, `lightgbm`) reach strict statistical significance. No tree class hurts on RB. Adopting the cols system-wide (which the lightgbm family already does automatically) is at minimum neutral and at maximum slightly helpful.
+
+**Probe approach abandoned** — the feature signal probe (`scripts/probe_feature_signal.py`) does NOT support the "drop existing cols, re-add via override" pattern that retrospective gating of already-shipped features would require. The probe applies `--drop` symmetrically and explicitly excludes override cols matching the drop list. Two abandoned probe attempts (`reports/track2b_rb_pbp_lgbnb_drop.md` and `reports/track2b_rb_pbp_lgbnb.md`) are preserved as record-of-experiment + as a forward-pointer for "do not use the probe for retrospective gating; use dual-run backtest instead."
+
+**Limitations:** the two backtest runs were generated 4 days apart on slightly different code (post-run includes PR #22 + #23 + #24's spec/plan/code, but those don't touch RB feature builder or the lightgbm models). Same-commit dual-run with manipulated feature parquets would be more hermetic, but it's not worth the infrastructure cost for an informational pass that produces a clean directional signal here.
+
+**Reports:** `reports/track2b_rb_pbp_other_models.md` (decision log + per-cell table + methodology + abandoned-probe appendix).
+
+---
+
 ## PBP Red-Zone Family Probe — verdict NULL (durable) at RZ-broad cut, all 4 positions (2026-05-02, on branch `feat/probe-pbp-redzone`)
 
 **Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-02-pbp-redzone-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-05-02-pbp-redzone-feature-family-probe.md`. Implements 4 pure compute fns + attach helper + public assembler in `src/projections/features/pbp_redzone_features.py`, the override-generator script `scripts/build_pbp_redzone_override.py`, 19 synthetic-fixture tests + 4 CLI tests. mypy strict + ruff + ruff format clean. CONTRIBUTING.md updated with a "Regenerating the PBP red-zone override" subsection. .gitignore extended with `.claude/` (small chore folded into the branch).
@@ -1396,38 +1454,52 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ---
 
-## Current status (as of 2026-05-01)
+## Current status (as of 2026-05-03)
 
-**Projections Core — RB PBP Features Integration shipped via PR #21 (`bc2dc8c`).** `RbFeaturesSchema` extended with 4 nullable-float PBP team-level columns (`pace_l4`, `proe_l4`, `team_ayps_l4`, `team_def_epa_resid_l4`); `attach_pbp_family_features` (extracted from PR #20's `build_pbp_family_overrides`) wired into `build_rb_features`. Adoption gate verdict on the binding `(BaselineModel, RB)` cell: **ADOPT** — composite RMSE delta -0.0124 fpts, CI [-0.0255, -0.0006]; probe predicted -0.0124 to 4 decimals. RB feature cache refreshed for 2018–2024 (151 partitions). See top-of-file entry for the full per-year breakdown and the spec-gap fix (`baseline.py:_RB_FEATURE_COLUMNS`).
+**Projections Core — Track 2A + Track 2B complete (all team-level PBP family work shipped + measured).** Final family probe (PBP pressure, this branch) returned `NULL` durable on this commit; Track 2B (RB PBP cols × other model classes, informational) also folded into PR #24 with the canonical "directional improvement, no regression" finding. The full Track 2A scoreboard:
+
+- PR #20 (pace/PROE/AYPS/EPA-resid bundle, 2026-04-30) — **SIGNAL via RB**; integrated into `RbFeaturesSchema` in PR #21 (`(BaselineModel, RB)` adoption gate -0.0124 fpts).
+- PR #22 (WR/TE receiver-level air-yards / aDOT bundle, 2026-05-01) — **NULL durable**.
+- PR #23 (red-zone bundle, 2026-05-02) — **NULL durable**; QB augment lgb-nb regression at +0.0268.
+- PR #24 (this — pressure bundle + Track 2B, 2026-05-02 / 2026-05-03) — **pressure NULL durable**; QB augment lgb-nb regression at +0.0276 (same pattern); **Track 2B**: RB PBP cols transfer directionally-favorably to all 4 tree-model classes (point estimates -0.0062 to -0.0141 fpts), only `baseline` reaches strict CI<0 (matches PR #21's -0.0124 to 4 decimals).
+
+Three out of four PBP family probes returned NULL; the only SIGNAL was the original PR #20 bundle, and only on RB. The repeated QB augment lgb-nb regression across PR #23 + PR #24 is a notable pattern: adding team-level PBP cols in augment mode under lgb-nb consistently produces small statistically-significant QB regressions, suggesting model-class overfit / feature redundancy on the QB-side.
+
+**Track 2B finding:** the RB PBP cols' signal transfers to the lightgbm family (which auto-derives features from the schema dynamically) but with smaller and noisier effects than the baseline lift. Untuned `lightgbm` shows the strongest point estimate (-0.0141 fpts, CI [-0.0278, +0.0005] — just barely brackets 0 on the upper bound); `lightgbm-tuned` / `lightgbm-nb` / `ensemble` all show -0.006 to -0.010 fpts directional improvement with CIs that bracket zero. No model class regresses on RB. No spillover to QB/WR/TE (their schemas weren't touched). See `reports/track2b_rb_pbp_other_models.md` for the per-cell table + methodology + appendix on probe attempts that did NOT work for retrospective gating of already-shipped cols.
 
 **Predecessors shipped since the previous 2026-04-27 status snapshot:**
 - **Plan 8** (adoption gate redesign) — replaced PR #10–#15-era §1.3 thresholds; weekly `[p10, p90]` calibration dropped as a gating metric (not load-bearing for planned downstream consumers).
 - **Plan 9** (PBP ingest plumbing + opp-adjusted EPA-residual feature) — PBP plumbing shipped (`src/projections/ingest/pbp.py`, `PbpSchema`, `pbp` kwarg threaded through builders); opp-EPA-residual feature DO_NOT_ADOPT 4/4 positions and reverted at `941b96c`.
 - **Plan 9 retro option C** (lightgbm-nb on EPA-residual) — DO_NOT_ADOPT 4/4 cells. Closed across model classes; do not revisit.
 - **Feature Signal Probe** — pre-spec screening tool (`scripts/probe_feature_signal.py`); canonical first step before any new feature plan.
-- **PBP Feature Family Probe** — bundled the 4 PBP team-features into one probe; verdict SIGNAL via RB. Greenlit RB-first integration; flagged WR / TE for refined-unit follow-up; QB excluded (augment-mode `passing_yards` regression).
-- **RB PBP Features Integration** — production builder + ADOPT for `(BaselineModel, RB)` (PR #21).
+- **PBP Feature Family Probe (PR #20)** — bundled the 4 PBP team-features into one probe; verdict SIGNAL via RB.
+- **RB PBP Features Integration (PR #21)** — production builder + ADOPT for `(BaselineModel, RB)`.
+- **PBP Receiver Family Probe (PR #22)** — receiver-level air-yards / aDOT — NULL durable.
+- **PBP Red-Zone Family Probe (PR #23)** — team-level RZ — NULL durable.
+- **PBP Pressure Family Probe (PR #24, this)** — team-level pressure — NULL durable.
 
 **Predecessors (longer history):**
 - Plan 1 / Plan 2a / Plan 2b / Plan 3a / Plan 3b / Plan 3c / Plan 3d / Plan 3e (Phase 0 + Phase 1) / Plan 5 / Plan 5b / Plan 5c / Plan 6 / Plan 7. See per-plan blocks below.
 
 ## Next action
 
-**WR/TE PBP receiver-level family closed.** The receiver-level family probe (this branch) returned `NULL` durable across BaselineModel + lgb-nb for both WR and TE. Player-level air-yards / aDOT distributions do not carry orthogonal signal at the trailing-4-receiver-active-games unit. Refined-unit candidates beyond air-yards / aDOT (per-route-concept, target-quality residuals, in-line vs flexed for TE) require ingest extensions not currently planned; none queued.
+**Track 2A is now complete.** All three TODO #3c team-level PBP feature families have been probed and all directional findings logged. Two of three returned durable NULL; one (PR #20) returned SIGNAL via RB and shipped in PR #21. No additional team-level family candidates are queued — the family-level prior framework concludes that team-level PBP-derived features do not carry meaningful orthogonal signal beyond the v1 + PR #20 bundle for the production model classes tested.
 
-**Track 2A — Other PBP feature families (next probe-only spec).** Per TODO #3c, the remaining team-level PBP feature candidates are:
+**Track 2B is now also closed** (folded into PR #24 — see top entry above). RB PBP cols transfer to all 4 tree-model classes directionally; only baseline reaches strict CI<0; no class regresses.
 
-- Pressure rate allowed by O-line (proxy for QB sack risk and rushing-yardage-on-scramble)
-- Red-zone usage shares — *team-level* (separate from this spec's receiver-level RZ target share)
-- Team pace alone (vs the bundled probe; PR #20 tested pace bundled with PROE/AYPS/EPA-resid)
+**Recommended next direction (pick one):**
 
-Bundle 3-4 candidates per probe per the family-level prior. Brainstorm + spec + plan on a new branch. The probe → composite-gate workflow from PR #20 + this spec is the canonical pattern.
+- **Pivot to model-improvement tracks.** Per the post-Plan-3e brainstorm, the three open mean-prediction tracks are: TODO #23 (target decomposition: volume × efficiency), TODO #24 (player-trajectory features: age curves, career arc, trend gradients), TODO #25 (weather features in per-position builders — small but real win on a subset of games). Each is a separate brainstorm → spec → plan cycle. None have been scoped yet.
 
-**Track 2B — RB PBP × other model classes (queued, informational).** Gate the 4 RB PBP cols against `lightgbm-tuned`, `lightgbm-nb`, and `ensemble`. Deferred during PR #21 per spec §1.3.5 because Optuna tuning + NB-2 dispersion fitting are 1+ hour each; the lightgbm family auto-picks-up the new cols dynamically. Informational, not gating, but answers whether the team-level PBP signal transfers to the tree-based model classes. Cheap to queue as a background informational pass.
+- **Refined-unit PBP candidates (low-priority).** The three closed family probes (PR #22/#23/#24) all flagged refined-unit follow-ups: per-route-concept distributions, goal-line / 3rd-down splits, alternate pressure denominators. None currently queued; the cumulative durable-NULL signal across the broad cuts argues against any of these clearing absent independent evidence the unit choice was the binding constraint.
 
-**Followup housekeeping (low-priority):** Model C-tuned is strictly dominated by Model C-NB on RMSE — TODO #29 captures the pruning when ready.
+**Followup housekeeping (low-priority):**
+- Model C-tuned is strictly dominated by Model C-NB on RMSE — TODO #29 captures the pruning when ready.
+- Triplicate `_read_concat` / `_FANTASY_POSITIONS` / `_build_player_team_week_index` / `_parse_season_range` across 3 override scripts (PR #20, #23, #24) — extract to `scripts/_pbp_override_common.py`.
+- `_trailing_4_mean` triplicated across 3 sibling feature modules — extract to `src/projections/features/_pbp_common.py`.
+- Drop redundant `notna()` clause in `_per_game_rate` (`pbp_pressure_features.py:64`).
 
-After Track 2A + the above tracks: Plan 4 (public API + CLI verbs + free-tier hosting), then Draft Hub.
+After the above: Plan 4 (public API + CLI verbs + free-tier hosting), then Draft Hub.
 
 ---
 

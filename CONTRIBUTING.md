@@ -332,6 +332,23 @@ rostered player who had a scheduled game that week. Used as input to
 data/features_probe/pbp_redzone.parquet ...`. Spec:
 `docs/superpowers/specs/2026-05-02-pbp-redzone-feature-family-probe-design.md`.
 
+### Regenerating the PBP pressure override
+
+Sibling to "Regenerating the PBP family override" and "Regenerating the
+PBP red-zone override" above. The pressure family override at
+`data/features_probe/pbp_pressure.parquet` is not committed; regenerate
+when the spec needs it:
+
+```bash
+python -m scripts.build_pbp_pressure_override --seasons 2018-2024
+```
+
+Output: ~one row per (gsis_id, season, week) for every fantasy-position
+rostered player who had a scheduled game that week. Used as input to
+`scripts/probe_feature_signal.py --override
+data/features_probe/pbp_pressure.parquet ...`. Spec:
+`docs/superpowers/specs/2026-05-02-pbp-pressure-feature-family-probe-design.md`.
+
 ### Regenerating the PBP receiver override
 
 The receiver-level override parquet (`data/features_probe/pbp_receiver.parquet`)
