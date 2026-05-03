@@ -34,6 +34,12 @@ from projections.ingest.depth_charts import (
 from projections.ingest.depth_charts import (
     _normalize_one_season as _normalize_depth_charts,
 )
+from projections.ingest.draft_picks import (
+    _fetch_raw_draft_picks,
+)
+from projections.ingest.draft_picks import (
+    _normalize_one_season as _normalize_draft_picks,
+)
 from projections.ingest.id_map import _fetch_raw_id_map, build_id_map
 from projections.ingest.ngs import (
     _fetch_raw_ngs,
@@ -250,3 +256,28 @@ def test_pbp_api_columns_and_schema() -> None:
     assert len(normalized) > 30000  # ~50k expected
     assert normalized["play_type"].notna().any()
     assert normalized["epa"].notna().mean() > 0.6  # ~80% in practice
+
+
+@pytest.mark.network
+def test_draft_picks_api_columns_and_schema(tmp_path: Path) -> None:
+    """Live network smoke for nfl_data_py.import_draft_picks.
+
+    Asserts the source returns the columns we depend on with reasonable
+    dtypes, then runs the normalize step end-to-end. Pandera surfaces any
+    dtype drift after a nfl_data_py version bump.
+    """
+    raw = _fetch_raw_draft_picks([2023])
+    expected_source_cols = {"season", "round", "pick", "gsis_id", "pfr_player_id", "age"}
+    missing = expected_source_cols - set(raw.columns)
+    assert not missing, f"missing source columns: {missing}"
+
+    normalized = _normalize_draft_picks(raw)
+    assert len(normalized) > 0
+    assert set(normalized.columns) == {
+        "gsis_id",
+        "draft_year",
+        "draft_round",
+        "draft_overall_pick",
+        "pfr_id",
+        "draft_age",
+    }
