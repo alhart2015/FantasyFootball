@@ -122,13 +122,13 @@ Four mechanism-distinct features, all `pa.Column(pa.Float64, nullable=True)` in 
 - Definition: `draft_age + (season - draft_year)`. The `import_draft_picks` source returns `age` (age at draft, April of `draft_year`) for every drafted player — we use it directly.
 - For UDFAs / pre-1980 / drafted-but-missing-`age`: fall back to `season - inferred_draft_year + age_offset`, where `age_offset = 22` (a reasonable mean entry age) and `inferred_draft_year` per §2.5. The `age_offset` lives as a module-level constant in `trajectory_features.py`. The fallback gives pro-experience age + a constant; the model's per-position coefficient handles the rest. Note that the `inferred_draft_year` value is *less* reliable than the explicit fallback path (i.e., a 2018-debut player's inferred year is only correct if that was their actual rookie year, not a return from a long absence), so most coverage of this feature comes from the primary `draft_age` path.
 - The `draft_year_inferred` informational column on the override (§2.5) doubles as an audit for which rows used the fallback `age`.
-- Compute fn: `compute_age(weekly_stats, draft_picks_lookup, asof_season, asof_week) -> DataFrame[gsis_id, season, week, age]`. The lookup carries `(draft_year, draft_age)` per gsis_id (a tuple, not a single int as in §2.4 — adjust the type accordingly).
+- Compute fn: `compute_age(weekly_stats, draft_lookup) -> DataFrame[gsis_id, season, age, draft_year_inferred]` — one row per (player, season) where the player has at least one weekly_stats row that season. The lookup carries `(draft_year, draft_age)` per gsis_id; missing key → inferred fallback path.
 
 ### 3.2 `is_rookie`
 
 - Binary 0/1 encoded as `Float64` (not `bool`) for ML-compatible schema dtype.
 - Definition: `1.0` if `season == draft_year` (or `season == inferred_draft_year`), else `0.0`.
-- Compute fn: `compute_is_rookie(weekly_stats, draft_picks_lookup, asof_season, asof_week) -> DataFrame[..., is_rookie]`.
+- Compute fn: `compute_is_rookie(weekly_stats, draft_lookup) -> DataFrame[gsis_id, season, is_rookie]` — one row per (player, season). Uses the same fallback as `compute_age`.
 
 ### 3.3 `volume_trend_l4_minus_prior_l4`
 
@@ -140,7 +140,7 @@ Four mechanism-distinct features, all `pa.Column(pa.Float64, nullable=True)` in 
 - Definition: `mean(stat_per_game over [w-4, w-1]) - mean(stat_per_game over [w-8, w-5])`. **Non-overlapping windows.**
 - Active-game denominator: per-game means use only games where the player has a `weekly_stats` row that week (mirrors PR #22's "active games" framing). A bye/IR week is excluded from the denominator, not counted as 0.
 - Cold-start: weeks where the player has fewer than 8 prior active games yield `NaN`. This drives the 2018 cold-start coverage pattern.
-- Per-position compute fns: `compute_qb_volume_trend`, `compute_rb_volume_trend`, `compute_wr_te_volume_trend`. Position dispatch happens at the assembler level (`build_trajectory_overrides` looks up the correct fn per position).
+- Per-position compute fns: `compute_qb_volume_trend(weekly_stats)`, `compute_rb_volume_trend(weekly_stats)`, `compute_wr_te_volume_trend(weekly_stats)` — each returns `(gsis_id, season, week, volume_trend_l4_minus_prior_l4)`. Position dispatch happens at the assembler level (`attach_trajectory_features` selects the correct fn per position).
 
 ### 3.4 `snap_pct_change_l4_vs_prior_l4`
 
@@ -148,7 +148,7 @@ Four mechanism-distinct features, all `pa.Column(pa.Float64, nullable=True)` in 
 - `snap_pct` = `SnapCountsSchema.offense_pct` directly. Already a per-player per-game offensive-snap share in [0, 1]; no ratio computation needed in this module.
 - Definition: `mean(offense_pct over [w-4, w-1]) - mean(offense_pct over [w-8, w-5])`. Non-overlapping windows; same active-game denominator pattern as §3.3.
 - A player without a `snap_counts` row in a given week (bench / inactive / practice-squad) is excluded from the active-game denominator (matches §3.3 framing) — *not* counted as `offense_pct = 0`.
-- Compute fn: `compute_snap_pct_change(snap_counts, asof_season, asof_week) -> DataFrame[..., snap_pct_change_l4_vs_prior_l4]`. Note the simplified signature — no `weekly_stats` parameter needed since `snap_counts` is the sole source.
+- Compute fn: `compute_snap_pct_change(snap_counts) -> DataFrame[gsis_id, season, week, snap_pct_change_l4_vs_prior_l4]` — one row per (gsis_id, season, week) where the player has a snap_counts row. Simplified signature: no `weekly_stats` parameter needed since `snap_counts` is the sole source.
 
 ### 3.5 Schema integration deferred
 
@@ -185,47 +185,68 @@ CONTRIBUTING.md                           # +"Regenerating the trajectory overri
 
 ### 4.3 `trajectory_features.py` interface
 
+Pattern matches PR #24's `pbp_pressure_features.py` — each `compute_*` returns every (gsis_id, season[, week]) combo with the feature value (NaN where prerequisite history is insufficient). The assembler merges all per-week feature frames onto the player-team-week index.
+
 ```python
-# DraftLookup carries (draft_year, draft_age) per gsis_id; draft_age may be NaN
-# (UDFA / pre-1980), in which case compute_age falls back to inferred_draft_year + age_offset.
+# DraftLookup carries (draft_year, draft_age) per gsis_id. draft_age may be NaN
+# (drafted-but-missing-age, rare); a missing key means UDFA / pre-coverage —
+# both edge cases route to the inferred-draft-year fallback in compute_age.
 DraftLookup = dict[GsisId, tuple[int, float]]
 
-# Pure compute functions — no I/O, no logging, no global state
+# Per-(gsis_id, season) features — age and rookie status do not change within a season.
 def compute_age(
     weekly_stats: pd.DataFrame,
     draft_lookup: DraftLookup,
-    asof_season: int,
-    asof_week: int,
-) -> pd.DataFrame: ...
+) -> pd.DataFrame:
+    """Returns (gsis_id, season, age, draft_year_inferred) — one row per (player, season)
+    where the player has at least one weekly_stats row in that season."""
+    ...
 
-def compute_is_rookie(...) -> pd.DataFrame: ...
+def compute_is_rookie(
+    weekly_stats: pd.DataFrame,
+    draft_lookup: DraftLookup,
+) -> pd.DataFrame:
+    """Returns (gsis_id, season, is_rookie) — one row per (player, season).
+    Uses the same inferred-draft-year fallback as compute_age."""
+    ...
 
-def compute_qb_volume_trend(weekly_stats: pd.DataFrame, asof_season: int, asof_week: int) -> pd.DataFrame: ...
-def compute_rb_volume_trend(weekly_stats: pd.DataFrame, asof_season: int, asof_week: int) -> pd.DataFrame: ...
-def compute_wr_te_volume_trend(weekly_stats: pd.DataFrame, asof_season: int, asof_week: int) -> pd.DataFrame: ...
+# Per-(gsis_id, season, week) features — volume trends and snap-share change. The
+# trailing-4 / prior-4 windows mean (season, week) granularity is load-bearing.
+def compute_qb_volume_trend(weekly_stats: pd.DataFrame) -> pd.DataFrame: ...
+def compute_rb_volume_trend(weekly_stats: pd.DataFrame) -> pd.DataFrame: ...
+def compute_wr_te_volume_trend(weekly_stats: pd.DataFrame) -> pd.DataFrame: ...
+def compute_snap_pct_change(snap_counts: pd.DataFrame) -> pd.DataFrame: ...
 
-def compute_snap_pct_change(
-    snap_counts: pd.DataFrame,
-    asof_season: int,
-    asof_week: int,
-) -> pd.DataFrame: ...
-
-# Attach helper (used by the assembler; reusable by future per-position builders)
+# Attach helper — merges all per-week feature frames onto the player-team-week index.
+# Position controls which volume_trend variant is used; ageis_rookie / snap_pct_change
+# are uniform.
 def attach_trajectory_features(
-    base: pd.DataFrame,
+    index: pd.DataFrame,
     weekly_stats: pd.DataFrame,
     snap_counts: pd.DataFrame,
     draft_lookup: DraftLookup,
     position: Position,
-    asof_season: int,
-    asof_week: int,
-) -> pd.DataFrame: ...
+) -> pd.DataFrame:
+    """Returns a copy of index with 4 nullable-Float64 cols appended:
+    age, is_rookie, volume_trend_l4_minus_prior_l4, snap_pct_change_l4_vs_prior_l4.
+    + draft_year_inferred informational column."""
+    ...
 
-# Public assembler — dispatches across positions, returns long-format override
+# Public assembler — dispatches per position across the index.
 def build_trajectory_overrides(
-    seasons: range,
-    data_root: Path,
-) -> pd.DataFrame: ...
+    weekly_stats: pd.DataFrame,
+    snap_counts: pd.DataFrame,
+    draft_lookup: DraftLookup,
+    player_team_week_index: pd.DataFrame,  # gsis_id, season, week, team, opp, position
+) -> pd.DataFrame:
+    """Returns the override frame: (gsis_id, season, week, age, is_rookie,
+    volume_trend_l4_minus_prior_l4, snap_pct_change_l4_vs_prior_l4,
+    draft_year_inferred). One row per input index row.
+
+    Raises:
+        ValueError: malformed gsis_id format or duplicate (gsis_id, season, week) keys.
+    """
+    ...
 ```
 
 ### 4.4 `build_trajectory_override.py` CLI
@@ -357,7 +378,8 @@ Plus, before final report: full `pytest -v` to confirm no cross-module regressio
 | Position-tailored volume trend (Approach 2 from brainstorm), not uniform fantasy-points trend | Mechanism-aligned per position: QB attempts, RB carries, WR/TE targets. Modest extra code (3 compute fns vs 1) in exchange for interpretable per-position signal. |
 | Non-overlapping `prior_l4` window, not `l8` | `l4 - l8` overlaps (l8 includes the trailing l4); the resulting delta is `l4 - average(l4 + earlier_l4)` which compresses the signal. Non-overlapping is a true "this 4 vs prior 4" trend. |
 | Active-game denominator (PR #22 framing) | Bye / IR / inactive weeks excluded from denominator; not counted as 0. Otherwise an injured-but-recovered RB looks like a trend-down. |
-| Use `import_draft_picks`'s `age` column (age at draft) directly when available; fall back to `inferred_draft_year + age_offset = 22` only when missing | The source data already contains biological age at draft for every drafted player back to ~1980. Computing `season - draft_year + 21` would throw away that information and approximate age within a year, when the source gives us the exact value. The fallback applies only to UDFAs / pre-coverage-horizon players. |
+| Use `import_draft_picks`'s `age` column (age at draft) directly when available; fall back to `season - inferred_draft_year + age_offset = 22` only when missing | The source data already contains biological age at draft for every drafted player back to ~1980. Computing `season - draft_year + 21` would throw away that information and approximate age within a year, when the source gives us the exact value. The fallback applies only to UDFAs / pre-coverage-horizon players. Empirical 2022 sample: 0/262 missing on `gsis_id`, 0/262 missing on `age` — fallback rate is small. |
+| `compute_*` functions return every-week-at-once frames keyed by (gsis_id, season[, week]); no asof-week pivoting | Matches PR #24's established pattern (`pbp_pressure_features.py`). The assembler merges all per-week frames onto the player-team-week index in one pass — simpler than asof-pivoting and reuses existing pandas rolling/groupby. Per-(player, season) features (age, is_rookie) emit one row per (gsis_id, season); per-(player, season, week) features (volume_trend, snap_pct_change) emit one row per (gsis_id, season, week). |
 | `is_rookie` encoded as `Float64`, not `bool` | ML-compatible schema dtype across pandera + LightGBM + RidgeCV without coercion gymnastics. |
 | Schema integration deferred (probe-only) | Track 2A pattern; SIGNAL verdict greenlights integration plan with adoption gate. Avoids feature-cache invalidation churn for a NULL-likely family. |
 | Draft picks stored as separate parquet partitioned table, not folded into id_map | id_map's role is cross-platform identity translation; draft_year is metadata, not an identity column. Keeps `NewType` separation clean. |
