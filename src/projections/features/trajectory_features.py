@@ -152,3 +152,72 @@ def compute_is_rookie(
             "is_rookie": pd.Float64Dtype(),
         }
     ).reset_index(drop=True)
+
+
+def _volume_trend(
+    weekly_stats: pd.DataFrame,
+    *,
+    position: str | tuple[str, ...],
+    value_col: str,
+) -> pd.DataFrame:
+    """Per-(player, season, week) volume trend on `value_col`, defined as
+    mean over trailing-4 active games minus mean over prior-4 active games.
+
+    Active game = game with a weekly_stats row for this player. Bye / IR /
+    inactive weeks are not in weekly_stats and therefore excluded from the
+    rolling denominator (treated as gaps, NOT as 0-value games).
+
+    Within-player rolling: groups by gsis_id, sorts by (season, week). The
+    trailing-4 window uses .rolling(4).mean().shift(1) — the row at week W
+    reflects the mean over W-4..W-1 (NOT W). The prior-4 window uses
+    .shift(5) — mean over W-8..W-5. Fewer than 8 prior active games yields
+    NaN for prior_l4 (and therefore NaN for the trend).
+
+    Position is a string or tuple of strings; rows whose position is not in
+    that set are excluded before the rolling computation.
+    """
+    if weekly_stats.empty:
+        return pd.DataFrame(
+            {
+                "gsis_id": pd.array([], dtype=pd.StringDtype("pyarrow")),
+                "season": pd.array([], dtype=pd.Int64Dtype()),
+                "week": pd.array([], dtype=pd.Int64Dtype()),
+                "volume_trend_l4_minus_prior_l4": pd.array([], dtype=pd.Float64Dtype()),
+            }
+        )
+
+    positions = (position,) if isinstance(position, str) else tuple(position)
+    filtered = weekly_stats[weekly_stats["position"].isin(positions)].copy()
+    if filtered.empty:
+        return pd.DataFrame(
+            {
+                "gsis_id": pd.array([], dtype=pd.StringDtype("pyarrow")),
+                "season": pd.array([], dtype=pd.Int64Dtype()),
+                "week": pd.array([], dtype=pd.Int64Dtype()),
+                "volume_trend_l4_minus_prior_l4": pd.array([], dtype=pd.Float64Dtype()),
+            }
+        )
+
+    sorted_df = filtered.sort_values(["gsis_id", "season", "week"]).reset_index(drop=True)
+    grouped = sorted_df.groupby("gsis_id", sort=False)[value_col]
+    l4 = grouped.transform(
+        lambda s: s.astype(float).rolling(window=4, min_periods=4).mean().shift(1)
+    )
+    prior_l4 = grouped.transform(
+        lambda s: s.astype(float).rolling(window=4, min_periods=4).mean().shift(5)
+    )
+    sorted_df["volume_trend_l4_minus_prior_l4"] = l4 - prior_l4
+    out = sorted_df[["gsis_id", "season", "week", "volume_trend_l4_minus_prior_l4"]]
+    return out.astype(
+        {
+            "gsis_id": pd.StringDtype("pyarrow"),
+            "season": pd.Int64Dtype(),
+            "week": pd.Int64Dtype(),
+            "volume_trend_l4_minus_prior_l4": pd.Float64Dtype(),
+        }
+    ).reset_index(drop=True)
+
+
+def compute_qb_volume_trend(weekly_stats: pd.DataFrame) -> pd.DataFrame:
+    """QB volume trend on `attempts`, trailing-4 minus prior-4 (active games)."""
+    return _volume_trend(weekly_stats, position="QB", value_col="attempts")

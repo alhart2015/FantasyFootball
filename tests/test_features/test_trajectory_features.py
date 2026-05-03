@@ -227,3 +227,109 @@ def test_compute_is_rookie_empty_input() -> None:
     assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
     assert out["season"].dtype == pd.Int64Dtype()
     assert out["is_rookie"].dtype == pd.Float64Dtype()
+
+
+def test_compute_qb_volume_trend_basic_arithmetic() -> None:
+    from projections.features.trajectory_features import compute_qb_volume_trend
+
+    # 9 weeks of attempts: weeks 1-4 = 20,22,24,26 (mean 23 = prior_l4 at week 9),
+    # weeks 5-8 = 30,32,34,36 (mean 33 = l4 at week 9). Trend = 33 - 23 = 10.
+    attempts_by_week = {1: 20, 2: 22, 3: 24, 4: 26, 5: 30, 6: 32, 7: 34, 8: 36, 9: 40}
+    weekly_stats = pd.DataFrame(
+        [
+            _ws_row(gsis_id="00-0033873", season=2018, week=w, attempts=a)
+            for w, a in attempts_by_week.items()
+        ]
+    )
+    out = compute_qb_volume_trend(weekly_stats)
+    week9 = out[(out["season"] == 2018) & (out["week"] == 9)][
+        "volume_trend_l4_minus_prior_l4"
+    ].iloc[0]
+    assert week9 == pytest.approx(10.0)
+    assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
+    assert out["season"].dtype == pd.Int64Dtype()
+    assert out["week"].dtype == pd.Int64Dtype()
+    assert out["volume_trend_l4_minus_prior_l4"].dtype == pd.Float64Dtype()
+
+
+def test_compute_qb_volume_trend_nan_before_8_prior_games() -> None:
+    from projections.features.trajectory_features import compute_qb_volume_trend
+
+    weekly_stats = pd.DataFrame(
+        [_ws_row(gsis_id="00-0033873", season=2018, week=w, attempts=20 + w) for w in range(1, 10)]
+    )
+    out = compute_qb_volume_trend(weekly_stats).sort_values("week").reset_index(drop=True)
+    # Weeks 1-8 lack 8 prior active games → NaN.
+    for w in range(1, 9):
+        val = out[out["week"] == w]["volume_trend_l4_minus_prior_l4"].iloc[0]
+        assert pd.isna(val)
+    # Week 9 should be a finite number.
+    val_w9 = out[out["week"] == 9]["volume_trend_l4_minus_prior_l4"].iloc[0]
+    assert pd.notna(val_w9)
+
+
+def test_compute_qb_volume_trend_filters_position() -> None:
+    from projections.features.trajectory_features import compute_qb_volume_trend
+
+    qb_rows = [
+        _ws_row(gsis_id="00-0033873", season=2018, week=w, attempts=30, position="QB")
+        for w in range(1, 10)
+    ]
+    rb_rows = [
+        _ws_row(gsis_id="00-0099999", season=2018, week=w, attempts=15, position="RB")
+        for w in range(1, 10)
+    ]
+    weekly_stats = pd.DataFrame(qb_rows + rb_rows)
+    out = compute_qb_volume_trend(weekly_stats)
+    assert set(out["gsis_id"].unique()) == {"00-0033873"}
+
+
+def test_compute_qb_volume_trend_crosses_season_boundary() -> None:
+    from projections.features.trajectory_features import compute_qb_volume_trend
+
+    # 2018 weeks 1-8: prior-4 will end up being weeks 1-4 (20,22,24,26 → mean 23),
+    # 2018 weeks 5-8 (30,32,34,36 → mean 33), so 2019 week 1 trend = 33 - 23 = 10.
+    rows = []
+    attempts_2018 = [20, 22, 24, 26, 30, 32, 34, 36]
+    for i, a in enumerate(attempts_2018, start=1):
+        rows.append(_ws_row(gsis_id="00-0033873", season=2018, week=i, attempts=a))
+    rows.append(_ws_row(gsis_id="00-0033873", season=2019, week=1, attempts=40))
+    weekly_stats = pd.DataFrame(rows)
+    out = compute_qb_volume_trend(weekly_stats)
+    val = out[(out["season"] == 2019) & (out["week"] == 1)]["volume_trend_l4_minus_prior_l4"].iloc[
+        0
+    ]
+    assert val == pytest.approx(10.0)
+
+
+def test_compute_qb_volume_trend_traded_player_unbroken_window() -> None:
+    from projections.features.trajectory_features import compute_qb_volume_trend
+
+    # Same player, team change at week 5. Trend computes by gsis_id, so window unbroken.
+    attempts_by_week = {1: 20, 2: 22, 3: 24, 4: 26, 5: 30, 6: 32, 7: 34, 8: 36, 9: 40}
+    rows = []
+    for w, a in attempts_by_week.items():
+        team = "KC" if w <= 4 else "DEN"
+        rows.append(_ws_row(gsis_id="00-0033873", season=2018, week=w, attempts=a, team=team))
+    weekly_stats = pd.DataFrame(rows)
+    out = compute_qb_volume_trend(weekly_stats)
+    week9 = out[(out["season"] == 2018) & (out["week"] == 9)][
+        "volume_trend_l4_minus_prior_l4"
+    ].iloc[0]
+    # Same arithmetic as the basic case — window is per-gsis_id, not per-team.
+    assert week9 == pytest.approx(10.0)
+
+
+def test_compute_qb_volume_trend_empty_input() -> None:
+    from projections.features.trajectory_features import compute_qb_volume_trend
+
+    weekly_stats = pd.DataFrame(
+        columns=["gsis_id", "season", "week", "position", "team", "opponent", "attempts"]
+    )
+    out = compute_qb_volume_trend(weekly_stats)
+    assert out.empty
+    assert set(out.columns) == {"gsis_id", "season", "week", "volume_trend_l4_minus_prior_l4"}
+    assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
+    assert out["season"].dtype == pd.Int64Dtype()
+    assert out["week"].dtype == pd.Int64Dtype()
+    assert out["volume_trend_l4_minus_prior_l4"].dtype == pd.Float64Dtype()
