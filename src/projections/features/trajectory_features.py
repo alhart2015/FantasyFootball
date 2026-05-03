@@ -12,8 +12,6 @@ the player-team-week index in one pass.
 Spec: docs/superpowers/specs/2026-05-03-trajectory-feature-family-probe-design.md.
 """
 
-# pd and Position are referenced by compute_* fns added in subsequent tasks
-# (Tasks 5-12); imported here so each task is a pure addition.
 from __future__ import annotations
 
 import re
@@ -21,7 +19,7 @@ from typing import Final
 
 import pandas as pd
 
-from projections.schemas import (  # noqa: F401  # Position used in subsequent tasks
+from projections.schemas import (
     GSIS_ID_PATTERN,
     Position,
 )
@@ -157,7 +155,7 @@ def compute_is_rookie(
 def _volume_trend(
     weekly_stats: pd.DataFrame,
     *,
-    position: str | tuple[str, ...],
+    position: Position | tuple[Position, ...],
     value_col: str,
 ) -> pd.DataFrame:
     """Per-(player, season, week) volume trend on `value_col`, defined as
@@ -173,8 +171,8 @@ def _volume_trend(
     .shift(5) — mean over W-8..W-5. Fewer than 8 prior active games yields
     NaN for prior_l4 (and therefore NaN for the trend).
 
-    Position is a string or tuple of strings; rows whose position is not in
-    that set are excluded before the rolling computation.
+    Position is a Position enum or tuple of Position enums; rows whose
+    position is not in that set are excluded before the rolling computation.
     """
     if weekly_stats.empty:
         return pd.DataFrame(
@@ -186,7 +184,9 @@ def _volume_trend(
             }
         )
 
-    positions = (position,) if isinstance(position, str) else tuple(position)
+    positions = (
+        (position.value,) if isinstance(position, Position) else tuple(p.value for p in position)
+    )
     filtered = weekly_stats[weekly_stats["position"].isin(positions)].copy()
     if filtered.empty:
         return pd.DataFrame(
@@ -220,4 +220,4 @@ def _volume_trend(
 
 def compute_qb_volume_trend(weekly_stats: pd.DataFrame) -> pd.DataFrame:
     """QB volume trend on `attempts`, trailing-4 minus prior-4 (active games)."""
-    return _volume_trend(weekly_stats, position="QB", value_col="attempts")
+    return _volume_trend(weekly_stats, position=Position.QB, value_col="attempts")
