@@ -58,7 +58,7 @@ def compute_age(
                 "gsis_id": pd.array([], dtype=pd.StringDtype("pyarrow")),
                 "season": pd.array([], dtype=pd.Int64Dtype()),
                 "age": pd.array([], dtype=pd.Float64Dtype()),
-                "draft_year_inferred": pd.array([], dtype=bool),
+                "draft_year_inferred": pd.array([], dtype=pd.BooleanDtype()),
             }
         )
 
@@ -92,7 +92,7 @@ def compute_age(
                 "gsis_id": pd.StringDtype("pyarrow"),
                 "season": pd.Int64Dtype(),
                 "age": pd.Float64Dtype(),
-                "draft_year_inferred": bool,
+                "draft_year_inferred": pd.BooleanDtype(),
             }
         )
         .reset_index(drop=True)

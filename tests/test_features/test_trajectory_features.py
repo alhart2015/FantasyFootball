@@ -133,6 +133,7 @@ def test_compute_age_uses_draft_age_when_available() -> None:
     assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
     assert out["season"].dtype == pd.Int64Dtype()
     assert out["age"].dtype == pd.Float64Dtype()
+    assert out["draft_year_inferred"].dtype == pd.BooleanDtype()
 
 
 def test_compute_age_falls_back_for_udfa() -> None:
@@ -197,6 +198,7 @@ def test_compute_age_empty_input() -> None:
     assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
     assert out["season"].dtype == pd.Int64Dtype()
     assert out["age"].dtype == pd.Float64Dtype()
+    assert out["draft_year_inferred"].dtype == pd.BooleanDtype()
 
 
 def test_compute_is_rookie_marks_drafted_player_in_draft_year() -> None:
@@ -646,3 +648,33 @@ def test_attach_trajectory_features_rejects_invalid_position() -> None:
     )
     with pytest.raises(ValueError, match="position"):
         attach_trajectory_features(index, weekly_stats, snap_counts, lookup, Position.K)
+
+
+def test_attach_trajectory_features_preserves_dtypes_on_merge_miss() -> None:
+    """An index row with no matching weekly_stats / draft_lookup entry must
+    not regress dtypes. Specifically, draft_year_inferred must remain
+    BooleanDtype (not object) when the left-merge introduces NaN.
+    Regression test for a bug surfaced in Task 11's code review.
+    """
+    from projections.features.trajectory_features import attach_trajectory_features
+
+    weekly_stats = pd.DataFrame([_ws_row(gsis_id="00-0033873", season=2018, week=1, position="QB")])
+    snap_counts = pd.DataFrame(
+        [_snap_row(gsis_id="00-0033873", season=2018, week=1, position="QB")]
+    )
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5))
+    # Index has TWO rows: one with a player who has data, one with a phantom
+    # player who doesn't appear in weekly_stats / snap_counts / lookup.
+    index = pd.DataFrame(
+        [
+            {"gsis_id": "00-0033873", "season": 2018, "week": 1, "team": "KC", "opp": "BUF"},
+            {"gsis_id": "00-0099999", "season": 2018, "week": 1, "team": "BUF", "opp": "KC"},
+        ]
+    )
+    out = attach_trajectory_features(index, weekly_stats, snap_counts, lookup, Position.QB)
+    assert len(out) == 2
+    # Critical: the phantom row's columns are NaN/NA, but the dtype stays
+    # nullable rather than object.
+    assert out["draft_year_inferred"].dtype == pd.BooleanDtype()
+    assert out["age"].dtype == pd.Float64Dtype()
+    assert out["is_rookie"].dtype == pd.Float64Dtype()
