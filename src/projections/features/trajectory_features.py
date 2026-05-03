@@ -99,3 +99,56 @@ def compute_age(
         )
         .reset_index(drop=True)
     )
+
+
+def compute_is_rookie(
+    weekly_stats: pd.DataFrame,
+    draft_lookup: DraftLookup,
+) -> pd.DataFrame:
+    """Per-(player, season) rookie flag (1.0 if season == draft_year, else 0.0).
+
+    For UDFAs / missing-from-lookup, uses the same inferred_draft_year
+    fallback as compute_age (earliest weekly_stats season).
+
+    Output: (gsis_id, season, is_rookie) — one row per (player, season)
+    where the player has at least one weekly_stats row. is_rookie is
+    Float64 for ML-compat.
+    """
+    if weekly_stats.empty:
+        return pd.DataFrame(
+            {
+                "gsis_id": pd.array([], dtype=pd.StringDtype("pyarrow")),
+                "season": pd.array([], dtype=pd.Int64Dtype()),
+                "is_rookie": pd.array([], dtype=pd.Float64Dtype()),
+            }
+        )
+
+    earliest = (
+        weekly_stats.groupby("gsis_id", as_index=False, observed=True)["season"]
+        .min()
+        .rename(columns={"season": "inferred_draft_year"})
+    )
+    distinct = weekly_stats[["gsis_id", "season"]].drop_duplicates()
+    merged = distinct.merge(earliest, on="gsis_id", how="left")
+
+    def _rookie_year(row: pd.Series) -> int:
+        entry = draft_lookup.get(row["gsis_id"])
+        if entry is not None:
+            return int(entry[0])
+        return int(row["inferred_draft_year"])
+
+    rookie_years = merged.apply(_rookie_year, axis=1)
+    out = pd.DataFrame(
+        {
+            "gsis_id": merged["gsis_id"].values,
+            "season": merged["season"].values,
+            "is_rookie": (merged["season"].values == rookie_years.values).astype(float),
+        }
+    )
+    return out.astype(
+        {
+            "gsis_id": pd.StringDtype("pyarrow"),
+            "season": pd.Int64Dtype(),
+            "is_rookie": pd.Float64Dtype(),
+        }
+    ).reset_index(drop=True)

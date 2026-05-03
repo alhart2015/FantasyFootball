@@ -164,3 +164,66 @@ def test_compute_age_empty_input() -> None:
     assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
     assert out["season"].dtype == pd.Int64Dtype()
     assert out["age"].dtype == pd.Float64Dtype()
+
+
+def test_compute_is_rookie_marks_drafted_player_in_draft_year() -> None:
+    from projections.features.trajectory_features import compute_is_rookie
+
+    weekly_stats = pd.DataFrame(
+        [
+            _ws_row(gsis_id="00-0033873", season=2017, week=1),
+            _ws_row(gsis_id="00-0033873", season=2018, week=1),
+        ]
+    )
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5))
+    out = compute_is_rookie(weekly_stats, lookup)
+    assert len(out) == 2
+    assert set(out.columns) == {"gsis_id", "season", "is_rookie"}
+    rookie_2017 = out[out["season"] == 2017]["is_rookie"].iloc[0]
+    rookie_2018 = out[out["season"] == 2018]["is_rookie"].iloc[0]
+    assert rookie_2017 == 1.0
+    assert rookie_2018 == 0.0
+    assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
+    assert out["season"].dtype == pd.Int64Dtype()
+    assert out["is_rookie"].dtype == pd.Float64Dtype()
+
+
+def test_compute_is_rookie_uses_inferred_year_for_udfa() -> None:
+    from projections.features.trajectory_features import compute_is_rookie
+
+    weekly_stats = pd.DataFrame(
+        [
+            _ws_row(gsis_id="00-0099999", season=2020, week=1),
+            _ws_row(gsis_id="00-0099999", season=2021, week=1),
+        ]
+    )
+    lookup: DraftLookup = {}
+    out = compute_is_rookie(weekly_stats, lookup)
+    rookie_2020 = out[out["season"] == 2020]["is_rookie"].iloc[0]
+    rookie_2021 = out[out["season"] == 2021]["is_rookie"].iloc[0]
+    assert rookie_2020 == 1.0
+    assert rookie_2021 == 0.0
+
+
+def test_compute_is_rookie_dtype_is_float() -> None:
+    from projections.features.trajectory_features import compute_is_rookie
+
+    weekly_stats = pd.DataFrame([_ws_row(gsis_id="00-0033873", season=2017, week=1)])
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5))
+    out = compute_is_rookie(weekly_stats, lookup)
+    # Float (not bool) for ML-compat; matches schema dtype.
+    assert out["is_rookie"].dtype == pd.Float64Dtype()
+
+
+def test_compute_is_rookie_empty_input() -> None:
+    from projections.features.trajectory_features import compute_is_rookie
+
+    weekly_stats = pd.DataFrame(
+        columns=["gsis_id", "season", "week", "position", "team", "opponent"]
+    )
+    out = compute_is_rookie(weekly_stats, {})
+    assert out.empty
+    assert set(out.columns) == {"gsis_id", "season", "is_rookie"}
+    assert out["gsis_id"].dtype == pd.StringDtype("pyarrow")
+    assert out["season"].dtype == pd.Int64Dtype()
+    assert out["is_rookie"].dtype == pd.Float64Dtype()
