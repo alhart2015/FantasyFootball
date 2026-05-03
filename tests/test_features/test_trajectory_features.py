@@ -16,6 +16,7 @@ import pytest
 from projections.features.trajectory_features import (
     DraftLookup,
 )
+from projections.schemas import Position
 
 
 def _ws_row(
@@ -547,3 +548,101 @@ def test_compute_snap_pct_change_empty_input() -> None:
     assert out["season"].dtype == pd.Int64Dtype()
     assert out["week"].dtype == pd.Int64Dtype()
     assert out["snap_pct_change_l4_vs_prior_l4"].dtype == pd.Float64Dtype()
+
+
+def test_attach_trajectory_features_appends_4_cols_qb() -> None:
+    from projections.features.trajectory_features import attach_trajectory_features
+
+    weekly_stats = pd.DataFrame(
+        [
+            _ws_row(gsis_id="00-0033873", season=2018, week=w, position="QB", attempts=20 + w)
+            for w in range(1, 10)
+        ]
+    )
+    snap_counts = pd.DataFrame(
+        [
+            _snap_row(
+                gsis_id="00-0033873", season=2018, week=w, position="QB", offense_pct=0.5 + w * 0.01
+            )
+            for w in range(1, 10)
+        ]
+    )
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5))
+    index = pd.DataFrame(
+        [
+            {"gsis_id": "00-0033873", "season": 2018, "week": 9, "team": "KC", "opp": "BUF"},
+        ]
+    )
+    out = attach_trajectory_features(index, weekly_stats, snap_counts, lookup, Position.QB)
+
+    assert len(out) == 1
+    expected_added = {
+        "age",
+        "is_rookie",
+        "volume_trend_l4_minus_prior_l4",
+        "snap_pct_change_l4_vs_prior_l4",
+        "draft_year_inferred",
+    }
+    assert expected_added <= set(out.columns)
+
+
+def test_attach_trajectory_features_uses_correct_volume_trend_per_position() -> None:
+    from projections.features.trajectory_features import attach_trajectory_features
+
+    # RB row at week 9 with carries trend.
+    weekly_stats = pd.DataFrame(
+        [
+            _ws_row(gsis_id="00-0033873", season=2018, week=w, position="RB", carries=c, attempts=0)
+            for w, c in [
+                (1, 5),
+                (2, 7),
+                (3, 9),
+                (4, 11),
+                (5, 15),
+                (6, 17),
+                (7, 19),
+                (8, 21),
+                (9, 25),
+            ]
+        ]
+    )
+    snap_counts = pd.DataFrame(
+        [
+            _snap_row(gsis_id="00-0033873", season=2018, week=w, position="RB", offense_pct=0.6)
+            for w in range(1, 10)
+        ]
+    )
+    lookup = _draft_lookup(("00-0033873", 2017, 22.0))
+    index = pd.DataFrame(
+        [{"gsis_id": "00-0033873", "season": 2018, "week": 9, "team": "KC", "opp": "BUF"}]
+    )
+    out = attach_trajectory_features(index, weekly_stats, snap_counts, lookup, Position.RB)
+    # Carries trend at week 9 = 18 - 8 = 10.
+    assert out["volume_trend_l4_minus_prior_l4"].iloc[0] == pytest.approx(10.0)
+
+
+def test_attach_trajectory_features_preserves_index_columns() -> None:
+    from projections.features.trajectory_features import attach_trajectory_features
+
+    weekly_stats = pd.DataFrame([_ws_row(gsis_id="00-0033873", season=2018, week=1)])
+    snap_counts = pd.DataFrame([_snap_row(gsis_id="00-0033873", season=2018, week=1)])
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5))
+    index = pd.DataFrame(
+        [{"gsis_id": "00-0033873", "season": 2018, "week": 1, "team": "KC", "opp": "BUF"}]
+    )
+    out = attach_trajectory_features(index, weekly_stats, snap_counts, lookup, Position.QB)
+    for col in ("gsis_id", "season", "week", "team", "opp"):
+        assert col in out.columns
+
+
+def test_attach_trajectory_features_rejects_invalid_position() -> None:
+    from projections.features.trajectory_features import attach_trajectory_features
+
+    weekly_stats = pd.DataFrame([_ws_row(gsis_id="00-0033873", season=2018, week=1)])
+    snap_counts = pd.DataFrame([_snap_row(gsis_id="00-0033873", season=2018, week=1)])
+    lookup = _draft_lookup(("00-0033873", 2017, 21.5))
+    index = pd.DataFrame(
+        [{"gsis_id": "00-0033873", "season": 2018, "week": 1, "team": "KC", "opp": "BUF"}]
+    )
+    with pytest.raises(ValueError, match="position"):
+        attach_trajectory_features(index, weekly_stats, snap_counts, lookup, Position.K)

@@ -268,3 +268,57 @@ def compute_snap_pct_change(snap_counts: pd.DataFrame) -> pd.DataFrame:
             "snap_pct_change_l4_vs_prior_l4": pd.Float64Dtype(),
         }
     ).reset_index(drop=True)
+
+
+def attach_trajectory_features(
+    index: pd.DataFrame,
+    weekly_stats: pd.DataFrame,
+    snap_counts: pd.DataFrame,
+    draft_lookup: DraftLookup,
+    position: Position,
+) -> pd.DataFrame:
+    """Append the 4 trajectory features (+ informational draft_year_inferred)
+    to a player-team-week index for one position.
+
+    Args:
+        index: (gsis_id, season, week, team, opp) — one row per player-week.
+        weekly_stats: full weekly_stats frame (multiple positions OK; the
+            position-specific volume_trend filters internally).
+        snap_counts: full snap_counts frame.
+        draft_lookup: gsis_id -> (draft_year, draft_age) lookup.
+        position: which position is being processed (selects volume_trend variant).
+
+    Returns:
+        A copy of `index` with 5 columns appended:
+            age, is_rookie, volume_trend_l4_minus_prior_l4,
+            snap_pct_change_l4_vs_prior_l4, draft_year_inferred.
+        Row count equals len(index).
+
+    Raises:
+        ValueError: position not in {QB, RB, WR, TE}.
+    """
+    if position == Position.QB:
+        trend = compute_qb_volume_trend(weekly_stats)
+    elif position == Position.RB:
+        trend = compute_rb_volume_trend(weekly_stats)
+    elif position in (Position.WR, Position.TE):
+        trend = compute_wr_te_volume_trend(weekly_stats)
+    else:
+        raise ValueError(f"unsupported position for trajectory features: {position!r}")
+
+    age = compute_age(weekly_stats, draft_lookup)
+    is_rookie = compute_is_rookie(weekly_stats, draft_lookup)
+    snap_change = compute_snap_pct_change(snap_counts)
+
+    out = index.merge(age, on=["gsis_id", "season"], how="left")
+    out = out.merge(is_rookie, on=["gsis_id", "season"], how="left")
+    out = out.merge(trend, on=["gsis_id", "season", "week"], how="left")
+    out = out.merge(snap_change, on=["gsis_id", "season", "week"], how="left")
+
+    if len(out) != len(index):
+        raise AssertionError(
+            f"row count mismatch in attach_trajectory_features: input {len(index)}, "
+            f"output {len(out)}; suggests a many-to-many merge regression"
+        )
+
+    return out
