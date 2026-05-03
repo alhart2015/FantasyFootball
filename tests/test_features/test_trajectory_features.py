@@ -363,3 +363,49 @@ def test_compute_rb_volume_trend_filters_to_rb_only() -> None:
     ]
     out = compute_rb_volume_trend(pd.DataFrame(rows))
     assert set(out["gsis_id"].unique()) == {"00-0099001"}
+
+
+def test_compute_wr_te_volume_trend_uses_targets_for_wr() -> None:
+    from projections.features.trajectory_features import compute_wr_te_volume_trend
+
+    rows = []
+    targets_by_week = {1: 4, 2: 6, 3: 8, 4: 10, 5: 12, 6: 14, 7: 16, 8: 18, 9: 20}
+    for w, t in targets_by_week.items():
+        rows.append(_ws_row(gsis_id="00-0033873", season=2018, week=w, position="WR", targets=t))
+    weekly_stats = pd.DataFrame(rows)
+    out = compute_wr_te_volume_trend(weekly_stats)
+    week_9 = out[(out["season"] == 2018) & (out["week"] == 9)]
+    # l4 = mean(12,14,16,18) = 15; prior_l4 = mean(4,6,8,10) = 7; trend = 8.
+    assert week_9["volume_trend_l4_minus_prior_l4"].iloc[0] == pytest.approx(8.0)
+
+
+def test_compute_wr_te_volume_trend_includes_te() -> None:
+    from projections.features.trajectory_features import compute_wr_te_volume_trend
+
+    rows = []
+    rows += [
+        _ws_row(gsis_id="00-0099001", season=2018, week=w, position="WR", targets=10)
+        for w in range(1, 10)
+    ]
+    rows += [
+        _ws_row(gsis_id="00-0099002", season=2018, week=w, position="TE", targets=8)
+        for w in range(1, 10)
+    ]
+    out = compute_wr_te_volume_trend(pd.DataFrame(rows))
+    assert set(out["gsis_id"].unique()) == {"00-0099001", "00-0099002"}
+
+
+def test_compute_wr_te_volume_trend_excludes_rb() -> None:
+    from projections.features.trajectory_features import compute_wr_te_volume_trend
+
+    rows = []
+    rows += [
+        _ws_row(gsis_id="00-0099001", season=2018, week=w, position="WR", targets=10)
+        for w in range(1, 10)
+    ]
+    rows += [
+        _ws_row(gsis_id="00-0099002", season=2018, week=w, position="RB", targets=4)
+        for w in range(1, 10)
+    ]
+    out = compute_wr_te_volume_trend(pd.DataFrame(rows))
+    assert set(out["gsis_id"].unique()) == {"00-0099001"}
