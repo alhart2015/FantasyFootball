@@ -65,6 +65,9 @@ def _build_synthetic_wr_features(
             df[col_name] = rng.integers(0, 2, size=len(df)).astype(bool)
         elif "int" in dtype_str.lower():
             df[col_name] = rng.integers(1, 6, size=len(df)).astype(np.int64)
+        elif col_name == "age":
+            # Trajectory feature: ge=15, le=50. Sample plausible WR ages.
+            df[col_name] = rng.uniform(22.0, 30.0, size=len(df)).astype(np.float64)
         else:
             df[col_name] = rng.uniform(0.0, 0.5, size=len(df)).astype(np.float64)
     return WrFeaturesSchema.validate(df)

@@ -63,6 +63,9 @@ def _build_synthetic_wr_features(
         elif "int" in dtype_str.lower():
             # depth_rank is ge=1, le=10 — pick a small positive int range.
             df[col_name] = rng.integers(1, 6, size=len(df)).astype(np.int64)
+        elif col_name == "age":
+            # Trajectory feature: ge=15, le=50. Sample plausible WR ages.
+            df[col_name] = rng.uniform(22.0, 30.0, size=len(df)).astype(np.float64)
         else:
             # Uniform [0, 0.5] satisfies typical schema range checks (ge=0,
             # often le=1, sometimes le=60). Negative values would fail many
