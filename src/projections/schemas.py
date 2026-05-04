@@ -461,6 +461,26 @@ class PbpSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class DraftPicksSchema(pa.DataFrameModel):
+    """Per-player NFL draft pick metadata — what `ingest.draft_picks` produces.
+
+    Snapshot semantics: a season's draft never changes after the draft completes.
+    Source: `nfl_data_py.import_draft_picks`. UDFAs and pre-coverage players
+    (drafts before 1980) are not present; downstream feature compute handles
+    that with an inferred-draft-year fallback (see trajectory_features.py).
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", unique=True)
+    draft_year: Series[int] = pa.Field(ge=1936, le=2100)
+    draft_round: Series[int] = pa.Field(ge=1, le=15, nullable=True)
+    draft_overall_pick: Series[int] = pa.Field(ge=1, le=500, nullable=True)
+    pfr_id: Series[str] = pa.Field(nullable=True)
+    draft_age: Series[float] = pa.Field(ge=18.0, le=40.0, nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
 class WrFeaturesSchema(pa.DataFrameModel):
     """WR feature DataFrame produced by `features.wr.build_wr_features`.
     Schema enforced at the module boundary — every column has a typed range

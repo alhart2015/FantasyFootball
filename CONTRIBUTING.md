@@ -364,6 +364,29 @@ To overwrite an existing file, pass `--force`. The script reads PBP for
 at week 1–4 of each season) and writes one row per `(gsis_id, season, week)`
 for every WR / TE rostered per `depth_charts`.
 
+### Regenerating the trajectory override
+
+Sibling to the four "Regenerating the PBP …" subsections above. The
+trajectory family override at `data/features_probe/trajectory.parquet`
+is regenerable from the live raw partitions and is NOT committed.
+
+```bash
+python -m scripts.build_trajectory_override --seasons 2018-2024
+```
+
+To overwrite an existing file, pass `--force`. The script reads
+weekly_stats / snap_counts / depth_charts / schedules / draft_picks raw
+partitions; weekly_stats and snap_counts are loaded over
+`[seasons.start - 1, seasons.stop)` so the trailing-8-game windows have
+prior-season backfill at week 1. The script bundles four player-level
+trajectory features (age, is_rookie, position-tailored volume_trend
+on attempts/carries/targets, snap_pct_change) plus an informational
+`draft_year_inferred` column. Used as input to
+`scripts/probe_feature_signal.py --override
+data/features_probe/trajectory.parquet ...`.
+
+Spec: `docs/superpowers/specs/2026-05-03-trajectory-feature-family-probe-design.md`.
+
 ## Adding a new pandera schema
 
 Schemas live in `src/projections/schemas.py` (single source of truth). Append your schema after the existing ones.
