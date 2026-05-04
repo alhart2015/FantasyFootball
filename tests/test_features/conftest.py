@@ -1043,7 +1043,7 @@ def te_draft_picks() -> pd.DataFrame:
                 "pfr_id": "KelcTr00",
                 "draft_age": 23.0,
             },
-            # Synthetic TE 00-0033084: 2017 draft, 24yo at draft.
+            # George Kittle: 2017 draft, 24yo at draft.
             {
                 "gsis_id": "00-0033084",
                 "draft_year": 2017,
