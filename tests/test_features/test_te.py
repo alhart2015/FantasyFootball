@@ -200,3 +200,29 @@ def test_build_te_features_ngs_separation_propagates(
     kelce = out[out["gsis_id"] == "00-0030506"].iloc[0]
     # Fixture sets avg_separation=2.8 for Kelce.
     assert kelce["avg_separation_std"] == pytest.approx(2.8, abs=1e-6)
+
+
+def test_build_te_features_attach_trajectory_drafted_veteran(
+    te_weekly_stats: pd.DataFrame,
+    te_snap_counts: pd.DataFrame,
+    te_depth_charts: pd.DataFrame,
+    te_ngs_receiving: pd.DataFrame,
+    te_schedules: pd.DataFrame,
+    te_draft_picks: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Travis Kelce: drafted 2013 at age 23; in 2024 should be age 34, is_rookie=0."""
+    out = build_te_features(
+        weekly_stats=te_weekly_stats,
+        snap_counts=te_snap_counts,
+        depth_charts=te_depth_charts,
+        ngs_receiving=te_ngs_receiving,
+        schedules=te_schedules,
+        pbp=fake_pbp_df,
+        draft_picks=te_draft_picks,
+        season=2024,
+        as_of_week=5,
+    )
+    kelce = out[out["gsis_id"] == "00-0030506"].iloc[0]
+    assert kelce["age"] == 34.0  # 23 + (2024 - 2013)
+    assert kelce["is_rookie"] == 0.0
