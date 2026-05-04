@@ -1019,3 +1019,65 @@ def wr_draft_picks() -> pd.DataFrame:
             "draft_age": pd.Float64Dtype(),
         }
     )
+
+
+@pytest.fixture
+def te_draft_picks() -> pd.DataFrame:
+    """Synthetic draft_picks for the TEs used across the TE fixture set.
+
+    Includes the two canonical TE gsis_ids from te_weekly_stats /
+    te_depth_charts plus a NaN-draft_age branch and a rookie. The
+    rookie 00-0099778 is intentionally drafted in 2024 (the test
+    season), so is_rookie computes to 1.0 from the primary
+    draft_lookup path. The other three are veteran drafts. Mirrors
+    PR #26's wr_draft_picks fixture shape.
+    """
+    return pd.DataFrame(
+        [
+            # Travis Kelce: 2013 draft, 23yo at draft.
+            {
+                "gsis_id": "00-0030506",
+                "draft_year": 2013,
+                "draft_round": 3,
+                "draft_overall_pick": 63,
+                "pfr_id": "KelcTr00",
+                "draft_age": 23.0,
+            },
+            # Synthetic TE 00-0033084: 2017 draft, 24yo at draft.
+            {
+                "gsis_id": "00-0033084",
+                "draft_year": 2017,
+                "draft_round": 1,
+                "draft_overall_pick": 19,
+                "pfr_id": "SyntTe00",
+                "draft_age": 24.0,
+            },
+            # Synthetic veteran TE with NaN draft_age branch (drafted but missing age).
+            {
+                "gsis_id": "00-0035555",
+                "draft_year": 2019,
+                "draft_round": 4,
+                "draft_overall_pick": 110,
+                "pfr_id": "NaNTe000",
+                "draft_age": float("nan"),
+            },
+            # Rookie TE 00-0099778: 2024 draft.
+            {
+                "gsis_id": "00-0099778",
+                "draft_year": 2024,
+                "draft_round": 2,
+                "draft_overall_pick": 51,
+                "pfr_id": "RookTE00",
+                "draft_age": 22.0,
+            },
+        ]
+    ).astype(
+        {
+            "gsis_id": "string[pyarrow]",
+            "draft_year": pd.Int64Dtype(),
+            "draft_round": pd.Int64Dtype(),
+            "draft_overall_pick": pd.Int64Dtype(),
+            "pfr_id": "string[pyarrow]",
+            "draft_age": pd.Float64Dtype(),
+        }
+    )
