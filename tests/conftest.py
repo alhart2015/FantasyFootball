@@ -364,14 +364,20 @@ def _wr_weekly_stats_row(
 
 @pytest.fixture
 def baseline_weekly_stats_wr() -> pd.DataFrame:
-    """8 weeks of 2024 + 4 weeks of 2025 WR-shaped stats for 5 synthetic WRs.
+    """17 weeks of 2024 + 4 weeks of 2025 WR-shaped stats for 5 synthetic WRs.
 
     2024 = training universe; 2025 = held-out. KC and MIN play each other
     every week so the opponent-allowed-fppg proxy resolves (MIN's allowed WR
     FPPG comes from KC's WRs and vice versa).
+
+    Trajectory-features note (2026-05-03 WR integration): the trailing-4
+    minus prior-4 trends require 8+ active games of history per player. With
+    only 8 weeks of 2024, every (l4 - prior_l4) row is NaN and baseline.py's
+    fit-time dropna empties the training set. Extending to 17 weeks of 2024
+    gives 9+ rows per player with non-NaN trends.
     """
     rows: list[dict[str, object]] = []
-    for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
+    for season, weeks in [(2024, range(1, 18)), (2025, range(1, 5))]:
         for week in weeks:
             for gsis_id, team, base_targets in zip(_GSIS_IDS, _TEAMS, _TARGETS_BASE, strict=True):
                 opponent = "MIN" if team == "KC" else "KC"
@@ -428,7 +434,7 @@ def baseline_features_wr(baseline_weekly_stats_wr: pd.DataFrame) -> pd.DataFrame
     # base_targets ranking) for every (season, week).
     dc_rows: list[dict[str, object]] = []
     for season in (2024, 2025):
-        weeks = range(1, 9) if season == 2024 else range(1, 5)
+        weeks = range(1, 18) if season == 2024 else range(1, 5)
         for week in weeks:
             for gsis_id, team, _base_targets in zip(_GSIS_IDS, _TEAMS, _TARGETS_BASE, strict=True):
                 # Rank within team by base_targets descending.
@@ -463,7 +469,7 @@ def baseline_features_wr(baseline_weekly_stats_wr: pd.DataFrame) -> pd.DataFrame
     # week-1-only.
     ngs_rows: list[dict[str, object]] = []
     for season in (2024, 2025):
-        weeks = range(1, 9) if season == 2024 else range(1, 5)
+        weeks = range(1, 18) if season == 2024 else range(1, 5)
         for week in weeks:
             for gsis_id, team, base_targets in zip(_GSIS_IDS, _TEAMS, _TARGETS_BASE, strict=True):
                 ngs_rows.append(
@@ -488,7 +494,7 @@ def baseline_features_wr(baseline_weekly_stats_wr: pd.DataFrame) -> pd.DataFrame
     # covers both teams' WRs.
     sch_rows: list[dict[str, object]] = []
     for season in (2024, 2025):
-        weeks = range(1, 9) if season == 2024 else range(1, 5)
+        weeks = range(1, 18) if season == 2024 else range(1, 5)
         for week in weeks:
             sch_rows.append(
                 {
@@ -520,7 +526,7 @@ def baseline_features_wr(baseline_weekly_stats_wr: pd.DataFrame) -> pd.DataFrame
 
     pbp = _build_synthetic_pbp()
     feat_frames: list[pd.DataFrame] = []
-    for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
+    for season, weeks in [(2024, range(1, 18)), (2025, range(1, 5))]:
         for week in weeks:
             f = build_wr_features(
                 weekly_stats=baseline_weekly_stats_wr,
