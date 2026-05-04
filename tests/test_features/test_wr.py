@@ -221,3 +221,29 @@ def test_build_wr_features_rookie_with_no_prior_games_zeros(
     assert rookie["targets_per_game_l4"] == 0.0
     assert rookie["receiving_yards_per_game_l4"] == 0.0
     assert bool(rookie["designed_rusher"]) is False
+
+
+def test_build_wr_features_attach_trajectory_drafted_veteran(
+    wr_weekly_stats: pd.DataFrame,
+    wr_snap_counts: pd.DataFrame,
+    wr_depth_charts: pd.DataFrame,
+    wr_ngs_receiving: pd.DataFrame,
+    wr_schedules: pd.DataFrame,
+    wr_draft_picks: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Justin Jefferson: drafted 2020 at age 21; in 2024 should be age 25, is_rookie=0."""
+    out = build_wr_features(
+        weekly_stats=wr_weekly_stats,
+        snap_counts=wr_snap_counts,
+        depth_charts=wr_depth_charts,
+        ngs_receiving=wr_ngs_receiving,
+        schedules=wr_schedules,
+        pbp=fake_pbp_df,
+        draft_picks=wr_draft_picks,
+        season=2024,
+        as_of_week=5,
+    )
+    jef = out[out["gsis_id"] == "00-0036322"].iloc[0]
+    assert jef["age"] == 25.0  # 21 + (2024 - 2020)
+    assert jef["is_rookie"] == 0.0
