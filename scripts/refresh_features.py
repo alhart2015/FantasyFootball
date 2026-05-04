@@ -62,6 +62,7 @@ def _refresh_one(
     *,
     raw_root: Path,
     features_root: Path,
+    draft_picks: pd.DataFrame,
 ) -> int:
     """Build + write every available week of features for (position, season).
     Returns the number of week partitions written."""
@@ -102,6 +103,7 @@ def _refresh_one(
             "season": season,
             "as_of_week": week,
             "pbp": pbp,
+            "draft_picks": draft_picks,
             ngs_kwarg: ngs_full,
         }
         feats = builder(**kwargs)
@@ -134,6 +136,22 @@ def main() -> None:
     raw_root = args.data_root / "raw"
     features_root = args.data_root / "features"
 
+    # 2026-05-03 WR trajectory: load draft_picks once across the full
+    # nfl_data_py-supported range (1980+) so the WR trajectory features see
+    # every drafted player's birth_date / draft_year on the join. Degrade
+    # gracefully if a season's partition is missing — the builder routes
+    # missing rows to the inferred-draft-year fallback.
+    max_season = max(seasons)
+    draft_picks_frames: list[pd.DataFrame] = []
+    for s in range(1980, max_season + 1):
+        try:
+            draft_picks_frames.append(read_partition(raw_root, "draft_picks", season=s))
+        except FileNotFoundError:
+            continue
+    draft_picks = (
+        pd.concat(draft_picks_frames, ignore_index=True) if draft_picks_frames else pd.DataFrame()
+    )
+
     positions: tuple[Position, ...] = (
         (Position.QB, Position.RB, Position.TE, Position.WR)
         if args.position == "all"
@@ -148,6 +166,7 @@ def main() -> None:
                 season,
                 raw_root=raw_root,
                 features_root=features_root,
+                draft_picks=draft_picks,
             )
             print(f"  {position.value} {season}: wrote {n} week partition(s)")
             total += n
