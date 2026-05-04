@@ -388,3 +388,32 @@ def test_build_wr_features_attach_trajectory_udfa_fallback(
     # (no historical seasons in the fixture), so inferred_year = 2024.
     assert jef["age"] == 22.0  # 2024 - 2024 + 22.0
     assert jef["is_rookie"] == 1.0
+
+
+def test_build_wr_features_empty_draft_picks_default(
+    wr_weekly_stats: pd.DataFrame,
+    wr_snap_counts: pd.DataFrame,
+    wr_depth_charts: pd.DataFrame,
+    wr_ngs_receiving: pd.DataFrame,
+    wr_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Calling build_wr_features without draft_picks (default empty) must
+    not raise. Every row falls through inferred-draft-year and the schema
+    validates with non-NaN age (~22.0 from the offset) for everyone."""
+    # Note: NO draft_picks kwarg passed.
+    out = build_wr_features(
+        weekly_stats=wr_weekly_stats,
+        snap_counts=wr_snap_counts,
+        depth_charts=wr_depth_charts,
+        ngs_receiving=wr_ngs_receiving,
+        schedules=wr_schedules,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    WrFeaturesSchema.validate(out)
+    assert "age" in out.columns
+    # All rows should have age = inferred-fallback (22.0) since the
+    # synthetic fixture's earliest-week is the target season.
+    assert (out["age"] == 22.0).all()
