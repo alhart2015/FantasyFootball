@@ -44,6 +44,10 @@ def _minimal_wr_features_row(week: int) -> dict[str, object]:
         "roof_dome": False,
         "opp_allowed_wr_fppg_l4": 35.0,
         "opponent": "GB",
+        "age": 25.0,
+        "is_rookie": 0.0,
+        "volume_trend_l4_minus_prior_l4": 0.0,
+        "snap_pct_change_l4_vs_prior_l4": 0.0,
     }
 
 
