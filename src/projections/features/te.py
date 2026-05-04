@@ -21,9 +21,10 @@ from projections.schemas import (
     TeFeaturesSchema,
 )
 
-# Module-level singleton for the unused `pbp` builder kwarg. Per ruff B008,
-# we cannot put `pd.DataFrame()` directly in the function default.
+# Module-level singletons for the optional builder kwargs. Per ruff B008,
+# we cannot put `pd.DataFrame()` directly in function defaults.
 _EMPTY_PBP: Final[pd.DataFrame] = pd.DataFrame()
+_EMPTY_DRAFT_PICKS: Final[pd.DataFrame] = pd.DataFrame()
 
 _PASS_CATCHING_POSITIONS: tuple[str, ...] = (
     Position.WR.value,
@@ -55,6 +56,10 @@ def build_te_features(
     # pbp: reserved plumbing for future PBP-driven features (Plan 9 Phase 6
     # negative result, kept threaded for future plans). Currently unused.
     pbp: pd.DataFrame = _EMPTY_PBP,
+    # draft_picks: reserved plumbing for the trajectory feature family
+    # (PR #25); accept-and-ignore until the TE-specific integration plan
+    # fires. Mirror the `pbp` precedent.
+    draft_picks: pd.DataFrame = _EMPTY_DRAFT_PICKS,
 ) -> pd.DataFrame:
     """Build the TE feature DataFrame for week `as_of_week` of `season`."""
     ws = weekly_stats[prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
