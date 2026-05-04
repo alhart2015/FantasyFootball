@@ -339,3 +339,52 @@ def test_build_wr_features_attach_trajectory_rookie(
     assert rookie["age"] == 22.0
     assert pd.isna(rookie["volume_trend_l4_minus_prior_l4"])
     assert pd.isna(rookie["snap_pct_change_l4_vs_prior_l4"])
+
+
+def test_build_wr_features_attach_trajectory_udfa_fallback(
+    wr_weekly_stats: pd.DataFrame,
+    wr_snap_counts: pd.DataFrame,
+    wr_depth_charts: pd.DataFrame,
+    wr_ngs_receiving: pd.DataFrame,
+    wr_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """UDFA WR (not in draft_picks fixture) falls back to inferred draft year
+    = earliest weekly_stats appearance. Jefferson appears in fixture from
+    week 1 of 2024, so inferred_year = 2024 -> is_rookie = 1.0,
+    age = 2024 - 2024 + 22.0 = 22.0."""
+    udfa_picks = pd.DataFrame(
+        columns=[
+            "gsis_id",
+            "draft_year",
+            "draft_round",
+            "draft_overall_pick",
+            "pfr_id",
+            "draft_age",
+        ]
+    ).astype(
+        {
+            "gsis_id": "string[pyarrow]",
+            "draft_year": pd.Int64Dtype(),
+            "draft_round": pd.Int64Dtype(),
+            "draft_overall_pick": pd.Int64Dtype(),
+            "pfr_id": "string[pyarrow]",
+            "draft_age": pd.Float64Dtype(),
+        }
+    )
+    out = build_wr_features(
+        weekly_stats=wr_weekly_stats,
+        snap_counts=wr_snap_counts,
+        depth_charts=wr_depth_charts,
+        ngs_receiving=wr_ngs_receiving,
+        schedules=wr_schedules,
+        pbp=fake_pbp_df,
+        draft_picks=udfa_picks,
+        season=2024,
+        as_of_week=5,
+    )
+    jef = out[out["gsis_id"] == "00-0036322"].iloc[0]
+    # Jefferson's earliest appearance in synthetic fixture is 2024 week 1
+    # (no historical seasons in the fixture), so inferred_year = 2024.
+    assert jef["age"] == 22.0  # 2024 - 2024 + 22.0
+    assert jef["is_rookie"] == 1.0
