@@ -68,6 +68,9 @@ def _build_synthetic_data(position: Position) -> tuple[pd.DataFrame, pd.DataFram
         elif "int" in dtype_str.lower():
             # depth_rank is ge=1, le=10 — small positive int range covers it.
             df[col_name] = rng.integers(1, 6, size=len(df)).astype(np.int64)
+        elif col_name == "age":
+            # WR trajectory feature: ge=15, le=50. Sample plausible ages.
+            df[col_name] = rng.uniform(22.0, 30.0, size=len(df)).astype(np.float64)
         else:
             # Uniform [0, 0.5] satisfies typical `ge=0` (often `le=1`) bounds.
             df[col_name] = rng.uniform(0.0, 0.5, size=len(df)).astype(np.float64)

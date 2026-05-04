@@ -119,6 +119,21 @@ def main() -> None:
             pass
     pbp_full = pd.concat(pbp_frames, ignore_index=True) if pbp_frames else pd.DataFrame()
 
+    # 2026-05-03 WR trajectory: load draft_picks across the full
+    # nfl_data_py-supported range (1980+) so the WR trajectory features see
+    # every drafted player's birth_date / draft_year on the join. Degrade
+    # gracefully if a season's partition is missing — the builder routes
+    # missing rows to the inferred-draft-year fallback.
+    draft_picks_frames: list[pd.DataFrame] = []
+    for s in range(1980, _HELD_OUT_SEASON + 1):
+        try:
+            draft_picks_frames.append(read_partition(raw_root, "draft_picks", season=s))
+        except FileNotFoundError:
+            continue
+    draft_picks = (
+        pd.concat(draft_picks_frames, ignore_index=True) if draft_picks_frames else pd.DataFrame()
+    )
+
     weeks = sorted(dc_held["week"].unique())
     rows: list[pd.DataFrame] = []
     for week in weeks:
@@ -130,6 +145,7 @@ def main() -> None:
             "season": _HELD_OUT_SEASON,
             "as_of_week": int(week),
             "pbp": pbp_full,
+            "draft_picks": draft_picks,
             ngs_kwarg: ngs_full,
         }
         feats = builder(**kwargs)

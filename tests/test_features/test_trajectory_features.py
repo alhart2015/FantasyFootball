@@ -15,6 +15,7 @@ import pytest
 
 from projections.features.trajectory_features import (
     DraftLookup,
+    build_draft_lookup,
 )
 from projections.schemas import Position
 
@@ -824,3 +825,43 @@ def test_build_trajectory_overrides_handles_missing_position_in_index() -> None:
     }
     for col, dtype in expected_dtypes.items():
         assert out[col].dtype == dtype, f"{col}: {out[col].dtype} != {dtype}"
+
+
+def test_build_draft_lookup_empty_returns_empty_dict() -> None:
+    empty = pd.DataFrame(columns=["gsis_id", "draft_year", "draft_age"]).astype(
+        {
+            "gsis_id": "string[pyarrow]",
+            "draft_year": pd.Int64Dtype(),
+            "draft_age": pd.Float64Dtype(),
+        }
+    )
+    assert build_draft_lookup(empty) == {}
+
+
+def test_build_draft_lookup_drafted_player_produces_year_age_tuple() -> None:
+    df = pd.DataFrame([{"gsis_id": "00-0036322", "draft_year": 2020, "draft_age": 21.0}]).astype(
+        {
+            "gsis_id": "string[pyarrow]",
+            "draft_year": pd.Int64Dtype(),
+            "draft_age": pd.Float64Dtype(),
+        }
+    )
+    lookup = build_draft_lookup(df)
+    assert lookup == {"00-0036322": (2020, 21.0)}
+
+
+def test_build_draft_lookup_nan_draft_age_preserved_as_nan() -> None:
+    df = pd.DataFrame(
+        [{"gsis_id": "00-0034950", "draft_year": 2020, "draft_age": float("nan")}]
+    ).astype(
+        {
+            "gsis_id": "string[pyarrow]",
+            "draft_year": pd.Int64Dtype(),
+            "draft_age": pd.Float64Dtype(),
+        }
+    )
+    lookup = build_draft_lookup(df)
+    assert "00-0034950" in lookup
+    year, age = lookup["00-0034950"]
+    assert year == 2020
+    assert pd.isna(age)

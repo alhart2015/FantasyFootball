@@ -528,6 +528,17 @@ class WrFeaturesSchema(pa.DataFrameModel):
     # Opponent strength (proxy: opp's allowed WR fantasy points/game over trailing 4)
     opp_allowed_wr_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
 
+    # Trajectory features (PR #25 family probe + 2026-05-03 WR integration
+    # spec). All four are structurally sparse: age + is_rookie need a
+    # draft_picks lookup hit (or the inferred fallback) and so cover ~88-97%
+    # of player-weeks; the trend cols need 8 prior active games and so cover
+    # ~50% of player-weeks. NaN where coverage is missing; BaselineModel
+    # imputes with feature mean, lightgbm consumes NaN natively.
+    age: Series[float] = pa.Field(ge=15, le=50, nullable=True)
+    is_rookie: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    volume_trend_l4_minus_prior_l4: Series[float] = pa.Field(nullable=True)
+    snap_pct_change_l4_vs_prior_l4: Series[float] = pa.Field(ge=-1, le=1, nullable=True)
+
     class Config:
         strict = "filter"
         # Required so the empty-depth-chart fast path validates: a

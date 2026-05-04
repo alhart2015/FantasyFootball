@@ -324,6 +324,31 @@ def attach_trajectory_features(
     return out
 
 
+def build_draft_lookup(draft_picks: pd.DataFrame) -> DraftLookup:
+    """Convert a draft_picks DataFrame into a {gsis_id: (draft_year, draft_age)} lookup.
+
+    Args:
+        draft_picks: frame matching ``DraftPicksSchema``. Must include
+            ``gsis_id``, ``draft_year``, ``draft_age``. ``draft_age`` may be
+            NaN (rare; per ``nfl_data_py``, missing for players whose
+            birthdate isn't in the source). Empty frame returns ``{}``.
+
+    Returns:
+        Lookup keyed by ``gsis_id``. Missing keys (UDFAs, pre-1980
+        draftees) route to the inferred-draft-year fallback inside
+        ``compute_age`` / ``compute_is_rookie``.
+    """
+    if draft_picks.empty:
+        return {}
+    return {
+        str(row["gsis_id"]): (
+            int(row["draft_year"]),
+            float(row["draft_age"]) if pd.notna(row["draft_age"]) else float("nan"),
+        )
+        for _, row in draft_picks.iterrows()
+    }
+
+
 _FANTASY_POSITIONS_ENUM: Final[tuple[Position, ...]] = (
     Position.QB,
     Position.RB,

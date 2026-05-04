@@ -20,9 +20,10 @@ from projections.schemas import (
     Stat,
 )
 
-# Module-level singleton for the unused `pbp` builder kwarg. Per ruff B008,
-# we cannot put `pd.DataFrame()` directly in the function default.
+# Module-level singletons for the optional builder kwargs. Per ruff B008,
+# we cannot put `pd.DataFrame()` directly in function defaults.
 _EMPTY_PBP: Final[pd.DataFrame] = pd.DataFrame()
+_EMPTY_DRAFT_PICKS: Final[pd.DataFrame] = pd.DataFrame()
 
 _RUSHING_QB_THRESHOLD: Final = 5.0  # carries/game over trailing 4
 
@@ -50,6 +51,10 @@ def build_qb_features(
     # pbp: reserved plumbing for future PBP-driven features (Plan 9 Phase 6
     # negative result, kept threaded for future plans). Currently unused.
     pbp: pd.DataFrame = _EMPTY_PBP,
+    # draft_picks: reserved plumbing for the trajectory feature family
+    # (PR #25); accept-and-ignore until the QB-specific integration plan
+    # fires. Mirror the `pbp` precedent.
+    draft_picks: pd.DataFrame = _EMPTY_DRAFT_PICKS,
 ) -> pd.DataFrame:
     """Build the QB feature DataFrame for week `as_of_week` of `season`."""
     # --- Leakage-safe input filtering -------------------------------------

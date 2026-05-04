@@ -285,6 +285,13 @@ _WR_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "is_home",
     "roof_dome",
     "opp_allowed_wr_fppg_l4",
+    # Trajectory features (PR #25 family probe + 2026-05-03 WR integration).
+    # lightgbm derives feature lists from WrFeaturesSchema dynamically and
+    # auto-picks-up; baseline.py is hardcoded so must be updated explicitly.
+    "age",
+    "is_rookie",
+    "volume_trend_l4_minus_prior_l4",
+    "snap_pct_change_l4_vs_prior_l4",
 )
 
 

@@ -51,6 +51,12 @@ _WR_FEAT_COLUMNS: tuple[str, ...] = (
     "is_home",
     "roof_dome",
     "opp_allowed_wr_fppg_l4",
+    # Trajectory features (Plan: WR trajectory). Bounded ranges enforced by
+    # WrFeaturesSchema; values populated below in _build_synthetic_joined.
+    "age",
+    "is_rookie",
+    "volume_trend_l4_minus_prior_l4",
+    "snap_pct_change_l4_vs_prior_l4",
 )
 
 # Real WR target stats — needed in the joined frame because _run_one_study
@@ -96,9 +102,24 @@ def _build_synthetic_joined(seed: int = 42, n_per_season: int = 80) -> pd.DataFr
 
     # Real WR feature columns — populated with random noise. The trial loop
     # only cares about column presence and dtype; the schema is bypassed
-    # because tests monkeypatch _load_join_for_position.
+    # because tests monkeypatch _load_join_for_position. Trajectory cols
+    # need bounded ranges (age in [15,50]; is_rookie in [0,1];
+    # snap_pct_change in [-1,1]) so any downstream sanity check that does
+    # peek at values still sees realistic data.
+    bounded_trajectory_cols = {
+        "age",
+        "is_rookie",
+        "volume_trend_l4_minus_prior_l4",
+        "snap_pct_change_l4_vs_prior_l4",
+    }
     for col in _WR_FEAT_COLUMNS:
+        if col in bounded_trajectory_cols:
+            continue
         df[col] = rng.normal(0.0, 1.0, size=len(df))
+    df["age"] = rng.uniform(21.0, 35.0, size=len(df))
+    df["is_rookie"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
+    df["volume_trend_l4_minus_prior_l4"] = rng.normal(0.0, 1.0, size=len(df))
+    df["snap_pct_change_l4_vs_prior_l4"] = rng.uniform(-1.0, 1.0, size=len(df))
 
     # Synthetic targets with mild signal so trials produce non-degenerate
     # pinball losses (not all-zero predictions). receiving_yards uses

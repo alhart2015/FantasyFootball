@@ -22,9 +22,10 @@ from projections.schemas import (
     Stat,
 )
 
-# Module-level singleton for the unused `pbp` builder kwarg. Per ruff B008,
-# we cannot put `pd.DataFrame()` directly in the function default.
+# Module-level singletons for the optional builder kwargs. Per ruff B008,
+# we cannot put `pd.DataFrame()` directly in function defaults.
 _EMPTY_PBP: Final[pd.DataFrame] = pd.DataFrame()
+_EMPTY_DRAFT_PICKS: Final[pd.DataFrame] = pd.DataFrame()
 
 _PASSING_DOWN_BACK_THRESHOLD: Final = 4.0  # targets/game over trailing 4
 
@@ -60,6 +61,10 @@ def build_rb_features(
     # team_ayps_l4, team_def_epa_resid_l4). Empty frame yields NaN for those
     # 4 columns via attach_pbp_family_features's empty-pbp short-circuit.
     pbp: pd.DataFrame = _EMPTY_PBP,
+    # draft_picks: reserved plumbing for the trajectory feature family
+    # (PR #25); accept-and-ignore until the RB-specific integration plan
+    # fires. Mirror the `pbp` precedent.
+    draft_picks: pd.DataFrame = _EMPTY_DRAFT_PICKS,
 ) -> pd.DataFrame:
     """Build the RB feature DataFrame for week `as_of_week` of `season`."""
     ws = weekly_stats[prior_mask(weekly_stats, season=season, as_of_week=as_of_week)].copy()
