@@ -226,3 +226,96 @@ def test_build_te_features_attach_trajectory_drafted_veteran(
     kelce = out[out["gsis_id"] == "00-0030506"].iloc[0]
     assert kelce["age"] == 34.0  # 23 + (2024 - 2013)
     assert kelce["is_rookie"] == 0.0
+
+
+def test_build_te_features_attach_trajectory_rookie(
+    te_weekly_stats: pd.DataFrame,
+    te_snap_counts: pd.DataFrame,
+    te_depth_charts: pd.DataFrame,
+    te_ngs_receiving: pd.DataFrame,
+    te_schedules: pd.DataFrame,
+    te_draft_picks: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Inject rookie TE 00-0099778 (drafted 2024 in fixture); is_rookie=1.0,
+    age=22.0, no prior 8 games so volume_trend / snap_pct_change are NaN.
+
+    The rookie needs at least one prior weekly_stats row in 2024 so that
+    ``compute_age`` / ``compute_is_rookie`` (keyed by weekly_stats
+    (gsis_id, season) pairs) emit a row for the rookie. A single week-1
+    appearance is enough; the trend cols still NaN at week 5 because we
+    have only 1 prior active game, far below the 8 needed. Mirrors PR
+    #26's rookie-WR test precedent."""
+    extra_dc = pd.concat(
+        [
+            te_depth_charts,
+            pd.DataFrame(
+                [
+                    {
+                        "gsis_id": "00-0099778",
+                        "season": 2024,
+                        "week": 5,
+                        "team": "KC",
+                        "position": "TE",
+                        "depth_team": "TE2",
+                        "depth_rank": 2,
+                    }
+                ]
+            ).astype({"gsis_id": "string[pyarrow]"}),
+        ],
+        ignore_index=True,
+    )
+    extra_ws = pd.concat(
+        [
+            te_weekly_stats,
+            pd.DataFrame(
+                [
+                    {
+                        "gsis_id": "00-0099778",
+                        "season": 2024,
+                        "week": 1,
+                        "position": "TE",
+                        "team": "KC",
+                        "opponent": "DET",
+                        "passing_yards": 0.0,
+                        "passing_tds": 0,
+                        "interceptions": 0,
+                        "rushing_yards": 0.0,
+                        "rushing_tds": 0,
+                        "carries": 0,
+                        "receptions": 2,
+                        "receiving_yards": 25.0,
+                        "receiving_tds": 0,
+                        "receiving_air_yards": 30.0,
+                        "targets": 3,
+                        "fumbles_lost": 0,
+                    }
+                ]
+            ).astype(
+                {
+                    "gsis_id": "string[pyarrow]",
+                    "position": "string[pyarrow]",
+                    "team": "string[pyarrow]",
+                    "opponent": "string[pyarrow]",
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    out = build_te_features(
+        weekly_stats=extra_ws,
+        snap_counts=te_snap_counts,
+        depth_charts=extra_dc,
+        ngs_receiving=te_ngs_receiving,
+        schedules=te_schedules,
+        pbp=fake_pbp_df,
+        draft_picks=te_draft_picks,
+        season=2024,
+        as_of_week=5,
+    )
+    rookie = out[out["gsis_id"] == "00-0099778"].iloc[0]
+    assert rookie["is_rookie"] == 1.0
+    assert rookie["age"] == 22.0
+    assert pd.isna(rookie["volume_trend_l4_minus_prior_l4"])
+    assert pd.isna(rookie["snap_pct_change_l4_vs_prior_l4"])
