@@ -4,6 +4,40 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## WR Trajectory Features Integration — verdict **ADOPT** on `(BaselineModel, WR)`; shipped (2026-05-04, on branch `feat/wr-trajectory-features`)
+
+**Status:** Production integration of the 4 trajectory features into `WrFeaturesSchema` + `build_wr_features` per `docs/superpowers/specs/2026-05-03-wr-trajectory-features-design.md`. Promoted `_build_draft_lookup` from override-script-private to public `build_draft_lookup` in `src/projections/features/trajectory_features.py`. Wired `attach_trajectory_features` into `build_wr_features` with the new `draft_picks` kwarg; added the same kwarg to QB/RB/TE builders for plumbing symmetry (unused there, mirroring the existing `pbp` precedent). Updated `baseline.py:_WR_FEATURE_COLUMNS` (the spec gap PR #21 caught at `9895dee`). All 4 caller scripts (`refresh_features.py`, `train_baseline.py`, `predict_2024.py`, `sanity_check_baseline.py`) load + thread `draft_picks`. Full pytest suite (838 passed, 17 skipped); mypy strict + ruff + ruff format clean.
+
+**Dual-run gate verdict on `(BaselineModel, WR)`:** **`ADOPT`** (composite RMSE delta **-0.0371 fpts**, CI [-0.0567, -0.0172]). Probe predicted -0.0414; gate matched the direction and landed within the probe CI (~0.004 fpts smaller magnitude — bootstrap noise, not a real divergence). **First production-builder integration since PR #21** (RB PBP cols).
+
+**Per-(model_class, WR) verdicts** (informational per spec §1.3.5; binding cell is baseline):
+
+| Model class | RMSE Δ | 95% CI | Spearman Δ | Verdict |
+|---|---:|---|---:|:---:|
+| **baseline**       | **-0.0371** | **[-0.0567, -0.0172]** | +0.0047 | **ADOPT (binding)** |
+| lightgbm           | -0.0207 | [-0.0289, -0.0121] | +0.0026 | ADOPT |
+| lightgbm-tuned     | +0.0025 | [-0.0056, +0.0106] | +0.0014 | DO_NOT_ADOPT |
+| lightgbm-nb        | -0.0171 | [-0.0269, -0.0071] | +0.0020 | ADOPT |
+| ensemble           | -0.0242 | [-0.0351, -0.0138] | +0.0019 | ADOPT |
+
+4 of 5 model classes ADOPT. lgb-nb cell at -0.0171 cross-checks the probe's second WR ADOPT cell (probe predicted -0.0194). lightgbm-tuned is the sole DO_NOT_ADOPT (point estimate near zero) — consistent with TODO #29's pruning candidate framing. Pre-existing `(BaselineModel, WR)` per-year breakdown: 2021 -0.0553 (CI strictly negative), 2022 -0.0295 (CI brackets zero), 2023 -0.0397 (CI strictly negative), 2024 -0.0233 (CI brackets zero); pooled CI strictly negative because every year-point estimate is negative.
+
+**Spec gaps caught + fixed during execution:**
+
+- **Helper-input contract (commit `d1b3092`).** Spec §1.1 Task 5 + §2.3 instructed passing prior-mask-filtered `ws`/`sc` to `attach_trajectory_features`. The helper's internal `_volume_trend` and `compute_snap_pct_change` already use `.rolling(4).mean().shift(1)` for leakage safety — double-filtering produced 100% NaN trend cols. Fix: pass full unfiltered frames; existing 5 WR leakage tests confirm leakage safety. Direct regression test added at `a742d83` asserting `volume_trend_l4_minus_prior_l4 == 2.0` for a hand-computed Jefferson scenario.
+- **Three Cluster A test-fixture leftovers** caught + fixed at commits `1f1f415` (`test_cache.py:_minimal_wr_features_row`), `33eea57` (7 lightgbm/ensemble synthetic fixtures special-casing `age` in [22, 30]), `807f046` (`test_tune_lightgbm.py:_WR_FEAT_COLUMNS`). Defense-in-depth grep for `opp_allowed_wr_fppg_l4` confirmed those were the only 3 missed sites.
+- **Spec gap from PR #21 already anticipated:** `baseline.py:_WR_FEATURE_COLUMNS` is hardcoded; lightgbm derives from the schema dynamically. Implementation plan called this out as its own task (commit `36313d9`).
+
+**Coverage statistics (2021-2024 eval window):** age 97.2%, is_rookie 97.2%, volume_trend_l4_minus_prior_l4 57.5%, snap_pct_change_l4_vs_prior_l4 73.9% — all within ~5pp of the probe's measured coverage. Gate didn't need a coverage-threshold flag (gate uses row-key matching, not NaN tolerance; the probe's `--coverage-threshold 0.35` is a different concern).
+
+**What this closes:** TODO #24's "trailing-8-game unit" branch of the trajectory candidate. Refined-unit candidates (`age²`, `is_2nd_year` flags, longer trailing windows, depth-chart-rank trends, `has_trajectory_history` indicator) remain unexplored under the same TODO. None queued.
+
+**TE follow-up status:** Per the trajectory probe (PR #25), TE adopted **only** under lgb-nb (-0.0107 fpts), not under BaselineModel. Per-position-routing decision required for any TE integration: either ship per-position routing to lgb-nb for TE only (precedent: Plan 6's QB-only ensemble suggestion), or ship the schema change for the lgb-nb code path while leaving baseline production routing unchanged. Not queued.
+
+See `reports/wr_trajectory_features_summary.md` for the full decision log + per-mode table + probe-vs-gate calibration + per-year breakdown.
+
+---
+
 ## Trajectory Family Probe — verdict **SIGNAL** via WR (both model classes) + TE (lgb-nb only) (2026-05-03, on branch `feat/probe-trajectory`)
 
 **Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-03-trajectory-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-05-03-trajectory-feature-family-probe.md`. Implements 4 pure compute fns (`compute_age`, `compute_is_rookie`, `compute_qb_volume_trend`, `compute_rb_volume_trend`, `compute_wr_te_volume_trend`, `compute_snap_pct_change`), `_volume_trend` shared helper, `attach_trajectory_features` joiner, public assembler `build_trajectory_overrides` in `src/projections/features/trajectory_features.py`, override-generator script `scripts/build_trajectory_override.py`, plus the new `refresh_draft_picks` ingest module and `DraftPicksSchema`. All tests pass; mypy strict + ruff + ruff format clean. CONTRIBUTING.md updated with a "Regenerating the trajectory override" subsection.
@@ -1526,15 +1560,15 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ## Next action
 
-**Track 2 (player-trajectory) probe SIGNAL'd via WR + TE.** This is the first SIGNAL family probe since PR #20. Three ADOPT cells in Phase 2 composite: WR augment baseline (-0.0414 fpts), WR augment lgb-nb (-0.0194 fpts), TE augment lgb-nb (-0.0107 fpts). The natural follow-up is the same shape as PR #20 → PR #21: probe SIGNAL → focused integration spec for the binding cell.
+**WR trajectory features integration shipped (PR #25 → PR #26 chain).** Probe SIGNAL → production gate ADOPT at -0.0371 fpts (CI [-0.0567, -0.0172]) on the binding `(BaselineModel, WR)` cell. 4 of 5 model classes ADOPT in the gate; lightgbm-tuned is the only DO_NOT_ADOPT (point estimate near zero). Probe-vs-gate calibration: probe predicted -0.0414, gate measured -0.0371 — within probe CI, same direction.
 
 **Recommended next direction (pick one):**
 
-1. **WR trajectory features integration (recommended).** Analogous to PR #21's RB PBP integration. Add the 4 trajectory cols + draft-lookup machinery to `WrFeaturesSchema` and wire `attach_trajectory_features` (extracted from `build_trajectory_overrides`) into `build_wr_features`. Run dual-run adoption gate on the binding `(BaselineModel, WR)` cell. **Expected ADOPT** at ~-0.0414 fpts gate magnitude (matches probe; same pattern as PR #21's -0.0124 baseline RB matching PR #20's probe to 4 decimals). WR is the strongest cell — both model classes ADOPT'd in augment mode.
+1. **TE trajectory features integration.** Sibling of the WR integration; the trajectory probe also ADOPT'd TE under lgb-nb (-0.0107 fpts), not under baseline. The dual-run gate on baseline would likely return DO_NOT_ADOPT for TE, but the lgb-nb cell would adopt. Spec must address per-position-routing question: ship per-position routing to lgb-nb for TE only (precedent: Plan 6's QB-only ensemble suggestion), OR ship the schema change for the lgb-nb code path while leaving baseline production routing unchanged. Lower expected magnitude than the just-shipped WR cell.
 
-2. **TE trajectory features integration.** Same pattern but at `TeFeaturesSchema`. **Only ADOPT'd under lgb-nb** (-0.0107 fpts), not under baseline. The dual-run gate on baseline would likely return DO_NOT_ADOPT for TE, but the lgb-nb cell would adopt. Consider scoping the TE integration to ship the schema + builder change but route the production binding to lgb-nb for TE only (precedent: Plan 6's QB-only ensemble suggestion). Lower expected magnitude than (1).
+2. **Sibling weather probe.** TODO #25 (weather features in per-position builders) is still queued per the original brainstorm Track 2 plan. `import_schedules` already returns wind / temperature / precipitation; the work is plumbing those into per-position feature builders, not new ingest. Independent of the trajectory integration; clean independent track.
 
-3. **Sibling weather probe.** TODO #25 (weather features in per-position builders) is still queued per the original brainstorm Track 2 plan. `import_schedules` already returns wind / temperature / precipitation; the work is plumbing those into per-position feature builders, not new ingest. Independent of the trajectory integration; could run in parallel.
+3. **Trajectory refined-unit candidates** (low-priority): `age²` interaction terms, `is_2nd_year` / `is_3rd_year` flags, depth-chart-rank trends, longer trailing windows (l8 vs l16), `has_trajectory_history` indicator. None queued — would need independent evidence the trailing-8-game unit was the binding constraint and refined units would clear.
 
 **Track 2A status (PBP team-level families):** Complete. All three TODO #3c team-level PBP feature families probed. Two NULL, one SIGNAL→ADOPT (PR #20→#21). No additional team-level candidates queued.
 
