@@ -251,13 +251,20 @@ def build_wr_features(
         out[col] = out[col].astype(_PYARROW_STR)
 
     # --- Trajectory features (PR #25 + 2026-05-03 WR integration) ---------
-    # Helper does its own position filter + rolling, so pass the unfiltered
-    # (but prior-mask-filtered) weekly_stats / snap_counts.
+    # Pass the FULL weekly_stats / snap_counts (not the prior_mask-filtered
+    # ws / sc): attach_trajectory_features's _volume_trend / _snap_change
+    # rolling helpers use .shift(1) internally for leakage safety, so the
+    # current week's value is computed from prior weeks only. Passing the
+    # prior_mask-filtered frames here would strip the current-week index
+    # row out of the trend output, breaking the (gsis_id, season, week)
+    # merge below (every trend value would resolve as NaN).
     draft_lookup = build_draft_lookup(draft_picks)
     traj_idx = out[["gsis_id", "season", "week", "team", "opponent"]].rename(
         columns={"opponent": "opp"}
     )
-    traj = attach_trajectory_features(traj_idx, ws, sc, draft_lookup, Position.WR)
+    traj = attach_trajectory_features(
+        traj_idx, weekly_stats, snap_counts, draft_lookup, Position.WR
+    )
     out = out.merge(
         traj[
             [
