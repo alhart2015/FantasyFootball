@@ -959,3 +959,63 @@ def te_schedules() -> pd.DataFrame:
             "wind": pd.array([0, 0], dtype=pd.Int64Dtype()),
         }
     )
+
+
+@pytest.fixture
+def wr_draft_picks() -> pd.DataFrame:
+    """Synthetic draft_picks for the WRs used across the WR fixture set.
+
+    Includes the four canonical WR gsis_ids from wr_weekly_stats /
+    wr_depth_charts. The rookie 00-0099777 is intentionally drafted in
+    2024 (the test season), so is_rookie computes to 1.0 from the
+    primary draft_lookup path. The other three are veteran drafts.
+    """
+    return pd.DataFrame(
+        [
+            # Justin Jefferson: 2020 draft, 21yo, currently a 4-year vet in 2024.
+            {
+                "gsis_id": "00-0036322",
+                "draft_year": 2020,
+                "draft_round": 1,
+                "draft_overall_pick": 22,
+                "pfr_id": "JeffJu00",
+                "draft_age": 21.0,
+            },
+            # Jaylen Waddle: 2021 draft, 22yo at draft.
+            {
+                "gsis_id": "00-0036323",
+                "draft_year": 2021,
+                "draft_round": 1,
+                "draft_overall_pick": 6,
+                "pfr_id": "WaddJa00",
+                "draft_age": 22.0,
+            },
+            # CeeDee Lamb: 2020 draft, 21yo, NaN draft_age branch.
+            {
+                "gsis_id": "00-0034950",
+                "draft_year": 2020,
+                "draft_round": 1,
+                "draft_overall_pick": 17,
+                "pfr_id": "LambCe00",
+                "draft_age": float("nan"),
+            },
+            # Rookie WR 00-0099777: 2024 draft.
+            {
+                "gsis_id": "00-0099777",
+                "draft_year": 2024,
+                "draft_round": 2,
+                "draft_overall_pick": 50,
+                "pfr_id": "RookXX00",
+                "draft_age": 22.0,
+            },
+        ]
+    ).astype(
+        {
+            "gsis_id": "string[pyarrow]",
+            "draft_year": pd.Int64Dtype(),
+            "draft_round": pd.Int64Dtype(),
+            "draft_overall_pick": pd.Int64Dtype(),
+            "pfr_id": "string[pyarrow]",
+            "draft_age": pd.Float64Dtype(),
+        }
+    )
