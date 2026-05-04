@@ -368,3 +368,32 @@ def test_build_te_features_attach_trajectory_udfa_fallback(
     # (no historical seasons in te_weekly_stats), so inferred_year = 2024.
     assert kelce["age"] == 22.0  # 2024 - 2024 + 22.0
     assert kelce["is_rookie"] == 1.0
+
+
+def test_build_te_features_empty_draft_picks_default(
+    te_weekly_stats: pd.DataFrame,
+    te_snap_counts: pd.DataFrame,
+    te_depth_charts: pd.DataFrame,
+    te_ngs_receiving: pd.DataFrame,
+    te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Calling build_te_features without draft_picks (default empty) must
+    not raise. Every row falls through inferred-draft-year and the schema
+    validates with non-NaN age (~22.0 from the offset) for everyone."""
+    # Note: NO draft_picks kwarg passed.
+    out = build_te_features(
+        weekly_stats=te_weekly_stats,
+        snap_counts=te_snap_counts,
+        depth_charts=te_depth_charts,
+        ngs_receiving=te_ngs_receiving,
+        schedules=te_schedules,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    TeFeaturesSchema.validate(out)
+    assert "age" in out.columns
+    # All rows should have age = inferred-fallback (22.0) since the
+    # synthetic fixture's earliest-week is the target season.
+    assert (out["age"] == 22.0).all()
