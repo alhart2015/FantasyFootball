@@ -319,3 +319,52 @@ def test_build_te_features_attach_trajectory_rookie(
     assert rookie["age"] == 22.0
     assert pd.isna(rookie["volume_trend_l4_minus_prior_l4"])
     assert pd.isna(rookie["snap_pct_change_l4_vs_prior_l4"])
+
+
+def test_build_te_features_attach_trajectory_udfa_fallback(
+    te_weekly_stats: pd.DataFrame,
+    te_snap_counts: pd.DataFrame,
+    te_depth_charts: pd.DataFrame,
+    te_ngs_receiving: pd.DataFrame,
+    te_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """UDFA TE (not in draft_picks fixture) falls back to inferred draft year
+    = earliest weekly_stats appearance. Kelce appears in fixture from week 1
+    of 2024, so inferred_year = 2024 -> is_rookie = 1.0, age = 2024 - 2024 +
+    22.0 = 22.0."""
+    udfa_picks = pd.DataFrame(
+        columns=[
+            "gsis_id",
+            "draft_year",
+            "draft_round",
+            "draft_overall_pick",
+            "pfr_id",
+            "draft_age",
+        ]
+    ).astype(
+        {
+            "gsis_id": "string[pyarrow]",
+            "draft_year": pd.Int64Dtype(),
+            "draft_round": pd.Int64Dtype(),
+            "draft_overall_pick": pd.Int64Dtype(),
+            "pfr_id": "string[pyarrow]",
+            "draft_age": pd.Float64Dtype(),
+        }
+    )
+    out = build_te_features(
+        weekly_stats=te_weekly_stats,
+        snap_counts=te_snap_counts,
+        depth_charts=te_depth_charts,
+        ngs_receiving=te_ngs_receiving,
+        schedules=te_schedules,
+        pbp=fake_pbp_df,
+        draft_picks=udfa_picks,
+        season=2024,
+        as_of_week=5,
+    )
+    kelce = out[out["gsis_id"] == "00-0030506"].iloc[0]
+    # Kelce's earliest appearance in synthetic fixture is 2024 week 1
+    # (no historical seasons in te_weekly_stats), so inferred_year = 2024.
+    assert kelce["age"] == 22.0  # 2024 - 2024 + 22.0
+    assert kelce["is_rookie"] == 1.0
