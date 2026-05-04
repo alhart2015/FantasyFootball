@@ -24,7 +24,7 @@ from pathlib import Path
 import pandas as pd
 
 from projections.features.trajectory_features import (
-    DraftLookup,
+    build_draft_lookup,
     build_trajectory_overrides,
 )
 from projections.schemas import Position
@@ -103,17 +103,6 @@ def _build_player_team_week_index(
     )
 
 
-def _build_draft_lookup(draft_picks: pd.DataFrame) -> DraftLookup:
-    """draft_picks DataFrame -> {gsis_id: (draft_year, draft_age)}."""
-    return {
-        str(row["gsis_id"]): (
-            int(row["draft_year"]),
-            float(row["draft_age"]) if pd.notna(row["draft_age"]) else float("nan"),
-        )
-        for _, row in draft_picks.iterrows()
-    }
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0] if __doc__ else "")
     parser.add_argument(
@@ -167,7 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     idx = _build_player_team_week_index(depth_charts, schedules, seasons)
-    draft_lookup = _build_draft_lookup(draft_picks)
+    draft_lookup = build_draft_lookup(draft_picks)
     overrides = build_trajectory_overrides(weekly_stats, snap_counts, draft_lookup, idx)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
