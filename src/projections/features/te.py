@@ -13,6 +13,10 @@ from projections.features._rolling import (
     trailing_n_share_in_group,
 )
 from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
+from projections.features.trajectory_features import (
+    attach_trajectory_features,
+    build_draft_lookup,
+)
 from projections.schemas import (
     _PYARROW_STR,
     Position,
@@ -204,5 +208,39 @@ def build_te_features(
     out["depth_rank"] = out["depth_rank"].astype(pd.Int64Dtype())
     for col in ("team", "opponent"):
         out[col] = out[col].astype(_PYARROW_STR)
+
+    # --- Trajectory features (PR #25 + 2026-05-04 TE integration) ---------
+    # Pass the FULL weekly_stats / snap_counts (not the prior_mask-filtered
+    # ws / sc): attach_trajectory_features's _volume_trend / _snap_change
+    # rolling helpers use .shift(1) internally for leakage safety, so the
+    # current week's value is computed from prior weeks only. Passing the
+    # prior_mask-filtered frames here would strip the current-week index
+    # row out of the trend output, breaking the (gsis_id, season, week)
+    # merge below (every trend value would resolve as NaN). Mirrors the
+    # WR precedent — the helper does its own position filter (WR + TE
+    # share compute_wr_te_volume_trend), so passing unfiltered frames
+    # is correct for both WR and TE.
+    draft_lookup = build_draft_lookup(draft_picks)
+    traj_idx = out[["gsis_id", "season", "week", "team", "opponent"]].rename(
+        columns={"opponent": "opp"}
+    )
+    traj = attach_trajectory_features(
+        traj_idx, weekly_stats, snap_counts, draft_lookup, Position.TE
+    )
+    out = out.merge(
+        traj[
+            [
+                "gsis_id",
+                "season",
+                "week",
+                "age",
+                "is_rookie",
+                "volume_trend_l4_minus_prior_l4",
+                "snap_pct_change_l4_vs_prior_l4",
+            ]
+        ],
+        on=["gsis_id", "season", "week"],
+        how="left",
+    )
 
     return TeFeaturesSchema.validate(out)
