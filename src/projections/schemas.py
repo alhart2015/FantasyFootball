@@ -697,6 +697,18 @@ class TeFeaturesSchema(pa.DataFrameModel):
     # Opponent strength proxy
     opp_allowed_te_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
 
+    # Trajectory features (PR #25 family probe + 2026-05-04 TE integration
+    # spec). All four are structurally sparse: age + is_rookie need a
+    # draft_picks lookup hit (or the inferred fallback) and so cover ~95%
+    # of TE player-weeks per the probe; the trend cols need 8 prior active
+    # games and so cover ~45-71% of TE player-weeks. NaN where coverage
+    # is missing; BaselineModel imputes with feature mean, lightgbm
+    # consumes NaN natively.
+    age: Series[float] = pa.Field(ge=15, le=50, nullable=True)
+    is_rookie: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    volume_trend_l4_minus_prior_l4: Series[float] = pa.Field(nullable=True)
+    snap_pct_change_l4_vs_prior_l4: Series[float] = pa.Field(ge=-1, le=1, nullable=True)
+
     class Config:
         strict = "filter"
         coerce = True  # see WrFeaturesSchema.Config for rationale

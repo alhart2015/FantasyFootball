@@ -633,6 +633,12 @@ def test_te_features_schema_accepts_valid_row() -> None:
             "is_home": [True],
             "roof_dome": [False],
             "opp_allowed_te_fppg_l4": [10.5],
+            # Trajectory cols (PR #25 + 2026-05-04 TE integration). All
+            # nullable=True; happy-path test covers the populated case.
+            "age": [25.0],
+            "is_rookie": [0.0],
+            "volume_trend_l4_minus_prior_l4": [1.5],
+            "snap_pct_change_l4_vs_prior_l4": [0.05],
         }
     )
     TeFeaturesSchema.validate(df)
@@ -664,6 +670,12 @@ def test_te_features_schema_rejects_target_share_over_one() -> None:
             "is_home": [True],
             "roof_dome": [False],
             "opp_allowed_te_fppg_l4": [10.5],
+            # Trajectory cols — provided so the failure is on target_share_l4,
+            # not on a missing trajectory column.
+            "age": [25.0],
+            "is_rookie": [0.0],
+            "volume_trend_l4_minus_prior_l4": [1.5],
+            "snap_pct_change_l4_vs_prior_l4": [0.05],
         }
     )
     with pytest.raises(SchemaError):

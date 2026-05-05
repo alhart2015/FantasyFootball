@@ -424,6 +424,14 @@ _TE_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "is_home",
     "roof_dome",
     "opp_allowed_te_fppg_l4",
+    # Trajectory features (PR #25 family probe + 2026-05-04 TE integration).
+    # lightgbm derives feature lists from TeFeaturesSchema dynamically and
+    # auto-picks-up; baseline.py is hardcoded so must be updated explicitly.
+    # Same spec gap class as PR #21 (RB, commit 9895dee) and PR #26 (WR).
+    "age",
+    "is_rookie",
+    "volume_trend_l4_minus_prior_l4",
+    "snap_pct_change_l4_vs_prior_l4",
 )
 
 

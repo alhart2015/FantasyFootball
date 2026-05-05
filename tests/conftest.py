@@ -712,14 +712,25 @@ _POSITION_BASE_KW: dict[str, str] = {
 }
 
 
-def _build_position_weekly_stats(position: str) -> pd.DataFrame:
-    """Stack 8 weeks of 2024 + 4 weeks of 2025 for the synthetic universe,
-    using the row-builder registered for `position`."""
+def _build_position_weekly_stats(
+    position: str,
+    *,
+    season_weeks: list[tuple[int, range]] | None = None,
+) -> pd.DataFrame:
+    """Stack synthetic weekly stats for `position` using the registered row-builder.
+
+    Defaults to 8 weeks of 2024 + 4 weeks of 2025 — the original universe
+    that QB / RB tests still rely on. Callers (TE) that need a longer
+    history for trajectory's 8-game prior window pass `season_weeks`
+    explicitly; mirrors PR #26's `baseline_weekly_stats_wr` extension.
+    """
+    if season_weeks is None:
+        season_weeks = [(2024, range(1, 9)), (2025, range(1, 5))]
     builder = _POSITION_ROW_BUILDERS[position]
     base_rates = _POSITION_BASE_RATES[position]
     base_kw = _POSITION_BASE_KW[position]
     rows: list[dict[str, object]] = []
-    for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
+    for season, weeks in season_weeks:
         for week in weeks:
             for gsis_id, team, base_rate in zip(_GSIS_IDS, _TEAMS, base_rates, strict=True):
                 opponent = "MIN" if team == "KC" else "KC"
@@ -755,20 +766,49 @@ def baseline_weekly_stats_rb() -> pd.DataFrame:
 
 @pytest.fixture
 def baseline_weekly_stats_te() -> pd.DataFrame:
-    """8 weeks of 2024 + 4 weeks of 2025 TE-shaped stats for 5 synthetic TEs.
+    """17 weeks of 2023 + 17 weeks of 2024 + 4 weeks of 2025 TE-shaped stats
+    for 5 synthetic TEs.
 
-    The TE whose gsis_id ends in "3" rushes (Taysom-Hill-shape) so the new
-    TeFeaturesSchema rushing columns from Phase 1 carry non-zero rolling
+    The TE whose gsis_id ends in "3" rushes (Taysom-Hill-shape) so the
+    TeFeaturesSchema rushing columns from Plan 3b carry non-zero rolling
     means.
+
+    Trajectory-features note (2026-05-04 TE integration): the trailing-4
+    minus prior-4 trends require 8+ active games of history per player.
+    Including 2023 weeks 1-17 ensures every 2024 row has a full 8-game
+    prior window, so the trend cols are non-NaN even on early 2024
+    training rows. Without 2023, every (l4 - prior_l4) row would be NaN
+    and BaselineModel.fit's dropna would empty the TE training set.
+    Mirrors PR #26's baseline_weekly_stats_wr extension.
     """
-    return _build_position_weekly_stats("TE")
+    return _build_position_weekly_stats(
+        "TE",
+        season_weeks=[
+            (2023, range(1, 18)),
+            (2024, range(1, 18)),
+            (2025, range(1, 5)),
+        ],
+    )
 
 
 def _build_position_supporting_frames(
-    weekly_stats: pd.DataFrame, position: str
+    weekly_stats: pd.DataFrame,
+    position: str,
+    *,
+    season_weeks: list[tuple[int, range]] | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Build snap_counts / depth_charts / ngs (passing or rushing or receiving)
-    / schedules sub-frames matching the synthetic universe."""
+    / schedules sub-frames matching the synthetic universe.
+
+    `season_weeks` controls the depth_charts / ngs / schedules iteration.
+    Defaults to 8 weeks of 2024 + 4 weeks of 2025 (QB/RB universe). TE
+    callers pass an extended window when paired with the trajectory-aware
+    `baseline_weekly_stats_te`. Note: snap_counts is derived from
+    `weekly_stats.iterrows()` and so always tracks whatever season range
+    the underlying weekly_stats covers.
+    """
+    if season_weeks is None:
+        season_weeks = [(2024, range(1, 9)), (2025, range(1, 5))]
     base_rates = _POSITION_BASE_RATES[position]
 
     snap_rows = [
@@ -793,8 +833,7 @@ def _build_position_supporting_frames(
         snap_counts[col] = snap_counts[col].astype(_PYARROW_STR)
 
     dc_rows: list[dict[str, object]] = []
-    for season in (2024, 2025):
-        weeks = range(1, 9) if season == 2024 else range(1, 5)
+    for season, weeks in season_weeks:
         for week in weeks:
             for gsis_id, team, _base in zip(_GSIS_IDS, _TEAMS, base_rates, strict=True):
                 team_pool = sorted(
@@ -823,8 +862,7 @@ def _build_position_supporting_frames(
 
     # NGS source depends on position: QB->passing, RB->rushing, TE->receiving.
     ngs_rows: list[dict[str, object]] = []
-    for season in (2024, 2025):
-        weeks = range(1, 9) if season == 2024 else range(1, 5)
+    for season, weeks in season_weeks:
         for week in weeks:
             for gsis_id, team, base in zip(_GSIS_IDS, _TEAMS, base_rates, strict=True):
                 row: dict[str, object] = {
@@ -865,8 +903,7 @@ def _build_position_supporting_frames(
         ngs[col] = ngs[col].astype(_PYARROW_STR)
 
     sch_rows: list[dict[str, object]] = []
-    for season in (2024, 2025):
-        weeks = range(1, 9) if season == 2024 else range(1, 5)
+    for season, weeks in season_weeks:
         for week in weeks:
             sch_rows.append(
                 {
@@ -1009,13 +1046,32 @@ def baseline_features_rb(baseline_weekly_stats_rb: pd.DataFrame) -> pd.DataFrame
 
 @pytest.fixture
 def baseline_features_te(baseline_weekly_stats_te: pd.DataFrame) -> pd.DataFrame:
-    """TE feature rows produced by build_te_features for every (season, week)."""
+    """TE feature rows produced by build_te_features for every (season, week).
+
+    Iterates 17 weeks of 2024 + 4 weeks of 2025 (matching the extended
+    `baseline_weekly_stats_te` universe). The 2023 weeks present in
+    weekly_stats supply prior history for trajectory's trailing-4 minus
+    prior-4 trends but aren't iterated here — `build_te_features` is only
+    called on the eval window. Mirrors PR #26's `baseline_features_wr`
+    extension.
+
+    The supporting depth_charts / ngs / schedules frames built by
+    `_build_position_supporting_frames` cover only 2024 + 2025 by default;
+    we extend the per-season-weeks parameter so the 2024 portion runs
+    weeks 1-17 (full season), keeping 2023 out of the supporting frames
+    since `build_te_features` is exact_week_mask-filtered to the
+    as_of_week and never reads them for 2023.
+    """
     from projections.features import build_te_features
 
-    aux = _build_position_supporting_frames(baseline_weekly_stats_te, "TE")
+    aux = _build_position_supporting_frames(
+        baseline_weekly_stats_te,
+        "TE",
+        season_weeks=[(2024, range(1, 18)), (2025, range(1, 5))],
+    )
     pbp = _build_synthetic_pbp()
     feat_frames: list[pd.DataFrame] = []
-    for season, weeks in [(2024, range(1, 9)), (2025, range(1, 5))]:
+    for season, weeks in [(2024, range(1, 18)), (2025, range(1, 5))]:
         for week in weeks:
             f = build_te_features(
                 weekly_stats=baseline_weekly_stats_te,
