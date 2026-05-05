@@ -4,6 +4,39 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## TE Trajectory Features Integration — verdict **ADOPT** on `(LightGBMNbModel, TE)`; shipped (2026-05-04, on branch `feat/te-trajectory-features`)
+
+**Status:** Production integration of the 4 trajectory features into `TeFeaturesSchema` + `build_te_features` per `docs/superpowers/specs/2026-05-04-te-trajectory-features-design.md`. Wired `attach_trajectory_features` into `build_te_features` via the existing `draft_picks` kwarg (plumbed in PR #26). Updated `baseline.py:_TE_FEATURE_COLUMNS` (same spec-gap class as PR #21 / PR #26). Extended shared `_build_position_weekly_stats` + `_build_position_supporting_frames` helpers parametrically so `baseline_weekly_stats_te` covers 17/17/4 weeks for trajectory's 8-game prior window (mirrors PR #26's WR fixture extension; QB/RB unchanged via default).
+
+**Dual-run gate verdict on `(LightGBMNbModel, TE)`:** **`ADOPT`** (composite RMSE delta **-0.0090 fpts**, CI [-0.0171, -0.0013]). Probe predicted -0.0107 fpts; gate matched within ~0.0017 fpts (sharper calibration than PR #26's WR ~0.0043 gap). **First production integration in the project to bind on a non-default model class** (TE production routes to `baseline`; lgb-nb is where the probe's signal lived per PR #25 trajectory probe).
+
+**Per-(model_class, TE) verdicts:**
+
+| Model class | n_paired | RMSE Δ (fpts) | RMSE 95% CI | Spearman Δ | Spearman 95% CI | Verdict |
+|---|---:|---:|---|---:|---|:---:|
+| baseline | 4257 | -0.0100 | [-0.0280, +0.0093] | +0.0018 | [-0.0033, +0.0071] | DO_NOT_ADOPT (informational) |
+| **lightgbm-nb** | 4257 | **-0.0090** | **[-0.0171, -0.0013]** | +0.0028 | [+0.0001, +0.0055] | **ADOPT (binding)** |
+
+**Spec deviation:** spec §1.3.3 called for all 5 model classes; only the binding cell (lgb-nb) and the modified-shape contingency cell (baseline) were evaluated. An earlier `--model all` attempt was aborted after 3 hours wall time with no run dir produced — the per-stat pinball optimizer in EnsembleModel + lightgbm-tuned drove the runtime; the `--model lightgbm-nb`+`baseline` pair completed in ~33 min combined. The skipped cells (lightgbm, lightgbm-tuned, ensemble) are explicitly informational per spec §1.3.4 and not gating per spec §1.3.5; back-fillable by a follow-up backtest if the routing-flip discussion ever needs them.
+
+**Modified-shape contingency:** `(baseline, TE)` returned DO_NOT_ADOPT at -0.0100 fpts with CI bracketing zero — **not REGRESSION**. Spec §1.3.5 modified-shape branch did NOT fire; ship as designed (`_TE_FEATURE_COLUMNS` extension stays in).
+
+**Coverage statistics (eval window 2021-2024):** `age` 94.8%, `is_rookie` 94.8%, `volume_trend_l4_minus_prior_l4` 46.4%, `snap_pct_change_l4_vs_prior_l4` 75.6%. All 4 cols within ~5pp of probe coverage. Age range observed 20.0-40.0 (no clipping of the `ge=15, le=50` bound). Rookie rate ~17% over 7042 rows, consistent with NFL roster turnover.
+
+**Cross-class deferred follow-up:** TE production routing remains on `baseline`. Naively stacking Plan 8's `(lgb-nb, TE)` baseline-vs-lgb-nb gap (+0.0028 fpts) with this PR's measured trajectory lift (-0.0090 fpts) suggests `lgb-nb-with-trajectory ≈ -0.0062 fpts` vs baseline-without-trajectory at the position level — small directional improvement, CI would likely bracket zero. A fresh cross-class re-eval is the right shape for that question; not load-bearing for any current consumer; queued under TODO #24.
+
+**What this closes:** TODO #24's TE-cell branch at the trailing-8-game unit. Combined with PR #26's WR integration, the trailing-8-game-unit branch is now closed at all three of PR #25's ADOPT cells (WR baseline, WR lgb-nb, TE lgb-nb). Refined-unit candidates remain unexplored: per-position aging-curve interactions (`age²`), `is_2nd_year` / `is_3rd_year` flags, depth-chart-rank trends, longer trailing windows (l8 vs l16), `has_trajectory_history` indicator.
+
+**Spec gaps caught + fixed during execution:**
+
+- **Plan-vs-precedent inconsistency** (Task 2). The plan text said pass `ws` / `sc` (prior-mask-filtered frames) to `attach_trajectory_features`; the implementer correctly diverged and passed full `weekly_stats` / `snap_counts`, matching PR #26's `build_wr_features` precedent. The helper's rolling helpers do their own `.shift(1)` leakage shifting; passing prior-mask-filtered frames would strip the current-week index row and the merge would resolve all NaN. Documented in the commit message + inline comment.
+- **PYTHONPATH workaround for the worktree's editable-install asymmetry.** Subagent reported the `.venv` resolves `projections` from main repo's `src/`, not the worktree's. Worktree-side scripts that read modified schemas need `PYTHONPATH=src` set explicitly. Not committed (environment concern, not code); applied to all real-data execution invocations in Phase 4.
+- **Plan column-count drift:** plan's pre-task TE schema column count (21) was stale by 2 (Plan 3b rushing cols); actual was 23 → 27. Cosmetic, no behavior impact.
+
+See `reports/te_trajectory_features_summary.md` for the full decision log + per-mode table + per-year breakdown + probe-vs-gate calibration.
+
+---
+
 ## WR Trajectory Features Integration — verdict **ADOPT** on `(BaselineModel, WR)`; shipped (2026-05-04, on branch `feat/wr-trajectory-features`)
 
 **Status:** Production integration of the 4 trajectory features into `WrFeaturesSchema` + `build_wr_features` per `docs/superpowers/specs/2026-05-03-wr-trajectory-features-design.md`. Promoted `_build_draft_lookup` from override-script-private to public `build_draft_lookup` in `src/projections/features/trajectory_features.py`. Wired `attach_trajectory_features` into `build_wr_features` with the new `draft_picks` kwarg; added the same kwarg to QB/RB/TE builders for plumbing symmetry (unused there, mirroring the existing `pbp` precedent). Updated `baseline.py:_WR_FEATURE_COLUMNS` (the spec gap PR #21 caught at `9895dee`). All 4 caller scripts (`refresh_features.py`, `train_baseline.py`, `predict_2024.py`, `sanity_check_baseline.py`) load + thread `draft_picks`. Full pytest suite (838 passed, 17 skipped); mypy strict + ruff + ruff format clean.
