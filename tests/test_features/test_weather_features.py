@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 
 def _make_schedule_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
@@ -527,3 +528,79 @@ def test_attach_weather_features_preserves_index_row_count() -> None:
     assert (out["wind_speed_mph"] == 25.0).all()
     assert (out["is_high_wind"] == 1.0).all()
     assert (out["temperature_f"] == 30.0).all()
+
+
+def test_build_weather_overrides_returns_one_row_per_index_row() -> None:
+    from projections.features.weather_features import build_weather_overrides
+
+    idx = _make_index_rows(
+        [
+            {"gsis_id": "00-0011111", "season": 2024, "week": 1, "team": "KC", "opp": "BAL"},
+            {"gsis_id": "00-0022222", "season": 2024, "week": 2, "team": "KC", "opp": "CIN"},
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 10,
+                "temp": 55,
+                "roof": "outdoors",
+            },
+            {
+                "season": 2024,
+                "week": 2,
+                "home_team": "KC",
+                "away_team": "CIN",
+                "wind": 5,
+                "temp": 75,
+                "roof": "outdoors",
+            },
+        ]
+    )
+
+    out = build_weather_overrides(sch, idx)
+    assert len(out) == 2
+    assert out.loc[out["week"] == 1, "wind_speed_mph"].iloc[0] == 10.0
+    assert out.loc[out["week"] == 2, "wind_speed_mph"].iloc[0] == 5.0
+
+
+def test_build_weather_overrides_raises_on_duplicate_index_keys() -> None:
+    """Probe override must have unique (gsis_id, season, week) keys to merge
+    cleanly into the probe runner. Duplicates raise immediately."""
+    from projections.features.weather_features import build_weather_overrides
+
+    idx = _make_index_rows(
+        [
+            {"gsis_id": "00-0011111", "season": 2024, "week": 1, "team": "KC", "opp": "BAL"},
+            {"gsis_id": "00-0011111", "season": 2024, "week": 1, "team": "KC", "opp": "BAL"},
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 10,
+                "roof": "outdoors",
+            },
+        ]
+    )
+
+    with pytest.raises(ValueError, match="duplicate"):
+        build_weather_overrides(sch, idx)
+
+
+def test_build_weather_overrides_raises_on_missing_required_index_columns() -> None:
+    from projections.features.weather_features import build_weather_overrides
+
+    bad = pd.DataFrame({"gsis_id": ["00-0011111"], "season": [2024]})
+    sch = _make_schedule_rows([{}])
+
+    with pytest.raises(ValueError, match="required column"):
+        build_weather_overrides(sch, bad)

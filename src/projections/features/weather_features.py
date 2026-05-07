@@ -102,3 +102,55 @@ def attach_weather_features(
     """
     weather = compute_weather_features(schedules)
     return index.merge(weather, on=["season", "week", "team"], how="left")
+
+
+_REQUIRED_INDEX_COLS = ("gsis_id", "season", "week", "team", "opp", "position")
+
+
+def build_weather_overrides(
+    schedules: pd.DataFrame,
+    player_team_week_index: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build the weather override frame from a schedules table + a
+    player-team-week index.
+
+    Args:
+        schedules: validated against `SchedulesSchema`.
+        player_team_week_index: frame from `_build_player_team_week_index`
+            with columns (gsis_id, season, week, team, opp, position).
+            Must have unique (gsis_id, season, week) keys.
+
+    Returns:
+        Frame with columns
+            (gsis_id, season, week, position,
+             wind_speed_mph, is_high_wind, temperature_f, is_grass_surface)
+        — one row per index input row. Designed to feed
+        `scripts.probe_feature_signal --override`.
+
+    Raises:
+        ValueError: index missing a required column or carrying duplicate
+            (gsis_id, season, week) keys.
+    """
+    missing = [c for c in _REQUIRED_INDEX_COLS if c not in player_team_week_index.columns]
+    if missing:
+        raise ValueError(f"player_team_week_index missing required column(s): {missing}")
+
+    key_cols = ["gsis_id", "season", "week"]
+    dups = player_team_week_index.duplicated(subset=key_cols)
+    if dups.any():
+        n = int(dups.sum())
+        raise ValueError(f"player_team_week_index has {n} duplicate (gsis_id, season, week) keys")
+
+    attached = attach_weather_features(player_team_week_index, schedules)
+    return attached[
+        [
+            "gsis_id",
+            "season",
+            "week",
+            "position",
+            "wind_speed_mph",
+            "is_high_wind",
+            "temperature_f",
+            "is_grass_surface",
+        ]
+    ].reset_index(drop=True)
