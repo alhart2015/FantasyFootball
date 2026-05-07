@@ -28,7 +28,7 @@ def test_parse_args_defaults(tmp_path: Path) -> None:
     args = parse_args(["--output", str(out)])
     assert args.output == out
     assert list(args.seasons) == list(range(2018, 2025))
-    assert args.data_root.name == "data"
+    assert args.data_root == Path("data")
 
 
 def test_parse_args_refuses_overwrite_without_force(tmp_path: Path) -> None:
