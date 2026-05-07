@@ -79,3 +79,26 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
             "is_grass_surface",
         ]
     ].reset_index(drop=True)
+
+
+def attach_weather_features(
+    index: pd.DataFrame,
+    schedules: pd.DataFrame,
+) -> pd.DataFrame:
+    """Left-merge the four weather features onto a player-team-week index.
+
+    Args:
+        index: frame with at least (season, week, team) columns. Typically
+            the player-team-week index from
+            `scripts.build_weather_override._build_player_team_week_index`,
+            carrying (gsis_id, season, week, team, opp, position).
+        schedules: frame validated against `SchedulesSchema`.
+
+    Returns:
+        Copy of index with four nullable Float64 cols appended:
+        wind_speed_mph, is_high_wind, temperature_f, is_grass_surface.
+        Index rows without a matching (season, week, team) in schedules
+        retain NaN in all four cols.
+    """
+    weather = compute_weather_features(schedules)
+    return index.merge(weather, on=["season", "week", "team"], how="left")

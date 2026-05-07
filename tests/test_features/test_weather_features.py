@@ -360,3 +360,170 @@ def test_output_columns_and_dtypes() -> None:
     assert set(out.columns) == expected_cols
     for col in ("wind_speed_mph", "is_high_wind", "temperature_f", "is_grass_surface"):
         assert str(out[col].dtype) == "Float64", f"{col} dtype: {out[col].dtype}"
+
+
+def _make_index_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
+    """Build a synthetic player-team-week index frame matching
+    `_build_player_team_week_index`'s output shape."""
+    defaults: dict[str, object] = {
+        "gsis_id": "00-0011111",
+        "season": 2024,
+        "week": 1,
+        "team": "KC",
+        "opp": "BAL",
+        "position": "WR",
+    }
+    out = [{**defaults, **r} for r in rows]
+    df = pd.DataFrame(out)
+    return df.astype(
+        {
+            "gsis_id": pd.StringDtype("pyarrow"),
+            "season": pd.Int64Dtype(),
+            "week": pd.Int64Dtype(),
+            "team": pd.StringDtype("pyarrow"),
+            "opp": pd.StringDtype("pyarrow"),
+            "position": pd.StringDtype("pyarrow"),
+        }
+    )
+
+
+def test_attach_weather_features_basic() -> None:
+    """Joins compute output onto index on (season, week, team); preserves
+    every input row."""
+    from projections.features.weather_features import attach_weather_features
+
+    idx = _make_index_rows(
+        [
+            {"gsis_id": "00-0011111", "season": 2024, "week": 1, "team": "KC", "opp": "BAL"},
+            {"gsis_id": "00-0022222", "season": 2024, "week": 1, "team": "BAL", "opp": "KC"},
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 12,
+                "temp": 65,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+
+    out = attach_weather_features(idx, sch)
+
+    assert len(out) == 2
+    # Both teams in the matchup pick up the same weather (game-level)
+    for team in ("KC", "BAL"):
+        row = out.loc[out["team"] == team].iloc[0]
+        assert row["wind_speed_mph"] == 12.0
+        assert row["temperature_f"] == 65.0
+        assert row["is_high_wind"] == 0.0
+        assert row["is_grass_surface"] == 1.0
+    # Original index columns preserved
+    assert set(out.columns) == {
+        "gsis_id",
+        "season",
+        "week",
+        "team",
+        "opp",
+        "position",
+        "wind_speed_mph",
+        "is_high_wind",
+        "temperature_f",
+        "is_grass_surface",
+    }
+
+
+def test_attach_weather_features_unmatched_index_row_propagates_nan() -> None:
+    """Index row with no matching schedule entry → NaN in all four weather cols."""
+    from projections.features.weather_features import attach_weather_features
+
+    idx = _make_index_rows(
+        [
+            {"gsis_id": "00-0011111", "season": 2024, "week": 99, "team": "KC", "opp": "BAL"},
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            # Different week — won't match.
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 12,
+                "temp": 65,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+
+    out = attach_weather_features(idx, sch)
+
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert pd.isna(row["wind_speed_mph"])
+    assert pd.isna(row["is_high_wind"])
+    assert pd.isna(row["temperature_f"])
+    assert pd.isna(row["is_grass_surface"])
+
+
+def test_attach_weather_features_preserves_index_row_count() -> None:
+    """Multiple players on the same team-game produce multiple output rows
+    (one per index row), all carrying identical weather."""
+    from projections.features.weather_features import attach_weather_features
+
+    idx = _make_index_rows(
+        [
+            {
+                "gsis_id": "00-0011111",
+                "season": 2024,
+                "week": 1,
+                "team": "KC",
+                "opp": "BAL",
+                "position": "QB",
+            },
+            {
+                "gsis_id": "00-0022222",
+                "season": 2024,
+                "week": 1,
+                "team": "KC",
+                "opp": "BAL",
+                "position": "WR",
+            },
+            {
+                "gsis_id": "00-0033333",
+                "season": 2024,
+                "week": 1,
+                "team": "KC",
+                "opp": "BAL",
+                "position": "TE",
+            },
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 25,
+                "temp": 30,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+
+    out = attach_weather_features(idx, sch)
+
+    assert len(out) == 3
+    assert (out["wind_speed_mph"] == 25.0).all()
+    assert (out["is_high_wind"] == 1.0).all()
+    assert (out["temperature_f"] == 30.0).all()
