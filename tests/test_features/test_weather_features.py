@@ -604,3 +604,75 @@ def test_build_weather_overrides_raises_on_missing_required_index_columns() -> N
 
     with pytest.raises(ValueError, match="required column"):
         build_weather_overrides(sch, bad)
+
+
+def test_build_weather_overrides_raises_on_invalid_gsis_id() -> None:
+    """Index carrying a malformed gsis_id raises ValueError. Mirrors the
+    sibling probe modules' boundary validation (CLAUDE.md #11)."""
+    from projections.features.weather_features import build_weather_overrides
+
+    idx = _make_index_rows(
+        [
+            {"gsis_id": "not-a-gsis-id", "season": 2024, "week": 1, "team": "KC", "opp": "BAL"},
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 10,
+                "roof": "outdoors",
+            },
+        ]
+    )
+
+    with pytest.raises(ValueError, match="invalid gsis_id"):
+        build_weather_overrides(sch, idx)
+
+
+def test_build_weather_overrides_raises_on_row_count_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If `attach_weather_features` ever produces more rows than the input
+    index (e.g., a future schedules-data quirk producing duplicate
+    (season, week, team) rows from `compute_weather_features`), the assembler
+    must fail loudly. Real schedule data won't produce duplicates from valid
+    input, so we monkey-patch to simulate the regression."""
+    from projections.features import weather_features
+    from projections.features.weather_features import build_weather_overrides
+
+    idx = _make_index_rows(
+        [
+            {"gsis_id": "00-0011111", "season": 2024, "week": 1, "team": "KC", "opp": "BAL"},
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 10,
+                "roof": "outdoors",
+            },
+        ]
+    )
+
+    def _bad_attach(index: pd.DataFrame, schedules: pd.DataFrame) -> pd.DataFrame:
+        # Simulate a many-to-many regression: returned frame has more rows
+        # than the input index.
+        doubled = pd.concat([index, index], ignore_index=True)
+        doubled["wind_speed_mph"] = 0.0
+        doubled["is_high_wind"] = 0.0
+        doubled["temperature_f"] = 70.0
+        doubled["is_grass_surface"] = 0.0
+        return doubled
+
+    monkeypatch.setattr(weather_features, "attach_weather_features", _bad_attach)
+
+    with pytest.raises(AssertionError, match="row count mismatch"):
+        build_weather_overrides(sch, idx)

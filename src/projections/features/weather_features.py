@@ -12,11 +12,17 @@ verdict per `docs/superpowers/specs/2026-05-07-weather-feature-family-probe-desi
 
 from __future__ import annotations
 
+import re
+from typing import Final
+
 import pandas as pd
+
+from projections.schemas import GSIS_ID_PATTERN
 
 _HIGH_WIND_MPH = 20.0
 _DOME_FILL_TEMP_F = 70.0
 _DOME_FILL_WIND_MPH = 0.0
+_GSIS_RE: Final[re.Pattern[str]] = re.compile(rf"^{GSIS_ID_PATTERN}$")
 
 
 def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
@@ -128,12 +134,21 @@ def build_weather_overrides(
         `scripts.probe_feature_signal --override`.
 
     Raises:
-        ValueError: index missing a required column or carrying duplicate
-            (gsis_id, season, week) keys.
+        ValueError: index missing a required column, carrying a malformed
+            gsis_id, or carrying duplicate (gsis_id, season, week) keys.
+        AssertionError: row-count mismatch after the weather merge
+            (internal-invariant violation; a future compute regression that
+            introduces duplicate (season, week, team) keys would trigger this).
     """
     missing = [c for c in _REQUIRED_INDEX_COLS if c not in player_team_week_index.columns]
     if missing:
         raise ValueError(f"player_team_week_index missing required column(s): {missing}")
+
+    bad_ids = [g for g in player_team_week_index["gsis_id"].dropna() if not _GSIS_RE.match(str(g))]
+    if bad_ids:
+        raise ValueError(
+            f"invalid gsis_id format(s): {bad_ids[:3]} (and {max(0, len(bad_ids) - 3)} more)"
+        )
 
     key_cols = ["gsis_id", "season", "week"]
     dups = player_team_week_index.duplicated(subset=key_cols)
@@ -142,6 +157,12 @@ def build_weather_overrides(
         raise ValueError(f"player_team_week_index has {n} duplicate (gsis_id, season, week) keys")
 
     attached = attach_weather_features(player_team_week_index, schedules)
+    if len(attached) != len(player_team_week_index):
+        raise AssertionError(
+            f"row count mismatch: input index had {len(player_team_week_index)} rows, "
+            f"output has {len(attached)}; suggests a many-to-many merge regression"
+        )
+
     return attached[
         [
             "gsis_id",
