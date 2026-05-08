@@ -20,6 +20,7 @@ from projections.features.trajectory_features import (
     attach_trajectory_features,
     build_draft_lookup,
 )
+from projections.features.weather_features import attach_weather_features
 from projections.schemas import (
     _PYARROW_STR,
     Position,
@@ -280,5 +281,11 @@ def build_wr_features(
         on=["gsis_id", "season", "week"],
         how="left",
     )
+
+    # --- Weather features (PR #28 family probe + 2026-05-08 RB+WR integration) ---
+    # attach_weather_features merges 4 nullable-float cols onto (season, week, team)
+    # from the exact-week-filtered schedules. Dome / closed-roof games have
+    # wind=0 / temp=70 per compute_weather_features semantics.
+    out = attach_weather_features(out, sch)
 
     return WrFeaturesSchema.validate(out)
