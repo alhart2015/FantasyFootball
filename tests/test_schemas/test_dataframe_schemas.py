@@ -418,6 +418,12 @@ def test_wr_features_schema_accepts_valid_row() -> None:
             "is_rookie": [0.0],
             "volume_trend_l4_minus_prior_l4": [1.5],
             "snap_pct_change_l4_vs_prior_l4": [0.05],
+            # Weather cols (PR #28 + 2026-05-08 RB+WR integration). All
+            # nullable=True; happy-path test covers the populated case.
+            "wind_speed_mph": [8.0],
+            "is_high_wind": [0.0],
+            "temperature_f": [65.0],
+            "is_grass_surface": [1.0],
         }
     )
     WrFeaturesSchema.validate(df)
@@ -459,6 +465,12 @@ def test_wr_features_schema_rejects_target_share_over_one() -> None:
             "is_rookie": [0.0],
             "volume_trend_l4_minus_prior_l4": [1.5],
             "snap_pct_change_l4_vs_prior_l4": [0.05],
+            # Weather cols — provided so the failure is on target_share_l4,
+            # not on a missing weather column.
+            "wind_speed_mph": [8.0],
+            "is_high_wind": [0.0],
+            "temperature_f": [65.0],
+            "is_grass_surface": [1.0],
         }
     )
     with pytest.raises(SchemaError):
@@ -564,6 +576,12 @@ def test_rb_features_schema_accepts_valid_row() -> None:
             "proe_l4": [2.5],
             "team_ayps_l4": [7.8],
             "team_def_epa_resid_l4": [-0.05],
+            # Weather cols (PR #28 + 2026-05-08 RB+WR integration). All
+            # nullable=True; happy-path test covers the populated case.
+            "wind_speed_mph": [8.0],
+            "is_high_wind": [0.0],
+            "temperature_f": [65.0],
+            "is_grass_surface": [1.0],
         }
     )
     RbFeaturesSchema.validate(df)
@@ -601,6 +619,12 @@ def test_rb_features_schema_rejects_rush_share_over_one() -> None:
             "proe_l4": [2.5],
             "team_ayps_l4": [7.8],
             "team_def_epa_resid_l4": [-0.05],
+            # Weather cols — provided so the failure is on rush_share_l4, not
+            # on a missing weather column.
+            "wind_speed_mph": [8.0],
+            "is_high_wind": [0.0],
+            "temperature_f": [65.0],
+            "is_grass_surface": [1.0],
         }
     )
     with pytest.raises(SchemaError):

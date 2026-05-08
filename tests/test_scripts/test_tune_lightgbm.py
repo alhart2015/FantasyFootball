@@ -57,6 +57,13 @@ _WR_FEAT_COLUMNS: tuple[str, ...] = (
     "is_rookie",
     "volume_trend_l4_minus_prior_l4",
     "snap_pct_change_l4_vs_prior_l4",
+    # Weather features (Plan: 2026-05-08 RB+WR weather integration). All
+    # nullable in WrFeaturesSchema; values populated below with random noise
+    # like the other unbounded feature columns.
+    "wind_speed_mph",
+    "is_high_wind",
+    "temperature_f",
+    "is_grass_surface",
 )
 
 # Real WR target stats — needed in the joined frame because _run_one_study
@@ -112,14 +119,28 @@ def _build_synthetic_joined(seed: int = 42, n_per_season: int = 80) -> pd.DataFr
         "volume_trend_l4_minus_prior_l4",
         "snap_pct_change_l4_vs_prior_l4",
     }
+    # Weather cols need bounded / categorical values (is_high_wind,
+    # is_grass_surface are 0/1 indicators; wind_speed_mph is non-negative;
+    # temperature_f is realistic NFL range). The schema is bypassed here, but
+    # downstream LightGBM still benefits from sane numeric ranges.
+    bounded_weather_cols = {
+        "wind_speed_mph",
+        "is_high_wind",
+        "temperature_f",
+        "is_grass_surface",
+    }
     for col in _WR_FEAT_COLUMNS:
-        if col in bounded_trajectory_cols:
+        if col in bounded_trajectory_cols or col in bounded_weather_cols:
             continue
         df[col] = rng.normal(0.0, 1.0, size=len(df))
     df["age"] = rng.uniform(21.0, 35.0, size=len(df))
     df["is_rookie"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
     df["volume_trend_l4_minus_prior_l4"] = rng.normal(0.0, 1.0, size=len(df))
     df["snap_pct_change_l4_vs_prior_l4"] = rng.uniform(-1.0, 1.0, size=len(df))
+    df["wind_speed_mph"] = rng.uniform(0.0, 30.0, size=len(df))
+    df["is_high_wind"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
+    df["temperature_f"] = rng.uniform(20.0, 90.0, size=len(df))
+    df["is_grass_surface"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
 
     # Synthetic targets with mild signal so trials produce non-degenerate
     # pinball losses (not all-zero predictions). receiving_yards uses

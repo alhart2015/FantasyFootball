@@ -397,3 +397,200 @@ def test_build_rb_features_attach_pbp_family_join_sides() -> None:
     # KC season-avg posteam EPA = (80*0.1 + 100*0.5)/180 = 0.32222...
     # BAL def-allowed vs KC = 0.1; per-game residual = 0.1 - 0.32222 = -0.22222
     assert row["team_def_epa_resid_l4"] == pytest.approx(-0.2222, abs=1e-3)
+
+
+def test_build_rb_features_attach_weather_dome_fill(
+    rb_weekly_stats: pd.DataFrame,
+    rb_snap_counts: pd.DataFrame,
+    rb_depth_charts: pd.DataFrame,
+    rb_ngs_rushing: pd.DataFrame,
+    rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Dome game: wind_speed_mph=0, temperature_f=70, is_high_wind=0 per
+    compute_weather_features semantics. Surface determined separately."""
+    sch = rb_schedules.copy()
+    week_mask = sch["week"] == 5
+    sch.loc[week_mask, "roof"] = "dome"
+    # Upstream NaN — should be overridden by dome fill. wind/temp are
+    # pd.Int64Dtype() in the fixture, which natively accepts pd.NA.
+    sch.loc[week_mask, "wind"] = pd.NA
+    sch.loc[week_mask, "temp"] = pd.NA
+
+    out = build_rb_features(
+        weekly_stats=rb_weekly_stats,
+        snap_counts=rb_snap_counts,
+        depth_charts=rb_depth_charts,
+        ngs_rushing=rb_ngs_rushing,
+        schedules=sch,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    assert (out["wind_speed_mph"] == 0.0).all(), "dome fill should set wind=0"
+    assert (out["temperature_f"] == 70.0).all(), "dome fill should set temp=70"
+    assert (out["is_high_wind"] == 0.0).all(), "dome fill => wind<20 => is_high_wind=0"
+
+
+def test_build_rb_features_attach_weather_outdoor_high_wind(
+    rb_weekly_stats: pd.DataFrame,
+    rb_snap_counts: pd.DataFrame,
+    rb_depth_charts: pd.DataFrame,
+    rb_ngs_rushing: pd.DataFrame,
+    rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Outdoor high-wind game: wind=22, temp=42, is_high_wind=1.0."""
+    sch = rb_schedules.copy()
+    week_mask = sch["week"] == 5
+    # Fixture's roof column is pyarrow string with "outdoors"; setting to NA
+    # is also outdoor per compute_weather_features (only {"dome","closed"}
+    # trigger indoor fill). Keep the explicit "outdoors" value to mirror
+    # the canonical fixture state.
+    sch.loc[week_mask, "roof"] = "outdoors"
+    sch.loc[week_mask, "wind"] = 22
+    sch.loc[week_mask, "temp"] = 42
+
+    out = build_rb_features(
+        weekly_stats=rb_weekly_stats,
+        snap_counts=rb_snap_counts,
+        depth_charts=rb_depth_charts,
+        ngs_rushing=rb_ngs_rushing,
+        schedules=sch,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    assert (out["wind_speed_mph"] == 22.0).all()
+    assert (out["temperature_f"] == 42.0).all()
+    assert (out["is_high_wind"] == 1.0).all(), "wind=22 >= 20 => is_high_wind=1"
+
+
+def test_build_rb_features_attach_weather_grass_surface(
+    rb_weekly_stats: pd.DataFrame,
+    rb_snap_counts: pd.DataFrame,
+    rb_depth_charts: pd.DataFrame,
+    rb_ngs_rushing: pd.DataFrame,
+    rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Surface code 'grass' => is_grass_surface=1.0; anything else => 0.0.
+
+    The rb_schedules fixture has both home_teams as SEA (PHI@SEA, SF@SEA),
+    so a home/away split would not produce diversity within a single builder
+    call. Instead, run the builder twice — once with all-grass, once with
+    all-sportturf — and assert the binary encoding both ways.
+    """
+    sch_grass = rb_schedules.copy()
+    week_mask = sch_grass["week"] == 5
+    sch_grass.loc[week_mask, "surface"] = "grass"
+
+    out_grass = build_rb_features(
+        weekly_stats=rb_weekly_stats,
+        snap_counts=rb_snap_counts,
+        depth_charts=rb_depth_charts,
+        ngs_rushing=rb_ngs_rushing,
+        schedules=sch_grass,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    assert (out_grass["is_grass_surface"] == 1.0).all(), (
+        "grass surface should produce is_grass_surface=1"
+    )
+
+    sch_turf = rb_schedules.copy()
+    sch_turf.loc[week_mask, "surface"] = "sportturf"
+
+    out_turf = build_rb_features(
+        weekly_stats=rb_weekly_stats,
+        snap_counts=rb_snap_counts,
+        depth_charts=rb_depth_charts,
+        ngs_rushing=rb_ngs_rushing,
+        schedules=sch_turf,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    assert (out_turf["is_grass_surface"] == 0.0).all(), (
+        "non-grass surface should produce is_grass_surface=0"
+    )
+
+
+def test_build_rb_features_attach_weather_bye_week_fallback(
+    rb_weekly_stats: pd.DataFrame,
+    rb_snap_counts: pd.DataFrame,
+    rb_depth_charts: pd.DataFrame,
+    rb_ngs_rushing: pd.DataFrame,
+    rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Defensive: builder already filters rostered teams to those with
+    schedule rows in as_of_week (TODO #9a), so a bye-week row should not
+    reach the weather merge in the first place. This test confirms that
+    if such a row did reach the merge (e.g., a future builder change
+    relaxes the filter), the schema's nullable=True accepts the resulting
+    NaN values for the 4 weather cols.
+
+    Approach: pass an empty schedules frame so the bye-week filter rejects
+    every depth-chart row; the output frame is empty but still schema-valid
+    and carries the 4 weather columns.
+    """
+    empty_sch = rb_schedules.iloc[0:0].copy()  # preserve column dtypes, zero rows
+
+    out = build_rb_features(
+        weekly_stats=rb_weekly_stats,
+        snap_counts=rb_snap_counts,
+        depth_charts=rb_depth_charts,
+        ngs_rushing=rb_ngs_rushing,
+        schedules=empty_sch,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    assert len(out) == 0, "empty schedules should drive empty output"
+    # All 4 weather cols still present in the output schema (zero-row frames).
+    for c in ("wind_speed_mph", "is_high_wind", "temperature_f", "is_grass_surface"):
+        assert c in out.columns
+
+
+def test_build_rb_features_attach_weather_outdoor_nan_data_propagates_nan(
+    rb_weekly_stats: pd.DataFrame,
+    rb_snap_counts: pd.DataFrame,
+    rb_depth_charts: pd.DataFrame,
+    rb_ngs_rushing: pd.DataFrame,
+    rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Outdoor game with NaN wind/temp/surface upstream: weather merge
+    propagates NaN, schema accepts via nullable=True. Simulates the ~8%
+    outdoor-NaN rate measured in PR #28 (concentrated in 2018-2019 data).
+    Verifies the genuine attach_weather_features path on real data shape,
+    distinct from the empty-schedules short-circuit covered above.
+    """
+    sch = rb_schedules.copy()
+    week_mask = sch["week"] == 5
+    sch.loc[week_mask, "roof"] = "outdoors"
+    sch.loc[week_mask, "wind"] = pd.NA
+    sch.loc[week_mask, "temp"] = pd.NA
+    sch.loc[week_mask, "surface"] = pd.NA
+
+    out = build_rb_features(
+        weekly_stats=rb_weekly_stats,
+        snap_counts=rb_snap_counts,
+        depth_charts=rb_depth_charts,
+        ngs_rushing=rb_ngs_rushing,
+        schedules=sch,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    assert len(out) > 0, "rb_dc players should not be filtered out — schedule has matching teams"
+    assert out["wind_speed_mph"].isna().all(), "outdoor + NaN wind upstream => wind_speed_mph NaN"
+    assert out["temperature_f"].isna().all(), "outdoor + NaN temp upstream => temperature_f NaN"
+    assert out["is_high_wind"].isna().all(), (
+        "NaN wind => NaN is_high_wind (NaN-preserving threshold)"
+    )
+    assert (out["is_grass_surface"] == 0.0).all(), (
+        "NaN surface coerces to False => 0.0 per compute_weather_features"
+    )

@@ -292,6 +292,12 @@ _WR_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "is_rookie",
     "volume_trend_l4_minus_prior_l4",
     "snap_pct_change_l4_vs_prior_l4",
+    # Weather features (PR #28 family probe + 2026-05-08 RB+WR integration).
+    # Same spec-gap class as the trajectory cols above (and PR #21, PR #27).
+    "wind_speed_mph",
+    "is_high_wind",
+    "temperature_f",
+    "is_grass_surface",
 )
 
 
@@ -383,6 +389,15 @@ _RB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "proe_l4",
     "team_ayps_l4",
     "team_def_epa_resid_l4",
+    # Weather features (PR #28 family probe + 2026-05-08 RB+WR integration).
+    # lightgbm derives feature lists from RbFeaturesSchema dynamically and
+    # auto-picks-up; baseline.py is hardcoded so must be updated explicitly.
+    # Same spec gap class as PR #21 (RB PBP, 9895dee), PR #26 (WR trajectory),
+    # PR #27 (TE trajectory).
+    "wind_speed_mph",
+    "is_high_wind",
+    "temperature_f",
+    "is_grass_surface",
 )
 
 
