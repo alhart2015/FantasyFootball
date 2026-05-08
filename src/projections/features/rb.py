@@ -14,6 +14,7 @@ from projections.features._rolling import (
 )
 from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
 from projections.features.pbp_team_features import attach_pbp_family_features
+from projections.features.weather_features import attach_weather_features
 from projections.schemas import (
     _PYARROW_STR,
     Position,
@@ -242,5 +243,11 @@ def build_rb_features(
 
     for col in ("team", "opponent"):
         out[col] = out[col].astype(_PYARROW_STR)
+
+    # --- Weather features (PR #28 family probe + 2026-05-08 RB+WR integration) ---
+    # attach_weather_features merges 4 nullable-float cols onto (season, week, team)
+    # from the exact-week-filtered schedules. Dome / closed-roof games have
+    # wind=0 / temp=70 per compute_weather_features semantics.
+    out = attach_weather_features(out, sch)
 
     return RbFeaturesSchema.validate(out)
