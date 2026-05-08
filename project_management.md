@@ -4,6 +4,38 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Weather Feature Family Probe — verdict **SIGNAL** via lgb-nb augment composite (RB + WR ADOPT) (2026-05-07, on branch `feat/probe-weather`)
+
+**Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-07-weather-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-05-07-weather-feature-family-probe.md`. Implements 4 weather features (`wind_speed_mph`, `is_high_wind` ≥20 mph threshold, `temperature_f`, `is_grass_surface`) sourced from existing `SchedulesSchema` columns — **no new ingest, no schema changes**. New module `src/projections/features/weather_features.py` (compute fns + `attach_weather_features` joiner + public `build_weather_overrides` assembler), override-generator script `scripts/build_weather_override.py`, weather override at `data/features_probe/weather.parquet` (56,652 rows). All tests pass; mypy strict + ruff + ruff format clean. CONTRIBUTING.md updated with a "Regenerating the weather override" subsection.
+
+**Verdict:** **`SIGNAL` (durable)** per spec §1.3 criterion 3 — both BaselineModel + lgb-nb tested at composite via `--force-composite`. **Second SIGNAL family probe in a row** (after PR #25 trajectory) and **first probe where signal lives only in lgb-nb composite, not in BaselineModel** — RidgeCV cannot extract the bundle's non-linear thresholds (`is_high_wind` ≥20, surface category) even with explicit boolean encoding; tree splits do.
+
+**ADOPT cells (2 of 16):**
+- **(lgb-nb augment, RB)** — composite RMSE Δ **-0.0081 fpts** ([-0.0163, -0.0005]); CI strictly below 0.
+- **(lgb-nb augment, WR)** — composite RMSE Δ **-0.0110 fpts** ([-0.0172, -0.0049]); CI strictly below 0.
+
+QB and TE returned DO_NOT_ADOPT under lgb-nb augment composite (point estimates near zero, CIs bracket 0). BaselineModel returned 0 Phase-1 SIGNAL across both modes (0/120 augment, 0/120 swap). lgb-nb swap returned the degenerate all-zero composite — weather cols have no v1 counterparts, so the candidate-side drop+add is a no-op (spec §5.2 anticipated this).
+
+**Coverage relaxation — `--coverage-threshold 0.90` (vs spec 0.95 default).** Outdoor-weather NaN rate measured at 8.39% (per `reports/feature_probe_weather_override_audit.md`); upstream `nfl_data_py` data quality issue (outdoor games where `wind` AND `temp` are both NaN despite no dome, concentrated in older 2018-2019 seasons). Per-(position, season) coverage in 2021-2024 eval window is uniformly ≥92% across all 4 positions. Spec §1.3 fallback invoked. Shallower than PR #25's 0.35 (deepest in Track 2 history); on par with PR #23's 0.90 precedent. Bias is symmetric across baseline + candidate arms under the probe's left-merge join.
+
+**Recurring QB augment regression check — milder than PR #23/#24/#25 pattern.** Per-stat Phase 1 fired one QB regression cell (`rushing_yards` 2023, +0.0812 fpts CI [+0.0133, +0.1515]) — single year, single stat. Pooled QB rushing_yards is NULL across all 4 modes. Composite QB augment lgb-nb is +0.0077 fpts (CI [-0.0114, +0.0266]) — DO_NOT_ADOPT, brackets zero, **NOT REGRESSION**. PRs #23/#24/#25 saw composite-level QB augment regressions of +0.0268, +0.0276, and +0.0382 respectively; weather's +0.0077 is within noise. Plausibly weather information that's already partially captured by `roof_dome` + Vegas-implied `implied_team_total` doesn't deliver enough new QB-relevant signal to trigger the QB-specific overfit pattern. Worth re-checking the 2023 rushing_yards cell on real production data if a follow-up weather plan ever targets QB.
+
+**Mechanism annotation:**
+- **WR signal** (-0.0110 fpts) was predicted by spec §1.1 — wind suppresses downfield passing (`is_high_wind` boolean activates the regime), grass-vs-turf affects YAC. lgb-nb-only adoption confirms non-linear: the threshold encoding is doing more work than continuous wind speed in a linear model could.
+- **RB signal** (-0.0081 fpts) was unexpected. Two plausible mechanisms (neither testable from probe alone): `is_grass_surface` (51% True) gives RBs a meaningfully different footing/cut-back regime; cold-weather games shift offensive balance toward rushing (passing efficiency drops, teams lean run; `temperature_f` continuous captures this regime).
+- **No QB signal** — `roof_dome` + `implied_team_total` already proxy known weather risk for outdoor games; marginal lift from explicit wind/temp over those proxies is below the per-cell noise floor for QBs.
+- **No TE signal** — likely sample-size driven (n_paired = 3,975 TE vs 5,273 RB / 8,470 WR). Not a clean mechanism rejection; could be revisited under a TE-specific refined-unit plan.
+
+**Refined-unit candidates left unexplored** (per spec §1.4 — revisit-only-on-SIGNAL territory; now in scope, none queued): precipitation (would require new ingest, e.g., NOAA hourly historical keyed on stadium lat/lon), kickoff hour / time-of-day (extractable from existing `schedules.kickoff` UTC), `is_cold_weather` boolean (`temp < 32`, sibling to `is_high_wind`), multi-class surface encoding (one bool per surface code), surface × position interactions, per-team weather acclimation, wind direction (would require new ingest). Recommended priority order: cold-weather threshold → multi-class surface → kickoff hour.
+
+**What this closes:** TODO #25's broad-cut weather family at the in-builder unit, on the RB + WR cells. QB + TE remain DO_NOT_ADOPT at this unit; refined-unit candidates remain open under the same TODO.
+
+**Recommended follow-up:** Combined RB + WR integration plan routed through `LightGBMNbModel` only — the two ADOPT cells share the same model class and binding mode, so a single integration plan can extend `RbFeaturesSchema` + `WrFeaturesSchema` together, plumb the 4 weather cols through `build_rb_features` + `build_wr_features`, and run dual-run gates on `(LightGBMNbModel, RB)` + `(LightGBMNbModel, WR)` in parallel. **Precedent: PR #27 TE trajectory integration shipped a schema change for a non-default model class** while leaving baseline production routing unchanged — the weather plan should follow that pattern. Do NOT extend `QbFeaturesSchema` or `TeFeaturesSchema` in the same plan.
+
+**Reports:** `reports/feature_probe_weather_summary.md` (decision log + per-mode table + mechanism annotation + coverage-relaxation note + follow-up recommendation), `reports/feature_probe_weather_override_audit.md` (override-generation audit), 4 per-(model, mode) .md/.csv files (`feature_probe_weather_{,baseline_,lgbnb_}{augment,swap}.{md,csv}`).
+
+---
+
 ## TE Trajectory Features Integration — verdict **ADOPT** on `(LightGBMNbModel, TE)`; shipped (2026-05-04, on branch `feat/te-trajectory-features`)
 
 **Status:** Production integration of the 4 trajectory features into `TeFeaturesSchema` + `build_te_features` per `docs/superpowers/specs/2026-05-04-te-trajectory-features-design.md`. Wired `attach_trajectory_features` into `build_te_features` via the existing `draft_picks` kwarg (plumbed in PR #26). Updated `baseline.py:_TE_FEATURE_COLUMNS` (same spec-gap class as PR #21 / PR #26). Extended shared `_build_position_weekly_stats` + `_build_position_supporting_frames` helpers parametrically so `baseline_weekly_stats_te` covers 17/17/4 weeks for trajectory's 8-game prior window (mirrors PR #26's WR fixture extension; QB/RB unchanged via default).
@@ -1557,9 +1589,9 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 
 ---
 
-## Current status (as of 2026-05-03)
+## Current status (as of 2026-05-07)
 
-**Projections Core — Track 2A + Track 2B complete; Track 2 trajectory family probe SHIPPED with verdict SIGNAL via WR/TE.** This is the **first SIGNAL family probe since PR #20**. The full multi-track scoreboard:
+**Projections Core — Weather family probe SHIPPED with verdict SIGNAL via lgb-nb augment composite (RB + WR). Sixth family probe in Track 2; second consecutive SIGNAL.** The full multi-track scoreboard:
 
 **Track 2A (team-level PBP families):**
 - PR #20 (pace/PROE/AYPS/EPA-resid bundle, 2026-04-30) — **SIGNAL via RB**; integrated into `RbFeaturesSchema` in PR #21 (`(BaselineModel, RB)` adoption gate -0.0124 fpts).
@@ -1567,12 +1599,17 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 - PR #23 (red-zone bundle, 2026-05-02) — **NULL durable**; QB augment lgb-nb regression at +0.0268.
 - PR #24 (pressure bundle + Track 2B, 2026-05-02 / 2026-05-03) — **pressure NULL durable**; QB augment lgb-nb regression at +0.0276; Track 2B: RB PBP cols transfer directionally-favorably to all 4 tree-model classes.
 
-**Track 2 player-trajectory features (this entry):**
-- **PR #25 (trajectory, 2026-05-03) — SIGNAL via WR (both model classes) + TE (lgb-nb only).** Three ADOPT cells: WR augment baseline -0.0414 fpts, WR augment lgb-nb -0.0194 fpts, TE augment lgb-nb -0.0107 fpts. Greenlights a follow-up integration plan analogous to PR #20 → PR #21.
+**Track 2 player-trajectory features:**
+- **PR #25 (trajectory probe, 2026-05-03) — SIGNAL via WR (both model classes) + TE (lgb-nb only).** Three ADOPT cells: WR augment baseline -0.0414 fpts, WR augment lgb-nb -0.0194 fpts, TE augment lgb-nb -0.0107 fpts.
+- **PR #26 (WR trajectory integration, 2026-05-04) — ADOPT** on `(BaselineModel, WR)` at -0.0371 fpts (CI [-0.0567, -0.0172]); 4 of 5 model classes ADOPT in the gate. Probe-vs-gate calibration: probe -0.0414, gate -0.0371 (~0.004 fpts gap, within probe CI).
+- **PR #27 (TE trajectory integration, 2026-05-04) — ADOPT** on `(LightGBMNbModel, TE)` at -0.0090 fpts (CI [-0.0171, -0.0013]). First production integration in the project to bind on a non-default model class (TE production routes to baseline; lgb-nb is where the probe's signal lived). Establishes the precedent for shipping schema changes for non-default model classes.
 
-**Recurring QB augment regression — 4 instances now span both model classes.** PR #23 and PR #24 each had QB augment lgb-nb composite RMSE regressions (+0.0268 and +0.0276). PR #25 (trajectory) extends the pattern to both **baseline** (+0.0382, the largest yet) and lgb-nb (+0.0233). Adding context / team / trajectory features to QB inputs consistently overfits on augment configurations across model-class spectrum. Worth flagging for any future QB feature work.
+**Track 2 weather features (this entry):**
+- **PR #28 (weather probe, 2026-05-07, this) — SIGNAL via lgb-nb augment composite (RB + WR ADOPT)**. Two ADOPT cells: lgb-nb augment RB -0.0081 fpts (CI [-0.0163, -0.0005]), lgb-nb augment WR -0.0110 fpts (CI [-0.0172, -0.0049]). **First probe where signal lives only in lgb-nb composite, not in BaselineModel** — RidgeCV cannot extract the bundle's non-linear thresholds (`is_high_wind` ≥20, surface category) even with explicit boolean encoding; tree splits do. Greenlights a combined RB+WR integration plan routed through `LightGBMNbModel` only (PR #27 precedent).
 
-**Spec deviation in PR #25 — coverage threshold relaxation.** Trajectory probes invoked with `--coverage-threshold 0.35` (vs spec's 0.95 default, vs PR #22's 0.70 fallback). Trend features are structurally sparse: they require 8 prior active games per player, which excludes ~50% of player-weeks across all years. NOT silent NaN imputation — the bias is symmetric on baseline + candidate sides under the probe's left-merge join. Documented in `reports/feature_probe_trajectory_summary.md`.
+**Recurring QB augment regression — pattern continues but milder.** PR #23, #24 had QB augment lgb-nb composite regressions (+0.0268, +0.0276). PR #25 extended to both BaselineModel (+0.0382) and lgb-nb (+0.0233). PR #28 (weather): per-stat-only regression on QB rushing_yards 2023 (+0.0812), pooled QB Phase 2 lgb-nb augment is +0.0077 fpts (CI brackets 0, NOT REGRESSION). Plausibly weather information already partially captured by `roof_dome` + `implied_team_total` doesn't deliver enough new QB-relevant signal to trigger the QB-specific overfit pattern as strongly.
+
+**Spec deviation in PR #28 — coverage threshold relaxation.** Weather probes invoked with `--coverage-threshold 0.90` (vs spec's 0.95 default). Outdoor-weather NaN rate measured at 8.39% (per `reports/feature_probe_weather_override_audit.md`) — upstream `nfl_data_py` data quality, concentrated in older 2018-2019 seasons. Per-(position, season) coverage in 2021-2024 eval window is uniformly ≥92%. Bias is symmetric across baseline + candidate arms under the probe's left-merge join. On par with PR #23's 0.90 precedent; shallower than PR #25's 0.35 (deepest in Track 2 history).
 
 **Track 2B finding:** the RB PBP cols' signal transfers to the lightgbm family (which auto-derives features from the schema dynamically) but with smaller and noisier effects than the baseline lift. Untuned `lightgbm` shows the strongest point estimate (-0.0141 fpts, CI [-0.0278, +0.0005] — just barely brackets 0 on the upper bound); `lightgbm-tuned` / `lightgbm-nb` / `ensemble` all show -0.006 to -0.010 fpts directional improvement with CIs that bracket zero. No model class regresses on RB. No spillover to QB/WR/TE (their schemas weren't touched). See `reports/track2b_rb_pbp_other_models.md` for the per-cell table + methodology + appendix on probe attempts that did NOT work for retrospective gating of already-shipped cols.
 
@@ -1586,28 +1623,32 @@ Per-stat means are systematically slightly *under* actual (e.g., receptions 2.90
 - **PBP Receiver Family Probe (PR #22)** — receiver-level air-yards / aDOT — NULL durable.
 - **PBP Red-Zone Family Probe (PR #23)** — team-level RZ — NULL durable.
 - **PBP Pressure Family Probe (PR #24)** — team-level pressure — NULL durable.
-- **Trajectory Feature Family Probe (PR #25, this)** — player-level age + role-trajectory — **SIGNAL via WR (both model classes) + TE (lgb-nb only)**.
+- **Trajectory Feature Family Probe (PR #25)** — player-level age + role-trajectory — SIGNAL via WR + TE.
+- **WR Trajectory Features Integration (PR #26)** — production builder + ADOPT on `(BaselineModel, WR)` at -0.0371 fpts.
+- **TE Trajectory Features Integration (PR #27)** — production builder + ADOPT on `(LightGBMNbModel, TE)` at -0.0090 fpts; first non-default-model-class binding.
+- **Weather Feature Family Probe (PR #28, this)** — game-environment features — **SIGNAL via lgb-nb augment composite (RB + WR)**.
 
 **Predecessors (longer history):**
 - Plan 1 / Plan 2a / Plan 2b / Plan 3a / Plan 3b / Plan 3c / Plan 3d / Plan 3e (Phase 0 + Phase 1) / Plan 5 / Plan 5b / Plan 5c / Plan 6 / Plan 7. See per-plan blocks below.
 
 ## Next action
 
-**WR trajectory features integration shipped (PR #25 → PR #26 chain).** Probe SIGNAL → production gate ADOPT at -0.0371 fpts (CI [-0.0567, -0.0172]) on the binding `(BaselineModel, WR)` cell. 4 of 5 model classes ADOPT in the gate; lightgbm-tuned is the only DO_NOT_ADOPT (point estimate near zero). Probe-vs-gate calibration: probe predicted -0.0414, gate measured -0.0371 — within probe CI, same direction.
+**Weather family probe shipped (PR #28).** Verdict SIGNAL via lgb-nb augment composite — RB ADOPT -0.0081 fpts (CI [-0.0163, -0.0005]) and WR ADOPT -0.0110 fpts (CI [-0.0172, -0.0049]). Baseline returned no Phase 1 SIGNAL across either mode; signal lives only in tree models (the bundle's non-linear thresholds — `is_high_wind` ≥20, surface category — are invisible to RidgeCV even with explicit boolean encoding). lgb-nb swap is degenerate (no v1 weather counterparts to drop). QB and TE returned DO_NOT_ADOPT under lgb-nb augment composite.
 
 **Recommended next direction (pick one):**
 
-1. **TE trajectory features integration.** Sibling of the WR integration; the trajectory probe also ADOPT'd TE under lgb-nb (-0.0107 fpts), not under baseline. The dual-run gate on baseline would likely return DO_NOT_ADOPT for TE, but the lgb-nb cell would adopt. Spec must address per-position-routing question: ship per-position routing to lgb-nb for TE only (precedent: Plan 6's QB-only ensemble suggestion), OR ship the schema change for the lgb-nb code path while leaving baseline production routing unchanged. Lower expected magnitude than the just-shipped WR cell.
+1. **Combined RB+WR weather features integration plan, routed through `LightGBMNbModel` only.** The two ADOPT cells share the same model class and binding mode (lgb-nb augment), so a single integration plan can extend `RbFeaturesSchema` + `WrFeaturesSchema` together, plumb the 4 weather cols through `build_rb_features` + `build_wr_features`, and run dual-run gates on `(LightGBMNbModel, RB)` and `(LightGBMNbModel, WR)` in parallel. **Precedent: PR #27** TE trajectory integration shipped a schema change for a non-default model class while leaving baseline production routing unchanged. Do NOT extend `QbFeaturesSchema` or `TeFeaturesSchema` in the same plan (QB DO_NOT_ADOPT + recurring augment-regression pattern; TE DO_NOT_ADOPT + small sample). Expected gate magnitudes: RB ~-0.008 fpts, WR ~-0.011 fpts (probe predictions; gate may differ ±0.003 fpts per PR #25/#26/#27 calibration history).
 
-2. **Sibling weather probe.** TODO #25 (weather features in per-position builders) is still queued per the original brainstorm Track 2 plan. `import_schedules` already returns wind / temperature / precipitation; the work is plumbing those into per-position feature builders, not new ingest. Independent of the trajectory integration; clean independent track.
+2. **Refined weather units** (lower priority; revisit-only-on-SIGNAL territory now in scope per spec §1.4): cold-weather threshold (`is_cold_weather = temp < 32`, sibling shape to `is_high_wind`), multi-class surface encoding (one bool per surface code), kickoff hour / time-of-day (free, extractable from existing `schedules.kickoff`), surface × position interactions, per-team weather acclimation, precipitation (would require new ingest — NOAA hourly historical), wind direction (would require new ingest). Recommended priority order if scoped: cold-weather threshold → multi-class surface → kickoff hour.
 
-3. **Trajectory refined-unit candidates** (low-priority): `age²` interaction terms, `is_2nd_year` / `is_3rd_year` flags, depth-chart-rank trends, longer trailing windows (l8 vs l16), `has_trajectory_history` indicator. None queued — would need independent evidence the trailing-8-game unit was the binding constraint and refined units would clear.
+3. **Pivot to next mechanism axis: target decomposition (TODO #23).** Volume × efficiency decomposition for each fantasy stat. 3-10% RMSE estimated independent of model class. Architecturally larger than weather integration but a different signal axis after consecutive context/team/trajectory/weather feature additions.
 
 **Track 2A status (PBP team-level families):** Complete. All three TODO #3c team-level PBP feature families probed. Two NULL, one SIGNAL→ADOPT (PR #20→#21). No additional team-level candidates queued.
 
 **Track 2B status (RB PBP cols × other model classes):** Closed (folded into PR #24). RB PBP cols transfer to all 4 tree-model classes directionally; only baseline reaches strict CI<0; no class regresses.
 
 **Refined-unit candidates (low-priority, none queued):**
+- Weather refined units: cold-weather threshold, multi-class surface, kickoff hour, surface × position, per-team acclimation, precipitation, wind direction.
 - Trajectory refined units: per-position aging-curve interaction terms (`age²`), `is_2nd_year` / `is_3rd_year` flags, depth-chart-rank trends, longer trailing windows (l8 vs l16), `has_trajectory_history` indicator.
 - PBP refined units: per-route-concept distributions, goal-line / 3rd-down splits, alternate pressure denominators. The cumulative durable-NULL signal across the broad cuts argues against any of these clearing absent independent evidence the unit choice was the binding constraint.
 
