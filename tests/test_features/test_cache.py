@@ -48,6 +48,13 @@ def _minimal_wr_features_row(week: int) -> dict[str, object]:
         "is_rookie": 0.0,
         "volume_trend_l4_minus_prior_l4": 0.0,
         "snap_pct_change_l4_vs_prior_l4": 0.0,
+        # Weather cols (PR #28 + 2026-05-08 RB+WR integration). Sane finite
+        # defaults: typical NFL gameday wind, under high-wind threshold,
+        # mild temperature, turf surface (most NFL stadiums).
+        "wind_speed_mph": 8.0,
+        "is_high_wind": 0.0,
+        "temperature_f": 60.0,
+        "is_grass_surface": 0.0,
     }
 
 
