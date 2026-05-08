@@ -552,3 +552,45 @@ def test_build_rb_features_attach_weather_bye_week_fallback(
     # All 4 weather cols still present in the output schema (zero-row frames).
     for c in ("wind_speed_mph", "is_high_wind", "temperature_f", "is_grass_surface"):
         assert c in out.columns
+
+
+def test_build_rb_features_attach_weather_outdoor_nan_data_propagates_nan(
+    rb_weekly_stats: pd.DataFrame,
+    rb_snap_counts: pd.DataFrame,
+    rb_depth_charts: pd.DataFrame,
+    rb_ngs_rushing: pd.DataFrame,
+    rb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Outdoor game with NaN wind/temp/surface upstream: weather merge
+    propagates NaN, schema accepts via nullable=True. Simulates the ~8%
+    outdoor-NaN rate measured in PR #28 (concentrated in 2018-2019 data).
+    Verifies the genuine attach_weather_features path on real data shape,
+    distinct from the empty-schedules short-circuit covered above.
+    """
+    sch = rb_schedules.copy()
+    week_mask = sch["week"] == 5
+    sch.loc[week_mask, "roof"] = "outdoors"
+    sch.loc[week_mask, "wind"] = pd.NA
+    sch.loc[week_mask, "temp"] = pd.NA
+    sch.loc[week_mask, "surface"] = pd.NA
+
+    out = build_rb_features(
+        weekly_stats=rb_weekly_stats,
+        snap_counts=rb_snap_counts,
+        depth_charts=rb_depth_charts,
+        ngs_rushing=rb_ngs_rushing,
+        schedules=sch,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    assert len(out) > 0, "rb_dc players should not be filtered out — schedule has matching teams"
+    assert out["wind_speed_mph"].isna().all(), "outdoor + NaN wind upstream => wind_speed_mph NaN"
+    assert out["temperature_f"].isna().all(), "outdoor + NaN temp upstream => temperature_f NaN"
+    assert out["is_high_wind"].isna().all(), (
+        "NaN wind => NaN is_high_wind (NaN-preserving threshold)"
+    )
+    assert (out["is_grass_surface"] == 0.0).all(), (
+        "NaN surface coerces to False => 0.0 per compute_weather_features"
+    )
