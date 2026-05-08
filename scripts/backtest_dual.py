@@ -66,17 +66,21 @@ def main() -> None:
     print("=== Phase 1: candidate run (current branch state, with weather features) ===")
     _backtest(_CANDIDATE_RUN_DIR)
 
-    print("\n=== Phase 2: roll back source to main HEAD ===")
-    _git_checkout("main")
+    # Phases 2-4 leave the working tree with main's source files; ensure we
+    # always restore HEAD on exit (success OR failure) so a crash mid-flight
+    # doesn't leave the worktree in an inconsistent state.
+    try:
+        print("\n=== Phase 2: roll back source to main HEAD ===")
+        _git_checkout("main")
 
-    print("\n=== Phase 3: refresh feature caches (now without weather cols) ===")
-    _refresh_caches()
+        print("\n=== Phase 3: refresh feature caches (now without weather cols) ===")
+        _refresh_caches()
 
-    print("\n=== Phase 4: baseline run (main state, no weather features) ===")
-    _backtest(_BASELINE_RUN_DIR)
-
-    print("\n=== Phase 5: restore source to HEAD (with weather features) ===")
-    _git_checkout("HEAD")
+        print("\n=== Phase 4: baseline run (main state, no weather features) ===")
+        _backtest(_BASELINE_RUN_DIR)
+    finally:
+        print("\n=== Phase 5: restore source to HEAD (with weather features) ===")
+        _git_checkout("HEAD")
 
     print("\n=== Phase 6: refresh feature caches (back to with weather cols) ===")
     _refresh_caches()
