@@ -387,6 +387,25 @@ data/features_probe/trajectory.parquet ...`.
 
 Spec: `docs/superpowers/specs/2026-05-03-trajectory-feature-family-probe-design.md`.
 
+### Regenerating the weather override
+
+Sibling to "Regenerating the trajectory override" above. The weather
+family override at `data/features_probe/weather.parquet` is regenerable
+from the existing `data/raw/schedules/` partitions and is NOT committed;
+no new ingest is required (`SchedulesSchema` already covers `wind`,
+`temp`, `roof`, `surface`).
+
+```bash
+python -m scripts.build_weather_override --seasons 2018-2024 --force
+```
+
+The script writes `data/features_probe/weather.parquet` and prints
+audit numbers (row count, coverage, dome/outdoor split, NaN rates) to
+stdout; capture that output in
+`reports/feature_probe_weather_override_audit.md`.
+
+Spec: `docs/superpowers/specs/2026-05-07-weather-feature-family-probe-design.md`.
+
 ## Adding a new pandera schema
 
 Schemas live in `src/projections/schemas.py` (single source of truth). Append your schema after the existing ones.
