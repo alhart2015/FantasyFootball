@@ -539,6 +539,16 @@ class WrFeaturesSchema(pa.DataFrameModel):
     volume_trend_l4_minus_prior_l4: Series[float] = pa.Field(nullable=True)
     snap_pct_change_l4_vs_prior_l4: Series[float] = pa.Field(ge=-1, le=1, nullable=True)
 
+    # Weather features (PR #28 family probe + 2026-05-08 RB+WR integration
+    # spec). Sourced from existing SchedulesSchema columns (wind, temp, roof,
+    # surface) — no new ingest. Dome / closed-roof games filled with
+    # (wind=0, temp=70) per compute_weather_features semantics. Outdoor NaN
+    # wind/temp propagates; ~8% NaN rate concentrated in 2018-2019.
+    wind_speed_mph: Series[float] = pa.Field(ge=0, nullable=True)
+    is_high_wind: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    temperature_f: Series[float] = pa.Field(nullable=True)
+    is_grass_surface: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+
     class Config:
         strict = "filter"
         # Required so the empty-depth-chart fast path validates: a
@@ -649,6 +659,16 @@ class RbFeaturesSchema(pa.DataFrameModel):
     proe_l4: Series[float] = pa.Field(nullable=True)
     team_ayps_l4: Series[float] = pa.Field(ge=0, nullable=True)
     team_def_epa_resid_l4: Series[float] = pa.Field(nullable=True)
+
+    # Weather features (PR #28 family probe + 2026-05-08 RB+WR integration
+    # spec). Sourced from existing SchedulesSchema columns (wind, temp, roof,
+    # surface) — no new ingest. Dome / closed-roof games filled with
+    # (wind=0, temp=70) per compute_weather_features semantics. Outdoor NaN
+    # wind/temp propagates; ~8% NaN rate concentrated in 2018-2019.
+    wind_speed_mph: Series[float] = pa.Field(ge=0, nullable=True)
+    is_high_wind: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    temperature_f: Series[float] = pa.Field(nullable=True)
+    is_grass_surface: Series[float] = pa.Field(ge=0, le=1, nullable=True)
 
     class Config:
         strict = "filter"
