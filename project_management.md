@@ -4,6 +4,46 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Weather Features RB+WR Integration — verdicts: RB ADOPT, WR ADOPT (both ship-as-designed) (2026-05-08, on branch `feat/weather-features-rb-wr`)
+
+**Status:** Production integration of the 4 weather features into `RbFeaturesSchema` + `WrFeaturesSchema` + `build_rb_features` + `build_wr_features` per `docs/superpowers/specs/2026-05-08-weather-features-rb-wr-design.md`. Wired `attach_weather_features` (already public from PR #28) into both builders via the existing `schedules` kwarg. Updated `baseline.py:_RB_FEATURE_COLUMNS` and `_WR_FEATURE_COLUMNS` (same recurring spec gap class as PR #21 / PR #26 / PR #27). No new ingest, no caller-script changes, no fixture extension (weather is per-game, not trailing-N).
+
+**Per-position dual-run gate verdicts (4 cells):**
+
+| Position | Model class | RMSE Δ | 95% CI | Verdict |
+|---|---|---:|---|:---:|
+| RB | baseline       | -0.0034 | [-0.0103, +0.0042] | DO_NOT_ADOPT (informational; not REGRESSION) |
+| **RB** | **lightgbm-nb** | **-0.0077** | **[-0.0157, -0.0001]** | **ADOPT (binding)** |
+| WR | baseline       | -0.0026 | [-0.0106, +0.0061] | DO_NOT_ADOPT (informational; not REGRESSION) |
+| **WR** | **lightgbm-nb** | **-0.0104** | **[-0.0165, -0.0042]** | **ADOPT (binding)** |
+
+**Probe-vs-gate calibration:** Probe predicted (lgb-nb, RB) -0.0081 / (lgb-nb, WR) -0.0110; gate measured -0.0077 / -0.0104. Both within ~5% of probe predictions and inside probe CIs. Track record extension: PR #20→#21 4-decimal match (RB); PR #25→#26 ~0.004 fpts (WR); PR #25→#27 ~0.0017 fpts (TE); this PR ~0.0004-0.0006 fpts on both binding cells.
+
+**Per-position §1.3.5 outcome:** **Both positions hit the default ship-as-designed branch.** No modified-shape branch fired (would have required `(baseline, POS)` REGRESSION); no revert branch fired (would have required `(lgb-nb, POS)` MARGINAL or DO_NOT_ADOPT). Schema cols stay in `RbFeaturesSchema` + `WrFeaturesSchema`; `attach_weather_features` stays wired into both builders; `_RB_FEATURE_COLUMNS` + `_WR_FEATURE_COLUMNS` extensions stay in `baseline.py`.
+
+**Second integration to bind on a non-default model class** (after PR #27 TE trajectory) and **first integration to bundle two positions into a single PR** with per-position contingency matrix (each position decided independently from the other). RB and WR production routings unchanged: both stay on `BaselineModel`.
+
+**3 informational classes skipped** (lightgbm, lightgbm-tuned, ensemble) per spec §1.3.4 + PR #27 precedent — wall-time risk + TODO #29 lightgbm-tuned pruning candidate framing made the additional ~12 cells (4 per skipped class × 3 classes) low-value. Back-fillable by a follow-up `--model lightgbm,lightgbm-tuned,ensemble` backtest if any cross-class routing-flip discussion needs them.
+
+**Coverage statistics (2021-2024 eval window, per Task 11 measurement on production builder output):** Weather-col coverage on RB / WR is **byte-perfectly identical** to PR #28's probe override (verified by reading `data/features_probe/weather.parquet` directly): wind/temp coverage ranges 67-98% per (position, season), uniformly 100% on `is_grass_surface`. Per-season variation: 2021 ~96%, 2022 ~67%, 2023 ~86%, 2024 ~98%. **PR #28 PM entry's coverage claim ("uniformly ≥92%") was overstated** — pooled 91.6% hides the 2022 trough. Documented for the record; future "coverage uniformly ≥X%" claims should be reported per-(position, season).
+
+**Cross-class deferred follow-ups (per position):** RB and WR each route to `baseline` per Plan 8. With weather cols now in `RbFeaturesSchema` / `WrFeaturesSchema`, separate cross-class re-evals could justify flipping `_PositionDispatch[{RB|WR}].default_model_class` to `lightgbm-nb`. Not load-bearing for any current consumer; queue alongside the next RB- or WR-related work. Same shape as PR #27's TE follow-up.
+
+**What this closes:** TODO #25's broad-cut weather family at the in-builder unit, on **both** the RB and WR ADOPT cells from PR #28. QB and TE remain DO_NOT_ADOPT at this unit per PR #28's probe; not re-tested in this PR's gate. Refined-unit candidates (cold-weather threshold, multi-class surface, kickoff hour, surface × position interactions, per-team weather acclimation, precipitation, wind direction) remain open under TODO #25; recommended priority `is_cold_weather` first.
+
+**Spec gaps caught + fixed during execution:**
+- `scripts/refresh_features.py` CLI takes a single position, not `rb wr` together as the plan suggested. Ran twice.
+- `scripts/backtest.py` does not have a `--position` flag. Worked around via the `run_backtest(positions=...)` Python API in `scripts/backtest_dual.py`.
+- `scripts/backtest.py --update-snapshot` overwrites the entire snapshot file. `scripts/backtest_dual.py` orchestrator preserves rows for non-target model classes.
+- `scripts/adoption_gate.py` dual-run mode requires single-model-class run dirs. Each `_run_single_backtest.py` produces a multi-class results.parquet; split into per-model-class subdirs (`run_{baseline,candidate}_{baseline,lightgbm-nb}/`) before invoking the gate.
+- Python import caching across the schema-revert boundary: first attempt at the dual backtest reused a single Python process; the in-memory schema classes did not refresh after `git checkout main -- src/projections/schemas.py`. Fixed by subprocess-ing `_run_single_backtest.py` for both runs.
+
+**Follow-up (non-blocking):** Code-review reviewer flagged that 4 PRs in a row (PR #21 RB PBP, PR #26 WR trajectory, PR #27 TE trajectory, this PR) have hit the same `baseline.py:_<POS>_FEATURE_COLUMNS` spec gap. A 5-line parametrized regression test pinning `set(_<POS>_FEATURE_COLUMNS) == set(SCHEMA.columns) - identity` would catch this structurally on every future schema extension. Worth a follow-up commit / mini-PR.
+
+See `reports/weather_features_rb_wr_summary.md` for the full decision log + per-mode table + probe-vs-gate calibration + per-position §1.3.5 outcome matrix.
+
+---
+
 ## Weather Feature Family Probe — verdict **SIGNAL** via lgb-nb augment composite (RB + WR ADOPT) (2026-05-07, on branch `feat/probe-weather`)
 
 **Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-07-weather-feature-family-probe-design.md` and plan `docs/superpowers/plans/2026-05-07-weather-feature-family-probe.md`. Implements 4 weather features (`wind_speed_mph`, `is_high_wind` ≥20 mph threshold, `temperature_f`, `is_grass_surface`) sourced from existing `SchedulesSchema` columns — **no new ingest, no schema changes**. New module `src/projections/features/weather_features.py` (compute fns + `attach_weather_features` joiner + public `build_weather_overrides` assembler), override-generator script `scripts/build_weather_override.py`, weather override at `data/features_probe/weather.parquet` (56,652 rows). All tests pass; mypy strict + ruff + ruff format clean. CONTRIBUTING.md updated with a "Regenerating the weather override" subsection.
