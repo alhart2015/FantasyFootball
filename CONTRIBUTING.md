@@ -389,22 +389,19 @@ Spec: `docs/superpowers/specs/2026-05-03-trajectory-feature-family-probe-design.
 
 ### Regenerating the weather override
 
-Sibling to "Regenerating the trajectory override" above. The weather
-family override at `data/features_probe/weather.parquet` is regenerable
-from the existing `data/raw/schedules/` partitions and is NOT committed;
-no new ingest is required (`SchedulesSchema` already covers `wind`,
-`temp`, `roof`, `surface`).
+The weather refined-unit bundle (~12 columns: 4 v1 + 1 cold + ~7 surface multi-class + 1 primetime) is regenerated from `data/raw/schedules` via:
 
 ```bash
-python -m scripts.build_weather_override --seasons 2018-2024 --force
+PYTHONPATH=src python -m scripts.build_weather_override --seasons 2018-2024 --force
 ```
 
-The script writes `data/features_probe/weather.parquet` and prints
-audit numbers (row count, coverage, dome/outdoor split, NaN rates) to
-stdout; capture that output in
-`reports/feature_probe_weather_override_audit.md`.
+Output goes to `data/features_probe/weather.parquet`. The script prints audit numbers (dome rate, per-column NaN rate, per-surface rates, primetime rate) to stdout.
 
-Spec: `docs/superpowers/specs/2026-05-07-weather-feature-family-probe-design.md`.
+**Multi-class surface re-pinning.** The `_SURFACE_CODES` tuple in `src/projections/features/weather_features.py` is pinned from observed codes in 2018–2024 data. If `nfl_data_py` introduces a new surface code in future seasons, the override generator raises `ValueError: unknown surface code(s) ...` rather than silently dropping it. Recover by:
+
+1. Re-run the Phase 0 enumeration: `python -c "import pandas as pd; from pathlib import Path; df = pd.concat([pd.read_parquet(p) for p in sorted(Path('data/raw/schedules').glob('season=*/part.parquet'))], ignore_index=True); print(sorted(df['surface'].dropna().unique()))"`.
+2. Update `_SURFACE_CODES` to add the new code in the right alphabetical position.
+3. Re-run the test suite + override generator.
 
 ## Adding a new pandera schema
 
