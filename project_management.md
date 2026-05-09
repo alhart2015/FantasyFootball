@@ -4,6 +4,40 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Weather Refined-Unit Family Probe — verdict **SIGNAL** via lgb-nb composite (RB swap + WR augment + WR swap) (2026-05-09, on branch `feat/probe-weather-refined`)
+
+**Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-09-weather-refined-unit-probe-design.md` and plan `docs/superpowers/plans/2026-05-09-weather-refined-unit-probe.md`. Implements three refined-unit weather features (`is_cold_weather`, multi-class surface one-hot, `is_primetime`) on top of PR #28's `weather_features.py` module. No new ingest, no schema changes; production builders unchanged (PR #29's RB+WR integration consumes the v1 4-col subset and ignores the new override-only cols).
+
+**Verdict:** **`SIGNAL`** per spec §1.3 criterion 3 (BaselineModel + lgb-nb composite via `--force-composite`).
+
+**ADOPT cells (3 of 16):**
+- **(lgb-nb augment, WR)** — composite RMSE Δ **-0.0051 fpts** (CI [-0.0097, -0.0006]); CI strictly negative.
+- **(lgb-nb swap, RB)** — composite RMSE Δ **-0.0088 fpts** (CI [-0.0153, -0.0030]); CI strictly negative.
+- **(lgb-nb swap, WR)** — composite RMSE Δ **-0.0050 fpts** (CI [-0.0098, -0.0006]); CI strictly negative.
+
+**Refined-unit-specific decoding** per spec §1.2:
+- **WR**: strict refinement (swap + augment ADOPT) → integration plan replaces v1 weather cols with refined 8-col bundle in `WrFeaturesSchema`.
+- **RB**: replace-only (swap ADOPT, augment ~null) → integration replaces v1 with refined in `RbFeaturesSchema`.
+- **QB / TE**: close at this cut. Refined-unit-of-refined-unit candidates remain on TODO #25.
+
+**Greenlights** a per-position integration plan analogous to PR #29: replace v1 weather cols (`wind_speed_mph`, `is_high_wind`, `temperature_f`, `is_grass_surface`) with the refined 8-col bundle (`is_cold_weather`, `is_primetime`, plus 6 surface one-hots: `is_a_turf`, `is_astroturf`, `is_fieldturf`, `is_grass`, `is_matrixturf`, `is_sportturf`) in `RbFeaturesSchema` + `WrFeaturesSchema`. Production routing for both positions unchanged (stays on `BaselineModel` per Plan 8); the lgb-nb-only ADOPT verdict means the cross-class re-eval (would lgb-nb-with-refined-weather beat baseline at the position level?) is the natural follow-up question.
+
+**Recurring QB augment regression** — sharper this round. (lgb-nb augment, QB) at composite RMSE Δ **+0.0099 fpts** (CI [+0.0002, +0.0202]) — CI strictly above 0. Worse than PR #28's +0.0077 fpts (CI bracketed 0). Pattern continues from PR #23 / #24 / #25 / #28 — adding context/team/trajectory/weather features to QB inputs consistently overfits on augment configurations across both BaselineModel and lgb-nb composite. Reinforces the "do not extend `QbFeaturesSchema` with weather features" rule established in PR #29.
+
+**In-scope ingest-layer bug fix.** During Task 7's real-data audit, `is_primetime` rate was measured at 0.16% (vs the spec's predicted 12-15%). Investigation traced the cause to `_build_kickoff` in `src/projections/ingest/schedules.py` mis-tagging `nfl_data_py.import_schedules`'s `gametime` (ET wall-clock) as UTC via `pd.to_datetime(..., utc=True)`. Fixed at commit `56df07f` by parsing naive, then `tz_localize("America/New_York")` (handles EDT/EST switch via stdlib zoneinfo) → `tz_convert("UTC")`. Added regression test `test_build_kickoff_localizes_et_wall_clock_to_utc`. Corrected an existing test that had pinned the buggy behavior. After re-running schedules ingest + override regen, `is_primetime` rate measured 21.97% — within back-of-envelope expectation for ~6 of 32 teams playing primetime per week (TNF + SNF + MNF + Saturday + Thanksgiving + Christmas).
+
+**Coverage caveat.** `is_cold_weather` non-NaN rate dips to 0.67 in 2022 across all 4 positions (well below the 0.90 threshold). Probe's pooled-baseline-rows coverage check still passed because pooled rate exceeds 0.90, but the 2022 cold-weather signal is diluted in fold splits. `is_primetime` coverage is 1.000 across all (position, season) cells. Documented per PR #29's coverage-claim hygiene rule.
+
+**Plan-vs-execution deviation.** Augment-mode probe runs used a 8-col refined-only override (`weather_refined_only.parquet`) instead of the plan's prescribed 12-col full override. Reason: post-PR-29, v1 weather cols are in `RbFeaturesSchema` + `WrFeaturesSchema` baseline, so the full 12-col override would collide on those 4 cols in augment mode. Workaround: refined-only override for augment, full override + `--drop` for swap. v1 cols verified bit-identical between baseline and override pre-probe. Spec §1.2 augment-vs-swap semantics preserved. Documented in summary report's decision log.
+
+**What this closes:** TODO #25's three refined-unit candidates at the in-builder-bundle unit (cold-weather threshold, multi-class surface, kickoff hour primetime). Refined-unit-of-refined-unit candidates remain open: continuous kickoff hour, `is_london` early-window cohort, surface×position interactions, per-team weather acclimation, precipitation (would require new ingest), wind direction (would require new ingest). None queued.
+
+**Recommended next direction.** Per-position production-builder integration plan: extend `RbFeaturesSchema` + `WrFeaturesSchema` with the 8 refined cols (replacing the 4 v1 cols), wire `attach_weather_features` through `build_rb_features` + `build_wr_features` (both already do this, just with the v1 subset), update `baseline.py:_RB_FEATURE_COLUMNS` + `_WR_FEATURE_COLUMNS`, run dual-run adoption gate on `(lgb-nb, RB)` + `(lgb-nb, WR)`. Same shape as PR #29 but at the strict-refinement (replace, not augment) level. Production routing for both positions remains unchanged (BaselineModel per Plan 8); cross-class flip evaluation is a separate follow-up.
+
+**Reports:** `reports/feature_probe_weather_refined_summary.md`, `reports/feature_probe_weather_refined_override_audit.md`, 4 per-(model, mode) `.md`/`.csv` files.
+
+---
+
 ## Weather Features RB+WR Integration — verdicts: RB ADOPT, WR ADOPT (both ship-as-designed) (2026-05-08, on branch `feat/weather-features-rb-wr`)
 
 **Status:** Production integration of the 4 weather features into `RbFeaturesSchema` + `WrFeaturesSchema` + `build_rb_features` + `build_wr_features` per `docs/superpowers/specs/2026-05-08-weather-features-rb-wr-design.md`. Wired `attach_weather_features` (already public from PR #28) into both builders via the existing `schedules` kwarg. Updated `baseline.py:_RB_FEATURE_COLUMNS` and `_WR_FEATURE_COLUMNS` (same recurring spec gap class as PR #21 / PR #26 / PR #27). No new ingest, no caller-script changes, no fixture extension (weather is per-game, not trailing-N).
