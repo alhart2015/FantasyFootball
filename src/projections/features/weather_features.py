@@ -56,8 +56,45 @@ def _compute_is_cold_weather(temperature_f: pd.Series) -> pd.Series:
     return (temperature_f <= _COLD_WEATHER_TEMP_F).astype("Float64")
 
 
+def _compute_surface_onehot(surface: pd.Series) -> pd.DataFrame:
+    """Multi-class one-hot from `surface` against `_SURFACE_CODES`.
+
+    Per-row encoding:
+        - `1.0` if `surface == <code>` (the matching column)
+        - `0.0` if `surface` is a different known code (the non-matching cols)
+        - `NaN` if `surface` is NaN (all cols)
+
+    Normalizes upstream `nfl_data_py` whitespace drift (e.g., `'grass '` with
+    trailing space observed in 93 rows of 2021 schedules data — see
+    `_SURFACE_CODES` comment for context). Strip whitespace before lookup;
+    preserves NaN.
+
+    Raises:
+        ValueError: surface contains code(s) not in `_SURFACE_CODES`. Forces
+            deliberate spec amendment on nfl_data_py upstream changes.
+    """
+    normalized = surface.where(surface.isna(), surface.astype("string").str.strip())
+    surface_known_or_nan = normalized.isna() | normalized.isin(_SURFACE_CODES)
+    if not surface_known_or_nan.all():
+        unknown_codes = sorted(set(normalized.loc[~surface_known_or_nan].dropna()))
+        raise ValueError(
+            f"unknown surface code(s) {unknown_codes!r} not in _SURFACE_CODES "
+            f"({list(_SURFACE_CODES)!r}); update the pinned tuple if upstream added "
+            f"a new code, then re-run."
+        )
+
+    is_nan_row = normalized.isna()
+    out = pd.DataFrame(index=normalized.index)
+    for code, col_name in zip(_SURFACE_CODES, _SURFACE_COL_NAMES, strict=True):
+        bool_col = (normalized == code).astype("Float64")
+        # Mask NaN-surface rows back to NaN so the one-hot preserves missingness.
+        bool_col[is_nan_row] = pd.NA
+        out[col_name] = bool_col
+    return out
+
+
 def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
-    """Per-team-game frame with five weather features.
+    """Per-team-game frame with eleven weather features.
 
     One row per (game, team) — each schedules row produces two output rows
     (home + away). Weather is a game-level attribute, so both teams in a
@@ -68,7 +105,8 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
         temperature_f = 70.0
         is_high_wind = 0.0 (falls out of wind_speed_mph = 0.0)
         is_cold_weather = 0.0 (falls out of temperature_f = 70.0)
-        is_grass_surface = surface == 'grass' (no override)
+        Surface bools (`is_<code>` and `is_grass_surface`) use the actual
+            surface code (no override).
 
     Outdoor handling: NaN wind / temp propagate; is_high_wind preserves NaN.
 
@@ -80,8 +118,10 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
         DataFrame with columns:
             season, week, team,
             wind_speed_mph, is_high_wind, temperature_f, is_cold_weather,
+            is_a_turf, is_astroturf, is_fieldturf, is_grass, is_matrixturf,
+            is_sportturf,
             is_grass_surface
-        All five feature columns are nullable Float64. season / week are
+        All eleven feature columns are nullable Float64. season / week are
         Int64; team is StringDtype("pyarrow") (inherited from inputs).
     """
     cols = ["season", "week", "wind", "temp", "roof", "surface"]
@@ -107,6 +147,10 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
 
     games["is_cold_weather"] = _compute_is_cold_weather(games["temperature_f"])
 
+    surface_onehot = _compute_surface_onehot(games["surface"])
+    for col_name in _SURFACE_COL_NAMES:
+        games[col_name] = surface_onehot[col_name]
+
     games["is_grass_surface"] = (games["surface"] == "grass").fillna(False).astype("Float64")
 
     return games[
@@ -118,6 +162,7 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
             "is_high_wind",
             "temperature_f",
             "is_cold_weather",
+            *_SURFACE_COL_NAMES,
             "is_grass_surface",
         ]
     ].reset_index(drop=True)
@@ -127,7 +172,7 @@ def attach_weather_features(
     index: pd.DataFrame,
     schedules: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Left-merge the five weather features onto a player-team-week index.
+    """Left-merge the eleven weather features onto a player-team-week index.
 
     Args:
         index: frame with at least (season, week, team) columns. Typically
@@ -137,11 +182,12 @@ def attach_weather_features(
         schedules: frame validated against `SchedulesSchema`.
 
     Returns:
-        Copy of index with five nullable Float64 cols appended:
+        Copy of index with eleven nullable Float64 cols appended:
         wind_speed_mph, is_high_wind, temperature_f, is_cold_weather,
-        is_grass_surface.
+        is_a_turf, is_astroturf, is_fieldturf, is_grass, is_matrixturf,
+        is_sportturf, is_grass_surface.
         Index rows without a matching (season, week, team) in schedules
-        retain NaN in all five cols.
+        retain NaN in all eleven cols.
     """
     weather = compute_weather_features(schedules)
     return index.merge(weather, on=["season", "week", "team"], how="left")
@@ -167,7 +213,8 @@ def build_weather_overrides(
         Frame with columns
             (gsis_id, season, week, position,
              wind_speed_mph, is_high_wind, temperature_f, is_cold_weather,
-             is_grass_surface)
+             is_a_turf, is_astroturf, is_fieldturf, is_grass, is_matrixturf,
+             is_sportturf, is_grass_surface)
         — one row per index input row. Designed to feed
         `scripts.probe_feature_signal --override`.
 
@@ -211,6 +258,7 @@ def build_weather_overrides(
             "is_high_wind",
             "temperature_f",
             "is_cold_weather",
+            *_SURFACE_COL_NAMES,
             "is_grass_surface",
         ]
     ].reset_index(drop=True)
