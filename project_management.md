@@ -38,7 +38,7 @@ Running log of project status, decisions, and next steps. Append new entries at 
 - `scripts/adoption_gate.py` dual-run mode requires single-model-class run dirs. Each `_run_single_backtest.py` produces a multi-class results.parquet; split into per-model-class subdirs (`run_{baseline,candidate}_{baseline,lightgbm-nb}/`) before invoking the gate.
 - Python import caching across the schema-revert boundary: first attempt at the dual backtest reused a single Python process; the in-memory schema classes did not refresh after `git checkout main -- src/projections/schemas.py`. Fixed by subprocess-ing `_run_single_backtest.py` for both runs.
 
-**Follow-up (non-blocking):** Code-review reviewer flagged that 4 PRs in a row (PR #21 RB PBP, PR #26 WR trajectory, PR #27 TE trajectory, this PR) have hit the same `baseline.py:_<POS>_FEATURE_COLUMNS` spec gap. A 5-line parametrized regression test pinning `set(_<POS>_FEATURE_COLUMNS) == set(SCHEMA.columns) - identity` would catch this structurally on every future schema extension. Worth a follow-up commit / mini-PR.
+**Follow-up — shipped in this PR:** Code-review reviewer flagged that 4 PRs in a row (PR #21 RB PBP, PR #26 WR trajectory, PR #27 TE trajectory, this PR) have hit the same `baseline.py:_<POS>_FEATURE_COLUMNS` spec gap. The parametrized regression test pinning `set(_<POS>_FEATURE_COLUMNS) == set(SCHEMA.columns) - identity` was added at `tests/test_models/test_baseline_feature_columns_match_schema.py` (5 cases — one per position plus an identity-cols sanity check). Closes the recurring-bug class structurally on every future schema extension.
 
 See `reports/weather_features_rb_wr_summary.md` for the full decision log + per-mode table + probe-vs-gate calibration + per-position §1.3.5 outcome matrix.
 

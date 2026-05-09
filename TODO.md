@@ -285,7 +285,7 @@ Small feature add; likely small but real win on a subset of games. Same plan slo
 
 **Coverage caveat:** PR #28 PM entry's "uniformly ≥92%" claim was **overstated** — actual production-builder coverage on 2022 RB/WR is ~67% (matches PR #28's probe override byte-perfectly; pooled 91.6% hides the per-season trough). The probe was nonetheless valid on this same data; the gate has now reproduced both ADOPT verdicts on production-pipeline output. Future "coverage uniformly ≥X%" claims should be reported per-(position, season).
 
-**Follow-up recommendation:** 4 PRs in a row (PR #21 RB PBP, PR #26 WR trajectory, PR #27 TE trajectory, this PR) have hit the same `baseline.py:_<POS>_FEATURE_COLUMNS` spec gap. A 5-line parametrized regression test pinning `set(_<POS>_FEATURE_COLUMNS) == set(SCHEMA.columns) - identity` would close this recurring-bug class structurally. Worth a follow-up commit / mini-PR.
+**Follow-up — shipped in this PR:** 4 PRs in a row (PR #21 RB PBP, PR #26 WR trajectory, PR #27 TE trajectory, this PR) hit the same `baseline.py:_<POS>_FEATURE_COLUMNS` spec gap. The parametrized regression test pinning `set(_<POS>_FEATURE_COLUMNS) == set(SCHEMA.columns) - identity` was added at `tests/test_models/test_baseline_feature_columns_match_schema.py` (5 cases — one per position plus an identity-cols sanity check). Closes the recurring-bug class structurally.
 
 ### 26. Plan 5 / 5b / 5c — LightGBM with quantile regression and NB-2 hybrid (Model C / C-tuned / C-NB) — closed in Plan 5 + 5b + 5c
 
