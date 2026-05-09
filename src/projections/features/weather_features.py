@@ -113,6 +113,9 @@ def _compute_is_primetime(kickoff_utc: pd.Series) -> pd.Series:
     local = kickoff_utc.dt.tz_convert(_KICKOFF_TZ)
     hour_frac = local.dt.hour + local.dt.minute / 60.0
     out = (hour_frac >= _PRIMETIME_HOUR_ET).astype("Float64")
+    # Required (not just defensive): without this mask, NaT -> NaN in hour_frac
+    # (float64), then (NaN >= 18.0) is False, which Float64-casts to 0.0, not
+    # pd.NA. Breaks the NaT-propagation contract in the docstring.
     out[kickoff_utc.isna()] = pd.NA
     return out
 

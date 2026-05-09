@@ -1048,6 +1048,32 @@ def test_is_primetime_early_window_in_november_not_primetime() -> None:
     assert out["is_primetime"].tolist() == [0.0, 0.0, 0.0, 0.0]
 
 
+def test_is_primetime_mnf_kickoff_in_november_eastern_standard() -> None:
+    """MNF in November (EST, UTC-5): 8:15pm ET = 01:15 UTC next day.
+    is_primetime = 1.0. Distinguishes EDT/EST handling from a naive
+    fixed-offset implementation (which would mishandle one zone or the other)."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 11,
+                "home_team": "MIA",
+                "away_team": "LAR",
+                # Mon 11/11/2024 8:15pm ET (EST) == Tue 11/12/2024 01:15 UTC.
+                "kickoff": pd.Timestamp("2024-11-12 01:15:00", tz="UTC"),
+                "wind": 5,
+                "temp": 50,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+    assert out["is_primetime"].tolist() == [1.0, 1.0]
+
+
 def test_is_primetime_nan_kickoff_propagates_nan() -> None:
     """NaN kickoff → NaN is_primetime."""
     from projections.features.weather_features import compute_weather_features
