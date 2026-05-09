@@ -939,6 +939,46 @@ def test_surface_onehot_is_grass_matches_v1_is_grass_surface_on_known_codes() ->
     assert (week3["is_grass_surface"] == 0.0).all()
 
 
+def test_surface_onehot_normalizes_trailing_whitespace() -> None:
+    """Upstream `nfl_data_py` surface drift like 'grass ' (trailing space, 93
+    rows in 2021) maps to is_grass=1.0 and does NOT raise the unseen-code
+    ValueError. Pins the `.str.strip()` normalization in `_compute_surface_onehot`
+    so a future refactor that drops it fails loudly here rather than silently
+    when overrides are regenerated against real 2021 data."""
+    from projections.features.weather_features import (
+        _SURFACE_COL_NAMES,
+        compute_weather_features,
+    )
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": "grass ",  # trailing space — 2021 upstream drift.
+            },
+        ]
+    )
+
+    # Must not raise: 'grass ' is a whitespace-variant of a known code, not
+    # an unseen code.
+    out = compute_weather_features(sch)
+
+    # Whitespace was stripped → matched canonical 'grass' → is_grass == 1.0.
+    assert (out["is_grass"] == 1.0).all()
+
+    # All other surface bools are 0.0 on the same row (matches a normal
+    # 'grass' row exactly — confirms normalize-then-match, not a partial
+    # match that fires multiple cols).
+    other_cols = [c for c in _SURFACE_COL_NAMES if c != "is_grass"]
+    for col in other_cols:
+        assert (out[col] == 0.0).all(), f"{col} should be 0.0 on a 'grass ' row"
+
+
 def test_surface_codes_tuple_well_formed() -> None:
     """Pinned _SURFACE_CODES tuple is non-empty, contains 'grass', and every
     code is a clean snake-case-able string. Protects against silent drift if a
