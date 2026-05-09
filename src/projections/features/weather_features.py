@@ -20,6 +20,7 @@ import pandas as pd
 from projections.schemas import GSIS_ID_PATTERN
 
 _HIGH_WIND_MPH = 20.0
+_COLD_WEATHER_TEMP_F = 32.0
 _DOME_FILL_TEMP_F = 70.0
 _DOME_FILL_WIND_MPH = 0.0
 
@@ -43,6 +44,16 @@ _SURFACE_COL_NAMES: Final[tuple[str, ...]] = tuple(
 )
 
 _GSIS_RE: Final[re.Pattern[str]] = re.compile(rf"^{GSIS_ID_PATTERN}$")
+
+
+def _compute_is_cold_weather(temperature_f: pd.Series) -> pd.Series:
+    """Float64 boolean: 1.0 if temperature_f <= 32.0, 0.0 if > 32.0, NaN if NaN.
+
+    Mirrors `is_high_wind`'s NaN-preserving threshold pattern. Domes are
+    already filled to `temperature_f=70.0` upstream, so this naturally
+    produces 0.0 for indoor games.
+    """
+    return (temperature_f <= _COLD_WEATHER_TEMP_F).astype("Float64")
 
 
 def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
@@ -92,6 +103,8 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
     wind_speed = games["wind_speed_mph"]
     games["is_high_wind"] = (wind_speed >= _HIGH_WIND_MPH).astype("Float64")
 
+    games["is_cold_weather"] = _compute_is_cold_weather(games["temperature_f"])
+
     games["is_grass_surface"] = (games["surface"] == "grass").fillna(False).astype("Float64")
 
     return games[
@@ -102,6 +115,7 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
             "wind_speed_mph",
             "is_high_wind",
             "temperature_f",
+            "is_cold_weather",
             "is_grass_surface",
         ]
     ].reset_index(drop=True)
@@ -192,6 +206,7 @@ def build_weather_overrides(
             "wind_speed_mph",
             "is_high_wind",
             "temperature_f",
+            "is_cold_weather",
             "is_grass_surface",
         ]
     ].reset_index(drop=True)

@@ -339,7 +339,8 @@ def test_null_roof_treated_as_outdoor() -> None:
 
 def test_output_columns_and_dtypes() -> None:
     """Output schema: (season, week, team, wind_speed_mph, is_high_wind,
-    temperature_f, is_grass_surface). All four feature cols are Float64."""
+    temperature_f, is_cold_weather, is_grass_surface). All five feature cols
+    are Float64."""
     from projections.features.weather_features import compute_weather_features
 
     sch = _make_schedule_rows(
@@ -356,10 +357,17 @@ def test_output_columns_and_dtypes() -> None:
         "wind_speed_mph",
         "is_high_wind",
         "temperature_f",
+        "is_cold_weather",
         "is_grass_surface",
     }
     assert set(out.columns) == expected_cols
-    for col in ("wind_speed_mph", "is_high_wind", "temperature_f", "is_grass_surface"):
+    for col in (
+        "wind_speed_mph",
+        "is_high_wind",
+        "temperature_f",
+        "is_cold_weather",
+        "is_grass_surface",
+    ):
         assert str(out[col].dtype) == "Float64", f"{col} dtype: {out[col].dtype}"
 
 
@@ -435,6 +443,7 @@ def test_attach_weather_features_basic() -> None:
         "wind_speed_mph",
         "is_high_wind",
         "temperature_f",
+        "is_cold_weather",
         "is_grass_surface",
     }
 
@@ -676,6 +685,92 @@ def test_build_weather_overrides_raises_on_row_count_mismatch(
 
     with pytest.raises(AssertionError, match="row count mismatch"):
         build_weather_overrides(sch, idx)
+
+
+def test_is_cold_weather_boundary_inclusive_at_32() -> None:
+    """temp == 32 → 1.0 (boundary inclusive). temp == 33 → 0.0."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "GB",
+                "away_team": "DET",
+                "wind": 5,
+                "temp": 32,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+            {
+                "week": 2,
+                "home_team": "GB",
+                "away_team": "MIN",
+                "wind": 5,
+                "temp": 33,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+
+    week1 = out.loc[out["week"] == 1]
+    week2 = out.loc[out["week"] == 2]
+    assert week1["is_cold_weather"].tolist() == [1.0, 1.0]
+    assert week2["is_cold_weather"].tolist() == [0.0, 0.0]
+
+
+def test_is_cold_weather_dome_falls_out_to_zero() -> None:
+    """Dome / closed roof fills temperature_f = 70.0, so is_cold_weather = 0.0."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "MIN",
+                "away_team": "DET",
+                "wind": pd.NA,
+                "temp": pd.NA,
+                "roof": "dome",
+                "surface": "fieldturf",
+            },
+            {
+                "week": 2,
+                "home_team": "DAL",
+                "away_team": "NYG",
+                "wind": pd.NA,
+                "temp": pd.NA,
+                "roof": "closed",
+                "surface": "matrixturf",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+
+    assert out["is_cold_weather"].tolist() == [0.0, 0.0, 0.0, 0.0]
+
+
+def test_is_cold_weather_outdoor_nan_temp_propagates() -> None:
+    """Outdoor game with NaN temp → is_cold_weather = NaN."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "BUF",
+                "away_team": "NYJ",
+                "wind": 10,
+                "temp": pd.NA,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+    assert out["is_cold_weather"].isna().all()
 
 
 def test_surface_codes_tuple_well_formed() -> None:
