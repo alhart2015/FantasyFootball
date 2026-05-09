@@ -22,6 +22,26 @@ from projections.schemas import GSIS_ID_PATTERN
 _HIGH_WIND_MPH = 20.0
 _DOME_FILL_TEMP_F = 70.0
 _DOME_FILL_WIND_MPH = 0.0
+
+# Pinned 2026-05-09 from data/raw/schedules across 2018-2024. Enumeration:
+#   sorted(df['surface'].dropna().str.strip().unique())
+# Note: raw `nfl_data_py` schedules contain `'grass '` (trailing space) in
+# 93 rows from the 2021 season; the canonical pinned set strips whitespace,
+# and Task 3's `_compute_surface_onehot` will normalize incoming codes the
+# same way. An unseen code at compute time triggers ValueError there.
+_SURFACE_CODES: Final[tuple[str, ...]] = (
+    "a_turf",
+    "astroturf",
+    "fieldturf",
+    "grass",
+    "matrixturf",
+    "sportturf",
+)
+
+_SURFACE_COL_NAMES: Final[tuple[str, ...]] = tuple(
+    f"is_{c.lower().replace('-', '_')}" for c in _SURFACE_CODES
+)
+
 _GSIS_RE: Final[re.Pattern[str]] = re.compile(rf"^{GSIS_ID_PATTERN}$")
 
 

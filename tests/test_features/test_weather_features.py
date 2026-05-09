@@ -676,3 +676,24 @@ def test_build_weather_overrides_raises_on_row_count_mismatch(
 
     with pytest.raises(AssertionError, match="row count mismatch"):
         build_weather_overrides(sch, idx)
+
+
+def test_surface_codes_tuple_well_formed() -> None:
+    """Pinned _SURFACE_CODES tuple is non-empty, contains 'grass', and every
+    code is a clean snake-case-able string. Protects against silent drift if a
+    future refactor mangles the constant."""
+    from projections.features.weather_features import _SURFACE_CODES, _SURFACE_COL_NAMES
+
+    assert len(_SURFACE_CODES) >= 4, "should have at least grass + 3 turf variants"
+    assert "grass" in _SURFACE_CODES
+    for code in _SURFACE_CODES:
+        assert isinstance(code, str)
+        assert code == code.lower(), f"{code!r} should be lowercase"
+        assert " " not in code, f"{code!r} should not contain spaces"
+
+    # Column names mirror the codes via lower + replace('-', '_').
+    assert len(_SURFACE_COL_NAMES) == len(_SURFACE_CODES)
+    assert "is_grass" in _SURFACE_COL_NAMES
+    for name in _SURFACE_COL_NAMES:
+        assert name.startswith("is_")
+        assert "-" not in name
