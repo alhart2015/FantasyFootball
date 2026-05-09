@@ -27,7 +27,7 @@ weather override audit (56652 rows):
   is_high_wind=1.0 rate (v1): 1.35%
   is_grass_surface=1.0 rate (v1): 51.05%
   is_cold_weather=1.0 rate (refined): 4.01%
-  is_primetime=1.0 rate (refined): 0.16%
+  is_primetime=1.0 rate (refined): 21.97%
   is_a_turf=1.0 rate (refined): 2.35%
   is_astroturf=1.0 rate (refined): 5.21%
   is_fieldturf=1.0 rate (refined): 22.81%
@@ -62,11 +62,24 @@ weather override audit (56652 rows):
 | 2023 | 1.000 | 1.000 | 1.000 | 1.000 |
 | 2024 | 1.000 | 1.000 | 1.000 | 1.000 |
 
+### `is_primetime` =1.0 rate (per-season, per-position)
+
+| season | QB | RB | TE | WR |
+|---|---|---|---|---|
+| 2018 | 0.213 | 0.213 | 0.214 | 0.213 |
+| 2019 | 0.207 | 0.207 | 0.205 | 0.209 |
+| 2020 | 0.214 | 0.215 | 0.215 | 0.211 |
+| 2021 | 0.226 | 0.221 | 0.214 | 0.225 |
+| 2022 | 0.222 | 0.218 | 0.219 | 0.218 |
+| 2023 | 0.225 | 0.235 | 0.223 | 0.230 |
+| 2024 | 0.234 | 0.232 | 0.233 | 0.237 |
+
 ## Notes
 
 - Indoor (dome + closed) rate 29.5% — consistent with PR #28 audit.
 - Outdoor `temp` / `wind` NaN rate inherited from PR #28 (8.39% across the 2018-2024 span). `is_cold_weather` shares the same NaN rate as `temperature_f` because it is derived directly from temperature on outdoor games (dome rows fill to 0).
-- `is_primetime` rate 0.16% pooled — much lower than the rough TNF+SNF+MNF expectation (~12-15% per game-week). This reflects the join semantics: `is_primetime` is a per-(player, week) feature derived from the schedule's `gameday`+`gametime` columns. The ~0.16% pooled rate is over the 56,652-row player-week index, not over the 1,942 game rows. (Ratio sanity-check: with ~30 players per team-week and ~3 primetime games per week, expected primetime player-weeks per regular-season week ≈ 6 teams × 30 ≈ 180 / ~2,400 active player-weeks ≈ 7.5%. The realized 0.16% is materially lower; this is a flag for follow-up — most likely the schedule's `gametime` column is sparsely populated, dropping primetime detection to only games where the start-time string parses cleanly. See Coverage caveat below.)
+- `is_primetime` rate 21.97% pooled. With ~3 primetime games per regular-season week (TNF, SNF, MNF) plus seasonal extras (Saturday late-season slates, Thanksgiving night, Christmas Day, occasional Friday games) and ~30+ active fantasy-eligible players per team, the realized rate is materially in line with the rough TNF+SNF+MNF expectation lifted to player-week granularity (~6 of 32 teams primetime per week ≈ 18-22%). Non-NaN rate is 1.000 across all (season, position) cells — the schedule's `gametime` column parses cleanly for every game in the index.
+- **Note: An ingest-layer bug in `_build_kickoff` (mis-tagging ET wall-clock as UTC) was discovered and fixed during this audit.** The corrected partitions produce the expected ~22% primetime rate; the prior version showed 0.16% due to the tz mistagging. `nfl_data_py` publishes `gametime` as ET wall-clock for all games (including international broadcasts); the helper now `tz_localize("America/New_York")` before `tz_convert("UTC")` to store kickoff in canonical UTC. Downstream `_compute_is_primetime` in `weather_features.py` was already correct (it `tz_convert`s UTC → ET); the bug was strictly in ingest.
 - Multi-class surface rate distribution: `is_grass` 55.82% (close to but not identical to v1 `is_grass_surface` 51.05% — the gap reflects rows where the v2 multi-class split tagged a row as one of the explicit turf brands while v1 fell back to the binary "grass vs not"); modern turfs (`is_fieldturf` 22.81%, `is_matrixturf` 6.62%, `is_sportturf` 5.02%) split the remainder; legacy codes (`is_a_turf` 2.35%, `is_astroturf` 5.21%) appear only in older seasons. The six per-surface columns share a common 2.17% NaN rate, slightly higher than v1's 0.00% — this reflects the stricter normalization (rows with unparseable / unknown surface codes are now NaN across all six rather than silently bucketed into "not grass").
 
 ## Coverage caveat
