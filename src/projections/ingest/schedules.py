@@ -43,11 +43,25 @@ def _normalize_team(v: str) -> str:
 
 
 def _build_kickoff(gameday: pd.Series, gametime: pd.Series) -> pd.Series:
-    """Combine `gameday` (date string) + `gametime` (HH:MM string) into a UTC
-    timestamp series. Missing gameday OR gametime → NaT (e.g., flex-scheduled
-    weeks where kickoff hasn't been confirmed)."""
+    """Combine `gameday` (date string) + `gametime` (HH:MM string) into a
+    timezone-aware UTC timestamp series.
+
+    `nfl_data_py.import_schedules` publishes `gametime` as ET wall-clock for
+    every game (including international broadcasts), so the parse sequence is:
+    parse naive, localize to ``America/New_York`` (zoneinfo handles the
+    EDT/EST switch automatically across the Sep-Feb season span), then convert
+    to UTC for storage.
+
+    Missing gameday OR gametime → NaT (e.g., flex-scheduled weeks where
+    kickoff hasn't been confirmed). DST transition windows (early Sunday
+    morning) lie outside any NFL kickoff slot, but ambiguous/nonexistent
+    timestamps are mapped to NaT defensively."""
     combined = gameday.astype(str) + " " + gametime.astype(str)
-    parsed = pd.to_datetime(combined, format="%Y-%m-%d %H:%M", errors="coerce", utc=True)
+    # Parse naive; the string is ET wall-clock, not UTC.
+    parsed = pd.to_datetime(combined, format="%Y-%m-%d %H:%M", errors="coerce")
+    parsed = parsed.dt.tz_localize(
+        "America/New_York", ambiguous="NaT", nonexistent="NaT"
+    ).dt.tz_convert("UTC")
     return parsed.astype("datetime64[us, UTC]")
 
 

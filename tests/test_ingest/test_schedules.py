@@ -44,9 +44,59 @@ def test_refresh_schedules_constructs_kickoff_from_gameday_and_gametime(
     )
     refresh_schedules(tmp_path, seasons=[2024])
     df = read_partition(tmp_path / "raw", "schedules", season=2024)
-    # Kickoff combined from "2024-09-22" + "20:20" -> 2024-09-22 20:20 UTC
+    # `gametime` is ET wall-clock per nfl_data_py. SNF on 2024-09-22 at 8:20pm
+    # ET (EDT, UTC-4) is 00:20 UTC the following calendar day.
     kc_atl = df[df["game_id"] == "2024_03_KC_ATL"].iloc[0]
-    assert pd.Timestamp(kc_atl["kickoff"]) == pd.Timestamp("2024-09-22 20:20:00", tz="UTC")
+    assert pd.Timestamp(kc_atl["kickoff"]) == pd.Timestamp("2024-09-23 00:20:00", tz="UTC")
+    # 1pm ET in September (EDT, UTC-4) is 17:00 UTC same day.
+    min_hou = df[df["game_id"] == "2024_03_MIN_HOU"].iloc[0]
+    assert pd.Timestamp(min_hou["kickoff"]) == pd.Timestamp("2024-09-22 17:00:00", tz="UTC")
+
+
+def test_build_kickoff_localizes_et_wall_clock_to_utc() -> None:
+    """nfl_data_py publishes gametime as ET wall-clock. _build_kickoff must
+    localize to America/New_York then convert to UTC. Catches the regression
+    where the old code mis-tagged ET wall-clock as UTC.
+
+    Test scenarios:
+    - Sept SNF (EDT, UTC-4): 8:20pm ET = 00:20 UTC next day.
+    - Nov MNF (EST, UTC-5): 8:15pm ET = 01:15 UTC next day.
+    - Sun 1pm ET in Sept (EDT): 17:00 UTC.
+    - Sun 1pm ET in Nov (EST): 18:00 UTC.
+    - Missing gameday or gametime -> NaT.
+    """
+    from projections.ingest.schedules import _build_kickoff
+
+    gameday = pd.Series(
+        [
+            "2024-09-08",  # Sept SNF (EDT)
+            "2024-11-11",  # Nov MNF (EST)
+            "2024-09-22",  # Sun 1pm ET in Sept (EDT)
+            "2024-11-10",  # Sun 1pm ET in Nov (EST)
+            None,  # missing gameday
+            "2024-09-08",  # missing gametime
+        ]
+    )
+    gametime = pd.Series(
+        [
+            "20:20",
+            "20:15",
+            "13:00",
+            "13:00",
+            "13:00",
+            None,
+        ]
+    )
+    out = _build_kickoff(gameday, gametime)
+
+    assert pd.Timestamp(out.iloc[0]) == pd.Timestamp("2024-09-09 00:20:00", tz="UTC")
+    assert pd.Timestamp(out.iloc[1]) == pd.Timestamp("2024-11-12 01:15:00", tz="UTC")
+    assert pd.Timestamp(out.iloc[2]) == pd.Timestamp("2024-09-22 17:00:00", tz="UTC")
+    assert pd.Timestamp(out.iloc[3]) == pd.Timestamp("2024-11-10 18:00:00", tz="UTC")
+    assert pd.isna(out.iloc[4])
+    assert pd.isna(out.iloc[5])
+    # Output dtype is timezone-aware UTC at us resolution (matches SchedulesSchema).
+    assert str(out.dtype) == "datetime64[us, UTC]"
 
 
 def test_refresh_schedules_normalizes_team_codes(
