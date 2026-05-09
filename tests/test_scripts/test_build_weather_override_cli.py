@@ -81,7 +81,7 @@ def test_print_audit_includes_refined_unit_rates(
     assert "weather override audit (4 rows)" in captured.out
     assert "is_cold_weather" in captured.out
     assert "is_primetime" in captured.out
-    assert "is_grass" in captured.out
+    assert "is_grass=1.0 rate (refined)" in captured.out
     # v1 lines still printed.
     assert "is_high_wind=1.0 rate (v1)" in captured.out
     assert "is_grass_surface=1.0 rate (v1)" in captured.out
