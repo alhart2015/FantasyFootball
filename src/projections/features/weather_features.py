@@ -1,19 +1,21 @@
-"""Weather feature computes for the weather family probe.
+"""Weather feature computes for the weather refined-unit family probe (PR #28
+broad-cut + this PR's refinements).
 
-Sourced from `SchedulesSchema` columns (`wind`, `temp`, `roof`, `surface`)
-already in `data/raw/schedules`. Dome / closed-roof games are filled per
-spec §3.5: a controlled environment has no weather, so wind=0 / temp=70
-is semantically correct, not "imputed missing."
+Sourced from `SchedulesSchema` columns (`wind`, `temp`, `roof`, `surface`,
+`kickoff`) already in `data/raw/schedules`. Dome / closed-roof games are
+filled per spec §3.5: a controlled environment has no weather, so wind=0 /
+temp=70 is semantically correct, not "imputed missing."
 
 Probe-only — features land in the override parquet, not in
 `*FeaturesSchema`. Integration follow-up is conditional on the family-probe
-verdict per `docs/superpowers/specs/2026-05-07-weather-feature-family-probe-design.md`.
+verdict per `docs/superpowers/specs/2026-05-09-weather-refined-unit-probe-design.md`.
 """
 
 from __future__ import annotations
 
 import re
 from typing import Final
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -23,6 +25,8 @@ _HIGH_WIND_MPH = 20.0
 _COLD_WEATHER_TEMP_F = 32.0
 _DOME_FILL_TEMP_F = 70.0
 _DOME_FILL_WIND_MPH = 0.0
+_PRIMETIME_HOUR_ET = 18.0
+_KICKOFF_TZ = ZoneInfo("America/New_York")
 
 # Pinned 2026-05-09 from data/raw/schedules across 2018-2024. Enumeration:
 #   sorted(df['surface'].dropna().str.strip().unique())
@@ -93,12 +97,32 @@ def _compute_surface_onehot(surface: pd.Series) -> pd.DataFrame:
     return out
 
 
+def _compute_is_primetime(kickoff_utc: pd.Series) -> pd.Series:
+    """Float64 boolean: 1.0 if local-ET kickoff hour >= 18.0, 0.0 if <, NaN if NaT.
+
+    Converts UTC to America/New_York via stdlib zoneinfo (handles EDT/EST
+    switch automatically across the Sep-Feb season span). Uses the local
+    hour + minute/60 to support fractional hours (e.g., 8:20pm = 20.333).
+    """
+    if not isinstance(kickoff_utc.dtype, pd.DatetimeTZDtype):
+        # Already-naive timestamps would silently mis-convert; force the
+        # caller to pass a UTC-aware Series (matches SchedulesSchema).
+        raise TypeError(
+            f"kickoff must be timezone-aware UTC Series, got dtype={kickoff_utc.dtype!r}"
+        )
+    local = kickoff_utc.dt.tz_convert(_KICKOFF_TZ)
+    hour_frac = local.dt.hour + local.dt.minute / 60.0
+    out = (hour_frac >= _PRIMETIME_HOUR_ET).astype("Float64")
+    out[kickoff_utc.isna()] = pd.NA
+    return out
+
+
 def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
-    """Per-team-game frame with eleven weather features.
+    """Per-team-game frame with twelve weather features.
 
     One row per (game, team) — each schedules row produces two output rows
     (home + away). Weather is a game-level attribute, so both teams in a
-    matchup carry identical wind/temp/surface values.
+    matchup carry identical wind/temp/surface/kickoff values.
 
     Dome / closed-roof handling (spec §3.5):
         wind_speed_mph = 0.0
@@ -107,12 +131,15 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
         is_cold_weather = 0.0 (falls out of temperature_f = 70.0)
         Surface bools (`is_<code>` and `is_grass_surface`) use the actual
             surface code (no override).
+        is_primetime is independent of roof: based on kickoff time only.
 
     Outdoor handling: NaN wind / temp propagate; is_high_wind preserves NaN.
+    NaT kickoff propagates NaN to is_primetime.
 
     Args:
         schedules: frame validated against `SchedulesSchema` (must carry
-            season, week, home_team, away_team, wind, temp, roof, surface).
+            season, week, home_team, away_team, wind, temp, roof, surface,
+            kickoff).
 
     Returns:
         DataFrame with columns:
@@ -120,11 +147,12 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
             wind_speed_mph, is_high_wind, temperature_f, is_cold_weather,
             is_a_turf, is_astroturf, is_fieldturf, is_grass, is_matrixturf,
             is_sportturf,
-            is_grass_surface
-        All eleven feature columns are nullable Float64. season / week are
+            is_grass_surface,
+            is_primetime
+        All twelve feature columns are nullable Float64. season / week are
         Int64; team is StringDtype("pyarrow") (inherited from inputs).
     """
-    cols = ["season", "week", "wind", "temp", "roof", "surface"]
+    cols = ["season", "week", "wind", "temp", "roof", "surface", "kickoff"]
     home = schedules[[*cols, "home_team"]].rename(columns={"home_team": "team"}).copy()
     away = schedules[[*cols, "away_team"]].rename(columns={"away_team": "team"}).copy()
     games = pd.concat([home, away], ignore_index=True)
@@ -153,6 +181,8 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
 
     games["is_grass_surface"] = (games["surface"] == "grass").fillna(False).astype("Float64")
 
+    games["is_primetime"] = _compute_is_primetime(games["kickoff"])
+
     return games[
         [
             "season",
@@ -164,6 +194,7 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
             "is_cold_weather",
             *_SURFACE_COL_NAMES,
             "is_grass_surface",
+            "is_primetime",
         ]
     ].reset_index(drop=True)
 
@@ -172,7 +203,7 @@ def attach_weather_features(
     index: pd.DataFrame,
     schedules: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Left-merge the eleven weather features onto a player-team-week index.
+    """Left-merge the twelve weather features onto a player-team-week index.
 
     Args:
         index: frame with at least (season, week, team) columns. Typically
@@ -182,12 +213,12 @@ def attach_weather_features(
         schedules: frame validated against `SchedulesSchema`.
 
     Returns:
-        Copy of index with eleven nullable Float64 cols appended:
+        Copy of index with twelve nullable Float64 cols appended:
         wind_speed_mph, is_high_wind, temperature_f, is_cold_weather,
         is_a_turf, is_astroturf, is_fieldturf, is_grass, is_matrixturf,
-        is_sportturf, is_grass_surface.
+        is_sportturf, is_grass_surface, is_primetime.
         Index rows without a matching (season, week, team) in schedules
-        retain NaN in all eleven cols.
+        retain NaN in all twelve cols.
     """
     weather = compute_weather_features(schedules)
     return index.merge(weather, on=["season", "week", "team"], how="left")
@@ -214,7 +245,7 @@ def build_weather_overrides(
             (gsis_id, season, week, position,
              wind_speed_mph, is_high_wind, temperature_f, is_cold_weather,
              is_a_turf, is_astroturf, is_fieldturf, is_grass, is_matrixturf,
-             is_sportturf, is_grass_surface)
+             is_sportturf, is_grass_surface, is_primetime)
         — one row per index input row. Designed to feed
         `scripts.probe_feature_signal --override`.
 
@@ -260,5 +291,6 @@ def build_weather_overrides(
             "is_cold_weather",
             *_SURFACE_COL_NAMES,
             "is_grass_surface",
+            "is_primetime",
         ]
     ].reset_index(drop=True)

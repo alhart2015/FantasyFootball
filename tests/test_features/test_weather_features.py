@@ -39,6 +39,9 @@ def _make_schedule_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
     df["wind"] = df["wind"].astype(pd.Int64Dtype())
     df["surface"] = df["surface"].astype(pd.StringDtype("pyarrow"))
     df["roof"] = df["roof"].astype(pd.StringDtype("pyarrow"))
+    # Match SchedulesSchema's `dtype_kwargs={"tz": "UTC", "unit": "us"}`. A
+    # single-row NaT-only frame would otherwise lose the tz, so coerce.
+    df["kickoff"] = pd.to_datetime(df["kickoff"], utc=True).astype("datetime64[us, UTC]")
     return df
 
 
@@ -339,8 +342,8 @@ def test_null_roof_treated_as_outdoor() -> None:
 
 def test_output_columns_and_dtypes() -> None:
     """Output schema: (season, week, team, wind_speed_mph, is_high_wind,
-    temperature_f, is_cold_weather, *_SURFACE_COL_NAMES, is_grass_surface).
-    All eleven feature cols are Float64."""
+    temperature_f, is_cold_weather, *_SURFACE_COL_NAMES, is_grass_surface,
+    is_primetime). All twelve feature cols are Float64."""
     from projections.features.weather_features import (
         _SURFACE_COL_NAMES,
         compute_weather_features,
@@ -363,6 +366,7 @@ def test_output_columns_and_dtypes() -> None:
         "is_cold_weather",
         *_SURFACE_COL_NAMES,
         "is_grass_surface",
+        "is_primetime",
     }
     assert set(out.columns) == expected_cols
     for col in (
@@ -372,6 +376,7 @@ def test_output_columns_and_dtypes() -> None:
         "is_cold_weather",
         *_SURFACE_COL_NAMES,
         "is_grass_surface",
+        "is_primetime",
     ):
         assert str(out[col].dtype) == "Float64", f"{col} dtype: {out[col].dtype}"
 
@@ -454,6 +459,7 @@ def test_attach_weather_features_basic() -> None:
         "is_cold_weather",
         *_SURFACE_COL_NAMES,
         "is_grass_surface",
+        "is_primetime",
     }
 
 
@@ -977,6 +983,92 @@ def test_surface_onehot_normalizes_trailing_whitespace() -> None:
     other_cols = [c for c in _SURFACE_COL_NAMES if c != "is_grass"]
     for col in other_cols:
         assert (out[col] == 0.0).all(), f"{col} should be 0.0 on a 'grass ' row"
+
+
+def test_is_primetime_snf_kickoff_in_september() -> None:
+    """SNF in September (EDT, UTC-4): 8:20pm ET = 00:20 UTC next day.
+    is_primetime = 1.0."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "PHI",
+                "away_team": "DAL",
+                # Sun 9/8/2024 8:20pm ET (EDT) == Mon 9/9/2024 00:20 UTC.
+                "kickoff": pd.Timestamp("2024-09-09 00:20:00", tz="UTC"),
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+    assert out["is_primetime"].tolist() == [1.0, 1.0]
+
+
+def test_is_primetime_early_window_in_november_not_primetime() -> None:
+    """Sunday 1pm ET in November (EST, UTC-5): 18:00 UTC. is_primetime = 0.0.
+    Same wall-clock 1pm ET in September (EDT, UTC-4) is also not primetime —
+    test EST switch correctness."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 10,
+                "home_team": "BUF",
+                "away_team": "NYJ",
+                # Sun 11/10/2024 1:00pm ET (EST) == 18:00 UTC.
+                "kickoff": pd.Timestamp("2024-11-10 18:00:00", tz="UTC"),
+                "wind": 5,
+                "temp": 50,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "MIA",
+                "away_team": "JAX",
+                # Sun 9/8/2024 1:00pm ET (EDT) == 17:00 UTC.
+                "kickoff": pd.Timestamp("2024-09-08 17:00:00", tz="UTC"),
+                "wind": 5,
+                "temp": 80,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+    assert out["is_primetime"].tolist() == [0.0, 0.0, 0.0, 0.0]
+
+
+def test_is_primetime_nan_kickoff_propagates_nan() -> None:
+    """NaN kickoff → NaN is_primetime."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "kickoff": pd.NaT,
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+    assert out["is_primetime"].isna().all()
 
 
 def test_surface_codes_tuple_well_formed() -> None:
