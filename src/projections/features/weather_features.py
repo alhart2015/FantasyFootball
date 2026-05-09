@@ -57,7 +57,7 @@ def _compute_is_cold_weather(temperature_f: pd.Series) -> pd.Series:
 
 
 def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
-    """Per-team-game frame with four weather features.
+    """Per-team-game frame with five weather features.
 
     One row per (game, team) — each schedules row produces two output rows
     (home + away). Weather is a game-level attribute, so both teams in a
@@ -67,6 +67,7 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
         wind_speed_mph = 0.0
         temperature_f = 70.0
         is_high_wind = 0.0 (falls out of wind_speed_mph = 0.0)
+        is_cold_weather = 0.0 (falls out of temperature_f = 70.0)
         is_grass_surface = surface == 'grass' (no override)
 
     Outdoor handling: NaN wind / temp propagate; is_high_wind preserves NaN.
@@ -78,8 +79,9 @@ def compute_weather_features(schedules: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with columns:
             season, week, team,
-            wind_speed_mph, is_high_wind, temperature_f, is_grass_surface
-        All four feature columns are nullable Float64. season / week are
+            wind_speed_mph, is_high_wind, temperature_f, is_cold_weather,
+            is_grass_surface
+        All five feature columns are nullable Float64. season / week are
         Int64; team is StringDtype("pyarrow") (inherited from inputs).
     """
     cols = ["season", "week", "wind", "temp", "roof", "surface"]
@@ -125,7 +127,7 @@ def attach_weather_features(
     index: pd.DataFrame,
     schedules: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Left-merge the four weather features onto a player-team-week index.
+    """Left-merge the five weather features onto a player-team-week index.
 
     Args:
         index: frame with at least (season, week, team) columns. Typically
@@ -135,10 +137,11 @@ def attach_weather_features(
         schedules: frame validated against `SchedulesSchema`.
 
     Returns:
-        Copy of index with four nullable Float64 cols appended:
-        wind_speed_mph, is_high_wind, temperature_f, is_grass_surface.
+        Copy of index with five nullable Float64 cols appended:
+        wind_speed_mph, is_high_wind, temperature_f, is_cold_weather,
+        is_grass_surface.
         Index rows without a matching (season, week, team) in schedules
-        retain NaN in all four cols.
+        retain NaN in all five cols.
     """
     weather = compute_weather_features(schedules)
     return index.merge(weather, on=["season", "week", "team"], how="left")
@@ -163,7 +166,8 @@ def build_weather_overrides(
     Returns:
         Frame with columns
             (gsis_id, season, week, position,
-             wind_speed_mph, is_high_wind, temperature_f, is_grass_surface)
+             wind_speed_mph, is_high_wind, temperature_f, is_cold_weather,
+             is_grass_surface)
         — one row per index input row. Designed to feed
         `scripts.probe_feature_signal --override`.
 
