@@ -4,6 +4,48 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Weather Refined-Unit RB+WR Integration — verdict **full-revert × 2** (probe-vs-gate divergence) (2026-05-09, on branch `feat/weather-refined-rb-wr`)
+
+**Status:** Production strict-replace integration of the 8 refined weather cols (`is_cold_weather`, six surface one-hots, `is_primetime`) into `RbFeaturesSchema` + `WrFeaturesSchema`, replacing the v1 4-col bundle from PR #29, per `docs/superpowers/specs/2026-05-09-weather-refined-rb-wr-design.md`. Followed PR #29's `attach_weather_features` wiring + `scripts/backtest_dual.py` orchestration. **Both binding cells `(LightGBMNbModel, RB)` and `(LightGBMNbModel, WR)` returned `DO_NOT_ADOPT`** with point estimates opposite-signed from PR #30's probe predictions. Per §1.3.5 contingency, both positions full-revert; net code change vs main is **zero** (9 files restored to main's state in commit `c4ba548`). The PR ships only the spec, plan, gate reports, and this summary as historical record.
+
+**Per-position dual-run gate verdicts (4 cells, all DO_NOT_ADOPT):**
+
+| Position | Model class | n_paired | RMSE Δ (fpts) | RMSE 95% CI | Spearman Δ | Verdict |
+|---|---|---:|---:|---|---:|:---:|
+| RB | baseline       | 5273 | +0.0020 | [-0.0117, +0.0156] | -0.0015 | DO_NOT_ADOPT (NULL) |
+| **RB** | **lightgbm-nb** | 5273 | **+0.0012** | **[-0.0064, +0.0090]** | -0.0002 | **DO_NOT_ADOPT (NULL)** |
+| WR | baseline       | 8460 | +0.0120 | [+0.0013, +0.0228] | -0.0025 | DO_NOT_ADOPT (RMSE REGRESSION-shape; Spearman strictly negative) |
+| **WR** | **lightgbm-nb** | 8460 | **+0.0060** | **[-0.0001, +0.0119]** | -0.0016 | **DO_NOT_ADOPT (RMSE NULL barely; Spearman strictly negative)** |
+
+(Bolded rows are the §1.3.5 binding cells.) The 3 informational classes (`lightgbm`, `lightgbm-tuned`, `ensemble`) skipped per spec §1.3.4 (PR #27 / PR #29 precedent).
+
+**Probe-vs-gate calibration: largest divergence in Track 2A history.** PR #30's swap probe predictions vs gate measurements:
+
+| Position | Probe RMSE Δ | Probe CI | Gate RMSE Δ | Gate CI | Magnitude Δ | Sign |
+|---|---:|---|---:|---|---:|---|
+| RB | -0.0088 | [-0.0153, -0.0030] | +0.0012 | [-0.0064, +0.0090] | +0.0100 | flipped |
+| WR | -0.0050 | [-0.0098, -0.0006] | +0.0060 | [-0.0001, +0.0119] | +0.0110 | flipped |
+
+**~+0.011 fpts shift on both binding cells, with sign flipped.** Compare to historical calibration: PR #20 → #21 matched to 4 decimals; PR #25 → #26 within ~0.004 fpts; PR #25 → #27 within ~0.0017; PR #28 → #29 within ~0.0006 on both cells. **First Track 2A integration where the gate flips a binding-cell sign with the probe's CI strictly negative.** Spec §5 risk register anticipated: "smallest binding-cell magnitude in Track 2A history, just inside the per-cell noise floor of ~0.001-0.002 fpts; a small calibration error could flip WR's lgb-nb cell to MARGINAL or DO_NOT_ADOPT." Both binding cells flipped, not just one.
+
+**Most likely mechanism:** the PR #30 probe's small-magnitude binding cells coincided with `--coverage-threshold 0.90` relaxation (the deepest in Track 2A; 2022 `is_cold_weather` non-NaN rate was 0.66 per (position, season)). Small-magnitude lift estimates from low-coverage features are the most fragile to sample-bootstrap variance. **Retrospective takeaway**: a probe binding-cell magnitude under ~0.005 fpts with coverage relaxation should be treated as MARGINAL, not SIGNAL, even if Phase 2's bootstrap CI test passes.
+
+**Per-position §1.3.5 outcome — both positions full-revert.** Single revert commit `c4ba548` restores 9 files: `schemas.py`, `baseline.py`, `weather_features.py` (docstring), `tests/test_features/test_rb.py` + `test_wr.py`, `tests/test_features/test_cache.py`, `tests/test_scripts/test_tune_lightgbm.py`, `tests/test_schemas/test_dataframe_schemas.py`, `tests/backtest/model_metrics.json`. The PR's `git diff main` shows zero net code change.
+
+**Closes:** the "broad-cut refined-unit weather at the in-builder unit" branch on the RB and WR cells from PR #30. Both are now empirically NULL at the production scale. Refined-unit-of-refined-unit candidates (continuous `kickoff_hour_et`, `is_london`, surface × position interactions, per-team weather acclimation, precipitation, wind direction) remain open under TODO #25 but are **deprioritized** — there's no evidence the refined unit is the binding constraint over v1, and the PR #30 probe is now retrospectively suspect for false-positive signal. None queued; future weather-related plans should require independent mechanism evidence before re-probing.
+
+**Cross-class production-routing follow-up (RB and WR):** Closed-without-action. PR #29 logged the v1 cross-class flip question; with this PR's verdict, lgb-nb-with-anything is even less attractive (lgb-nb-with-refined cell measured +0.0012 RB / +0.0060 WR vs baseline-v1). Plan 8's `BaselineModel` routing for both RB and WR remains the right call.
+
+**Spec gaps caught + fixed during execution:**
+- `scripts/refresh_features.py` CLI takes a single position (PR #29 caught this; plan correctly invoked twice).
+- `scripts/adoption_gate.py` dual-run mode requires single-model-class run dirs (PR #29 caught; this PR's plan referenced but didn't prescribe the workaround in Task 10 — surfaced at gate-run time as `MergeError: Merge keys are not unique`. Workaround applied: split each run's `results.parquet` by model_class into 4 subdirs, then run the gate 4 times). For any future refined-feature plan, prescribe this in the plan steps directly.
+- Pre-commit mypy hook uses system Python (pre-existing pydantic v1/v2 conflict). Workaround: `PATH="/.venv/Scripts:$PATH" git commit`.
+- Plan said "4 PR #29 weather tests per file"; actual was 5 (`outdoor_nan_data_propagates_nan` was missed). Plan corrected mid-flight (commit `559d4d9`).
+
+See `reports/weather_refined_rb_wr_summary.md` for the full decision log + per-mode table + probe-vs-gate calibration + per-position §1.3.5 outcome narrative.
+
+---
+
 ## Weather Refined-Unit Family Probe — verdict **SIGNAL** via lgb-nb composite (RB swap + WR augment + WR swap) (2026-05-09, on branch `feat/probe-weather-refined`)
 
 **Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-09-weather-refined-unit-probe-design.md` and plan `docs/superpowers/plans/2026-05-09-weather-refined-unit-probe.md`. Implements three refined-unit weather features (`is_cold_weather`, multi-class surface one-hot, `is_primetime`) on top of PR #28's `weather_features.py` module. No new ingest, no schema changes; production builders unchanged (PR #29's RB+WR integration consumes the v1 4-col subset and ignores the new override-only cols).

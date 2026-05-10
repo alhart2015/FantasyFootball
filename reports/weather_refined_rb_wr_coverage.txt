@@ -1,0 +1,74 @@
+=== RB ===
+  season 2021 (1852 rows):
+    is_cold_weather: non-NaN rate = 0.9611
+    is_a_turf: non-NaN rate = 1.0000
+    is_astroturf: non-NaN rate = 1.0000
+    is_fieldturf: non-NaN rate = 1.0000
+    is_grass: non-NaN rate = 1.0000
+    is_matrixturf: non-NaN rate = 1.0000
+    is_sportturf: non-NaN rate = 1.0000
+    is_primetime: non-NaN rate = 1.0000
+  season 2022 (1850 rows):
+    is_cold_weather: non-NaN rate = 0.6616
+    is_a_turf: non-NaN rate = 0.9778
+    is_astroturf: non-NaN rate = 0.9778
+    is_fieldturf: non-NaN rate = 0.9778
+    is_grass: non-NaN rate = 0.9778
+    is_matrixturf: non-NaN rate = 0.9778
+    is_sportturf: non-NaN rate = 0.9778
+    is_primetime: non-NaN rate = 1.0000
+  season 2023 (1771 rows):
+    is_cold_weather: non-NaN rate = 0.8509
+    is_a_turf: non-NaN rate = 0.8724
+    is_astroturf: non-NaN rate = 0.8724
+    is_fieldturf: non-NaN rate = 0.8724
+    is_grass: non-NaN rate = 0.8724
+    is_matrixturf: non-NaN rate = 0.8724
+    is_sportturf: non-NaN rate = 0.8724
+    is_primetime: non-NaN rate = 1.0000
+  season 2024 (1758 rows):
+    is_cold_weather: non-NaN rate = 0.9824
+    is_a_turf: non-NaN rate = 0.9932
+    is_astroturf: non-NaN rate = 0.9932
+    is_fieldturf: non-NaN rate = 0.9932
+    is_grass: non-NaN rate = 0.9932
+    is_matrixturf: non-NaN rate = 0.9932
+    is_sportturf: non-NaN rate = 0.9932
+    is_primetime: non-NaN rate = 1.0000
+=== WR ===
+  season 2021 (2961 rows):
+    is_cold_weather: non-NaN rate = 0.9605
+    is_a_turf: non-NaN rate = 1.0000
+    is_astroturf: non-NaN rate = 1.0000
+    is_fieldturf: non-NaN rate = 1.0000
+    is_grass: non-NaN rate = 1.0000
+    is_matrixturf: non-NaN rate = 1.0000
+    is_sportturf: non-NaN rate = 1.0000
+    is_primetime: non-NaN rate = 1.0000
+  season 2022 (2935 rows):
+    is_cold_weather: non-NaN rate = 0.6514
+    is_a_turf: non-NaN rate = 0.9772
+    is_astroturf: non-NaN rate = 0.9772
+    is_fieldturf: non-NaN rate = 0.9772
+    is_grass: non-NaN rate = 0.9772
+    is_matrixturf: non-NaN rate = 0.9772
+    is_sportturf: non-NaN rate = 0.9772
+    is_primetime: non-NaN rate = 1.0000
+  season 2023 (2964 rows):
+    is_cold_weather: non-NaN rate = 0.8495
+    is_a_turf: non-NaN rate = 0.8718
+    is_astroturf: non-NaN rate = 0.8718
+    is_fieldturf: non-NaN rate = 0.8718
+    is_grass: non-NaN rate = 0.8718
+    is_matrixturf: non-NaN rate = 0.8718
+    is_sportturf: non-NaN rate = 0.8718
+    is_primetime: non-NaN rate = 1.0000
+  season 2024 (2879 rows):
+    is_cold_weather: non-NaN rate = 0.9840
+    is_a_turf: non-NaN rate = 0.9927
+    is_astroturf: non-NaN rate = 0.9927
+    is_fieldturf: non-NaN rate = 0.9927
+    is_grass: non-NaN rate = 0.9927
+    is_matrixturf: non-NaN rate = 0.9927
+    is_sportturf: non-NaN rate = 0.9927
+    is_primetime: non-NaN rate = 1.0000
