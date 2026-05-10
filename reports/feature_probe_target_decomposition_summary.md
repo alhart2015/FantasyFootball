@@ -4,7 +4,7 @@
 **Branch:** `feat/probe-target-decomposition`
 **Spec:** `docs/superpowers/specs/2026-05-10-target-decomposition-probe-design.md`
 **Plan:** `docs/superpowers/plans/2026-05-10-target-decomposition-probe.md`
-**Commit:** [fill in after final commit]
+**Commit:** `79ce1ee`
 **Predecessor:** PR #31 (refined-unit weather strict-replace integration — full-revert × 2; closes broad-cut weather direction on RB/WR). With the weather track closed, target decomposition (TODO #23) is the next untouched model-improvement axis. This is the **first probe in the project to test a model architecture change** (volume × efficiency factor decomposition) rather than a feature addition.
 
 ## Verdict
