@@ -6,17 +6,20 @@ Spec: docs/superpowers/specs/2026-05-10-target-decomposition-probe-design.md
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 from sklearn.linear_model import RidgeCV
 
 from projections.backtest.target_decomposition_probe import (
     _RIDGE_ALPHAS,
     _WR_RECEIVING_DECOMPS,
+    WalkForwardOutput,
     _fit_decomposed_efficiency,
     _fit_decomposed_volume,
     _fit_direct,
     _predict_decomposed,
     _predict_direct,
+    walk_forward_residuals,
 )
 from projections.schemas import Stat
 
@@ -156,3 +159,215 @@ def test_predict_decomposed_no_clip_on_efficiency_hi_when_inf() -> None:
     )
     # No upper clip; product is ~250.
     assert np.all(pred > 200.0)
+
+
+def _make_synthetic_walk_forward_inputs(
+    seasons: tuple[int, ...] = (2018, 2019, 2020, 2021),
+    n_per_season: int = 25,
+    seed: int = 6,
+) -> tuple[dict[int, pd.DataFrame], pd.DataFrame]:
+    """Build a tiny features dict and weekly_stats frame whose schema is
+    compatible with the harness. Identifying cols are stable (same gsis_ids
+    across seasons) so the inner-join joins.
+    """
+    rng = np.random.default_rng(seed)
+    feature_cols = ["targets_per_game_l4", "receiving_yards_per_game_l4"]
+    features_by_year: dict[int, pd.DataFrame] = {}
+    weekly_rows: list[dict[str, object]] = []
+    for season in seasons:
+        n = n_per_season
+        gsis_ids = [f"00-{season:04d}{i:03d}" for i in range(n)]
+        feat_df = pd.DataFrame(
+            {
+                "gsis_id": gsis_ids,
+                "season": season,
+                "week": rng.integers(1, 18, size=n),
+                "team": "KC",
+                "opponent": "DEN",
+                **{c: rng.standard_normal(n) for c in feature_cols},
+            }
+        )
+        features_by_year[season] = feat_df
+        # Construct weekly stats so targets is non-zero on most rows.
+        targets = rng.integers(0, 12, size=n)
+        for i, gid in enumerate(gsis_ids):
+            t = int(targets[i])
+            weekly_rows.append(
+                {
+                    "gsis_id": gid,
+                    "season": season,
+                    "week": int(feat_df["week"].iloc[i]),
+                    "position": "WR",
+                    "team": "KC",
+                    "opponent": "DEN",
+                    "targets": t,
+                    "receptions": int(t * 0.6),
+                    "receiving_yards": float(t * 8.0),
+                    "receiving_tds": int(t * 0.05),
+                    "passing_yards": 0.0,
+                    "passing_tds": 0,
+                    "interceptions": 0,
+                    "attempts": 0,
+                    "completions": 0,
+                    "sacks": 0,
+                    "rushing_yards": 0.0,
+                    "rushing_tds": 0,
+                    "carries": 0,
+                    "receiving_air_yards": 0.0,
+                    "fumbles_lost": 0,
+                }
+            )
+    weekly_stats = pd.DataFrame(weekly_rows)
+    return features_by_year, weekly_stats
+
+
+def test_walk_forward_output_shape_matches_three_stats() -> None:
+    """Output is a WalkForwardOutput with one entry per decomposed stat
+    (receptions, receiving_yards, receiving_tds), each holding aligned
+    arrays of (actual, mu_direct, mu_decomposed) of equal length n_paired.
+    """
+    features_by_year, weekly_stats = _make_synthetic_walk_forward_inputs()
+    out = walk_forward_residuals(
+        features_by_year=features_by_year,
+        weekly_stats=weekly_stats,
+        feature_columns=("targets_per_game_l4", "receiving_yards_per_game_l4"),
+        eval_years=(2021,),
+        train_start=2018,
+    )
+    assert isinstance(out, WalkForwardOutput)
+    assert set(out.per_stat.keys()) == {
+        Stat.RECEPTIONS,
+        Stat.RECEIVING_YARDS,
+        Stat.RECEIVING_TDS,
+    }
+    for _stat, residuals in out.per_stat.items():
+        assert residuals.actual.shape == residuals.mu_direct.shape
+        assert residuals.actual.shape == residuals.mu_decomposed.shape
+        assert residuals.n_paired == len(residuals.actual)
+
+
+def test_walk_forward_train_eval_strict_separation_assertion() -> None:
+    """Defense-in-depth: train rows for eval Y must not contain season Y rows.
+
+    Construct synthetic data where features for season 2021 leak into the
+    train pool for eval year 2021; verify the harness catches it.
+    """
+    features_by_year, weekly_stats = _make_synthetic_walk_forward_inputs(seasons=(2019, 2020, 2021))
+    # Inject a row tagged season=2021 into the 2020 features frame.
+    leak_row = features_by_year[2020].iloc[[0]].copy()
+    leak_row["season"] = 2021
+    features_by_year[2020] = pd.concat([features_by_year[2020], leak_row], ignore_index=True)
+    # Add the corresponding weekly_stats row.
+    leak_ws = (
+        weekly_stats[
+            (weekly_stats["gsis_id"] == leak_row["gsis_id"].iloc[0])
+            & (weekly_stats["season"] == 2020)
+        ]
+        .iloc[[0]]
+        .copy()
+    )
+    leak_ws["season"] = 2021
+    weekly_stats = pd.concat([weekly_stats, leak_ws], ignore_index=True)
+
+    with pytest.raises(AssertionError, match="contain season >= eval year"):
+        walk_forward_residuals(
+            features_by_year=features_by_year,
+            weekly_stats=weekly_stats,
+            feature_columns=("targets_per_game_l4", "receiving_yards_per_game_l4"),
+            eval_years=(2021,),
+            train_start=2019,
+        )
+
+
+def test_walk_forward_coverage_measured_per_year() -> None:
+    """Coverage = (targets > 0).mean() per eval year on eval rows; same on train rows.
+
+    Construct synthetic data where 80% of 2020 eval rows have targets > 0;
+    verify coverage_by_year[2020] reflects that.
+    """
+    rng = np.random.default_rng(42)
+    n = 50
+    seasons = (2018, 2019, 2020)
+    features_by_year: dict[int, pd.DataFrame] = {}
+    weekly_rows: list[dict[str, object]] = []
+    for season in seasons:
+        gsis_ids = [f"00-{season:04d}{i:03d}" for i in range(n)]
+        feat_df = pd.DataFrame(
+            {
+                "gsis_id": gsis_ids,
+                "season": season,
+                "week": np.arange(1, n + 1) % 18 + 1,
+                "team": "KC",
+                "opponent": "DEN",
+                "targets_per_game_l4": rng.standard_normal(n),
+                "receiving_yards_per_game_l4": rng.standard_normal(n),
+            }
+        )
+        features_by_year[season] = feat_df
+        # 2020: exactly 40 rows with targets > 0 (80%); other seasons: ~95%.
+        if season == 2020:
+            targets = np.array([3] * 40 + [0] * 10)
+        else:
+            targets = rng.choice([0, 5], size=n, p=[0.05, 0.95])
+        for i, gid in enumerate(gsis_ids):
+            t = int(targets[i])
+            weekly_rows.append(
+                {
+                    "gsis_id": gid,
+                    "season": season,
+                    "week": int(feat_df["week"].iloc[i]),
+                    "position": "WR",
+                    "team": "KC",
+                    "opponent": "DEN",
+                    "targets": t,
+                    "receptions": int(t * 0.6),
+                    "receiving_yards": float(t * 8.0),
+                    "receiving_tds": int(t * 0.05),
+                    "passing_yards": 0.0,
+                    "passing_tds": 0,
+                    "interceptions": 0,
+                    "attempts": 0,
+                    "completions": 0,
+                    "sacks": 0,
+                    "rushing_yards": 0.0,
+                    "rushing_tds": 0,
+                    "carries": 0,
+                    "receiving_air_yards": 0.0,
+                    "fumbles_lost": 0,
+                }
+            )
+    weekly_stats = pd.DataFrame(weekly_rows)
+
+    out = walk_forward_residuals(
+        features_by_year=features_by_year,
+        weekly_stats=weekly_stats,
+        feature_columns=("targets_per_game_l4", "receiving_yards_per_game_l4"),
+        eval_years=(2020,),
+        train_start=2018,
+    )
+    cov = {c.eval_year: c for c in out.coverage_by_year}
+    assert cov[2020].targets_positive_rate == pytest.approx(0.80, abs=0.01)
+    assert cov[2020].n_eval_rows == n
+
+
+def test_walk_forward_factor_residuals_recorded_per_stat_per_year() -> None:
+    """For each (stat, eval_year), volume_residuals + efficiency_residuals
+    are recorded on rows where targets > 0 (efficiency residual undefined
+    where targets == 0).
+    """
+    features_by_year, weekly_stats = _make_synthetic_walk_forward_inputs(seasons=(2018, 2019, 2020))
+    out = walk_forward_residuals(
+        features_by_year=features_by_year,
+        weekly_stats=weekly_stats,
+        feature_columns=("targets_per_game_l4", "receiving_yards_per_game_l4"),
+        eval_years=(2019, 2020),
+        train_start=2018,
+    )
+    for stat in (Stat.RECEPTIONS, Stat.RECEIVING_YARDS, Stat.RECEIVING_TDS):
+        per_year = out.factor_residuals_by_year[stat]
+        assert len(per_year) == 2  # one entry per eval year
+        years = sorted(p.eval_year for p in per_year)
+        assert years == [2019, 2020]
+        for entry in per_year:
+            assert entry.volume_residuals.shape == entry.efficiency_residuals.shape
+            assert entry.volume_residuals.dtype == np.float64
