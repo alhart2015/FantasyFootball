@@ -17,13 +17,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from pathlib import Path
+from typing import Final, Literal
 
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import RidgeCV
 
-from projections.schemas import Stat
+from projections.backtest.adoption_gate import (
+    BootstrapDelta,
+    paired_bootstrap_rmse_delta,
+)
+from projections.schemas import Ruleset, Stat
 
 # Same alpha grid as BaselineModel.fit (src/projections/models/baseline.py:563).
 _RIDGE_ALPHAS: Final = np.logspace(-3, 3, 13)
@@ -389,3 +394,235 @@ def walk_forward_residuals(
         train_coverage_by_year=train_coverage,
         eval_years=tuple(eval_years),
     )
+
+
+ProbeVerdictLabel = Literal["SIGNAL", "NULL", "REGRESSION"]
+
+
+def _verdict_from_delta(delta: BootstrapDelta) -> ProbeVerdictLabel:
+    """Pure CI-based per-stat verdict (no effect-size floor).
+
+    SIGNAL iff hi_95 < 0 (decomposed strictly improves).
+    REGRESSION iff lo_95 > 0 (decomposed strictly regresses).
+    NULL otherwise.
+    """
+    if delta.hi_95 < 0:
+        return "SIGNAL"
+    if delta.lo_95 > 0:
+        return "REGRESSION"
+    return "NULL"
+
+
+@dataclass(frozen=True, slots=True)
+class StatProbeVerdict:
+    """Per-stat probe verdict + diagnostic numbers."""
+
+    stat: Stat
+    n_paired: int
+    rmse_delta: BootstrapDelta
+    rmse_direct: float
+    rmse_decomposed: float
+    verdict: ProbeVerdictLabel
+    expected_composite_fpts_delta: float
+    """RMSE delta translated to expected composite-fpts contribution
+    (rmse_delta.point x scoring coefficient for this stat under ESPN PPR).
+    Per section 5 risk #1: surfaces probe-vs-gate magnitude calibration."""
+    factor_residual_correlation_by_year: Mapping[int, float]
+    """Per-eval-year Pearson rho between volume residual and efficiency residual.
+    |rho| > 0.2 in any year is a documented caveat per section 5 risk #2."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeReport:
+    """Bundle of all per-stat verdicts + the walk-forward output for context.
+
+    Renders to:
+    - 1 summary markdown (hand-written from this struct; see Task 5).
+    - 1 per-stat csv.
+    - 3 per-stat markdown details.
+    """
+
+    verdicts: Mapping[Stat, StatProbeVerdict]
+    walk_forward: WalkForwardOutput
+    bootstrap_n: int
+    seed: int
+
+
+def _rmse(actual: np.ndarray, mu: np.ndarray) -> float:
+    return float(np.sqrt(np.mean((actual - mu) ** 2)))
+
+
+def _stat_scoring_coefficient(stat: Stat) -> float:
+    """ESPN PPR coefficient for `stat`. Mirrors
+    `projections.scoring.score_distribution._scoring_coefficients`.
+
+    Used to translate per-stat RMSE delta to expected composite-fpts impact:
+    a per-stat RMSE delta of -0.1 yds with coefficient 0.1 fpt/yd implies
+    the stat contributes roughly -0.01 fpts to composite-fpts RMSE (rough,
+    not exact -- composite-fpts RMSE depends on cross-stat covariance).
+    """
+    ruleset = Ruleset.espn_ppr()
+    coefficients = {
+        Stat.RECEPTIONS: ruleset.reception_pts,
+        Stat.RECEIVING_YARDS: 1.0 / ruleset.receiving_yds_per_pt,
+        Stat.RECEIVING_TDS: ruleset.receiving_td_pts,
+    }
+    return coefficients[stat]
+
+
+def _factor_residual_correlation(
+    factor_residuals: Sequence[FactorResidualsByYear],
+) -> dict[int, float]:
+    """Per-eval-year Pearson rho of (volume_residual, efficiency_residual)."""
+    out: dict[int, float] = {}
+    for entry in factor_residuals:
+        if len(entry.volume_residuals) < 2:
+            out[entry.eval_year] = float("nan")
+            continue
+        vol = entry.volume_residuals
+        eff = entry.efficiency_residuals
+        std_v = float(vol.std(ddof=0))
+        std_e = float(eff.std(ddof=0))
+        if std_v == 0.0 or std_e == 0.0:
+            out[entry.eval_year] = float("nan")
+            continue
+        cov_matrix: np.ndarray = np.cov(vol, eff, ddof=0)
+        rho = float(cov_matrix[0, 1]) / (std_v * std_e)
+        out[entry.eval_year] = rho
+    return out
+
+
+def render_probe_report(
+    walk_forward: WalkForwardOutput,
+    *,
+    bootstrap_n: int = 5000,
+    seed: int = 0xD3C0,
+) -> ProbeReport:
+    """Per-stat verdicts via paired-bootstrap on the pooled residuals.
+
+    Args:
+        walk_forward: output from `walk_forward_residuals`.
+        bootstrap_n: paired-bootstrap resample count (default 5000, matches
+            `feature_probe.py`).
+        seed: RNG seed for the bootstrap; deterministic across runs.
+    """
+    verdicts: dict[Stat, StatProbeVerdict] = {}
+    for stat, residuals in walk_forward.per_stat.items():
+        # paired_bootstrap_rmse_delta consumes residual arrays (actual - mu);
+        # compute them up front from the per-row buffers.
+        residuals_direct = residuals.actual - residuals.mu_direct
+        residuals_decomposed = residuals.actual - residuals.mu_decomposed
+        # Sign convention: candidate - incumbent. We name "decomposed" the
+        # candidate (we want it to win), so direct is incumbent.
+        delta = paired_bootstrap_rmse_delta(
+            residuals_incumbent=residuals_direct,
+            residuals_candidate=residuals_decomposed,
+            n_bootstrap=bootstrap_n,
+            seed=seed,
+        )
+        rmse_direct = _rmse(residuals.actual, residuals.mu_direct)
+        rmse_decomposed = _rmse(residuals.actual, residuals.mu_decomposed)
+        coef = _stat_scoring_coefficient(stat)
+        per_year_rho = _factor_residual_correlation(walk_forward.factor_residuals_by_year[stat])
+        verdicts[stat] = StatProbeVerdict(
+            stat=stat,
+            n_paired=residuals.n_paired,
+            rmse_delta=delta,
+            rmse_direct=rmse_direct,
+            rmse_decomposed=rmse_decomposed,
+            verdict=_verdict_from_delta(delta),
+            expected_composite_fpts_delta=delta.point * coef,
+            factor_residual_correlation_by_year=per_year_rho,
+        )
+
+    return ProbeReport(
+        verdicts=verdicts,
+        walk_forward=walk_forward,
+        bootstrap_n=bootstrap_n,
+        seed=seed,
+    )
+
+
+def write_per_stat_csv(report: ProbeReport, path: Path) -> None:
+    """Write a 3-row CSV: one row per decomposed stat with verdict + diagnostics."""
+    rows: list[dict[str, object]] = []
+    for stat, v in report.verdicts.items():
+        rows.append(
+            {
+                "stat": stat.value,
+                "n_paired": v.n_paired,
+                "rmse_direct": v.rmse_direct,
+                "rmse_decomposed": v.rmse_decomposed,
+                "rmse_delta_point": v.rmse_delta.point,
+                "rmse_delta_lo_95": v.rmse_delta.lo_95,
+                "rmse_delta_hi_95": v.rmse_delta.hi_95,
+                "verdict": v.verdict,
+                "expected_composite_fpts_delta": v.expected_composite_fpts_delta,
+            }
+        )
+    df = pd.DataFrame(rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
+
+
+def write_per_stat_markdown(report: ProbeReport, stat: Stat, path: Path) -> None:
+    """Render the per-stat detail markdown."""
+    v = report.verdicts[stat]
+    coverage = {c.eval_year: c for c in report.walk_forward.coverage_by_year}
+    train_coverage = {c.eval_year: c for c in report.walk_forward.train_coverage_by_year}
+    eval_years = report.walk_forward.eval_years
+
+    lines: list[str] = []
+    lines.append(f"# Target Decomposition Probe — {stat.value}")
+    lines.append("")
+    lines.append(f"**Verdict:** {v.verdict}")
+    lines.append("")
+    lines.append("## Pooled per-stat verdict")
+    lines.append("")
+    lines.append("| n_paired | RMSE direct | RMSE decomposed | Delta-RMSE | 95% CI | Verdict |")
+    lines.append("|---:|---:|---:|---:|---|:---:|")
+    lines.append(
+        f"| {v.n_paired} | {v.rmse_direct:.4f} | {v.rmse_decomposed:.4f} | "
+        f"{v.rmse_delta.point:+.4f} | "
+        f"[{v.rmse_delta.lo_95:+.4f}, {v.rmse_delta.hi_95:+.4f}] | "
+        f"**{v.verdict}** |"
+    )
+    lines.append("")
+    lines.append(
+        f"**Expected composite-fpts Delta (rough)**: "
+        f"{v.expected_composite_fpts_delta:+.4f} fpts "
+        f"(stat RMSE Delta x ESPN PPR coefficient {_stat_scoring_coefficient(stat):+.4f}). "
+        f"Per section 5 risk #1, magnitudes < 0.005 fpts under coverage relaxation should "
+        f"be treated as MARGINAL, not SIGNAL."
+    )
+    lines.append("")
+    lines.append("## Per-eval-year coverage")
+    lines.append("")
+    lines.append("| Year | Eval n | Eval (targets > 0) | Train n | Train (targets > 0) |")
+    lines.append("|---:|---:|---:|---:|---:|")
+    for year in eval_years:
+        e = coverage[year]
+        t = train_coverage[year]
+        lines.append(
+            f"| {year} | {e.n_eval_rows} | {e.targets_positive_rate:.3f} | "
+            f"{t.n_eval_rows} | {t.targets_positive_rate:.3f} |"
+        )
+    lines.append("")
+    lines.append("## Factor residual correlation (Pearson rho)")
+    lines.append("")
+    lines.append(
+        "Per-eval-year Pearson rho between (predicted-volume residual, "
+        "predicted-efficiency residual) on rows with targets > 0. |rho| > 0.2 in "
+        "any year is a documented caveat per section 5 risk #2."
+    )
+    lines.append("")
+    lines.append("| Year | rho |")
+    lines.append("|---:|---:|")
+    for year in eval_years:
+        rho = v.factor_residual_correlation_by_year.get(year, float("nan"))
+        lines.append(f"| {year} | {rho:+.3f} |")
+    lines.append("")
+    lines.append(f"_Bootstrap n_resamples = {report.bootstrap_n}, seed = {report.seed}._")
+    lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")

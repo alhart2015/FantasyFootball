@@ -5,21 +5,29 @@ Spec: docs/superpowers/specs/2026-05-10-target-decomposition-probe-design.md
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.linear_model import RidgeCV
 
+from projections.backtest.adoption_gate import BootstrapDelta
 from projections.backtest.target_decomposition_probe import (
     _RIDGE_ALPHAS,
     _WR_RECEIVING_DECOMPS,
+    ProbeReport,
     WalkForwardOutput,
     _fit_decomposed_efficiency,
     _fit_decomposed_volume,
     _fit_direct,
     _predict_decomposed,
     _predict_direct,
+    _verdict_from_delta,
+    render_probe_report,
     walk_forward_residuals,
+    write_per_stat_csv,
+    write_per_stat_markdown,
 )
 from projections.schemas import Stat
 
@@ -371,3 +379,130 @@ def test_walk_forward_factor_residuals_recorded_per_stat_per_year() -> None:
         for entry in per_year:
             assert entry.volume_residuals.shape == entry.efficiency_residuals.shape
             assert entry.volume_residuals.dtype == np.float64
+
+
+def _delta(point: float, lo_95: float, hi_95: float) -> BootstrapDelta:
+    """Test helper. BootstrapDelta has 5 required fields; the verdict logic
+    only reads point/lo_95/hi_95, so pin the others at constants."""
+    return BootstrapDelta(
+        point=point,
+        lo_95=lo_95,
+        hi_95=hi_95,
+        n_paired_rows=100,
+        n_bootstrap=200,
+    )
+
+
+def test_verdict_signal_when_hi_95_strictly_negative() -> None:
+    assert _verdict_from_delta(_delta(-0.5, -0.8, -0.1)) == "SIGNAL"
+
+
+def test_verdict_regression_when_lo_95_strictly_positive() -> None:
+    assert _verdict_from_delta(_delta(0.5, 0.1, 0.8)) == "REGRESSION"
+
+
+def test_verdict_null_when_ci_brackets_zero() -> None:
+    assert _verdict_from_delta(_delta(-0.05, -0.3, 0.2)) == "NULL"
+
+
+def test_verdict_null_at_exact_zero_boundaries() -> None:
+    """SIGNAL requires hi_95 strictly < 0; lo_95 strictly > 0 for REGRESSION.
+    Exact-zero boundaries fall into NULL."""
+    assert _verdict_from_delta(_delta(-0.5, -1.0, 0.0)) == "NULL"
+    assert _verdict_from_delta(_delta(0.5, 0.0, 1.0)) == "NULL"
+
+
+def test_render_probe_report_returns_three_stat_verdicts() -> None:
+    """End-to-end: walk_forward_residuals -> render_probe_report yields 3 verdicts,
+    each with finite n_paired and RMSE deltas."""
+    features_by_year, weekly_stats = _make_synthetic_walk_forward_inputs(n_per_season=120)
+    out = walk_forward_residuals(
+        features_by_year=features_by_year,
+        weekly_stats=weekly_stats,
+        feature_columns=("targets_per_game_l4", "receiving_yards_per_game_l4"),
+        eval_years=(2021,),
+        train_start=2018,
+    )
+    report = render_probe_report(out, bootstrap_n=200, seed=42)
+    assert isinstance(report, ProbeReport)
+    assert set(report.verdicts.keys()) == {
+        Stat.RECEPTIONS,
+        Stat.RECEIVING_YARDS,
+        Stat.RECEIVING_TDS,
+    }
+    for stat, v in report.verdicts.items():
+        assert v.stat is stat
+        assert v.n_paired > 0
+        assert np.isfinite(v.rmse_delta.point)
+        assert np.isfinite(v.rmse_delta.lo_95)
+        assert np.isfinite(v.rmse_delta.hi_95)
+        assert v.verdict in ("SIGNAL", "NULL", "REGRESSION")
+
+
+def test_render_probe_report_is_deterministic_under_fixed_seed() -> None:
+    features_by_year, weekly_stats = _make_synthetic_walk_forward_inputs(n_per_season=120)
+    out = walk_forward_residuals(
+        features_by_year=features_by_year,
+        weekly_stats=weekly_stats,
+        feature_columns=("targets_per_game_l4", "receiving_yards_per_game_l4"),
+        eval_years=(2021,),
+        train_start=2018,
+    )
+    a = render_probe_report(out, bootstrap_n=200, seed=123)
+    b = render_probe_report(out, bootstrap_n=200, seed=123)
+    for stat in (Stat.RECEPTIONS, Stat.RECEIVING_YARDS, Stat.RECEIVING_TDS):
+        assert a.verdicts[stat].rmse_delta.point == b.verdicts[stat].rmse_delta.point
+        assert a.verdicts[stat].rmse_delta.lo_95 == b.verdicts[stat].rmse_delta.lo_95
+        assert a.verdicts[stat].rmse_delta.hi_95 == b.verdicts[stat].rmse_delta.hi_95
+
+
+def test_per_stat_csv_has_one_row_per_decomposed_stat(tmp_path: Path) -> None:
+    """Per-stat CSV: one row per decomposed stat with verdict columns."""
+    features_by_year, weekly_stats = _make_synthetic_walk_forward_inputs(n_per_season=120)
+    out = walk_forward_residuals(
+        features_by_year=features_by_year,
+        weekly_stats=weekly_stats,
+        feature_columns=("targets_per_game_l4", "receiving_yards_per_game_l4"),
+        eval_years=(2021,),
+        train_start=2018,
+    )
+    report = render_probe_report(out, bootstrap_n=200, seed=42)
+    csv_path = tmp_path / "per_stat.csv"
+    write_per_stat_csv(report, csv_path)
+    df = pd.read_csv(csv_path)
+    assert len(df) == 3
+    assert set(df["stat"]) == {"receptions", "receiving_yards", "receiving_tds"}
+    for col in (
+        "n_paired",
+        "rmse_direct",
+        "rmse_decomposed",
+        "rmse_delta_point",
+        "rmse_delta_lo_95",
+        "rmse_delta_hi_95",
+        "verdict",
+        "expected_composite_fpts_delta",
+    ):
+        assert col in df.columns
+
+
+def test_per_stat_markdown_renders_verdict_and_diagnostics(tmp_path: Path) -> None:
+    """Per-stat markdown: verdict header + RMSE table + per-year coverage table
+    + per-year factor-residual rho."""
+    features_by_year, weekly_stats = _make_synthetic_walk_forward_inputs(n_per_season=120)
+    out = walk_forward_residuals(
+        features_by_year=features_by_year,
+        weekly_stats=weekly_stats,
+        feature_columns=("targets_per_game_l4", "receiving_yards_per_game_l4"),
+        eval_years=(2021,),
+        train_start=2018,
+    )
+    report = render_probe_report(out, bootstrap_n=200, seed=42)
+    md_path = tmp_path / "receiving_yards.md"
+    write_per_stat_markdown(report, Stat.RECEIVING_YARDS, md_path)
+    text = md_path.read_text(encoding="utf-8")
+    assert "receiving_yards" in text
+    assert report.verdicts[Stat.RECEIVING_YARDS].verdict in text
+    # Composite-fpts translation must surface in the body.
+    assert "Expected composite-fpts" in text or "expected_composite_fpts" in text
+    # Factor residual correlation surfaces.
+    assert "Factor residual" in text or "rho" in text
