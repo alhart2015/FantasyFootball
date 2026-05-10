@@ -1,22 +1,14 @@
-"""Weather feature computes for both the v1 broad-cut bundle (PR #28 probe →
-PR #29 RB+WR integration) and the refined-unit bundle (PR #30 probe →
-PR-#-this-spec strict-replace integration).
+"""Weather feature computes for the weather refined-unit family probe (PR #28
+broad-cut + this PR's refinements).
 
 Sourced from `SchedulesSchema` columns (`wind`, `temp`, `roof`, `surface`,
 `kickoff`) already in `data/raw/schedules`. Dome / closed-roof games are
-filled per the original PR #28 spec §3.5: a controlled environment has no
-weather, so `wind=0` / `temp=70` is semantically correct, not "imputed
-missing."
+filled per spec §3.5: a controlled environment has no weather, so wind=0 /
+temp=70 is semantically correct, not "imputed missing."
 
-`compute_weather_features` returns 12 cols: 4 v1 (`wind_speed_mph`,
-`is_high_wind`, `temperature_f`, `is_grass_surface`) and 8 refined
-(`is_cold_weather`, six surface one-hots, `is_primetime`). The v1 4-col
-bundle was superseded in `RbFeaturesSchema` / `WrFeaturesSchema` by the
-refined 8-col bundle in PR-#-this-spec; the helper still returns all 12
-because `build_weather_overrides` and `scripts/build_weather_override.py`
-consume the full set for any future probe re-run. Pandera's `strict="filter"`
-on the production builders' schema validates filters the v1 cols at the
-boundary.
+Probe-only — features land in the override parquet, not in
+`*FeaturesSchema`. Integration follow-up is conditional on the family-probe
+verdict per `docs/superpowers/specs/2026-05-09-weather-refined-unit-probe-design.md`.
 """
 
 from __future__ import annotations

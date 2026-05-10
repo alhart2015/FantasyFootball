@@ -610,17 +610,7 @@ def test_build_wr_features_attach_trajectory_veteran_with_8plus_history_yields_n
     assert jef["is_rookie"] == 0.0
 
 
-_REFINED_SURFACE_FLAGS: tuple[str, ...] = (
-    "is_a_turf",
-    "is_astroturf",
-    "is_fieldturf",
-    "is_grass",
-    "is_matrixturf",
-    "is_sportturf",
-)
-
-
-def test_build_wr_features_attach_weather_refined_dome_fill(
+def test_build_wr_features_attach_weather_dome_fill(
     wr_weekly_stats: pd.DataFrame,
     wr_snap_counts: pd.DataFrame,
     wr_depth_charts: pd.DataFrame,
@@ -628,18 +618,15 @@ def test_build_wr_features_attach_weather_refined_dome_fill(
     wr_schedules: pd.DataFrame,
     fake_pbp_df: pd.DataFrame,
 ) -> None:
-    """Dome game: temperature_f filled to 70 by attach_weather_features =>
-    is_cold_weather=0; surface flags reflect the actual stadium surface
-    (no roof-based override per `_compute_surface_onehot`); is_primetime=0
-    for the fixture's 1pm- and 4:25pm-ET kickoffs (both pre-6pm ET)."""
+    """Dome game: wind_speed_mph=0, temperature_f=70, is_high_wind=0 per
+    compute_weather_features semantics. Surface determined separately."""
     sch = wr_schedules.copy()
     week_mask = sch["week"] == 5
     sch.loc[week_mask, "roof"] = "dome"
-    # Upstream NaN — should be overridden by dome temperature fill. wind/temp
-    # are pd.Int64Dtype() in the fixture, which natively accepts pd.NA.
+    # Upstream NaN — should be overridden by dome fill. wind/temp are
+    # pd.Int64Dtype() in the fixture, which natively accepts pd.NA.
     sch.loc[week_mask, "wind"] = pd.NA
     sch.loc[week_mask, "temp"] = pd.NA
-    sch.loc[week_mask, "surface"] = "fieldturf"
 
     out = build_wr_features(
         weekly_stats=wr_weekly_stats,
@@ -651,17 +638,12 @@ def test_build_wr_features_attach_weather_refined_dome_fill(
         season=2024,
         as_of_week=5,
     )
-    assert not out.empty
-    assert (out["is_cold_weather"] == 0.0).all(), "dome fill => temp=70 => is_cold_weather=0"
-    assert (out["is_fieldturf"] == 1.0).all(), "fieldturf surface => matching one-hot=1"
-    for surf in ("is_a_turf", "is_astroturf", "is_grass", "is_matrixturf", "is_sportturf"):
-        assert (out[surf] == 0.0).all(), f"non-matching surface flag {surf} should be 0"
-    # Fixture kickoffs are 17:00 UTC (1pm EDT) and 20:25 UTC (4:25pm EDT) —
-    # neither >= 18:00 ET, so is_primetime=0 for both.
-    assert (out["is_primetime"] == 0.0).all(), "1pm/4:25pm ET kickoff => is_primetime=0"
+    assert (out["wind_speed_mph"] == 0.0).all(), "dome fill should set wind=0"
+    assert (out["temperature_f"] == 70.0).all(), "dome fill should set temp=70"
+    assert (out["is_high_wind"] == 0.0).all(), "dome fill => wind<20 => is_high_wind=0"
 
 
-def test_build_wr_features_attach_weather_refined_cold_outdoor(
+def test_build_wr_features_attach_weather_outdoor_high_wind(
     wr_weekly_stats: pd.DataFrame,
     wr_snap_counts: pd.DataFrame,
     wr_depth_charts: pd.DataFrame,
@@ -669,14 +651,16 @@ def test_build_wr_features_attach_weather_refined_cold_outdoor(
     wr_schedules: pd.DataFrame,
     fake_pbp_df: pd.DataFrame,
 ) -> None:
-    """Outdoor cold game: temp=28 => is_cold_weather=1; grass surface =>
-    is_grass=1 with other 5 surface flags 0; 1pm-ET kickoff => is_primetime=0."""
+    """Outdoor high-wind game: wind=22, temp=42, is_high_wind=1.0."""
     sch = wr_schedules.copy()
     week_mask = sch["week"] == 5
+    # Fixture's roof column is pyarrow string with "outdoors"; setting to NA
+    # is also outdoor per compute_weather_features (only {"dome","closed"}
+    # trigger indoor fill). Keep the explicit "outdoors" value to mirror
+    # the canonical fixture state.
     sch.loc[week_mask, "roof"] = "outdoors"
-    sch.loc[week_mask, "wind"] = 10
-    sch.loc[week_mask, "temp"] = 28
-    sch.loc[week_mask, "surface"] = "grass"
+    sch.loc[week_mask, "wind"] = 22
+    sch.loc[week_mask, "temp"] = 42
 
     out = build_wr_features(
         weekly_stats=wr_weekly_stats,
@@ -688,28 +672,12 @@ def test_build_wr_features_attach_weather_refined_cold_outdoor(
         season=2024,
         as_of_week=5,
     )
-    assert not out.empty
-    assert (out["is_cold_weather"] == 1.0).all(), "temp=28 <= 32 => is_cold_weather=1"
-    assert (out["is_grass"] == 1.0).all(), "grass surface => is_grass=1"
-    for surf in ("is_a_turf", "is_astroturf", "is_fieldturf", "is_matrixturf", "is_sportturf"):
-        assert (out[surf] == 0.0).all(), f"non-matching surface flag {surf} should be 0"
-    assert (out["is_primetime"] == 0.0).all(), "1pm/4:25pm ET kickoff => is_primetime=0"
+    assert (out["wind_speed_mph"] == 22.0).all()
+    assert (out["temperature_f"] == 42.0).all()
+    assert (out["is_high_wind"] == 1.0).all(), "wind=22 >= 20 => is_high_wind=1"
 
 
-@pytest.mark.parametrize(
-    "surface_code,matching_flag",
-    [
-        ("a_turf", "is_a_turf"),
-        ("astroturf", "is_astroturf"),
-        ("fieldturf", "is_fieldturf"),
-        ("grass", "is_grass"),
-        ("matrixturf", "is_matrixturf"),
-        ("sportturf", "is_sportturf"),
-    ],
-)
-def test_build_wr_features_attach_weather_refined_surface_multiclass(
-    surface_code: str,
-    matching_flag: str,
+def test_build_wr_features_attach_weather_grass_surface(
     wr_weekly_stats: pd.DataFrame,
     wr_snap_counts: pd.DataFrame,
     wr_depth_charts: pd.DataFrame,
@@ -717,83 +685,50 @@ def test_build_wr_features_attach_weather_refined_surface_multiclass(
     wr_schedules: pd.DataFrame,
     fake_pbp_df: pd.DataFrame,
 ) -> None:
-    """Each of the 6 pinned surface codes drives its matching one-hot flag
-    to 1.0 and the other 5 flags to 0.0."""
-    sch = wr_schedules.copy()
-    week_mask = sch["week"] == 5
-    sch.loc[week_mask, "surface"] = surface_code
+    """Surface code 'grass' => is_grass_surface=1.0; anything else => 0.0.
 
-    out = build_wr_features(
+    The wr_schedules fixture has both home_teams as CHI (MIN@CHI, KC@CHI),
+    so a home/away split would not produce diversity within a single builder
+    call. Instead, run the builder twice — once with all-grass, once with
+    all-sportturf — and assert the binary encoding both ways.
+    """
+    sch_grass = wr_schedules.copy()
+    week_mask = sch_grass["week"] == 5
+    sch_grass.loc[week_mask, "surface"] = "grass"
+
+    out_grass = build_wr_features(
         weekly_stats=wr_weekly_stats,
         snap_counts=wr_snap_counts,
         depth_charts=wr_depth_charts,
         ngs_receiving=wr_ngs_receiving,
-        schedules=sch,
+        schedules=sch_grass,
         pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
-    assert not out.empty
-    assert (out[matching_flag] == 1.0).all(), f"{surface_code} => {matching_flag}=1"
-    for flag in _REFINED_SURFACE_FLAGS:
-        if flag == matching_flag:
-            continue
-        assert (out[flag] == 0.0).all(), f"non-matching surface flag {flag} should be 0"
+    assert (out_grass["is_grass_surface"] == 1.0).all(), (
+        "grass surface should produce is_grass_surface=1"
+    )
 
+    sch_turf = wr_schedules.copy()
+    sch_turf.loc[week_mask, "surface"] = "sportturf"
 
-def test_build_wr_features_attach_weather_refined_primetime_kickoff(
-    wr_weekly_stats: pd.DataFrame,
-    wr_snap_counts: pd.DataFrame,
-    wr_depth_charts: pd.DataFrame,
-    wr_ngs_receiving: pd.DataFrame,
-    wr_schedules: pd.DataFrame,
-    fake_pbp_df: pd.DataFrame,
-) -> None:
-    """is_primetime keys on local-ET kickoff hour. 8:20pm ET (00:20 UTC the
-    next day during EDT) => is_primetime=1.0; 1pm ET (17:00 UTC during EDT)
-    => is_primetime=0.0."""
-    # Primetime: Sun 8:20pm ET on 2024-10-06 (EDT, UTC-4) == 2024-10-07T00:20Z.
-    sch_pt = wr_schedules.copy()
-    week_mask = sch_pt["week"] == 5
-    sch_pt.loc[week_mask, "kickoff"] = pd.to_datetime(
-        ["2024-10-07T00:20:00Z", "2024-10-07T00:20:00Z"], utc=True
-    ).as_unit("us")
-
-    out_pt = build_wr_features(
+    out_turf = build_wr_features(
         weekly_stats=wr_weekly_stats,
         snap_counts=wr_snap_counts,
         depth_charts=wr_depth_charts,
         ngs_receiving=wr_ngs_receiving,
-        schedules=sch_pt,
+        schedules=sch_turf,
         pbp=fake_pbp_df,
         season=2024,
         as_of_week=5,
     )
-    assert not out_pt.empty
-    assert (out_pt["is_primetime"] == 1.0).all(), "8:20pm ET kickoff => is_primetime=1"
-
-    # Non-primetime: Sun 1pm ET on 2024-10-06 (EDT) == 2024-10-06T17:00Z.
-    # Mirrors the canonical fixture state.
-    sch_day = wr_schedules.copy()
-    sch_day.loc[week_mask, "kickoff"] = pd.to_datetime(
-        ["2024-10-06T17:00:00Z", "2024-10-06T17:00:00Z"], utc=True
-    ).as_unit("us")
-
-    out_day = build_wr_features(
-        weekly_stats=wr_weekly_stats,
-        snap_counts=wr_snap_counts,
-        depth_charts=wr_depth_charts,
-        ngs_receiving=wr_ngs_receiving,
-        schedules=sch_day,
-        pbp=fake_pbp_df,
-        season=2024,
-        as_of_week=5,
+    assert (out_turf["is_grass_surface"] == 0.0).all(), (
+        "non-grass surface should produce is_grass_surface=0"
     )
-    assert not out_day.empty
-    assert (out_day["is_primetime"] == 0.0).all(), "1pm ET kickoff => is_primetime=0"
 
 
-def test_build_wr_features_attach_weather_refined_bye_week_fallback(
+def test_build_wr_features_attach_weather_bye_week_fallback(
     wr_weekly_stats: pd.DataFrame,
     wr_snap_counts: pd.DataFrame,
     wr_depth_charts: pd.DataFrame,
@@ -802,10 +737,15 @@ def test_build_wr_features_attach_weather_refined_bye_week_fallback(
     fake_pbp_df: pd.DataFrame,
 ) -> None:
     """Defensive: builder already filters rostered teams to those with
-    schedule rows in as_of_week, so bye-week rows never reach the weather
-    merge. Empty schedules drive an empty output frame; the 8 refined
-    weather cols are still present (zero-row frames) and pass schema
-    validation via nullable=True.
+    schedule rows in as_of_week (TODO #9a), so a bye-week row should not
+    reach the weather merge in the first place. This test confirms that
+    if such a row did reach the merge (e.g., a future builder change
+    relaxes the filter), the schema's nullable=True accepts the resulting
+    NaN values for the 4 weather cols.
+
+    Approach: pass an empty schedules frame so the bye-week filter rejects
+    every depth-chart row; the output frame is empty but still schema-valid
+    and carries the 4 weather columns.
     """
     empty_sch = wr_schedules.iloc[0:0].copy()  # preserve column dtypes, zero rows
 
@@ -820,19 +760,48 @@ def test_build_wr_features_attach_weather_refined_bye_week_fallback(
         as_of_week=5,
     )
     assert len(out) == 0, "empty schedules should drive empty output"
-    # All 8 refined weather cols still present in the output schema.
-    for c in (
-        "is_cold_weather",
-        "is_a_turf",
-        "is_astroturf",
-        "is_fieldturf",
-        "is_grass",
-        "is_matrixturf",
-        "is_sportturf",
-        "is_primetime",
-    ):
+    # All 4 weather cols still present in the output schema (zero-row frames).
+    for c in ("wind_speed_mph", "is_high_wind", "temperature_f", "is_grass_surface"):
         assert c in out.columns
-    # Schema validation (which the builder runs internally before returning)
-    # accepts the empty + nullable cols; re-validate to keep the assertion
-    # close to the test's claim.
-    WrFeaturesSchema.validate(out)
+
+
+def test_build_wr_features_attach_weather_outdoor_nan_data_propagates_nan(
+    wr_weekly_stats: pd.DataFrame,
+    wr_snap_counts: pd.DataFrame,
+    wr_depth_charts: pd.DataFrame,
+    wr_ngs_receiving: pd.DataFrame,
+    wr_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """Outdoor game with NaN wind/temp/surface upstream: weather merge
+    propagates NaN, schema accepts via nullable=True. Simulates the ~8%
+    outdoor-NaN rate measured in PR #28 (concentrated in 2018-2019 data).
+    Verifies the genuine attach_weather_features path on real data shape,
+    distinct from the empty-schedules short-circuit covered above.
+    """
+    sch = wr_schedules.copy()
+    week_mask = sch["week"] == 5
+    sch.loc[week_mask, "roof"] = "outdoors"
+    sch.loc[week_mask, "wind"] = pd.NA
+    sch.loc[week_mask, "temp"] = pd.NA
+    sch.loc[week_mask, "surface"] = pd.NA
+
+    out = build_wr_features(
+        weekly_stats=wr_weekly_stats,
+        snap_counts=wr_snap_counts,
+        depth_charts=wr_depth_charts,
+        ngs_receiving=wr_ngs_receiving,
+        schedules=sch,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    assert len(out) > 0, "wr_dc players should not be filtered out — schedule has matching teams"
+    assert out["wind_speed_mph"].isna().all(), "outdoor + NaN wind upstream => wind_speed_mph NaN"
+    assert out["temperature_f"].isna().all(), "outdoor + NaN temp upstream => temperature_f NaN"
+    assert out["is_high_wind"].isna().all(), (
+        "NaN wind => NaN is_high_wind (NaN-preserving threshold)"
+    )
+    assert (out["is_grass_surface"] == 0.0).all(), (
+        "NaN surface coerces to False => 0.0 per compute_weather_features"
+    )

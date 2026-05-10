@@ -539,25 +539,15 @@ class WrFeaturesSchema(pa.DataFrameModel):
     volume_trend_l4_minus_prior_l4: Series[float] = pa.Field(nullable=True)
     snap_pct_change_l4_vs_prior_l4: Series[float] = pa.Field(ge=-1, le=1, nullable=True)
 
-    # Weather features — refined-unit replace per PR #30 verdict (RB swap, WR
-    # swap+augment ADOPT under lgb-nb composite). Replaces the v1 4-col bundle
-    # from PR #29 (wind_speed_mph, is_high_wind, temperature_f,
-    # is_grass_surface) with the 8 refined cols below. Sourced from existing
-    # SchedulesSchema cols (temp, surface, kickoff). Domes filled (temp=70 →
-    # is_cold_weather=0; surface flags reflect the actual surface code with no
-    # override since stadia keep their playing surface across roof states;
-    # is_primetime is independent of roof). 2022 has a known coverage trough
-    # on is_cold_weather (~0.67 non-NaN per (position, season)) due to upstream
-    # NaN temp on outdoor games — nullable=True absorbs; pooled-row CI is
-    # symmetric across baseline/candidate dropna; documented in PR #30 audit.
-    is_cold_weather: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_a_turf: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_astroturf: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_fieldturf: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_grass: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_matrixturf: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_sportturf: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_primetime: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    # Weather features (PR #28 family probe + 2026-05-08 RB+WR integration
+    # spec). Sourced from existing SchedulesSchema columns (wind, temp, roof,
+    # surface) — no new ingest. Dome / closed-roof games filled with
+    # (wind=0, temp=70) per compute_weather_features semantics. Outdoor NaN
+    # wind/temp propagates; ~8% NaN rate concentrated in 2018-2019.
+    wind_speed_mph: Series[float] = pa.Field(ge=0, nullable=True)
+    is_high_wind: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    temperature_f: Series[float] = pa.Field(nullable=True)
+    is_grass_surface: Series[float] = pa.Field(ge=0, le=1, nullable=True)
 
     class Config:
         strict = "filter"
@@ -670,25 +660,15 @@ class RbFeaturesSchema(pa.DataFrameModel):
     team_ayps_l4: Series[float] = pa.Field(ge=0, nullable=True)
     team_def_epa_resid_l4: Series[float] = pa.Field(nullable=True)
 
-    # Weather features — refined-unit replace per PR #30 verdict (RB swap, WR
-    # swap+augment ADOPT under lgb-nb composite). Replaces the v1 4-col bundle
-    # from PR #29 (wind_speed_mph, is_high_wind, temperature_f,
-    # is_grass_surface) with the 8 refined cols below. Sourced from existing
-    # SchedulesSchema cols (temp, surface, kickoff). Domes filled (temp=70 →
-    # is_cold_weather=0; surface flags reflect the actual surface code with no
-    # override since stadia keep their playing surface across roof states;
-    # is_primetime is independent of roof). 2022 has a known coverage trough
-    # on is_cold_weather (~0.67 non-NaN per (position, season)) due to upstream
-    # NaN temp on outdoor games — nullable=True absorbs; pooled-row CI is
-    # symmetric across baseline/candidate dropna; documented in PR #30 audit.
-    is_cold_weather: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_a_turf: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_astroturf: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_fieldturf: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_grass: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_matrixturf: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_sportturf: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    is_primetime: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    # Weather features (PR #28 family probe + 2026-05-08 RB+WR integration
+    # spec). Sourced from existing SchedulesSchema columns (wind, temp, roof,
+    # surface) — no new ingest. Dome / closed-roof games filled with
+    # (wind=0, temp=70) per compute_weather_features semantics. Outdoor NaN
+    # wind/temp propagates; ~8% NaN rate concentrated in 2018-2019.
+    wind_speed_mph: Series[float] = pa.Field(ge=0, nullable=True)
+    is_high_wind: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    temperature_f: Series[float] = pa.Field(nullable=True)
+    is_grass_surface: Series[float] = pa.Field(ge=0, le=1, nullable=True)
 
     class Config:
         strict = "filter"
