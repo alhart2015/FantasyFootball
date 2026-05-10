@@ -39,6 +39,9 @@ def _make_schedule_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
     df["wind"] = df["wind"].astype(pd.Int64Dtype())
     df["surface"] = df["surface"].astype(pd.StringDtype("pyarrow"))
     df["roof"] = df["roof"].astype(pd.StringDtype("pyarrow"))
+    # Match SchedulesSchema's `dtype_kwargs={"tz": "UTC", "unit": "us"}`. A
+    # single-row NaT-only frame would otherwise lose the tz, so coerce.
+    df["kickoff"] = pd.to_datetime(df["kickoff"], utc=True).astype("datetime64[us, UTC]")
     return df
 
 
@@ -339,8 +342,12 @@ def test_null_roof_treated_as_outdoor() -> None:
 
 def test_output_columns_and_dtypes() -> None:
     """Output schema: (season, week, team, wind_speed_mph, is_high_wind,
-    temperature_f, is_grass_surface). All four feature cols are Float64."""
-    from projections.features.weather_features import compute_weather_features
+    temperature_f, is_cold_weather, *_SURFACE_COL_NAMES, is_grass_surface,
+    is_primetime). All twelve feature cols are Float64."""
+    from projections.features.weather_features import (
+        _SURFACE_COL_NAMES,
+        compute_weather_features,
+    )
 
     sch = _make_schedule_rows(
         [
@@ -356,10 +363,21 @@ def test_output_columns_and_dtypes() -> None:
         "wind_speed_mph",
         "is_high_wind",
         "temperature_f",
+        "is_cold_weather",
+        *_SURFACE_COL_NAMES,
         "is_grass_surface",
+        "is_primetime",
     }
     assert set(out.columns) == expected_cols
-    for col in ("wind_speed_mph", "is_high_wind", "temperature_f", "is_grass_surface"):
+    for col in (
+        "wind_speed_mph",
+        "is_high_wind",
+        "temperature_f",
+        "is_cold_weather",
+        *_SURFACE_COL_NAMES,
+        "is_grass_surface",
+        "is_primetime",
+    ):
         assert str(out[col].dtype) == "Float64", f"{col} dtype: {out[col].dtype}"
 
 
@@ -391,7 +409,10 @@ def _make_index_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
 def test_attach_weather_features_basic() -> None:
     """Joins compute output onto index on (season, week, team); preserves
     every input row."""
-    from projections.features.weather_features import attach_weather_features
+    from projections.features.weather_features import (
+        _SURFACE_COL_NAMES,
+        attach_weather_features,
+    )
 
     idx = _make_index_rows(
         [
@@ -435,7 +456,10 @@ def test_attach_weather_features_basic() -> None:
         "wind_speed_mph",
         "is_high_wind",
         "temperature_f",
+        "is_cold_weather",
+        *_SURFACE_COL_NAMES,
         "is_grass_surface",
+        "is_primetime",
     }
 
 
@@ -676,3 +700,419 @@ def test_build_weather_overrides_raises_on_row_count_mismatch(
 
     with pytest.raises(AssertionError, match="row count mismatch"):
         build_weather_overrides(sch, idx)
+
+
+def test_is_cold_weather_boundary_inclusive_at_32() -> None:
+    """temp == 32 → 1.0 (boundary inclusive). temp == 33 → 0.0."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "GB",
+                "away_team": "DET",
+                "wind": 5,
+                "temp": 32,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+            {
+                "week": 2,
+                "home_team": "GB",
+                "away_team": "MIN",
+                "wind": 5,
+                "temp": 33,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+
+    week1 = out.loc[out["week"] == 1]
+    week2 = out.loc[out["week"] == 2]
+    assert week1["is_cold_weather"].tolist() == [1.0, 1.0]
+    assert week2["is_cold_weather"].tolist() == [0.0, 0.0]
+
+
+def test_is_cold_weather_dome_falls_out_to_zero() -> None:
+    """Dome / closed roof fills temperature_f = 70.0, so is_cold_weather = 0.0."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "MIN",
+                "away_team": "DET",
+                "wind": pd.NA,
+                "temp": pd.NA,
+                "roof": "dome",
+                "surface": "fieldturf",
+            },
+            {
+                "week": 2,
+                "home_team": "DAL",
+                "away_team": "NYG",
+                "wind": pd.NA,
+                "temp": pd.NA,
+                "roof": "closed",
+                "surface": "matrixturf",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+
+    assert out["is_cold_weather"].tolist() == [0.0, 0.0, 0.0, 0.0]
+
+
+def test_is_cold_weather_outdoor_nan_temp_propagates() -> None:
+    """Outdoor game with NaN temp → is_cold_weather = NaN."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "BUF",
+                "away_team": "NYJ",
+                "wind": 10,
+                "temp": pd.NA,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+    assert out["is_cold_weather"].isna().all()
+
+
+def test_surface_onehot_each_code_produces_correct_column() -> None:
+    """Each pinned surface code activates exactly one is_<code> column at 1.0."""
+    from projections.features.weather_features import (
+        _SURFACE_CODES,
+        compute_weather_features,
+    )
+
+    rows = [
+        {
+            "week": i + 1,
+            "home_team": "KC",
+            "away_team": "BAL",
+            "wind": 5,
+            "temp": 70,
+            "roof": "outdoors",
+            "surface": code,
+        }
+        for i, code in enumerate(_SURFACE_CODES)
+    ]
+    sch = _make_schedule_rows(rows)
+    out = compute_weather_features(sch)
+
+    # For each (week, code) row pair, the matching is_<code> col is 1.0
+    # and all others are 0.0.
+    for i, code in enumerate(_SURFACE_CODES):
+        col = f"is_{code.lower().replace('-', '_')}"
+        rows_for_week = out.loc[out["week"] == i + 1]
+        assert (rows_for_week[col] == 1.0).all(), f"week {i + 1}: {col} should be 1.0"
+        for other_code in _SURFACE_CODES:
+            if other_code == code:
+                continue
+            other_col = f"is_{other_code.lower().replace('-', '_')}"
+            assert (rows_for_week[other_col] == 0.0).all(), (
+                f"week {i + 1}: {other_col} should be 0.0 (only {col} should fire)"
+            )
+
+
+def test_surface_onehot_sum_equals_one_on_known_codes_nan_on_unknown() -> None:
+    """Sum across all is_<code> cols == 1.0 on rows with known code; == NaN on
+    rows with NaN surface."""
+    from projections.features.weather_features import (
+        _SURFACE_COL_NAMES,
+        compute_weather_features,
+    )
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+            {
+                "week": 2,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": pd.NA,
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+
+    week1 = out.loc[out["week"] == 1]
+    week2 = out.loc[out["week"] == 2]
+
+    # Week 1: sum of all surface bools == 1.0 (exactly one fires).
+    surface_cols = list(_SURFACE_COL_NAMES)
+    week1_sum = week1[surface_cols].sum(axis=1)
+    assert (week1_sum == 1.0).all(), week1[surface_cols].to_string()
+
+    # Week 2: every surface bool is NaN.
+    for col in surface_cols:
+        assert week2[col].isna().all()
+
+
+def test_surface_onehot_unseen_code_raises_valueerror() -> None:
+    """A surface code outside _SURFACE_CODES raises ValueError. Forces a
+    deliberate spec amendment on nfl_data_py upstream changes."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": "moonrock",
+            },
+        ]
+    )
+    with pytest.raises(ValueError, match=r"unknown surface code\(s\).*moonrock"):
+        compute_weather_features(sch)
+
+
+def test_surface_onehot_is_grass_matches_v1_is_grass_surface_on_known_codes() -> None:
+    """On rows where surface is non-NaN, refined `is_grass` equals v1
+    `is_grass_surface` row-for-row. Differs only on NaN-surface rows: v1
+    fills NaN to 0.0; refined preserves NaN."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+            {
+                "week": 2,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": "fieldturf",
+            },
+            {
+                "week": 3,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": pd.NA,
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+
+    # Weeks 1-2 (non-NaN surface): is_grass == is_grass_surface row-for-row.
+    nonnan = out.loc[out["week"].isin([1, 2])]
+    pd.testing.assert_series_equal(
+        nonnan["is_grass"].astype("Float64"),
+        nonnan["is_grass_surface"].astype("Float64"),
+        check_names=False,
+    )
+
+    # Week 3 (NaN surface): is_grass is NaN; is_grass_surface is 0.0.
+    week3 = out.loc[out["week"] == 3]
+    assert week3["is_grass"].isna().all()
+    assert (week3["is_grass_surface"] == 0.0).all()
+
+
+def test_surface_onehot_normalizes_trailing_whitespace() -> None:
+    """Upstream `nfl_data_py` surface drift like 'grass ' (trailing space, 93
+    rows in 2021) maps to is_grass=1.0 and does NOT raise the unseen-code
+    ValueError. Pins the `.str.strip()` normalization in `_compute_surface_onehot`
+    so a future refactor that drops it fails loudly here rather than silently
+    when overrides are regenerated against real 2021 data."""
+    from projections.features.weather_features import (
+        _SURFACE_COL_NAMES,
+        compute_weather_features,
+    )
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": "grass ",  # trailing space — 2021 upstream drift.
+            },
+        ]
+    )
+
+    # Must not raise: 'grass ' is a whitespace-variant of a known code, not
+    # an unseen code.
+    out = compute_weather_features(sch)
+
+    # Whitespace was stripped → matched canonical 'grass' → is_grass == 1.0.
+    assert (out["is_grass"] == 1.0).all()
+
+    # All other surface bools are 0.0 on the same row (matches a normal
+    # 'grass' row exactly — confirms normalize-then-match, not a partial
+    # match that fires multiple cols).
+    other_cols = [c for c in _SURFACE_COL_NAMES if c != "is_grass"]
+    for col in other_cols:
+        assert (out[col] == 0.0).all(), f"{col} should be 0.0 on a 'grass ' row"
+
+
+def test_is_primetime_snf_kickoff_in_september() -> None:
+    """SNF in September (EDT, UTC-4): 8:20pm ET = 00:20 UTC next day.
+    is_primetime = 1.0."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "PHI",
+                "away_team": "DAL",
+                # Sun 9/8/2024 8:20pm ET (EDT) == Mon 9/9/2024 00:20 UTC.
+                "kickoff": pd.Timestamp("2024-09-09 00:20:00", tz="UTC"),
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+    assert out["is_primetime"].tolist() == [1.0, 1.0]
+
+
+def test_is_primetime_early_window_in_november_not_primetime() -> None:
+    """Sunday 1pm ET in November (EST, UTC-5): 18:00 UTC. is_primetime = 0.0.
+    Same wall-clock 1pm ET in September (EDT, UTC-4) is also not primetime —
+    test EST switch correctness."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 10,
+                "home_team": "BUF",
+                "away_team": "NYJ",
+                # Sun 11/10/2024 1:00pm ET (EST) == 18:00 UTC.
+                "kickoff": pd.Timestamp("2024-11-10 18:00:00", tz="UTC"),
+                "wind": 5,
+                "temp": 50,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "MIA",
+                "away_team": "JAX",
+                # Sun 9/8/2024 1:00pm ET (EDT) == 17:00 UTC.
+                "kickoff": pd.Timestamp("2024-09-08 17:00:00", tz="UTC"),
+                "wind": 5,
+                "temp": 80,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+    assert out["is_primetime"].tolist() == [0.0, 0.0, 0.0, 0.0]
+
+
+def test_is_primetime_mnf_kickoff_in_november_eastern_standard() -> None:
+    """MNF in November (EST, UTC-5): 8:15pm ET = 01:15 UTC next day.
+    is_primetime = 1.0. Distinguishes EDT/EST handling from a naive
+    fixed-offset implementation (which would mishandle one zone or the other)."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 11,
+                "home_team": "MIA",
+                "away_team": "LAR",
+                # Mon 11/11/2024 8:15pm ET (EST) == Tue 11/12/2024 01:15 UTC.
+                "kickoff": pd.Timestamp("2024-11-12 01:15:00", tz="UTC"),
+                "wind": 5,
+                "temp": 50,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+    assert out["is_primetime"].tolist() == [1.0, 1.0]
+
+
+def test_is_primetime_nan_kickoff_propagates_nan() -> None:
+    """NaN kickoff → NaN is_primetime."""
+    from projections.features.weather_features import compute_weather_features
+
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "kickoff": pd.NaT,
+                "wind": 5,
+                "temp": 70,
+                "roof": "outdoors",
+                "surface": "grass",
+            },
+        ]
+    )
+    out = compute_weather_features(sch)
+    assert out["is_primetime"].isna().all()
+
+
+def test_surface_codes_tuple_well_formed() -> None:
+    """Pinned _SURFACE_CODES tuple is non-empty, contains 'grass', and every
+    code is a clean snake-case-able string. Protects against silent drift if a
+    future refactor mangles the constant."""
+    from projections.features.weather_features import _SURFACE_CODES, _SURFACE_COL_NAMES
+
+    assert len(_SURFACE_CODES) >= 4, "should have at least grass + 3 turf variants"
+    assert "grass" in _SURFACE_CODES
+    for code in _SURFACE_CODES:
+        assert isinstance(code, str)
+        assert code == code.lower(), f"{code!r} should be lowercase"
+        assert " " not in code, f"{code!r} should not contain spaces"
+
+    # Column names mirror the codes via lower + replace('-', '_').
+    assert len(_SURFACE_COL_NAMES) == len(_SURFACE_CODES)
+    assert "is_grass" in _SURFACE_COL_NAMES
+    for name in _SURFACE_COL_NAMES:
+        assert name.startswith("is_")
+        assert "-" not in name

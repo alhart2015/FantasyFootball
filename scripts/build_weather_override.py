@@ -129,38 +129,49 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def _print_audit(overrides: pd.DataFrame, schedules: pd.DataFrame) -> None:
-    """Print audit numbers for `reports/feature_probe_weather_override_audit.md`.
+    """Print audit numbers for `reports/feature_probe_weather_refined_override_audit.md`.
 
-    Numbers reported:
+    Numbers reported (extended for refined-unit bundle):
         - Pooled dome / closed-roof game share (% of games).
         - Outdoor-NaN rate per weather feature (% of override rows).
         - Pooled is_high_wind rate (% of override rows where True).
-        - Pooled is_grass_surface rate (% of override rows where True).
+        - Pooled is_cold_weather rate (% of override rows where True).
+        - Pooled is_grass_surface rate (v1, % where True).
+        - Per-surface rate from _SURFACE_COL_NAMES (refined multi-class).
+        - Pooled is_primetime rate (% of override rows where True).
     """
+    from projections.features.weather_features import _SURFACE_COL_NAMES
+
     n = len(overrides)
     is_indoor = schedules["roof"].isin(["dome", "closed"]).fillna(False)
     n_indoor_games = int(is_indoor.sum())
     n_total_games = len(schedules)
     indoor_pct = (n_indoor_games / n_total_games * 100.0) if n_total_games else 0.0
 
-    nan_rates = {
-        col: overrides[col].isna().mean() * 100.0
-        for col in (
-            "wind_speed_mph",
-            "is_high_wind",
-            "temperature_f",
-            "is_grass_surface",
-        )
-    }
-    high_wind_rate = overrides["is_high_wind"].fillna(0.0).mean() * 100.0
-    grass_rate = overrides["is_grass_surface"].fillna(0.0).mean() * 100.0
+    nan_cols = (
+        "wind_speed_mph",
+        "is_high_wind",
+        "temperature_f",
+        "is_cold_weather",
+        "is_grass_surface",
+        "is_primetime",
+        *_SURFACE_COL_NAMES,
+    )
+    nan_rates = {col: overrides[col].isna().mean() * 100.0 for col in nan_cols}
+
+    rate_cols_v1 = ("is_high_wind", "is_grass_surface")
+    rate_cols_refined = ("is_cold_weather", "is_primetime", *_SURFACE_COL_NAMES)
 
     print(f"weather override audit ({n} rows):")
     print(f"  indoor games (dome+closed): {n_indoor_games}/{n_total_games} = {indoor_pct:.1f}%")
     for col, pct in nan_rates.items():
         print(f"  {col} NaN rate: {pct:.2f}%")
-    print(f"  is_high_wind=1.0 rate (incl. dome): {high_wind_rate:.2f}%")
-    print(f"  is_grass_surface=1.0 rate: {grass_rate:.2f}%")
+    for col in rate_cols_v1:
+        rate = overrides[col].fillna(0.0).mean() * 100.0
+        print(f"  {col}=1.0 rate (v1): {rate:.2f}%")
+    for col in rate_cols_refined:
+        rate = overrides[col].fillna(0.0).mean() * 100.0
+        print(f"  {col}=1.0 rate (refined): {rate:.2f}%")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
