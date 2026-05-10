@@ -420,10 +420,14 @@ def test_wr_features_schema_accepts_valid_row() -> None:
             "snap_pct_change_l4_vs_prior_l4": [0.05],
             # Weather cols (PR #28 + 2026-05-08 RB+WR integration). All
             # nullable=True; happy-path test covers the populated case.
-            "wind_speed_mph": [8.0],
-            "is_high_wind": [0.0],
-            "temperature_f": [65.0],
-            "is_grass_surface": [1.0],
+            "is_cold_weather": [0.0],
+            "is_a_turf": [0.0],
+            "is_astroturf": [0.0],
+            "is_fieldturf": [0.0],
+            "is_grass": [1.0],
+            "is_matrixturf": [0.0],
+            "is_sportturf": [0.0],
+            "is_primetime": [0.0],
         }
     )
     WrFeaturesSchema.validate(df)
@@ -467,10 +471,14 @@ def test_wr_features_schema_rejects_target_share_over_one() -> None:
             "snap_pct_change_l4_vs_prior_l4": [0.05],
             # Weather cols — provided so the failure is on target_share_l4,
             # not on a missing weather column.
-            "wind_speed_mph": [8.0],
-            "is_high_wind": [0.0],
-            "temperature_f": [65.0],
-            "is_grass_surface": [1.0],
+            "is_cold_weather": [0.0],
+            "is_a_turf": [0.0],
+            "is_astroturf": [0.0],
+            "is_fieldturf": [0.0],
+            "is_grass": [1.0],
+            "is_matrixturf": [0.0],
+            "is_sportturf": [0.0],
+            "is_primetime": [0.0],
         }
     )
     with pytest.raises(SchemaError):
@@ -578,10 +586,14 @@ def test_rb_features_schema_accepts_valid_row() -> None:
             "team_def_epa_resid_l4": [-0.05],
             # Weather cols (PR #28 + 2026-05-08 RB+WR integration). All
             # nullable=True; happy-path test covers the populated case.
-            "wind_speed_mph": [8.0],
-            "is_high_wind": [0.0],
-            "temperature_f": [65.0],
-            "is_grass_surface": [1.0],
+            "is_cold_weather": [0.0],
+            "is_a_turf": [0.0],
+            "is_astroturf": [0.0],
+            "is_fieldturf": [0.0],
+            "is_grass": [1.0],
+            "is_matrixturf": [0.0],
+            "is_sportturf": [0.0],
+            "is_primetime": [0.0],
         }
     )
     RbFeaturesSchema.validate(df)
@@ -621,10 +633,14 @@ def test_rb_features_schema_rejects_rush_share_over_one() -> None:
             "team_def_epa_resid_l4": [-0.05],
             # Weather cols — provided so the failure is on rush_share_l4, not
             # on a missing weather column.
-            "wind_speed_mph": [8.0],
-            "is_high_wind": [0.0],
-            "temperature_f": [65.0],
-            "is_grass_surface": [1.0],
+            "is_cold_weather": [0.0],
+            "is_a_turf": [0.0],
+            "is_astroturf": [0.0],
+            "is_fieldturf": [0.0],
+            "is_grass": [1.0],
+            "is_matrixturf": [0.0],
+            "is_sportturf": [0.0],
+            "is_primetime": [0.0],
         }
     )
     with pytest.raises(SchemaError):
