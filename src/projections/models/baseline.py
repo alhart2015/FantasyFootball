@@ -398,7 +398,7 @@ _RB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "team_def_epa_resid_l4",
     # Weather features — refined-unit replace per PR #30 verdict (this PR's
     # strict-replace integration). lightgbm derives feature lists from
-    # WrFeaturesSchema dynamically and auto-picks-up; baseline.py is hardcoded
+    # RbFeaturesSchema dynamically and auto-picks-up; baseline.py is hardcoded
     # so must be updated explicitly. Same rule recurs at every per-position
     # feature-list edit (PR #21, #26, #27, #29 each caught it once).
     "is_cold_weather",
