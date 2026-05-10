@@ -506,3 +506,158 @@ def test_per_stat_markdown_renders_verdict_and_diagnostics(tmp_path: Path) -> No
     assert "Expected composite-fpts" in text or "expected_composite_fpts" in text
     # Factor residual correlation surfaces.
     assert "Factor residual" in text or "rho" in text
+
+
+def test_walk_forward_efficiency_clip_applied_in_factor_residuals() -> None:
+    """Regression: factor residuals must use the CLIPPED efficiency prediction
+    (matches the deployed predict recipe). A regression that drops np.clip(...)
+    in the harness's factor-residual block would silently corrupt the section 5
+    risk #2 Pearson rho diagnostic.
+
+    Engineer eval data so the efficiency factor's raw prediction exceeds
+    clip_hi=1.0 (catch_rate domain) on most rows, then verify the recorded
+    efficiency_residuals reflect the clipped prediction (<= 1.0), not raw.
+    """
+    rng = np.random.default_rng(101)
+    seasons = (2018, 2019, 2020)
+    n = 30
+    feature_cols = ["targets_per_game_l4", "receiving_yards_per_game_l4"]
+
+    features_by_year: dict[int, pd.DataFrame] = {}
+    weekly_rows: list[dict[str, object]] = []
+    for season in seasons:
+        ids = [f"00-{season:04d}{i:03d}" for i in range(n)]
+        feat_df = pd.DataFrame(
+            {
+                "gsis_id": ids,
+                "season": season,
+                "week": np.arange(1, n + 1) % 18 + 1,
+                "team": "KC",
+                "opponent": "DEN",
+                # Engineered features that bias the efficiency ridge to predict
+                # large values: large positive targets_per_game_l4 paired with
+                # large catch_rate truth in training.
+                "targets_per_game_l4": rng.uniform(2.0, 8.0, size=n),
+                "receiving_yards_per_game_l4": rng.uniform(20.0, 100.0, size=n),
+            }
+        )
+        features_by_year[season] = feat_df
+        for i, gid in enumerate(ids):
+            t = int(rng.integers(2, 12))
+            # Engineer training catch_rate >> 1.0 so the ridge learns to predict high.
+            # Specifically: receptions = targets * 1.5 (impossible in reality, but the
+            # ridge will fit on this and predict catch_rate near 1.5 on similar inputs).
+            receptions = int(t * 1.5) if season != 2020 else int(t * 0.5)
+            weekly_rows.append(
+                {
+                    "gsis_id": gid,
+                    "season": season,
+                    "week": int(feat_df["week"].iloc[i]),
+                    "position": "WR",
+                    "team": "KC",
+                    "opponent": "DEN",
+                    "targets": t,
+                    "receptions": receptions,
+                    "receiving_yards": float(t * 8.0),
+                    "receiving_tds": int(t * 0.05),
+                    "passing_yards": 0.0,
+                    "passing_tds": 0,
+                    "interceptions": 0,
+                    "attempts": 0,
+                    "completions": 0,
+                    "sacks": 0,
+                    "rushing_yards": 0.0,
+                    "rushing_tds": 0,
+                    "carries": 0,
+                    "receiving_air_yards": 0.0,
+                    "fumbles_lost": 0,
+                }
+            )
+    weekly_stats = pd.DataFrame(weekly_rows)
+
+    out = walk_forward_residuals(
+        features_by_year=features_by_year,
+        weekly_stats=weekly_stats,
+        feature_columns=tuple(feature_cols),
+        eval_years=(2020,),
+        train_start=2018,
+    )
+    # On the receptions stat (clip_hi=1.0): the recorded efficiency residual
+    # = actual_ratio - clipped_predicted_ratio. Since the ridge predicts ~1.5
+    # on most rows and clip_hi=1.0, the residual should reflect the clipped
+    # 1.0 prediction. We verify by computing what the residuals would be
+    # without clipping and confirming the harness's residuals are different.
+    receptions_factor = out.factor_residuals_by_year[Stat.RECEPTIONS]
+    assert len(receptions_factor) == 1
+    entry = receptions_factor[0]
+    # All recorded efficiency residuals = actual_ratio - clipped_pred. Since
+    # actual catch_rate is 0.5 in 2020 (eval year) and clipped pred is 1.0,
+    # residuals should be ~ -0.5 on every row. If clipping were dropped, the
+    # raw pred would be ~1.5, residual ~ -1.0. Distinguish by mean.
+    mean_resid = float(entry.efficiency_residuals.mean())
+    # Allow some noise from RidgeCV's regularization but reject the un-clipped case.
+    assert -0.7 < mean_resid < -0.3, (
+        f"Mean efficiency residual {mean_resid:.3f} outside the expected "
+        f"clipped range [-0.7, -0.3]; if clipping is bypassed, expect ~ -1.0."
+    )
+
+
+def test_walk_forward_eval_nan_cells_imputed_with_train_medians() -> None:
+    """Regression: eval-row NaN cells must be filled with train-set medians
+    (computed BEFORE NaN-row drop, per BaselineModel.fit:548-550 convention).
+
+    Inject a known-NaN cell into eval features. Verify the harness produces
+    finite predictions for that row (rather than NaN propagating through ridge).
+    """
+    features_by_year, weekly_stats = _make_synthetic_walk_forward_inputs(
+        seasons=(2018, 2019, 2020), n_per_season=20, seed=11
+    )
+    # Inject a NaN into one feature column on eval year 2020 row 0.
+    features_by_year[2020].loc[0, "targets_per_game_l4"] = np.nan
+
+    out = walk_forward_residuals(
+        features_by_year=features_by_year,
+        weekly_stats=weekly_stats,
+        feature_columns=("targets_per_game_l4", "receiving_yards_per_game_l4"),
+        eval_years=(2020,),
+        train_start=2018,
+    )
+    for stat in (Stat.RECEPTIONS, Stat.RECEIVING_YARDS, Stat.RECEIVING_TDS):
+        residuals = out.per_stat[stat]
+        # Predictions for the NaN-injected row must be finite (imputation worked).
+        # If imputation were skipped, NaN would propagate through ridge.predict
+        # and we'd see NaN in mu_direct or mu_decomposed.
+        assert np.all(np.isfinite(residuals.mu_direct)), (
+            f"NaN in mu_direct[{stat.value}] -- train-median imputation broke."
+        )
+        assert np.all(np.isfinite(residuals.mu_decomposed)), (
+            f"NaN in mu_decomposed[{stat.value}] -- train-median imputation broke."
+        )
+
+
+def test_walk_forward_train_nan_rows_dropped_before_fit() -> None:
+    """Regression: training rows with NaN in any feature column must be
+    dropped before fit. Visible via train_coverage_by_year.n_eval_rows
+    (which counts post-NaN-drop train rows).
+    """
+    features_by_year, weekly_stats = _make_synthetic_walk_forward_inputs(
+        seasons=(2018, 2019, 2020), n_per_season=20, seed=12
+    )
+    # Inject NaN into 3 train-pool rows (in season 2018).
+    for i in range(3):
+        features_by_year[2018].loc[i, "targets_per_game_l4"] = np.nan
+    # Total train rows pre-drop: 20 (2018) + 20 (2019) = 40.
+    # Post-drop: 40 - 3 = 37.
+
+    out = walk_forward_residuals(
+        features_by_year=features_by_year,
+        weekly_stats=weekly_stats,
+        feature_columns=("targets_per_game_l4", "receiving_yards_per_game_l4"),
+        eval_years=(2020,),
+        train_start=2018,
+    )
+    train_cov = {c.eval_year: c for c in out.train_coverage_by_year}
+    assert train_cov[2020].n_eval_rows == 37, (
+        f"Expected 37 post-NaN-drop train rows, got {train_cov[2020].n_eval_rows}; "
+        f"NaN row drop may have been skipped."
+    )
