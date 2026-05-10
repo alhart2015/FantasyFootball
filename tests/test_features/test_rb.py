@@ -420,7 +420,7 @@ def test_build_rb_features_attach_weather_refined_dome_fill(
     """Dome game: temperature_f filled to 70 by attach_weather_features =>
     is_cold_weather=0; surface flags reflect the actual stadium surface
     (no roof-based override per `_compute_surface_onehot`); is_primetime=0
-    for the fixture's 1pm-ET kickoff."""
+    for the fixture's 1pm- and 4:25pm-ET kickoffs (both pre-6pm ET)."""
     sch = rb_schedules.copy()
     week_mask = sch["week"] == 5
     sch.loc[week_mask, "roof"] = "dome"
