@@ -71,8 +71,8 @@ The shipping decision is binary and bound to the **lgb-nb** verdict, **per posit
 
 - **No builder code changes in `features/rb.py` or `features/wr.py`.** PR #29 wired `attach_weather_features(out, sch)` into both at `rb.py:251` and `wr.py:289`. The helper still returns all 12 weather cols (unchanged from PR #28; reused unchanged by PR #29 and PR #30). Pandera's `strict="filter"` on the schema validate at the end of each builder (`rb.py:253` / `wr.py:291`) drops the 4 v1 cols at the boundary. Cost: ~4 trivial column ops per builder invocation (negligible). Benefit: zero builder churn; `attach_weather_features` and the upstream `build_weather_overrides` assembler stay usable by `scripts/build_weather_override.py` for any future probe re-run.
 
-- **Tests at the builder boundary (`tests/test_features/test_rb.py`, `tests/test_features/test_wr.py`).** Drop or rewrite the four PR #29 weather tests in each file, replacing with refined-shape analogs. Edits to each file are parallel:
-  - **Drop**: `test_<pos>_features_attach_weather_dome_fill` (asserts `wind_speed_mph == 0.0`, `temperature_f == 70.0`, `is_high_wind == 0.0` — those cols won't be in the schema after this PR), `test_<pos>_features_attach_weather_outdoor_high_wind`, `test_<pos>_features_attach_weather_grass_surface`. The bye-week-fallback test stays in shape but its assertions update.
+- **Tests at the builder boundary (`tests/test_features/test_rb.py`, `tests/test_features/test_wr.py`).** Drop or rewrite the five PR #29 weather tests in each file (`test_build_<pos>_features_attach_weather_{dome_fill, outdoor_high_wind, grass_surface, bye_week_fallback, outdoor_nan_data_propagates_nan}`), replacing with refined-shape analogs. Edits to each file are parallel:
+  - **Drop**: `test_build_<pos>_features_attach_weather_dome_fill` (asserts `wind_speed_mph == 0.0`, `temperature_f == 70.0`, `is_high_wind == 0.0` — those cols won't be in the schema after this PR), `test_build_<pos>_features_attach_weather_outdoor_high_wind`, `test_build_<pos>_features_attach_weather_grass_surface`. The bye-week-fallback test stays in shape but its assertions update; the outdoor-nan-data-propagates-nan test is rewritten to assert refined-col NaN propagation.
   - **Add**: `test_<pos>_features_attach_weather_refined_dome_fill` — synthetic `roof="dome"` schedules row at 1pm ET. Assert `is_cold_weather == 0.0` (falls out of dome's `temperature_f=70` fill), all 6 surface flags reflect the actual surface code (no roof-based override; stadium keeps its playing surface), `is_primetime == 0.0`.
   - **Add**: `test_<pos>_features_attach_weather_refined_cold_outdoor` — synthetic outdoor `wind=10, temp=28, roof=NaN, surface="grass", kickoff=1pm ET`. Assert `is_cold_weather == 1.0`, `is_grass == 1.0`, all other surface flags `0.0`, `is_primetime == 0.0`.
   - **Add**: `test_<pos>_features_attach_weather_refined_surface_multiclass_<code>` (one per code, parametrized) — for each of the 6 codes in `_SURFACE_CODES`, synthesize a schedules row with that surface; assert `is_<code> == 1.0` and all 5 other surface flags `0.0`.
@@ -336,12 +336,13 @@ boundary.
 
 In `tests/test_features/test_rb.py` and `tests/test_features/test_wr.py` (parallel additions in each file):
 
-**Drop or rewrite the four PR #29 builder-boundary weather tests:**
+**Drop or rewrite the five PR #29 builder-boundary weather tests:**
 
-- `test_<pos>_features_attach_weather_dome_fill` → drop. Replaced by `test_<pos>_features_attach_weather_refined_dome_fill`.
-- `test_<pos>_features_attach_weather_outdoor_high_wind` → drop. The "high wind" axis isn't in the refined bundle (PR #30's 4 binding refinements are cold-weather, multi-class surface, primetime — wind threshold dropped per probe §1.2). The wind axis stays in `compute_weather_features`'s output but is filtered out at the schema boundary; helper-level wind tests stay in `test_weather_features.py`.
-- `test_<pos>_features_attach_weather_grass_surface` → drop. Replaced by `test_<pos>_features_attach_weather_refined_surface_multiclass_<code>` (parametrized).
-- `test_<pos>_features_attach_weather_bye_week_fallback` → rewrite. Same shape (synthetic player-week with no schedule join), assertions update to the 8 refined cols all NaN.
+- `test_build_<pos>_features_attach_weather_dome_fill` → drop. Replaced by `test_build_<pos>_features_attach_weather_refined_dome_fill`.
+- `test_build_<pos>_features_attach_weather_outdoor_high_wind` → drop. The "high wind" axis isn't in the refined bundle (PR #30's 4 binding refinements are cold-weather, multi-class surface, primetime — wind threshold dropped per probe §1.2). The wind axis stays in `compute_weather_features`'s output but is filtered out at the schema boundary; helper-level wind tests stay in `test_weather_features.py`.
+- `test_build_<pos>_features_attach_weather_grass_surface` → drop. Replaced by `test_build_<pos>_features_attach_weather_refined_surface_multiclass_<code>` (parametrized).
+- `test_build_<pos>_features_attach_weather_bye_week_fallback` → rewrite. Same shape (synthetic player-week with no schedule join), assertions update to the 8 refined cols all NaN.
+- `test_build_<pos>_features_attach_weather_outdoor_nan_data_propagates_nan` → rewrite. Asserts NaN propagation on the refined cols: outdoor game with NaN `temp` upstream → `is_cold_weather` is NaN in builder output; missing `surface` → all 6 surface flags NaN. The current test asserts NaN on `wind_speed_mph` / `temperature_f` (which won't be in the schema post-PR); the rewrite preserves the test's intent (real-data shape NaN propagation through `attach_weather_features` to the builder output) and re-anchors it on the refined cols.
 
 **Add the refined-bundle builder-boundary tests:**
 
