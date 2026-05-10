@@ -57,13 +57,17 @@ _WR_FEAT_COLUMNS: tuple[str, ...] = (
     "is_rookie",
     "volume_trend_l4_minus_prior_l4",
     "snap_pct_change_l4_vs_prior_l4",
-    # Weather features (Plan: 2026-05-08 RB+WR weather integration). All
-    # nullable in WrFeaturesSchema; values populated below with random noise
-    # like the other unbounded feature columns.
-    "wind_speed_mph",
-    "is_high_wind",
-    "temperature_f",
-    "is_grass_surface",
+    # Weather features (refined-unit replace per PR #30 verdict). All
+    # nullable in WrFeaturesSchema; values populated below as 0/1 indicators
+    # (is_cold_weather, six surface one-hots summing to 1, is_primetime).
+    "is_cold_weather",
+    "is_a_turf",
+    "is_astroturf",
+    "is_fieldturf",
+    "is_grass",
+    "is_matrixturf",
+    "is_sportturf",
+    "is_primetime",
 )
 
 # Real WR target stats — needed in the joined frame because _run_one_study
@@ -119,15 +123,18 @@ def _build_synthetic_joined(seed: int = 42, n_per_season: int = 80) -> pd.DataFr
         "volume_trend_l4_minus_prior_l4",
         "snap_pct_change_l4_vs_prior_l4",
     }
-    # Weather cols need bounded / categorical values (is_high_wind,
-    # is_grass_surface are 0/1 indicators; wind_speed_mph is non-negative;
-    # temperature_f is realistic NFL range). The schema is bypassed here, but
-    # downstream LightGBM still benefits from sane numeric ranges.
+    # Weather refined cols are all 0/1 boolean indicators (is_cold_weather,
+    # six surface one-hots, is_primetime). The schema is bypassed here, but
+    # tune_lightgbm fits on these values so they must be in-range.
     bounded_weather_cols = {
-        "wind_speed_mph",
-        "is_high_wind",
-        "temperature_f",
-        "is_grass_surface",
+        "is_cold_weather",
+        "is_a_turf",
+        "is_astroturf",
+        "is_fieldturf",
+        "is_grass",
+        "is_matrixturf",
+        "is_sportturf",
+        "is_primetime",
     }
     for col in _WR_FEAT_COLUMNS:
         if col in bounded_trajectory_cols or col in bounded_weather_cols:
@@ -137,10 +144,20 @@ def _build_synthetic_joined(seed: int = 42, n_per_season: int = 80) -> pd.DataFr
     df["is_rookie"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
     df["volume_trend_l4_minus_prior_l4"] = rng.normal(0.0, 1.0, size=len(df))
     df["snap_pct_change_l4_vs_prior_l4"] = rng.uniform(-1.0, 1.0, size=len(df))
-    df["wind_speed_mph"] = rng.uniform(0.0, 30.0, size=len(df))
-    df["is_high_wind"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
-    df["temperature_f"] = rng.uniform(20.0, 90.0, size=len(df))
-    df["is_grass_surface"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
+    df["is_cold_weather"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
+    # Surface one-hot: pick one code per row, set that flag to 1.0, others to 0.0.
+    surface_idx = rng.integers(0, 6, size=len(df))
+    surface_cols = (
+        "is_a_turf",
+        "is_astroturf",
+        "is_fieldturf",
+        "is_grass",
+        "is_matrixturf",
+        "is_sportturf",
+    )
+    for i, col in enumerate(surface_cols):
+        df[col] = (surface_idx == i).astype(np.float64)
+    df["is_primetime"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
 
     # Synthetic targets with mild signal so trials produce non-degenerate
     # pinball losses (not all-zero predictions). receiving_yards uses
