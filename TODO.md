@@ -485,3 +485,111 @@ strict -1.8% to -2.5% across 4/4 years). Per-position routing
 (`POSITION_DISPATCH[QB].factories['default'] = qb_ensemble`) would adopt
 Model D for QB only without breaking RB/TE/WR. Open as a follow-up if
 QB-specific accuracy ever matters more than uniform routing.
+
+### 31. Preseason full-season projections for the Draft Hub (required, not yet built)
+
+**Context.** Today's Projections Core produces *weekly in-season* projections. Every per-position feature builder consumes trailing-N in-season stats (`*_per_game_l4`, `volume_trend_l4_minus_prior_l4`, `snap_pct_change_l4_vs_prior_l4`, NGS rolling windows). For Week 1 of a new season the builders fall back to the prior season's trailing data; for any week ≥ 2 they require games already played in the current season.
+
+**The gap.** The Draft Hub (planned sub-project per CLAUDE.md) needs *preseason* season-long projections — a single number per player produced before any 2026 games are played. The current pipeline can't deliver that cleanly:
+
+- 2026 weekly_stats don't exist yet (and won't until games are played).
+- 2026 depth charts don't exist until preseason camps open (late July).
+- 2026 schedules are released by the NFL in May (likely just now available via `nfl_data_py.import_schedules`).
+- Even with all of the above, "Week 1 features × 17 weeks" would whiff on rookies (no prior pro stats), free-agent moves (player on new team with new role), and year-over-year aging effects (RB age curves don't show up in trailing-4 from last season).
+
+**What "good" looks like.**
+- Per-player season-total projection: full distribution (mean + intervals), not just a point estimate. Same `Distribution` Protocol the weekly path already uses.
+- Handles rookies via draft-pick + college-production priors, not zero-padding.
+- Handles team/role changes (FA moves, trades, depth-chart shifts) via a role/usage prior keyed on team-position.
+- Handles aging via the trajectory features that PR #26/#27 already shipped — but applied *forward* (project age N+1) rather than measured backward.
+- Backtest-able: re-project a historical season's preseason ranking from data available at draft time only, and gate it against actual season totals.
+
+**Candidate mechanisms (none built).**
+1. **Prior-season aggregate as the trailing window:** instead of `*_per_game_l4` from games actually played, use `*_per_game_full_season_<year-1>`. New feature class on each position's schema, populated from the prior season's `weekly_stats` aggregate.
+2. **Role / depth-chart prior:** for any player with a new team-position assignment, predict their usage from a team-position role distribution (e.g., "team's projected WR1 averages 9.2 targets/game across the league"), then per-player residual.
+3. **Rookie prior:** draft-pick-anchored model trained on rookie-year per-game distributions, keyed on position + round + college conference. Probably needs its own ingest of college stats.
+4. **Aging-curve forward-pass:** TODO #24's trajectory features but applied as "where will player be at age N+1" rather than "where are they now relative to prior season."
+5. **Composition layer:** combine 1-4 into a season-total distribution, multiply by projected games played (16 or 17 minus injury prior).
+
+**Estimated scope.** Substantial — likely a new sub-project parallel to `src/projections/` (e.g., `src/projections/preseason/`) with its own feature schema, its own model classes, and its own backtest harness gated on season-total RMSE/rank-correlation vs actuals. Don't try to retrofit the weekly path.
+
+**Workflow recommendation.** Spec → plan → execute on a dedicated branch. First plan should be the brainstorm + roadmap (which mechanism first? what's the cheapest path to a credible preseason rank?). Treat it as Project-level work, not a single feature plan.
+
+**Status.** Required by the Draft Hub. Not yet on the roadmap. Surfaced 2026-05-11 during a 2025-retrospective sanity check that prompted the user to flag the gap.
+
+### 32. Migrate ingest off `nfl_data_py` to `nflreadpy` (blocks in-season 2026 projections)
+
+**Critical blocker for the in-season-projections premise.** Discovered 2026-05-11 when a 2025 retrospective failed at ingest: `nfl_data_py.import_weekly_data([2025])` returned `HTTP 404`. Investigation:
+
+- `nfl_data_py` v0.3.2 (installed) and v0.3.3 (latest on PyPI, uploaded 2024-09-20) both fetch weekly stats from `https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_<y>.parquet`.
+- Direct HEAD probe: `player_stats_2024.parquet` is 200 OK (5,597 rows); `player_stats_2025.parquet` is **404**.
+- `nflverse-data` quietly migrated the weekly stats release in 2025 to **`stats_player/stats_player_week_<y>.parquet`** (release tag changed + filename changed + schema expanded to include defensive players and renamed columns: `interceptions` → `passing_interceptions`, `recent_team` → `team`, `sacks` → `sacks_suffered`, `sack_yards` → `sack_yards_lost`).
+- `stats_player_week_2024.parquet` is 200 OK and returns **18,981 rows** (vs the old URL's 5,597 — 3.4× more, including DST/IDP).
+- `stats_player_week_2025.parquet` is 200 OK with 19,421 rows across all 22 weeks of 2025 (regular + playoffs).
+- Other tables (`pbp`, `snap_counts`, `depth_charts`, `schedules`, `ngs_*`, `draft_picks`) still work on `nfl_data_py 0.3.2` for 2025 — only the weekly stats endpoint moved.
+
+**The official `nflverse` org maintains `nflreadpy`** (PyPI `nflreadpy`, latest 0.1.5, uploaded 2025-11-19, repo at https://github.com/nflverse/nflreadpy, docs at https://nflreadpy.nflverse.com). Smoke test: `nflreadpy.load_player_stats(seasons=[2025])` returns the full 19,421 rows. This is the supported successor library; `nfl_data_py` appears effectively abandoned (no PyPI release for 14+ months, missed the URL migration).
+
+**What this means for the project's premise:** mid-season 2026 projections require live ingest of weekly stats during the season. With the current dependency, that ingest cannot pull 2025 weekly stats today, and 2026 weekly stats will hit the same wall when the season opens in September. **This is a hard blocker** — not a nice-to-have refactor.
+
+**Three migration paths (in increasing scope):**
+
+1. **Minimum patch (1-2 hour):** add the new URL template directly to `src/projections/ingest/weekly_stats.py:_fetch_raw_weekly`, with a column-rename map (`passing_interceptions → interceptions`, `team` stays, `sacks_suffered → sacks`, `sack_yards_lost → sack_yards`) and filtering on `position_group in {QB, RB, WR, TE}` to match the existing fantasy-positions filter. Skip the DST/IDP columns. Keeps `nfl_data_py` as the dep for the other 7 tables; adds an in-house URL fallback for weekly_stats only. Lowest risk; doesn't touch the other ingest seams.
+
+2. **Migrate weekly_stats to nflreadpy, leave others on `nfl_data_py`:** wrap `nflreadpy.load_player_stats` behind `_fetch_raw_weekly`. Polars-vs-pandas mismatch — `nflreadpy` returns Polars frames; coerce via `.to_pandas()`. Same column-rename layer as option 1. Adds a second dep (`polars`) but uses a maintained library.
+
+3. **Full migrate every ingest source to nflreadpy:** all 8 tables (weekly_stats, schedules, depth_charts, ngs_{passing,rushing,receiving}, snap_counts, pbp, draft_picks, id_map). Future-proofs against further nflverse URL changes (which we now know happen). Largest scope. Requires column-rename audits on every ingest module + every per-position feature builder downstream.
+
+**Recommended order:** ship option 1 immediately to unblock 2025 retrospective + 2026 in-season ingest; then plan option 3 as a separate "migrate ingest layer to nflreadpy" project before the 2026 season opens (Sept 2026 — ~4 months from today).
+
+**Also worth checking** in the same investigation: are any of the *other* `nfl_data_py` endpoints showing 2025 data that's stale-looking vs nflverse's actual releases? PBP-2025 and snap-counts-2025 fetch successfully today, but the URL paths may have similarly silent renames coming. Audit each `nflverse-data/releases/download/<tag>/<file>` path in `nfl_data_py.__init__.py` against the corresponding accessor in `nflreadpy` and note any divergence.
+
+**Probe URLs captured for the record** (HEAD-probed 2026-05-11):
+- `player_stats/player_stats_2024.parquet` → 200 (old format, kept for backward-compat)
+- `player_stats/player_stats_2025.parquet` → **404**
+- `stats_player/stats_player_week_2024.parquet` → 200 (new format, 18,981 rows)
+- `stats_player/stats_player_week_2025.parquet` → 200 (new format, 19,421 rows)
+- `pbp/play_by_play_2025.parquet` → 200 (still working)
+- `snap_counts/snap_counts_2025.parquet` → 200 (still working)
+- `depth_charts/depth_charts_2025.parquet` → 200 (still working)
+- `depth_charts/depth_charts_2026.parquet` → 200 (already published for upcoming season — useful for TODO #31's preseason-projection work)
+
+**Status.** Captured 2026-05-11. Hard blocker for mid-season 2026 ingest. Ship option 1 before mid-September 2026.
+
+### 33. Elite-season under-projection — four leverage points
+
+**Diagnosis.** Captured 2026-05-11 during a 2024 retrospective. The current pipeline's mean prediction systematically under-projects the actual top-tier finishers by 50-150 fantasy points each, across positions. 2024 examples (predicted - actual): Ja'Marr Chase WR1 -143 (260 pred / 403 actual); Jahmyr Gibbs RB2 -132 (259 / 390); Derrick Henry RB3 -106 (276 / 381); Saquon Barkley RB1 -88 (361 / 450); Terry McLaurin WR4 -77 (246 / 322); Joe Burrow QB6 -72 (300 / 373); George Kittle TE3 -70 (167 / 237); Bijan Robinson RB4 -60 (279 / 340); James Cook RB5 -60 (264 / 324); Justin Jefferson WR3 -55 (273 / 328); Amon-Ra St. Brown WR2 -53 (285 / 338); Josh Allen QB2 -51 (383 / 434); Lamar Jackson QB1 -50 (420 / 470). Pattern is *systematic and predictable*: at every position, the model gets the *rank* of the top tier roughly right but compresses the *magnitude*, so elite seasons land in the 250-300 pred-points band even when they actually score 380-470.
+
+**Why this matters.** The draft tool (TODO #31) needs to differentiate elite from very-good — a fantasy draft turns on whether you can take Chase at WR4 ADP and project him at 400, not 260. Mean-prediction RMSE alone misses this; the model can have low aggregate RMSE while still being useless for the specific decisions that draft-tool consumers make.
+
+**Mechanism (best current read).** The trailing-N features describe the player's recent statistical past. Chase's 2018-2023 averaged ~15 ppg PPR; trailing-4 features in 2024 look like a 15 ppg player; Ridge regularization compresses any single feature's coefficient, so the model has no internal mechanism to push the prediction to 23 ppg. Forward-looking signals that *do* explain breakouts (team-context shifts, role consolidation, scheme changes) are mostly absent from the current feature set. Compounding the issue at the count-stat level: TDs are weighted 6 pts in PPR, but Ridge under-disperses TD predictions hard — Chase's 17 TDs (~1/game) likely projected to ~7-10 (~0.5/game), which alone accounts for ~50 of the 143-point miss.
+
+**Four leverage points, in order of likely impact.**
+
+**33a. Use production model routing, not BaselineModel uniformly.** The 2024 retrospective used `BaselineModel` for all four positions because it was the cheapest to train. Plan 8's production routing is QB→`lightgbm-nb`, RB→`baseline`, TE→`baseline`, WR→`ensemble`. Plan 5c established that lgb-nb cleanly beats baseline on QB cells (4/4 RMSE wins, mean calib +0.012) and Plan 6's ensemble was specifically designed to combine A's calibration on RB/TE/WR with C-NB's mean accuracy on QB. **The Chase miss might be 30-50 points smaller under WR ensemble, and the entire QB top-10 might tighten under lgb-nb.** Cheapest possible experiment (no model changes; just stop hardcoding `"baseline"` in `scripts/project_season.py` and call `production_model_for(position)` instead). Status: re-running the 2024 retrospective with production routing 2026-05-11 to quantify.
+
+**33b. Decomposed targets (volume × efficiency) for WR yards and TDs.** TODO #23 established the mechanism. PR #32's probe signaled marginal SIGNAL on receptions but NULL on yards and TDs at the Ridge-only sub-model class. The natural follow-up (already named in PR #32 §7 follow-ups) is to test factor-appropriate sub-models: logistic for catch_rate / td_rate_per_target, log-link Gamma for yards_per_target, Poisson / NB-2 for targets. The compounding multiplier — high target volume × high YPT × high TD rate, each of which Chase had in 2024 — is exactly what direct per-stat prediction collapses. Decomposed prediction with proper distribution composition (`ProductDistribution` + within-row coherent sampling) might recover 30-50 points on elite WR seasons specifically because it preserves the multiplicative structure. **Existing roadmap; this is the highest-leverage already-scoped follow-up.** Same approach extends to RB rushing (carries × yards_per_carry + TDs per touch). Cross-reference TODO #23.
+
+**33c. Forward-looking team-context features.** Current feature classes (PBP team pace/PROE, opp-EPA, red-zone, pressure, trajectory, weather) all measure *what already happened*. None capture *what will happen next year* (the 2024 Saquon-to-PHI / Henry-to-BAL / Bowers-on-LV signals existed in May 2024 from preseason ADP, team win totals, OC hires, free-agent movement). Candidate features: Vegas season-long win totals at each week's as-of-time, projected snap share from depth-chart rank (refined), preseason ADP, head-coach / OC tenure indicators, free-agent acquisition flags. **Different feature class than anything probed so far.** Also directly load-bearing for the Draft Hub (TODO #31) where there is no in-season trailing data at all. Cheapest probe entry: bundle 3-4 Vegas-derived signals (season win total, season O/U, projected pace, projected passing rate) and run the probe-first workflow. Mechanism prediction: most lift on RB and WR; QB modest; TE small.
+
+**33d. Rank by an upside-sensitive statistic, not season-total mean.** Independent of any model change. The pipeline already emits per-week `p10`, `p50`, `p90` for every player; Chase's *weekly p90* is probably close to his actual 23.5 ppg even when his mean is 15 ppg. For *ranking* purposes (which is what draft-tool consumers actually see), Monte Carlo the per-week distributions, sum to a season-total distribution per player, and rank by E[points above replacement] or P[season total ≥ elite threshold] — a metric that rewards both mean and upside. This doesn't fix mean RMSE but it does fix the *display*. **Cheapest fix of the four if it works; doesn't touch the model.** Verification step: sum Chase's weekly p90s for 2024 and check if it approaches 380-400. If yes, the upside signal already exists and is just being thrown away in aggregation. If no, the model genuinely doesn't see the upside and 33b/33c are required. Cross-reference TODO #30 (upper-tail calibration) — 33d uses the same upper-tail distributions; TODO #30's mechanisms (pinball at upper quantiles, ZIP for counts) directly improve the input to 33d.
+
+**Suggested sequencing.** 33a is essentially free (one-line script change); ship today. 33d is the next-cheapest (single-shot MC aggregation script); validates whether the existing distributions already contain the answer. Run 33d *after* 33a so the production-routed predictions feed the ranking metric. 33b is the natural next integration cycle (PR #32 follow-up already scoped). 33c is a fresh feature-class probe; queue alongside or after TODO #31 (Draft Hub) since both need forward-looking signals.
+
+**33a — empirical result, 2026-05-11.** Re-ran 2024 retrospective with production routing (QB lgb-nb, RB baseline, TE baseline, WR ensemble). **Fixed two real bugs, did not fix the elite-magnitude problem.**
+
+| Issue | Baseline-only routing | Production routing |
+|---|---|---|
+| Carson Wentz over-projection | 323.0 pred / 4.7 actual / +318 miss (QB #7) | dropped out of top 100 entirely |
+| Backup-QB over-projection class | Driskel, Browning, Rudolph, Willis all in top 100 | all gone from top 100 |
+| Malik Nabers as WR1 | 296.9 pred / 271.6 actual (predicted #1, actual #8) | 256.4 pred (predicted #5) — rank-realistic |
+| Ja'Marr Chase miss | 260.1 pred / 403.0 actual / −143 (predicted #7) | 250.4 pred / −152 (predicted #9) — **slightly worse** |
+| Lamar Jackson miss (#1 QB) | 419.6 pred / 469.5 actual / −50 | 427.0 / −43 |
+| Josh Allen miss (#2 QB) | 383.0 / −51 | 386.2 / −48 |
+| Saquon Barkley miss (#1 RB) | 361.3 / 449.7 / −88 | unchanged (RB stays baseline) |
+| Gibbs miss (#2 RB) | 258.7 / 390.4 / −132 | unchanged |
+| Henry miss (#3 RB) | 275.6 / 381.4 / −106 | unchanged |
+
+**Conclusion: 33a closes two bug classes but doesn't move the elite-magnitude needle.** The mean-regression compression on elite players lives in *feature signal coverage*, not in model class. lgb-nb's NB-2 dispersion handles the backup-QB defect cleanly (correctly down-weights "depth-chart presence without snaps"); the ensemble's calibration-aware weighting handles the rookie-volume-extrapolation defect cleanly (Nabers's trailing-4 target spike no longer linearly extrapolates). Neither addresses the lack of features that *can* predict a 23 ppg WR season or a 24 ppg RB season. Ship 33a permanently (one-line change in any consumer that previously used `factories["baseline"]`); then move to 33d (upside-sensitive ranking) to test whether the existing distributions already carry the elite signal, before committing to the larger 33b / 33c builds.
+
+**Status.** Diagnosis captured 2026-05-11. 33a executed inline — *necessary but not sufficient*; ship the routing change as the durable fix. 33d/33b/33c queued.
