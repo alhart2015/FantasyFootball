@@ -278,7 +278,11 @@ class WeeklyStatsSchema(pa.DataFrameModel):
     receptions: Series[int] = pa.Field(ge=0, le=30)
     receiving_yards: Series[float] = pa.Field(ge=-50, le=400)
     receiving_tds: Series[int] = pa.Field(ge=0, le=10)
-    receiving_air_yards: Series[float] = pa.Field(ge=-50, le=400)
+    # 2025-W?? Tyler Higbee shows -92 receiving_air_yards (target on a behind-the-LOS
+    # screen / shovel that lost ~92 yards). Empirical min on 2018-2024 was -33; the
+    # wider bound here gives headroom for similar anomalies under the new nflverse
+    # release schema.
+    receiving_air_yards: Series[float] = pa.Field(ge=-100, le=400)
     targets: Series[int] = pa.Field(ge=0, le=30)
     fumbles_lost: Series[int] = pa.Field(ge=0, le=10)
 
