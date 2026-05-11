@@ -1,6 +1,6 @@
-"""Refresh per-season depth charts from `nfl_data_py.import_depth_charts`.
+"""Refresh per-season depth charts from `nflreadpy.load_depth_charts`.
 
-`nfl_data_py` raw column conventions vary across seasons:
+Raw column conventions vary across seasons:
 - Pre-2018-ish: `depth_team` uses alignment labels (LWR, RWR, SWR).
 - Newer seasons: `depth_team` uses rank labels (WR1, WR2) and `depth_position`
   contains a numeric rank.
@@ -15,7 +15,7 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
-import nfl_data_py as nfl
+import nflreadpy
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
@@ -35,7 +35,7 @@ _TRAILING_DIGITS = re.compile(r"(\d+)$")
 
 
 def _fetch_raw_depth_charts(seasons: list[int]) -> pd.DataFrame:
-    return nfl.import_depth_charts(seasons)
+    return nflreadpy.load_depth_charts(seasons=seasons).to_pandas()
 
 
 def _normalize_team(v: str) -> str:
@@ -64,7 +64,25 @@ def _parse_depth_rank(*, depth_team: str | None, depth_position: int | None) -> 
     return 1, True
 
 
+_LEGACY_REQUIRED_COLS = {"club_code", "depth_team", "depth_position", "season", "week"}
+
+
 def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
+    missing = _LEGACY_REQUIRED_COLS - set(raw.columns)
+    if missing:
+        # nflverse migrated the 2025+ depth_charts release to a
+        # snapshot-by-timestamp feed (columns: dt, pos_slot, pos_rank,
+        # pos_abb, pos_grp, ...) that doesn't carry a season/week. Building
+        # weekly snapshots from it requires joining `dt` against schedules
+        # and picking the latest snapshot before each game day. Tracked as
+        # a follow-up; for now, refresh fails loud for any season whose
+        # upstream payload uses the new format.
+        raise NotImplementedError(
+            f"depth_charts upstream missing legacy columns {sorted(missing)} — likely a "
+            "post-2025 nflverse release with the new snapshot-by-timestamp schema. "
+            "See TODO follow-up for the derivation logic."
+        )
+
     df = raw.rename(columns=_RENAME).copy()
 
     # Resolve depth_rank row-by-row; track if any rows fell back to 1 unranked.
@@ -93,7 +111,7 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
     # Drop rows with NaN season/week (corrupt rows that would coerce to 0
     # and fail schema validation downstream).
     df = df[df["season"].notna() & df["week"].notna()].copy()
-    # nfl_data_py returns int32 for season/week; pandera Series[int] requires int64.
+    # Upstream returns int32 for season/week; pandera Series[int] requires int64.
     for int_col in ("season", "week", "depth_rank"):
         if int_col in df.columns:
             df[int_col] = df[int_col].astype("int64")

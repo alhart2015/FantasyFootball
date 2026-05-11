@@ -35,7 +35,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--run-network",
         action="store_true",
         default=False,
-        help="Run @pytest.mark.network tests that hit the live nfl_data_py API.",
+        help="Run @pytest.mark.network tests that hit the live nflreadpy / nflverse releases.",
     )
     parser.addoption(
         "--run-backtest",

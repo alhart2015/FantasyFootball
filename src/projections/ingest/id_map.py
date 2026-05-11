@@ -1,4 +1,4 @@
-"""Build the canonical id_map.parquet from `nfl_data_py.import_ids()`.
+"""Build the canonical id_map.parquet from `nflreadpy.load_ff_playerids()`.
 
 `_fetch_raw_id_map` is split out so tests can monkeypatch it instead of
 hitting the network.
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import nfl_data_py as nfl
+import nflreadpy
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
@@ -23,7 +23,7 @@ from projections.store import write_partition
 
 
 def _fetch_raw_id_map() -> pd.DataFrame:
-    return nfl.import_ids()
+    return nflreadpy.load_ff_playerids().to_pandas()
 
 
 def _normalize_team(v: str | None) -> str | None:
@@ -50,14 +50,14 @@ def build_id_map(data_root: Path) -> Path:
     df = df[df["gsis_id"].notna()].copy()
 
     # Drop rows whose gsis_id does not match the canonical pattern (some
-    # nfl_data_py.import_ids() rows carry legacy PFR-style IDs in the
-    # gsis_id column for very old players — those are not joinable).
+    # load_ff_playerids() rows carry legacy PFR-style IDs in the gsis_id
+    # column for very old players — those are not joinable).
     from projections.schemas import GSIS_ID_PATTERN
 
     df = df[df["gsis_id"].astype(str).str.match(rf"^{GSIS_ID_PATTERN}$")].copy()
 
     # Drop players at positions outside our covered set (offensive line, punters, etc.)
-    # nfl_data_py.import_ids() returns roster-wide rows; we only model the positions
+    # load_ff_playerids() returns roster-wide rows; we only model the positions
     # downstream consumers care about.
     df = df[df["position"].isin([p.value for p in Position])].copy()
 

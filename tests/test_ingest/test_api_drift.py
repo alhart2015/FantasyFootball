@@ -1,4 +1,4 @@
-"""Opt-in API-drift smoke tests for `nfl_data_py`.
+"""Opt-in API-drift smoke tests for `nflreadpy` / nflverse releases.
 
 Marked `@pytest.mark.network`; skipped by default. Run with:
 
@@ -9,11 +9,11 @@ Each test fetches a tiny live slice (one season) via the same private
 column our normalize step depends on is present, and then runs the
 normalize end-to-end (schema validation gates this — pandera will throw
 on dtype / value drift). Designed to be the canonical post-bump check
-after upgrading the `nfl_data_py` pin in `pyproject.toml`.
+after upgrading the `nflreadpy` pin in `pyproject.toml`.
 
 Test season: 2023 — old enough to be stable upstream, recent enough to
 exercise the full column set including `attempts` / `completions` /
-`sacks` (added to `WeeklyStatsSchema` in Plan 2b) and the modern
+`sacks_suffered` (the latter is `sacks` after rename) and the modern
 rank-based depth-chart labels. Seasons before ~2018 used different
 column conventions and would force the smokes to handle two contracts.
 
@@ -82,16 +82,14 @@ def _assert_columns_present(raw_columns: set[str], expected: set[str], source: s
     defensive `[c for c in _KEEP if c in df.columns]` filters."""
     missing = expected - raw_columns
     assert not missing, (
-        f"nfl_data_py {source} missing expected columns {sorted(missing)}; "
-        f"got {sorted(raw_columns)}"
+        f"nflreadpy {source} missing expected columns {sorted(missing)}; got {sorted(raw_columns)}"
     )
 
 
 def test_weekly_stats_api_columns_and_schema() -> None:
     # Column names match the post-migration nflverse `stats_player_week_*`
-    # parquet schema (see weekly_stats._NFLVERSE_WEEKLY_URL). `interceptions`
-    # is now `passing_interceptions`, `sacks` is `sacks_suffered`, and
-    # `recent_team` was dropped in favour of `team`.
+    # parquet schema. `interceptions` is now `passing_interceptions`, `sacks`
+    # is `sacks_suffered`, and `recent_team` was dropped in favour of `team`.
     raw = _fetch_raw_weekly([_DRIFT_SEASON])
     expected = {
         "player_id",
@@ -119,7 +117,7 @@ def test_weekly_stats_api_columns_and_schema() -> None:
         "receiving_fumbles_lost",
         "sack_fumbles_lost",
     }
-    _assert_columns_present(set(raw.columns), expected, "stats_player_week parquet")
+    _assert_columns_present(set(raw.columns), expected, "load_player_stats")
     df = _normalize_weekly(raw)
     assert not df.empty
 
@@ -135,7 +133,7 @@ def test_depth_charts_api_columns_and_schema() -> None:
         "depth_team",
         "depth_position",
     }
-    _assert_columns_present(set(raw.columns), expected, "import_depth_charts")
+    _assert_columns_present(set(raw.columns), expected, "load_depth_charts")
     df = _normalize_depth_charts(raw)
     assert not df.empty
 
@@ -178,7 +176,7 @@ def test_ngs_api_columns_and_schema(stat_type: str) -> None:
     _assert_columns_present(
         set(raw.columns),
         common | per_stat[stat_type],
-        f"import_ngs_data({stat_type!r})",
+        f"load_nextgen_stats({stat_type!r})",
     )
     df = _normalize_ngs(stat_type, raw)  # type: ignore[arg-type]
     assert not df.empty
@@ -203,18 +201,18 @@ def test_schedules_api_columns_and_schema() -> None:
         "temp",
         "wind",
     }
-    _assert_columns_present(set(raw.columns), expected, "import_schedules")
+    _assert_columns_present(set(raw.columns), expected, "load_schedules")
     df = _normalize_schedules(raw)
     assert not df.empty
 
 
 def test_id_map_api_columns_and_schema(tmp_path: Path) -> None:
     """`build_id_map` is the only one without a separate `_normalize_one_season`
-    — its full body runs `import_ids()` and writes a partition. Drift surfaces
-    via the schema validation inside `build_id_map`."""
+    — its full body runs `load_ff_playerids()` and writes a partition. Drift
+    surfaces via the schema validation inside `build_id_map`."""
     raw = _fetch_raw_id_map()
     expected = {"gsis_id", "espn_id", "sleeper_id", "pfr_id", "name", "position", "team"}
-    _assert_columns_present(set(raw.columns), expected, "import_ids")
+    _assert_columns_present(set(raw.columns), expected, "load_ff_playerids")
     out = build_id_map(tmp_path)
     assert out.exists()
 
@@ -237,7 +235,7 @@ def test_snap_counts_api_columns_and_schema(tmp_path: Path) -> None:
         "st_snaps",
         "st_pct",
     }
-    _assert_columns_present(set(raw.columns), expected, "import_snap_counts")
+    _assert_columns_present(set(raw.columns), expected, "load_snap_counts")
     build_id_map(tmp_path)
     df = _normalize_snap_counts(raw, tmp_path)
     assert not df.empty
@@ -251,7 +249,7 @@ def test_pbp_api_columns_and_schema() -> None:
     missing = set(_KEEP_PBP) - set(raw.columns)
     assert not missing, (
         f"PBP upstream missing columns we depend on: {sorted(missing)}. "
-        "If this fails after a nfl_data_py bump, patch _KEEP / _normalize_one_season "
+        "If this fails after a nflreadpy bump, patch _KEEP / _normalize_one_season "
         "in src/projections/ingest/pbp.py and re-run."
     )
 
@@ -264,11 +262,11 @@ def test_pbp_api_columns_and_schema() -> None:
 
 @pytest.mark.network
 def test_draft_picks_api_columns_and_schema(tmp_path: Path) -> None:
-    """Live network smoke for nfl_data_py.import_draft_picks.
+    """Live network smoke for nflreadpy.load_draft_picks.
 
     Asserts the source returns the columns we depend on with reasonable
     dtypes, then runs the normalize step end-to-end. Pandera surfaces any
-    dtype drift after a nfl_data_py version bump.
+    dtype drift after a nflreadpy version bump.
     """
     raw = _fetch_raw_draft_picks([2023])
     expected_source_cols = {"season", "round", "pick", "gsis_id", "pfr_player_id", "age"}

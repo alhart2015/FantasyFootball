@@ -1,4 +1,4 @@
-"""Refresh per-season draft picks from `nfl_data_py.import_draft_picks`.
+"""Refresh per-season draft picks from `nflreadpy.load_draft_picks`.
 
 Writes one parquet partition per season (curated subset). Snapshot
 semantics — a season's draft never changes after the draft completes,
@@ -11,7 +11,7 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
-import nfl_data_py as nfl
+import nflreadpy
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
@@ -26,10 +26,10 @@ _GSIS_RE = re.compile(rf"^{GSIS_ID_PATTERN}$")
 
 
 def _fetch_raw_draft_picks(seasons: list[int]) -> pd.DataFrame:
-    """Thin wrapper around nfl_data_py; tests monkey-patch this."""
+    """Thin wrapper around nflreadpy; tests monkey-patch this."""
     if not seasons:
         return pd.DataFrame()
-    return nfl.import_draft_picks(seasons)
+    return nflreadpy.load_draft_picks(seasons=seasons).to_pandas()
 
 
 def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:

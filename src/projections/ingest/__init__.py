@@ -1,4 +1,4 @@
-"""Ingest layer — the only module that talks to nfl_data_py."""
+"""Ingest layer — the only module that talks to nflreadpy."""
 
 from __future__ import annotations
 
