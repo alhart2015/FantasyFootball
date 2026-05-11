@@ -4,6 +4,46 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## WR Receiving Stats Target Decomposition Probe — verdict **SIGNAL (marginal) — receptions cell** (2026-05-10, on branch `feat/probe-target-decomposition`)
+
+**Status:** Probe-only spec shipped per `docs/superpowers/specs/2026-05-10-target-decomposition-probe-design.md` and plan `docs/superpowers/plans/2026-05-10-target-decomposition-probe.md`. **First model-architecture probe in the project** (Track 2A's prior probes have all measured feature additions via override parquets; this probe measures a prediction-recipe change with no override layer). New module `src/projections/backtest/target_decomposition_probe.py` walks forward over 2021–2024, fitting one shared volume RidgeCV (on `targets`) plus three efficiency RidgeCVs (on `catch_rate`, `yards_per_target`, `td_rate_per_target` filtered to `targets > 0`) plus three direct-comparator RidgeCVs (matching `BaselineModel.fit`). Sub-model class deliberately Ridge-only across both arms so any SIGNAL is attributable to *decomposition itself*, not to a model-class change. No new ingest, no schema changes, no production builders touched, no model factory added.
+
+**Per-stat verdicts (pooled 2021–2024, paired-bootstrap CI on RMSE delta):**
+
+| Stat | n_paired | RMSE direct | RMSE decomposed | Δ-RMSE | 95% CI | Verdict | Expected composite-fpts Δ |
+|---|---:|---:|---:|---:|---|:---:|---:|
+| receptions | 8460 | 2.0324 | 2.0282 | **-0.0042** | **[-0.0079, -0.0004]** | **SIGNAL** | **-0.0042 fpts** |
+| receiving_yards | 8460 | 31.1654 | 31.1600 | -0.0054 | [-0.0601, +0.0492] | NULL | -0.0005 fpts |
+| receiving_tds | 8460 | 0.4793 | 0.4788 | -0.0005 | [-0.0011, +0.0002] | NULL | -0.0029 fpts |
+
+**Family verdict:** SIGNAL on 1 of 3 cells (receptions); NULL on the other two; no REGRESSION. Spec §4 branch: **"≥ 1 SIGNAL, no REGRESSION → greenlight integration plan"**, with §5 risk #1 caveat flag — the binding cell's expected composite-fpts Δ is -0.0042 fpts, just below the ~0.005 fpts threshold.
+
+**Probe-vs-gate calibration risk (per spec §5 risk #1).** Per-stat RMSE Δ translated to expected composite-fpts contribution via the ESPN PPR coefficients (1.0 fpt/rec, 0.1 fpt/yd, 6.0 fpt/td). Net expected composite-fpts magnitude on the WR cell is -0.0076 fpts summed across the three stats; receptions alone contributes -0.0042 fpts. Per the PR #31 retrospective rule, probe binding-cell magnitudes under ~0.005 fpts (composite-fpts Δ) under coverage relaxation should be treated as MARGINAL, not SIGNAL. Coverage was strictly above 0.95 across all eval years (lowest 0.981 in 2023 eval), so the PR #31 rule's "coverage relaxation" condition does not apply here — but the magnitude alone falls in the marginal zone. The integration plan's adoption gate must weight CI strength (strictly below zero) against the small absolute magnitude.
+
+**Factor orthogonality check (per spec §5 risk #2).** Pearson ρ between volume residual and efficiency residual per eval year, on rows with `targets > 0`. All 12 (stat × year) values have |ρ| < 0.05, well under the 0.2 caveat threshold. **Strongest mechanism-level finding from the probe:** the decomposition cleanly separates the two signal axes — no risk of systematic double-counting in the integration plan's `ProductDistribution` composition.
+
+**Coverage:** 0.981–0.988 (eval) / 0.993–0.994 (train) across 2021–2024. Threshold 0.95 met with margin on every (year, population) cell. No relaxation invoked; PR #31 retrospective MARGINAL rule does not strictly apply (but the magnitude flag does — see above).
+
+**Plan-vs-execution deviations (all minor, all caught during Tasks 1–5).**
+- **Ruff Unicode rules + mypy strict on sklearn returns** (Task 1). Source-code docstrings and string literals required ASCII (ruff RUF001/RUF002 disallows Δ, ρ, § in `.py` files); typed local variables needed around sklearn `predict` returns (mypy strict's `[no-any-return]` on sklearn `Any`).
+- **Bootstrap floor on synthetic fixtures** (Task 3). `paired_bootstrap_rmse_delta` requires `n_paired >= 100`; synthetic-fixture tests bumped `n_per_season` to 120. Real-data run clears this trivially (8460 paired rows per stat).
+- **UTF-8 encoding on Windows** (Task 3). `path.write_text` requires explicit `encoding="utf-8"` because the markdown report bodies use em-dashes and Windows defaults to cp1252.
+- **mypy `mypy_path` collision** (Task 4). Plan's combined invocation triggers a pre-existing "Source file found twice" error when run on `scripts/foo.py` + `tests/test_scripts/test_foo_cli.py` together (mypy_path collision); canonical `mypy src tests` is clean.
+
+**What this closes:** target decomposition at the WR receiving cell × 2-factor (volume `targets` × efficiency `{catch_rate, yards_per_target, td_rate_per_target}`) × Ridge-only unit. Greenlights a per-position integration plan analogous to PR #21 / PR #29.
+
+**Recommended next direction.** Per spec §7 named follow-ups, the integration plan must scope:
+1. New `DecomposedBaselineModel` peer (subclass of `BaselineModel`) with per-stat decomposition opt-in via constructor arg.
+2. Within-row coherent factor sampling — shared per-row `targets` draw flowing into all decomposed stats' composed `SampledDistribution`s. Requires a `ProductDistribution` or sample-set helper.
+3. Factor-appropriate sub-model classes (logistic for catch_rate / td_rate_per_target, log-link Gamma for yards_per_target, Poisson / NB-2 for targets) **deferred** to a separate probe + integration cycle conditional on this integration's adoption-gate verdict.
+4. Composite-fpts adoption gate on `(DecomposedBaselineModel, WR)` vs production `(EnsembleModel, WR)` with §1.3.5 per-position contingency matrix.
+
+**Implementation option for the integration plan**: opt in to ONLY the SIGNAL stat (receptions) at the model level — leave receiving_yards and receiving_tds on direct ridges. Avoids high-variance ratio sub-models on the first integration cycle. The integration plan's contingency matrix should explicitly cover this option as the conservative path.
+
+**Reports:** `reports/feature_probe_target_decomposition_summary.md`, `reports/feature_probe_target_decomposition_per_stat.csv`, 3 per-stat `.md` reports.
+
+---
+
 ## Weather Refined-Unit RB+WR Integration — verdict **full-revert × 2** (probe-vs-gate divergence) (2026-05-09, on branch `feat/weather-refined-rb-wr`)
 
 **Status:** Production strict-replace integration of the 8 refined weather cols (`is_cold_weather`, six surface one-hots, `is_primetime`) into `RbFeaturesSchema` + `WrFeaturesSchema`, replacing the v1 4-col bundle from PR #29, per `docs/superpowers/specs/2026-05-09-weather-refined-rb-wr-design.md`. Followed PR #29's `attach_weather_features` wiring + `scripts/backtest_dual.py` orchestration. **Both binding cells `(LightGBMNbModel, RB)` and `(LightGBMNbModel, WR)` returned `DO_NOT_ADOPT`** with point estimates opposite-signed from PR #30's probe predictions. Per §1.3.5 contingency, both positions full-revert; net code change vs main is **zero** (9 files restored to main's state in commit `c4ba548`). The PR ships only the spec, plan, gate reports, and this summary as historical record.
