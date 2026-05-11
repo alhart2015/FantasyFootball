@@ -554,7 +554,7 @@ QB-specific accuracy ever matters more than uniform routing.
 - `depth_charts/depth_charts_2025.parquet` → 200 (still working)
 - `depth_charts/depth_charts_2026.parquet` → 200 (already published for upcoming season — useful for TODO #31's preseason-projection work)
 
-**Status.** Captured 2026-05-11. Hard blocker for mid-season 2026 ingest. Ship option 1 before mid-September 2026.
+**Status.** Captured 2026-05-11. Option 1 shipped same-day on `fix/weekly-stats-2025-ingest`: `_fetch_raw_weekly` now reads `stats_player/stats_player_week_<season>.parquet` directly via `pd.read_parquet`; `_RENAME` extended to fold `passing_interceptions → interceptions` and `sacks_suffered → sacks` (the legacy `recent_team → team` mapping is kept as a harmless no-op against new-format input so the old-shape `fake_weekly_df` fixture still validates). `WeeklyStatsSchema.receiving_air_yards` lower bound loosened from -50 to -100 to accommodate a 2025 Tyler Higbee anomaly (-92 on a target behind the LOS; empirical 2018-2024 floor was -33). 2025 partition ingested (6,895 rows across QB/RB/WR/TE/K). 2018-2024 partitions left as-is — re-ingesting them from the new URL would add ~22% more rows per season (zero-stat weeks + K) and is deferred. **Still open:** option 3 (migrate every ingest source to nflreadpy) before the 2026 season opens (~Sept 2026), at which point the historical re-ingest is the natural sweep.
 
 ### 33. Elite-season under-projection — four leverage points
 

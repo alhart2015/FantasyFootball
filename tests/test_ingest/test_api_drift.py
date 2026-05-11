@@ -88,20 +88,24 @@ def _assert_columns_present(raw_columns: set[str], expected: set[str], source: s
 
 
 def test_weekly_stats_api_columns_and_schema() -> None:
+    # Column names match the post-migration nflverse `stats_player_week_*`
+    # parquet schema (see weekly_stats._NFLVERSE_WEEKLY_URL). `interceptions`
+    # is now `passing_interceptions`, `sacks` is `sacks_suffered`, and
+    # `recent_team` was dropped in favour of `team`.
     raw = _fetch_raw_weekly([_DRIFT_SEASON])
     expected = {
         "player_id",
-        "recent_team",
+        "team",
         "opponent_team",
         "season",
         "week",
         "position",
         "passing_yards",
         "passing_tds",
-        "interceptions",
+        "passing_interceptions",
         "attempts",
         "completions",
-        "sacks",
+        "sacks_suffered",
         "rushing_yards",
         "rushing_tds",
         "carries",
@@ -115,7 +119,7 @@ def test_weekly_stats_api_columns_and_schema() -> None:
         "receiving_fumbles_lost",
         "sack_fumbles_lost",
     }
-    _assert_columns_present(set(raw.columns), expected, "import_weekly_data")
+    _assert_columns_present(set(raw.columns), expected, "stats_player_week parquet")
     df = _normalize_weekly(raw)
     assert not df.empty
 

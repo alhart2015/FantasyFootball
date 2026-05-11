@@ -1,7 +1,14 @@
-"""Refresh per-season weekly stats from `nfl_data_py.import_weekly_data`.
+"""Refresh per-season weekly stats from the nflverse parquet releases.
 
 Writes one parquet partition per season (further per-week splitting is
 unnecessary at this scale — a season is small).
+
+Fetches directly from
+``github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_<season>.parquet``.
+``nfl_data_py`` 0.3.x still hits the legacy ``player_stats/player_stats_<season>.parquet``
+release path, which nflverse deprecated in 2025 — it 404s for >= 2025 and
+will not be back-populated. See TODO #32 / pm decision-log entry for the
+full migration analysis.
 """
 
 from __future__ import annotations
@@ -9,7 +16,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-import nfl_data_py as nfl
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
@@ -40,15 +46,28 @@ _KEEP = [
     "fumbles_lost",
 ]
 
+# The new nflverse release renamed several stat columns (`interceptions` →
+# `passing_interceptions`, `sacks` → `sacks_suffered`) and replaced
+# `recent_team` with `team`. The old names are kept here as no-op renames
+# so the legacy-shape fake fixtures under tests/conftest.py continue to
+# normalize correctly through the same path.
 _RENAME = {
     "player_id": "gsis_id",
     "recent_team": "team",
     "opponent_team": "opponent",
+    "passing_interceptions": "interceptions",
+    "sacks_suffered": "sacks",
 }
+
+_NFLVERSE_WEEKLY_URL = (
+    "https://github.com/nflverse/nflverse-data/releases/download/"
+    "stats_player/stats_player_week_{season}.parquet"
+)
 
 
 def _fetch_raw_weekly(seasons: list[int]) -> pd.DataFrame:
-    return nfl.import_weekly_data(seasons)
+    frames = [pd.read_parquet(_NFLVERSE_WEEKLY_URL.format(season=s)) for s in seasons]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 def _normalize_team(v: str) -> str:
