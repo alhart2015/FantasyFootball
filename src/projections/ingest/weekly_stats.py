@@ -117,6 +117,17 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
     df = df[df["position"].isin([p.value for p in Position])].copy()
     df = df[df["gsis_id"].notna()].copy()
 
+    # Drop player-weeks with zero offensive touch (no attempt, no carry, no
+    # target). nflreadpy's post-2025 release format includes inactive-roster
+    # rows that the legacy nfl_data_py path omitted; without this filter,
+    # baseline mean-stat predictions regress 10-15% downward because the
+    # training set picks up ~10% more all-zero rows. See backtest-gate diff
+    # captured during the nflreadpy migration. K is implicitly dropped here
+    # because kickers never have attempts / carries / targets in the
+    # offensive-stat sense — when K modeling lands it will need a separate
+    # ingest path keyed off FG / PAT counts.
+    df = df[(df["attempts"] > 0) | (df["carries"] > 0) | (df["targets"] > 0)].copy()
+
     df["team"] = df["team"].map(_normalize_team).astype(_PYARROW_STR)
     df["opponent"] = df["opponent"].map(_normalize_team).astype(_PYARROW_STR)
 
