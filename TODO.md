@@ -554,7 +554,22 @@ QB-specific accuracy ever matters more than uniform routing.
 - `depth_charts/depth_charts_2025.parquet` → 200 (still working)
 - `depth_charts/depth_charts_2026.parquet` → 200 (already published for upcoming season — useful for TODO #31's preseason-projection work)
 
-**Status.** Captured 2026-05-11. Option 1 shipped same-day on `fix/weekly-stats-2025-ingest`: `_fetch_raw_weekly` now reads `stats_player/stats_player_week_<season>.parquet` directly via `pd.read_parquet`; `_RENAME` extended to fold `passing_interceptions → interceptions` and `sacks_suffered → sacks` (the legacy `recent_team → team` mapping is kept as a harmless no-op against new-format input so the old-shape `fake_weekly_df` fixture still validates). `WeeklyStatsSchema.receiving_air_yards` lower bound loosened from -50 to -100 to accommodate a 2025 Tyler Higbee anomaly (-92 on a target behind the LOS; empirical 2018-2024 floor was -33). 2025 partition ingested (6,895 rows across QB/RB/WR/TE/K). 2018-2024 partitions left as-is — re-ingesting them from the new URL would add ~22% more rows per season (zero-stat weeks + K) and is deferred. **Still open:** option 3 (migrate every ingest source to nflreadpy) before the 2026 season opens (~Sept 2026), at which point the historical re-ingest is the natural sweep.
+**Status.** Captured 2026-05-11. Option 1 shipped same-day on `fix/weekly-stats-2025-ingest` (PR #34). Option 3 (full migration to `nflreadpy` + historical re-ingest) shipped same-day on `feat/nflreadpy-migration`: all 8 sources (weekly_stats, schedules, depth_charts, ngs_{passing,rushing,receiving}, snap_counts, pbp, draft_picks, id_map) now route through `nflreadpy.load_*().to_pandas()`. `nfl_data_py` dropped from deps; `nflreadpy>=0.1.5` and `polars>=1.0` added. Historical re-ingest covered 2018-2025 for every source except depth_charts. **Carve-out:** depth_charts 2025+ uses a fundamentally different upstream schema — see TODO #34 below for the derivation work needed. **All other follow-ups under this TODO are now closed.**
+
+### 34. depth_charts 2025+ — derive (season, week) from snapshot-by-timestamp feed
+
+**Captured 2026-05-11 during the nflreadpy migration.** nflverse changed the 2025+ depth_charts release from a weekly per-team format to a snapshot-by-timestamp feed. New columns: `dt` (ISO timestamp), `team`, `gsis_id`, `pos_abb` / `pos_grp` / `pos_name` / `pos_slot` / `pos_rank`, `player_name`, `espn_id`. Old columns we depended on (`season`, `week`, `club_code`, `depth_team`, `depth_position`) are gone. nfl_data_py 0.3.x ingested the legacy URL successfully into 2024 (which is why it didn't trip the option-1 spike), but the underlying release was already migrating; from 2025 on the only release path returns the new shape.
+
+**Effect on this codebase:** `refresh_depth_charts` raises `NotImplementedError` for any season whose payload lacks the legacy columns, so 2025 depth_charts partitions are simply not produced. 2018-2024 partitions remain fully up to date. Downstream feature builders that read depth_charts (`build_*_features`) treat a missing 2025 row as missing data — currently surfaces as `NaN` features and would fail pandera validation on 2025 projection runs.
+
+**Approach for the derivation.** Snapshot-by-timestamp can be coerced back to per-week:
+1. Read 2025 `schedules`. For each (game_id, kickoff), pick the depth_charts snapshot with the largest `dt` strictly before kickoff (closest-prior snapshot).
+2. Map `pos_abb` (e.g., LWR, RWR, SWR, RB1, TE1, QB1) and/or `pos_rank` to our canonical `(position, depth_rank)`.
+3. Emit one row per (season=2025, week, team, gsis_id) with the resolved rank.
+
+Two open design questions before the spike: (a) what timezone is `dt` published in (assume UTC; verify); (b) how to handle the ~3,200-row snapshots that include defensive/special-teams players we don't model — same `Position` filter as everywhere else should suffice. Snapshots are emitted roughly daily (221 distinct dt values across 2025), so the closest-prior-snapshot rule is well-conditioned even mid-week.
+
+**Status.** Captured 2026-05-11. Blocking 2025+ projection runs that consume depth_chart features. Defer until next ingest-touching plan.
 
 ### 33. Elite-season under-projection — four leverage points
 

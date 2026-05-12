@@ -1,6 +1,6 @@
-"""Refresh per-season snap counts from `nfl_data_py.import_snap_counts`.
+"""Refresh per-season snap counts from `nflreadpy.load_snap_counts`.
 
-`nfl_data_py` returns a `pfr_player_id` column rather than `gsis_id` for
+Upstream returns a `pfr_player_id` column rather than `gsis_id` for
 snap counts. We join on the id_map (built by `build_id_map`) to resolve
 `pfr_player_id` -> `gsis_id` before validation. Rows with no id_map match
 (bench/practice players we don't track) are dropped silently.
@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-import nfl_data_py as nfl
+import nflreadpy
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
@@ -35,7 +35,7 @@ _KEEP = [
 
 
 def _fetch_raw_snap_counts(seasons: list[int]) -> pd.DataFrame:
-    return nfl.import_snap_counts(seasons)
+    return nflreadpy.load_snap_counts(seasons=seasons).to_pandas()
 
 
 def _normalize_team(v: str) -> str:
@@ -67,7 +67,7 @@ def _normalize_one_season(raw: pd.DataFrame, data_root: Path) -> pd.DataFrame:
 
     # Drop rows with NaN season/week before int64 coercion.
     df = df[df["season"].notna() & df["week"].notna()].copy()
-    # nfl_data_py returns int32 for season/week; pandera Series[int] requires int64.
+    # Upstream returns int32 for season/week; pandera Series[int] requires int64.
     for int_col in ("season", "week", "offense_snaps", "defense_snaps", "st_snaps"):
         if int_col in df.columns:
             df[int_col] = df[int_col].fillna(0).astype("int64")

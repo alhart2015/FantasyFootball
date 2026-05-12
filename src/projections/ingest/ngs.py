@@ -1,4 +1,4 @@
-"""Refresh per-season NGS data from `nfl_data_py.import_ngs_data`.
+"""Refresh per-season NGS data from `nflreadpy.load_nextgen_stats`.
 
 Parameterized by `stat_type` ∈ {"passing", "rushing", "receiving"}; produces
 three distinct partition tables (`ngs_passing`, `ngs_rushing`, `ngs_receiving`).
@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Literal
 
-import nfl_data_py as nfl
+import nflreadpy
 import pandas as pd
 import pandera.pandas as pa
 
@@ -105,7 +105,7 @@ _SCHEMA_FOR: dict[NgsStatType, type[pa.DataFrameModel]] = {
 
 
 def _fetch_raw_ngs(stat_type: NgsStatType, seasons: list[int]) -> pd.DataFrame:
-    return nfl.import_ngs_data(stat_type, seasons)
+    return nflreadpy.load_nextgen_stats(seasons=seasons, stat_type=stat_type).to_pandas()
 
 
 def _normalize_team(v: str) -> str:
@@ -120,7 +120,7 @@ def _normalize_one_season(stat_type: NgsStatType, raw: pd.DataFrame) -> pd.DataF
         if int_col in df.columns:
             df[int_col] = df[int_col].astype(pd.Int64Dtype())
 
-    # nfl_data_py returns int32 for season/week; pandera Series[int] requires int64.
+    # Upstream returns int32 for season/week; pandera Series[int] requires int64.
     # NGS also includes season-summary rows with week=0 — drop them.
     df = df[df["season"].notna() & df["week"].notna()].copy()
     for int_col in ("season", "week"):
