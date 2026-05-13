@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import RidgeCV
 
-from projections.models.baseline import BaselineModel
+from projections.models.baseline import _RIDGE_ALPHA_GRID, BaselineModel
 from projections.schemas import Stat, WeeklyStatsSchema
 
 
@@ -113,7 +113,7 @@ class DecomposedBaselineModel(BaselineModel):
         joined_kept = joined.loc[feature_frame.index]
         x_train = feature_frame.to_numpy(dtype=np.float64)
 
-        alphas = np.logspace(-3, 3, 13)
+        alphas = _RIDGE_ALPHA_GRID
 
         # Fit shared volume sub-models (one per unique volume_stat).
         unique_volume_stats = {spec.volume_stat for spec in self.decomposed_stats.values()}
