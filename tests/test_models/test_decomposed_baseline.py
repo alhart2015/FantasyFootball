@@ -166,6 +166,45 @@ def test_decomposed_baseline_constructs_with_empty_decomposed_stats() -> None:
     assert model.efficiency_ridges == {}
 
 
+def test_fit_with_empty_decomposed_stats_produces_no_volume_or_efficiency_ridges() -> None:
+    """Empty decomposed_stats: fit() populates direct ridges (parent path) but
+    leaves volume_ridges / efficiency_ridges empty. Behaviorally indistinguishable
+    from BaselineModel on the train side."""
+    from projections.models.baseline import (
+        _WR_DIST_FAMILIES,
+        _WR_FEATURE_COLUMNS,
+        _WR_TARGET_STATS,
+        _default_code_hash_files,
+    )
+    from projections.schemas import Position, WeeklyStatsSchema, WrFeaturesSchema
+
+    model = DecomposedBaselineModel(
+        position=Position.WR,
+        target_stats=_WR_TARGET_STATS,
+        feature_columns=_WR_FEATURE_COLUMNS,
+        dist_families=_WR_DIST_FAMILIES,
+        feature_schema=WrFeaturesSchema,
+        code_hash_files=_default_code_hash_files("wr.py"),
+        decomposed_stats={},
+    )
+    features, weekly_stats = _synthetic_wr_fit_inputs()
+    for col in model.feature_columns:
+        if col not in features.columns:
+            features[col] = _WR_COLUMN_DEFAULTS.get(col, 0.0)
+    features = model.feature_schema.validate(features)
+    weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
+    model.fit(features, weekly_stats)
+
+    assert set(model.ridges) == set(_WR_TARGET_STATS)
+    assert model.volume_ridges == {}
+    assert model.efficiency_ridges == {}
+    assert model.volume_variance == {}
+    assert model.efficiency_variance == {}
+    # model_id still uses decomposed-baseline prefix (class-level identity is
+    # decoupled from the runtime decomposed_stats config).
+    assert model.model_id.startswith("decomposed-baseline:wr:")
+
+
 def _wr_decomp_model_receptions_only() -> DecomposedBaselineModel:
     from projections.models.baseline import (
         _WR_DIST_FAMILIES,
@@ -235,3 +274,27 @@ def test_fit_populates_decomposition_sub_models_for_receptions() -> None:
 def test_fit_model_id_uses_decomposed_baseline_prefix() -> None:
     model = _fit_model(_wr_decomp_model_receptions_only())
     assert model.model_id.startswith("decomposed-baseline:wr:")
+
+
+def test_fit_raises_when_no_positive_volume_rows() -> None:
+    """When all training rows have volume_stat == 0, the efficiency factor
+    cannot be fitted and a clear ValueError is raised. Guards spec §3.1.3
+    structurally."""
+    from projections.schemas import WeeklyStatsSchema
+
+    model = _wr_decomp_model_receptions_only()
+    features, weekly_stats = _synthetic_wr_fit_inputs()
+    # Zero out all targets so the efficiency mask is always False.
+    weekly_stats["targets"] = 0
+    # Derived stats also drop to 0 since targets=0 forces all receiving stats
+    # to zero in any plausible fixture; tighten the fixture to match.
+    weekly_stats["receptions"] = 0
+    weekly_stats["receiving_yards"] = 0.0
+    weekly_stats["receiving_tds"] = 0
+    for col in model.feature_columns:
+        if col not in features.columns:
+            features[col] = _WR_COLUMN_DEFAULTS.get(col, 0.0)
+    features = model.feature_schema.validate(features)
+    weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
+    with pytest.raises(ValueError, match="no training rows with"):
+        model.fit(features, weekly_stats)
