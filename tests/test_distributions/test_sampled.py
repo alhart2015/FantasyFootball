@@ -16,13 +16,14 @@ def test_sample_returns_underlying_array_when_n_equals_len() -> None:
 
     score_distribution calls .sample(n_samples=10_000) on each per-stat distribution;
     when n matches len(samples), FrozenSampledDistribution returns the underlying
-    array directly, preserving any cross-stat correlation baked into the array.
+    array directly (exact identity, not a view), preserving any cross-stat
+    correlation baked into the array.
     """
     rng = np.random.default_rng(seed=42)
     samples = rng.normal(loc=10.0, scale=2.0, size=100)
     dist = FrozenSampledDistribution(samples=samples)
     out = dist.sample(n=100)
-    assert out is samples or np.shares_memory(out, samples)
+    assert out is dist.samples
     assert np.array_equal(out, samples)
 
 
@@ -71,3 +72,24 @@ def test_satisfies_distribution_protocol() -> None:
 
     dist = FrozenSampledDistribution(samples=np.array([1.0, 2.0, 3.0]))
     assert isinstance(dist, Distribution)
+
+
+def test_samples_array_is_read_only() -> None:
+    """The frozen dataclass marks the underlying array read-only so in-place
+    mutation through the n == len zero-copy branch raises rather than silently
+    corrupting cross-stat correlation."""
+    samples = np.array([1.0, 2.0, 3.0])
+    dist = FrozenSampledDistribution(samples=samples)
+    out = dist.sample(n=3)
+    with pytest.raises(ValueError):
+        out[0] = 99.0
+
+
+def test_construction_rejects_empty_samples() -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        FrozenSampledDistribution(samples=np.array([], dtype=np.float64))
+
+
+def test_construction_rejects_multidim_samples() -> None:
+    with pytest.raises(ValueError, match="1-D"):
+        FrozenSampledDistribution(samples=np.array([[1.0, 2.0], [3.0, 4.0]]))

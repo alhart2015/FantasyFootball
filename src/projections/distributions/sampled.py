@@ -38,6 +38,20 @@ class FrozenSampledDistribution:
 
     samples: NDArray[np.float64]
 
+    def __post_init__(self) -> None:
+        # frozen=True blocks reassignment of self.samples but not mutation of its
+        # contents. The cross-stat coherence guarantee depends on the n == len
+        # branch returning the underlying array without anyone mutating it — so
+        # we make the array itself read-only. Use object.__setattr__ because the
+        # dataclass is frozen.
+        arr = np.asarray(self.samples, dtype=np.float64)
+        if arr.ndim != 1 or arr.size == 0:
+            raise ValueError(
+                f"samples must be a non-empty 1-D float64 array, got shape {arr.shape}"
+            )
+        arr.flags.writeable = False
+        object.__setattr__(self, "samples", arr)
+
     def mean(self) -> float:
         return float(self.samples.mean())
 
