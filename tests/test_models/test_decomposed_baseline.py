@@ -12,13 +12,17 @@ import pandas as pd
 import pytest
 from sklearn.linear_model import RidgeCV
 
-from projections.distributions import FrozenSampledDistribution
+from projections.distributions import (
+    FrozenSampledDistribution,
+    QuantileDistribution,
+    unpack_per_stat_params,
+)
 from projections.distributions.parametric import (
     ParametricNegativeBinomial,
     ParametricNormal,
 )
 from projections.models.decomposed_baseline import DecomposedBaselineModel, DecompositionSpec
-from projections.schemas import Stat, WeeklyStatsSchema
+from projections.schemas import DistributionFamily, Ruleset, Stat, WeeklyStatsSchema
 
 
 def test_decomposition_spec_is_frozen() -> None:
@@ -481,3 +485,97 @@ def test_build_stat_distributions_is_deterministic_per_row() -> None:
         assert isinstance(rec_a, FrozenSampledDistribution)
         assert isinstance(rec_b, FrozenSampledDistribution)
         assert np.array_equal(rec_a.samples, rec_b.samples)
+
+
+def test_predict_distribution_round_trip_through_quantile_codec() -> None:
+    """predict_distribution validates against ProjectionWeeklySchema; the
+    params blob decodes back with the decomposed stat as a QuantileDistribution
+    (the persisted form), non-decomposed stats as their parametric form.
+    """
+    model = _wr_decomp_model_receptions_only()
+    features, weekly_stats = _synthetic_wr_fit_inputs()
+    for col in model.feature_columns:
+        if col not in features.columns:
+            features[col] = _WR_COLUMN_DEFAULTS.get(col, 0.0)
+    features = model.feature_schema.validate(features)
+    weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
+    model.fit(features, weekly_stats)
+
+    ruleset = Ruleset.espn_ppr()
+    pred = model.predict_distribution(features, ruleset=ruleset)
+    # Schema validation already happens inside predict_distribution; if we get
+    # here without raising, the frame is schema-conformant.
+    assert len(pred) == len(features)
+    assert (pred["family"] == DistributionFamily.SAMPLED_SUMMARY.value).all()
+
+    # Decode the first row's params blob.
+    blob = pred.iloc[0]["params"]
+    decoded = unpack_per_stat_params(blob)
+    assert isinstance(decoded[Stat.RECEPTIONS], QuantileDistribution)
+    assert isinstance(decoded[Stat.RECEIVING_YARDS], ParametricNormal)
+    assert isinstance(decoded[Stat.RECEIVING_TDS], ParametricNegativeBinomial)
+
+
+def test_predict_distribution_mean_p10_p90_finite() -> None:
+    """The summarized per-row mean/p10/p50/p90 should be finite and ordered
+    p10 < p50 < p90 for nontrivial predictions."""
+    model = _wr_decomp_model_receptions_only()
+    features, weekly_stats = _synthetic_wr_fit_inputs()
+    for col in model.feature_columns:
+        if col not in features.columns:
+            features[col] = _WR_COLUMN_DEFAULTS.get(col, 0.0)
+    features = model.feature_schema.validate(features)
+    weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
+    model.fit(features, weekly_stats)
+    pred = model.predict_distribution(features, ruleset=Ruleset.espn_ppr())
+
+    for col in ("mean", "p10", "p50", "p90"):
+        assert pred[col].notna().all()
+        assert np.isfinite(pred[col]).all()
+    assert (pred["p10"] <= pred["p50"]).all()
+    assert (pred["p50"] <= pred["p90"]).all()
+
+
+def test_persistable_dists_handles_all_zero_samples_gracefully() -> None:
+    """If a per-row composed sample array is all zero (e.g., zero predicted
+    volume on a deep WR4), the quantile values are all zero. QuantileDistribution
+    accepts non-decreasing values (equal is allowed); this test guards against
+    a regression where _PERSISTED_QUANTILES is changed to require strictly
+    increasing values.
+    """
+    from projections.models.decomposed_baseline import (
+        _PERSISTED_QUANTILES,
+        DecomposedBaselineModel,
+    )
+
+    zero_samples = np.zeros(10_000, dtype=np.float64)
+    frozen = FrozenSampledDistribution(samples=zero_samples)
+
+    # Minimal model just to expose _persistable_dists_for_packing as bound.
+    from projections.models.baseline import (
+        _WR_DIST_FAMILIES,
+        _WR_FEATURE_COLUMNS,
+        _WR_TARGET_STATS,
+        _default_code_hash_files,
+    )
+    from projections.schemas import Position, WrFeaturesSchema
+
+    model = DecomposedBaselineModel(
+        position=Position.WR,
+        target_stats=_WR_TARGET_STATS,
+        feature_columns=_WR_FEATURE_COLUMNS,
+        dist_families=_WR_DIST_FAMILIES,
+        feature_schema=WrFeaturesSchema,
+        code_hash_files=_default_code_hash_files("wr.py"),
+        decomposed_stats={
+            Stat.RECEPTIONS: DecompositionSpec(
+                volume_stat=Stat.TARGETS,
+                efficiency_label="catch_rate",
+                efficiency_clip_hi=1.0,
+            ),
+        },
+    )
+    out = model._persistable_dists_for_packing({Stat.RECEPTIONS: frozen})
+    quant = out[Stat.RECEPTIONS]
+    assert isinstance(quant, QuantileDistribution)
+    assert np.array_equal(quant.values_, np.zeros_like(_PERSISTED_QUANTILES))

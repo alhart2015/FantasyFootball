@@ -24,12 +24,18 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import RidgeCV
 
-from projections.distributions import Distribution, FrozenSampledDistribution
+from projections.distributions import Distribution, FrozenSampledDistribution, QuantileDistribution
 from projections.models.baseline import _RIDGE_ALPHA_GRID, BaselineModel
 from projections.schemas import Stat, WeeklyStatsSchema
 from projections.scoring.score_distribution import derive_row_seed
 
 _N_SAMPLES: Final[int] = 10_000
+
+# Persisted quantile grid: 19 knots at q in {0.05, 0.10, ..., 0.95}. Per-row
+# persistence cost is 19 floats per decomposed stat — small relative to the
+# existing per-stat parametric encoding. QuantileDistribution recomposes via
+# linear interpolation between knots.
+_PERSISTED_QUANTILES: Final[np.ndarray] = np.arange(0.05, 0.96, 0.05)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +170,35 @@ class DecomposedBaselineModel(BaselineModel):
             f"decomposed-baseline:{self.position.value.lower()}:{self.code_hash}"
             f":{self.train_seasons[0]}-{self.train_seasons[1]}"
         )
+
+    def _persistable_dists_for_packing(
+        self, stat_dists: Mapping[Stat, Distribution]
+    ) -> Mapping[Stat, Distribution]:
+        """Convert FrozenSampledDistribution entries (decomposed stats) into
+        QuantileDistribution summaries for persistence via the existing
+        QUANTILE codec branch.
+
+        The cross-stat correlation baked into the FrozenSampledDistribution's
+        sample array is lost at the persistence boundary — see spec §3.1.5 +
+        §5 risk #4. This is acceptable for v1 (no post-hoc re-scoring from
+        persisted params blobs). The scoring step has already consumed the
+        live in-memory FrozenSampledDistributions via score_distribution
+        upstream; this conversion is downstream of that.
+        """
+        out: dict[Stat, Distribution] = {}
+        for stat, dist in stat_dists.items():
+            if isinstance(dist, FrozenSampledDistribution):
+                values = np.quantile(dist.samples, _PERSISTED_QUANTILES).astype(np.float64)
+                # QuantileDistribution requires values to be non-decreasing
+                # (validated in its __init__); np.quantile already produces
+                # sorted output for ascending quantiles.
+                out[stat] = QuantileDistribution(
+                    quantiles=_PERSISTED_QUANTILES.copy(),
+                    values=values,
+                )
+            else:
+                out[stat] = dist
+        return out
 
     def build_stat_distributions(self, features: pd.DataFrame) -> list[dict[Stat, Distribution]]:
         """Per-row dicts of {Stat -> Distribution}.

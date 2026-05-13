@@ -684,10 +684,6 @@ class BaselineModel:
         """Hook for subclasses to convert non-codec-supported Distribution types
         (e.g., FrozenSampledDistribution) into supported ones (QuantileDistribution)
         before persistence. Default returns ``stat_dists`` unchanged.
-
-        BaselineModel emits only parametric distributions and QuantileDistribution
-        in stat_dists, all of which are directly codec-supported, so no conversion
-        is needed at this level.
         """
         return stat_dists
 
