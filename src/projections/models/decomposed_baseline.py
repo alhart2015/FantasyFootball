@@ -184,6 +184,13 @@ class DecomposedBaselineModel(BaselineModel):
         persisted params blobs). The scoring step has already consumed the
         live in-memory FrozenSampledDistributions via score_distribution
         upstream; this conversion is downstream of that.
+
+        Downstream consumers that re-score from the persisted blob
+        (e.g., ``aggregate_to_season`` in projections.aggregation.season)
+        get per-stat QuantileDistribution samples drawn independently; the
+        cross-stat correlation from the shared volume axis is not recoverable.
+        Season-level variance for decomposed stats may therefore be slightly
+        under-estimated relative to the live-weekly variance.
         """
         out: dict[Stat, Distribution] = {}
         for stat, dist in stat_dists.items():

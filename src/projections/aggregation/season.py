@@ -78,6 +78,17 @@ def aggregate_to_season(
                 week=int(week_row["week"]),
                 ruleset_name=ruleset.name,
             )
+            # NOTE: for DecomposedBaselineModel outputs, the params blob stores
+            # decomposed stats as QuantileDistribution summaries (see
+            # DecomposedBaselineModel._persistable_dists_for_packing in
+            # src/projections/models/decomposed_baseline.py). The cross-stat
+            # correlation from the original FrozenSampledDistribution's shared
+            # volume draw is NOT recoverable here — score_distribution will draw
+            # per-stat samples independently and the season-level variance for
+            # stats that shared a volume axis will be slightly compressed
+            # (smaller p10..p90 spread than the live weekly predict produced).
+            # This is the v1 acceptable trade-off; revisit if a ProductDistribution
+            # codec branch is added.
             week_dist = score_distribution(per_stat_dists, ruleset, n_samples=n_samples, seed=seed)
             season_samples += week_dist.samples
 
