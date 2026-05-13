@@ -187,11 +187,10 @@ class DecomposedBaselineModel(BaselineModel):
             return per_row_parametric
 
         # Feature matrix (impute with train medians; bool -> int8).
+        # self.feature_means is guaranteed non-None here: super().build_stat_distributions
+        # (called above) already raises if the model is not fitted.
         x_frame = self._x_frame_with_bool_coercion(features)
-        if self.feature_means is None:
-            raise RuntimeError(
-                "feature_means is None; model is not fitted. Call fit() before predict."
-            )
+        assert self.feature_means is not None, "feature_means is None after parent guard"
         x_frame = x_frame.fillna(self.feature_means)
         x = x_frame.to_numpy(dtype=np.float64)
 
@@ -207,6 +206,13 @@ class DecomposedBaselineModel(BaselineModel):
             mu_e: np.ndarray = self.efficiency_ridges[cs].predict(x).astype(np.float64)
             per_decomposed_mu_eff[cs] = mu_e
 
+        # Sort volume_stats by Stat.value for stable seed assignment regardless
+        # of decomposed_stats insertion order.
+        sorted_volume_stats = sorted(per_volume_mu.keys(), key=lambda s: s.value)
+        n_vol = len(sorted_volume_stats)
+        # Sort decomposed_stats by composite_stat.value for stable seed assignment.
+        sorted_decomposed = sorted(self.decomposed_stats.items(), key=lambda kv: kv[0].value)
+
         # Per-row coherent sampling.
         features_iter = features.reset_index(drop=True)
         for i in range(len(features_iter)):
@@ -217,19 +223,25 @@ class DecomposedBaselineModel(BaselineModel):
                 week=int(feat_row["week"]),
                 ruleset_name="__decomp_build__",
             )
-            # Per-row volume draws (one per volume_stat). Shared across all
-            # decomposed stats whose spec.volume_stat is this volume_stat.
+            # Per-row volume draws. Each unique volume_stat gets a distinct
+            # seed offset (sorted-index order) so multi-volume-stat configs
+            # don't produce artificially-correlated volume draws.
+            # Seeds: row_seed + 0, row_seed + 1, ..., row_seed + n_vol-1.
             vol_samples: dict[Stat, np.ndarray] = {}
-            for vs, mu_arr in per_volume_mu.items():
+            for vol_idx, vs in enumerate(sorted_volume_stats):
                 sigma_v = self.volume_variance[vs]
-                rng_v = np.random.default_rng(row_seed)
-                vs_raw = rng_v.normal(loc=float(mu_arr[i]), scale=sigma_v, size=_N_SAMPLES)
+                rng_v = np.random.default_rng(row_seed + vol_idx)
+                vs_raw = rng_v.normal(
+                    loc=float(per_volume_mu[vs][i]), scale=sigma_v, size=_N_SAMPLES
+                )
                 vol_samples[vs] = np.maximum(vs_raw, 0.0)
 
-            # Per-stat efficiency draws + composition.
-            for j, (composite_stat, spec) in enumerate(self.decomposed_stats.items(), start=1):
+            # Per-stat efficiency draws + composition. Efficiency seeds start
+            # at row_seed + n_vol to avoid overlap with the volume seed range.
+            # Seeds: row_seed + n_vol + 0, ..., row_seed + n_vol + K-1.
+            for eff_idx, (composite_stat, spec) in enumerate(sorted_decomposed):
                 sigma_e = self.efficiency_variance[composite_stat]
-                rng_e = np.random.default_rng(row_seed + j)
+                rng_e = np.random.default_rng(row_seed + n_vol + eff_idx)
                 eff_raw = rng_e.normal(
                     loc=float(per_decomposed_mu_eff[composite_stat][i]),
                     scale=sigma_e,
