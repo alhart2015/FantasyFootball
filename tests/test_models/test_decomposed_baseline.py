@@ -12,8 +12,13 @@ import pandas as pd
 import pytest
 from sklearn.linear_model import RidgeCV
 
+from projections.distributions import FrozenSampledDistribution
+from projections.distributions.parametric import (
+    ParametricNegativeBinomial,
+    ParametricNormal,
+)
 from projections.models.decomposed_baseline import DecomposedBaselineModel, DecompositionSpec
-from projections.schemas import Stat
+from projections.schemas import Stat, WeeklyStatsSchema
 
 
 def test_decomposition_spec_is_frozen() -> None:
@@ -298,3 +303,181 @@ def test_fit_raises_when_no_positive_volume_rows() -> None:
     weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
     with pytest.raises(ValueError, match="no training rows with"):
         model.fit(features, weekly_stats)
+
+
+def test_build_stat_distributions_emits_frozen_sampled_for_decomposed_stat() -> None:
+    """build_stat_distributions emits FrozenSampledDistribution for the
+    decomposed stat (carrying the per-row composed sample array) and
+    parametric distributions for non-decomposed stats (unchanged path).
+    """
+    model = _wr_decomp_model_receptions_only()
+    features, weekly_stats = _synthetic_wr_fit_inputs()
+    for col in model.feature_columns:
+        if col not in features.columns:
+            features[col] = _WR_COLUMN_DEFAULTS.get(col, 0.0)
+    features = model.feature_schema.validate(features)
+    weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
+    model.fit(features, weekly_stats)
+
+    per_row = model.build_stat_distributions(features)
+    assert len(per_row) == len(features)
+
+    row0 = per_row[0]
+    # Receptions is decomposed → FrozenSampledDistribution carrying 10_000 samples.
+    rec_dist_row0 = row0[Stat.RECEPTIONS]
+    assert isinstance(rec_dist_row0, FrozenSampledDistribution)
+    assert len(rec_dist_row0.samples) == 10_000
+    # Non-decomposed stats keep parametric forms per _WR_DIST_FAMILIES.
+    assert isinstance(row0[Stat.RECEIVING_YARDS], ParametricNormal)
+    assert isinstance(row0[Stat.RECEIVING_TDS], ParametricNegativeBinomial)
+    assert isinstance(row0[Stat.RUSHING_YARDS], ParametricNormal)
+    assert isinstance(row0[Stat.RUSHING_TDS], ParametricNegativeBinomial)
+    assert isinstance(row0[Stat.FUMBLES_LOST], ParametricNegativeBinomial)
+
+
+def _synthetic_wr_fit_inputs_low_eff_variance() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Variant of _synthetic_wr_fit_inputs where yards_per_target has very low
+    variance (Normal(10.0, 0.1) instead of Normal(11.0, 3.0)).
+
+    Used by the cross-stat coherence test to ensure efficiency variance is
+    small relative to volume variance, so the shared volume draw dominates the
+    composed products and correlation rho > 0.5 is analytically guaranteed.
+    """
+    rows: list[dict[str, object]] = []
+    weekly_rows: list[dict[str, object]] = []
+    rng = np.random.default_rng(seed=0xD3C0)
+    for season in (2018, 2019, 2020):
+        for week in (1, 2, 3):
+            for pid in range(4):
+                gsis = _PLAYER_IDS[pid]
+                team = ("KC", "BUF", "DAL", "PHI")[pid]
+                opp = ("LV", "NE", "NYG", "WAS")[pid]
+                targets_per_game_l4 = float(rng.uniform(3.0, 12.0))
+                features_row: dict[str, object] = {
+                    "gsis_id": gsis,
+                    "season": season,
+                    "week": week,
+                    "team": team,
+                    "opponent": opp,
+                    "depth_rank": float(rng.integers(1, 4)),
+                    "targets_per_game_l4": targets_per_game_l4,
+                    "targets_per_game_std": float(rng.uniform(0.5, 3.0)),
+                }
+                rows.append(features_row)
+                tgt = int(rng.poisson(targets_per_game_l4))
+                rec = int(rng.binomial(max(tgt, 0), 0.65))
+                # Near-constant yards_per_target (low efficiency variance) so the
+                # shared volume draw dominates and corr(rec_composed, yds_composed) > 0.5.
+                yds = float(max(tgt, 0) * rng.normal(10.0, 0.1))
+                tds = int(rng.random() < min(tgt * 0.05, 1.0))
+                weekly_rows.append(
+                    {
+                        "gsis_id": gsis,
+                        "season": season,
+                        "week": week,
+                        "team": team,
+                        "opponent": opp,
+                        "position": "WR",
+                        "passing_yards": 0.0,
+                        "passing_tds": 0,
+                        "interceptions": 0,
+                        "attempts": 0,
+                        "completions": 0,
+                        "sacks": 0,
+                        "rushing_yards": 0.0,
+                        "rushing_tds": 0,
+                        "carries": 0,
+                        "targets": tgt,
+                        "receptions": rec,
+                        "receiving_yards": max(yds, -50.0),
+                        "receiving_tds": tds,
+                        "receiving_air_yards": float(max(tgt, 0) * 8),
+                        "fumbles_lost": 0,
+                    }
+                )
+    return pd.DataFrame(rows), pd.DataFrame(weekly_rows)
+
+
+def test_within_row_cross_stat_coherence_two_stat_synthetic_config() -> None:
+    """Architectural guarantee: two decomposed stats sharing the same
+    volume_stat produce FrozenSampledDistribution instances with strongly
+    correlated samples within a row (Pearson rho > 0.5).
+
+    Uses a fixture with near-constant yards_per_target (efficiency variance
+    << volume variance) so the shared volume draw dominates the composition and
+    the cross-stat correlation is analytically guaranteed: with sigma_eff_yds ~
+    0.10 and sigma_vol ~ 2.5, the theoretical rho is ~0.55.
+
+    v1 production decomposes only receptions, but this test exercises the
+    coherence code path that v2 will exercise in production. If this test
+    fails, the cross-stat coherence guarantee is broken.
+    """
+    from projections.models.baseline import (
+        _WR_DIST_FAMILIES,
+        _WR_FEATURE_COLUMNS,
+        _WR_TARGET_STATS,
+        _default_code_hash_files,
+    )
+    from projections.schemas import Position, WrFeaturesSchema
+
+    model = DecomposedBaselineModel(
+        position=Position.WR,
+        target_stats=_WR_TARGET_STATS,
+        feature_columns=_WR_FEATURE_COLUMNS,
+        dist_families=_WR_DIST_FAMILIES,
+        feature_schema=WrFeaturesSchema,
+        code_hash_files=_default_code_hash_files("wr.py"),
+        decomposed_stats={
+            Stat.RECEPTIONS: DecompositionSpec(
+                volume_stat=Stat.TARGETS,
+                efficiency_label="catch_rate",
+                efficiency_clip_hi=1.0,
+            ),
+            Stat.RECEIVING_YARDS: DecompositionSpec(
+                volume_stat=Stat.TARGETS,
+                efficiency_label="yards_per_target",
+                efficiency_clip_hi=float("inf"),
+            ),
+        },
+    )
+    features, weekly_stats = _synthetic_wr_fit_inputs_low_eff_variance()
+    for col in model.feature_columns:
+        if col not in features.columns:
+            features[col] = _WR_COLUMN_DEFAULTS.get(col, 0.0)
+    features = model.feature_schema.validate(features)
+    weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
+    model.fit(features, weekly_stats)
+
+    per_row = model.build_stat_distributions(features)
+    row0 = per_row[0]
+    rec_dist = row0[Stat.RECEPTIONS]
+    yds_dist = row0[Stat.RECEIVING_YARDS]
+    assert isinstance(rec_dist, FrozenSampledDistribution)
+    assert isinstance(yds_dist, FrozenSampledDistribution)
+    # Both compose against the same per-row volume draw → strong positive
+    # element-wise correlation (volume variance >> efficiency variance ensures
+    # the shared draw dominates).
+    rho = float(np.corrcoef(rec_dist.samples, yds_dist.samples)[0, 1])
+    assert rho > 0.5, f"expected within-row Pearson rho > 0.5, got {rho:.3f}"
+
+
+def test_build_stat_distributions_is_deterministic_per_row() -> None:
+    """Same model state + same features → same sample arrays. Per-row seed
+    derivation via derive_row_seed makes this byte-stable.
+    """
+    model = _wr_decomp_model_receptions_only()
+    features, weekly_stats = _synthetic_wr_fit_inputs()
+    for col in model.feature_columns:
+        if col not in features.columns:
+            features[col] = _WR_COLUMN_DEFAULTS.get(col, 0.0)
+    features = model.feature_schema.validate(features)
+    weekly_stats = WeeklyStatsSchema.validate(weekly_stats)
+    model.fit(features, weekly_stats)
+    per_row_a = model.build_stat_distributions(features)
+    per_row_b = model.build_stat_distributions(features)
+    for i in range(len(features)):
+        rec_a = per_row_a[i][Stat.RECEPTIONS]
+        rec_b = per_row_b[i][Stat.RECEPTIONS]
+        assert isinstance(rec_a, FrozenSampledDistribution)
+        assert isinstance(rec_b, FrozenSampledDistribution)
+        assert np.array_equal(rec_a.samples, rec_b.samples)

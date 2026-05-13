@@ -18,13 +18,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Final
 
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import RidgeCV
 
+from projections.distributions import Distribution, FrozenSampledDistribution
 from projections.models.baseline import _RIDGE_ALPHA_GRID, BaselineModel
 from projections.schemas import Stat, WeeklyStatsSchema
+from projections.scoring.score_distribution import derive_row_seed
+
+_N_SAMPLES: Final[int] = 10_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,3 +164,80 @@ class DecomposedBaselineModel(BaselineModel):
             f"decomposed-baseline:{self.position.value.lower()}:{self.code_hash}"
             f":{self.train_seasons[0]}-{self.train_seasons[1]}"
         )
+
+    def build_stat_distributions(self, features: pd.DataFrame) -> list[dict[Stat, Distribution]]:
+        """Per-row dicts of {Stat -> Distribution}.
+
+        Non-decomposed stats: inherited parametric path (Normal/Gamma/NB per
+        ``dist_families``).
+        Decomposed stats: per-row FrozenSampledDistribution with 10_000 samples.
+
+        Within-row cross-stat coherence: all decomposed stats sharing a
+        ``volume_stat`` reuse the same per-row volume draw, baking element-wise
+        correlation into their composed sample arrays. ``score_distribution``
+        consumes the FrozenSampledDistributions via ``.sample(n=10_000)``;
+        the ``n == len`` branch returns the underlying arrays verbatim,
+        preserving the correlation through scoring.
+        """
+        # Parent path emits parametric distributions for all target_stats --
+        # including the decomposed ones, which we will overwrite below.
+        per_row_parametric = super().build_stat_distributions(features)
+
+        if not self.decomposed_stats:
+            return per_row_parametric
+
+        # Feature matrix (impute with train medians; bool -> int8).
+        x_frame = self._x_frame_with_bool_coercion(features)
+        if self.feature_means is None:
+            raise RuntimeError(
+                "feature_means is None; model is not fitted. Call fit() before predict."
+            )
+        x_frame = x_frame.fillna(self.feature_means)
+        x = x_frame.to_numpy(dtype=np.float64)
+
+        # Vectorized volume + efficiency predictions.
+        unique_volume_stats = {spec.volume_stat for spec in self.decomposed_stats.values()}
+        per_volume_mu: dict[Stat, np.ndarray] = {}
+        for vs in unique_volume_stats:
+            mu_v: np.ndarray = self.volume_ridges[vs].predict(x).astype(np.float64)
+            per_volume_mu[vs] = mu_v
+
+        per_decomposed_mu_eff: dict[Stat, np.ndarray] = {}
+        for cs in self.decomposed_stats:
+            mu_e: np.ndarray = self.efficiency_ridges[cs].predict(x).astype(np.float64)
+            per_decomposed_mu_eff[cs] = mu_e
+
+        # Per-row coherent sampling.
+        features_iter = features.reset_index(drop=True)
+        for i in range(len(features_iter)):
+            feat_row = features_iter.iloc[i]
+            row_seed = derive_row_seed(
+                gsis_id=str(feat_row["gsis_id"]),
+                season=int(feat_row["season"]),
+                week=int(feat_row["week"]),
+                ruleset_name="__decomp_build__",
+            )
+            # Per-row volume draws (one per volume_stat). Shared across all
+            # decomposed stats whose spec.volume_stat is this volume_stat.
+            vol_samples: dict[Stat, np.ndarray] = {}
+            for vs, mu_arr in per_volume_mu.items():
+                sigma_v = self.volume_variance[vs]
+                rng_v = np.random.default_rng(row_seed)
+                vs_raw = rng_v.normal(loc=float(mu_arr[i]), scale=sigma_v, size=_N_SAMPLES)
+                vol_samples[vs] = np.maximum(vs_raw, 0.0)
+
+            # Per-stat efficiency draws + composition.
+            for j, (composite_stat, spec) in enumerate(self.decomposed_stats.items(), start=1):
+                sigma_e = self.efficiency_variance[composite_stat]
+                rng_e = np.random.default_rng(row_seed + j)
+                eff_raw = rng_e.normal(
+                    loc=float(per_decomposed_mu_eff[composite_stat][i]),
+                    scale=sigma_e,
+                    size=_N_SAMPLES,
+                )
+                eff_samples = np.clip(eff_raw, 0.0, spec.efficiency_clip_hi)
+                composed = vol_samples[spec.volume_stat] * eff_samples
+                # Replace the parametric entry with the live FrozenSampled.
+                per_row_parametric[i][composite_stat] = FrozenSampledDistribution(samples=composed)
+
+        return per_row_parametric
