@@ -33,6 +33,7 @@ from projections.features.cache import read_features
 from projections.models import (
     POSITION_DISPATCH,
     BaselineModel,
+    DecomposedBaselineModel,
     EnsembleModel,
     LightGBMModel,
 )
@@ -264,7 +265,7 @@ def run_backtest(
                 # the union of concrete classes so we can read
                 # `target_stats` (not on the Model protocol).
                 model = cast(
-                    BaselineModel | LightGBMModel | EnsembleModel,
+                    BaselineModel | DecomposedBaselineModel | LightGBMModel | EnsembleModel,
                     dispatch.factories[model_class](),
                 )
                 model.fit(train_features, train_actuals)
