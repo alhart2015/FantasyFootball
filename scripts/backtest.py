@@ -118,6 +118,7 @@ def main() -> None:
         "--model",
         choices=[
             "baseline",
+            "decomposed-baseline",
             "lightgbm",
             "lightgbm-tuned",
             "lightgbm-nb",

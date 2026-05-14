@@ -579,3 +579,68 @@ def test_persistable_dists_handles_all_zero_samples_gracefully() -> None:
     quant = out[Stat.RECEPTIONS]
     assert isinstance(quant, QuantileDistribution)
     assert np.array_equal(quant.values_, np.zeros_like(_PERSISTED_QUANTILES))
+
+
+def test_wr_decomposed_baseline_factory_returns_unfitted_model() -> None:
+    from projections.models.decomposed_baseline import wr_decomposed_baseline
+
+    model = wr_decomposed_baseline()
+    assert isinstance(model, DecomposedBaselineModel)
+    assert model.position.value == "WR"
+    # v1 config: receptions decomposed, others fall through.
+    assert set(model.decomposed_stats.keys()) == {Stat.RECEPTIONS}
+    rec_spec = model.decomposed_stats[Stat.RECEPTIONS]
+    assert rec_spec.volume_stat is Stat.TARGETS
+    assert rec_spec.efficiency_label == "catch_rate"
+    assert rec_spec.efficiency_clip_hi == 1.0
+    # Unfitted state.
+    assert model.code_hash is None
+    assert model.train_seasons is None
+
+
+def test_dispatch_registers_decomposed_baseline_for_wr() -> None:
+    """POSITION_DISPATCH[Position.WR].factories['decomposed-baseline'] is
+    callable and returns the same shape the factory returns directly.
+    """
+    from projections.models import POSITION_DISPATCH
+    from projections.schemas import Position
+
+    factory = POSITION_DISPATCH[Position.WR].factories["decomposed-baseline"]
+    model = factory()
+    assert isinstance(model, DecomposedBaselineModel)
+
+
+def test_dispatch_default_model_class_for_wr_is_unchanged() -> None:
+    """Pre-gate state: WR routes to ensemble. The flip (if ADOPT) is
+    explicitly a Phase 6 action, not landed in this PR's initial commits.
+    """
+    from projections.models import POSITION_DISPATCH
+    from projections.schemas import Position
+
+    assert POSITION_DISPATCH[Position.WR].default_model_class == "ensemble"
+
+
+def test_decomposed_baseline_satisfies_model_protocol() -> None:
+    """DecomposedBaselineModel must implement Model: position, model_id, fit,
+    predict_distribution, save, load. fit + predict_distribution end-to-end
+    exercise on a synthetic frame is the strongest structural assertion.
+    """
+    from projections.models.base import Model
+
+    model = _wr_decomp_model_receptions_only()
+    # Structural conformance: check attribute/method presence on the instance.
+    # model_id is a property that raises RuntimeError on unfitted models — check
+    # it on the class (MRO walk) rather than invoking the getter.
+    instance_attrs = ("position", "fit", "predict_distribution", "save", "load")
+    for attr in instance_attrs:
+        assert hasattr(model, attr), f"missing Model attr {attr!r}"
+    assert isinstance(
+        type(model).__mro__[0].__dict__.get("model_id")
+        or next(
+            (cls.__dict__["model_id"] for cls in type(model).__mro__ if "model_id" in cls.__dict__),
+            None,
+        ),
+        property,
+    ), "model_id is not a property on DecomposedBaselineModel"
+    # Mypy enforces signatures; this is a smoke check.
+    _: Model = model  # type-check assignment

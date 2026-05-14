@@ -32,6 +32,10 @@ from projections.models.baseline import (
     te_baseline,
     wr_baseline,
 )
+from projections.models.decomposed_baseline import (
+    DecomposedBaselineModel,
+    wr_decomposed_baseline,
+)
 from projections.models.ensemble import (
     EnsembleModel,
     qb_ensemble,
@@ -71,6 +75,7 @@ from projections.schemas import (
 __all__ = [
     "POSITION_DISPATCH",
     "BaselineModel",
+    "DecomposedBaselineModel",
     "EnsembleModel",
     "LightGBMModel",
     "LightGBMNbModel",
@@ -94,6 +99,7 @@ __all__ = [
     "te_lightgbm_nb",
     "te_lightgbm_tuned",
     "wr_baseline",
+    "wr_decomposed_baseline",
     "wr_ensemble",
     "wr_lightgbm",
     "wr_lightgbm_nb",
@@ -161,6 +167,7 @@ _TE_FACTORIES: dict[str, Callable[[], Model]] = {
 }
 _WR_FACTORIES: dict[str, Callable[[], Model]] = {
     "baseline": wr_baseline,
+    "decomposed-baseline": wr_decomposed_baseline,
     "lightgbm": wr_lightgbm,
     "lightgbm-tuned": wr_lightgbm_tuned,
     "lightgbm-nb": wr_lightgbm_nb,

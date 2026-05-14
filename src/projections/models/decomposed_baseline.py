@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Final
 
 import numpy as np
@@ -25,8 +26,15 @@ import pandas as pd
 from sklearn.linear_model import RidgeCV
 
 from projections.distributions import Distribution, FrozenSampledDistribution, QuantileDistribution
-from projections.models.baseline import _RIDGE_ALPHA_GRID, BaselineModel
-from projections.schemas import Stat, WeeklyStatsSchema
+from projections.models.baseline import (
+    _RIDGE_ALPHA_GRID,
+    _WR_DIST_FAMILIES,
+    _WR_FEATURE_COLUMNS,
+    _WR_TARGET_STATS,
+    BaselineModel,
+    _default_code_hash_files,
+)
+from projections.schemas import Position, Stat, WeeklyStatsSchema, WrFeaturesSchema
 from projections.scoring.score_distribution import derive_row_seed
 
 _N_SAMPLES: Final[int] = 10_000
@@ -295,3 +303,43 @@ class DecomposedBaselineModel(BaselineModel):
                 per_row_parametric[i][composite_stat] = FrozenSampledDistribution(samples=composed)
 
         return per_row_parametric
+
+
+_WR_RECEIVING_DECOMPOSITION: Final[Mapping[Stat, DecompositionSpec]] = {
+    Stat.RECEPTIONS: DecompositionSpec(
+        volume_stat=Stat.TARGETS,
+        efficiency_label="catch_rate",
+        efficiency_clip_hi=1.0,
+    ),
+}
+
+
+def _decomposed_baseline_code_hash_files(position_module: str) -> tuple[Path, ...]:
+    """Extend BaselineModel's code-hash file tuple with decomposed_baseline.py.
+
+    Any edit to this module must invalidate fitted artifacts' model_id, so it
+    must be in the code-hash file tuple. Builds on _default_code_hash_files
+    rather than duplicating its 8-file list.
+    """
+    project_root = Path(__file__).resolve().parents[3]
+    return (
+        *_default_code_hash_files(position_module),
+        project_root / "src" / "projections" / "models" / "decomposed_baseline.py",
+    )
+
+
+def wr_decomposed_baseline() -> DecomposedBaselineModel:
+    """Construct an unfitted WR decomposed-baseline model.
+
+    v1 config: receptions decomposed via TARGETS x catch_rate; all other WR
+    target stats fall through to direct RidgeCV (identical to BaselineModel).
+    """
+    return DecomposedBaselineModel(
+        position=Position.WR,
+        target_stats=_WR_TARGET_STATS,
+        feature_columns=_WR_FEATURE_COLUMNS,
+        dist_families=_WR_DIST_FAMILIES,
+        feature_schema=WrFeaturesSchema,
+        code_hash_files=_decomposed_baseline_code_hash_files("wr.py"),
+        decomposed_stats=_WR_RECEIVING_DECOMPOSITION,
+    )
