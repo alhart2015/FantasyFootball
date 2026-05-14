@@ -16,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 from projections.backtest import diff_snapshot, read_snapshot, run_backtest, write_snapshot
+from projections.schemas import Position
 
 _SNAPSHOT_PATH = Path("tests/backtest/model_metrics.json")
 _TOLERANCES_PATH = Path("tests/backtest/tolerances.json")
@@ -118,6 +119,7 @@ def main() -> None:
         "--model",
         choices=[
             "baseline",
+            "decomposed-baseline",
             "lightgbm",
             "lightgbm-tuned",
             "lightgbm-nb",
@@ -129,7 +131,9 @@ def main() -> None:
         help=(
             "Which model class(es) to run. "
             "'both' = Model A + Model C (legacy default). "
-            "'all' = Model A + Model C + Model C-tuned + Model C-NB + Ensemble (Model D)."
+            "'all' = Model A + Model C + Model C-tuned + Model C-NB + Ensemble (Model D). "
+            "'decomposed-baseline' = WR decomposed-baseline only (other positions are skipped — "
+            "the factory is registered for WR only in v1)."
         ),
     )
     args = parser.parse_args()
@@ -147,8 +151,21 @@ def main() -> None:
     else:
         model_classes = (args.model,)
 
+    # decomposed-baseline is registered only for WR (v1 receptions-only config);
+    # other positions' _FACTORIES dicts don't contain the key. Restrict positions
+    # so the dispatch loop doesn't KeyError on QB/RB/TE.
+    positions: tuple[Position, ...] | None
+    if args.model == "decomposed-baseline":
+        positions = (Position.WR,)
+    else:
+        positions = None
+
     tolerances = json.loads(_TOLERANCES_PATH.read_text(encoding="utf-8"))
-    run = run_backtest(model_classes=model_classes)
+    run = (
+        run_backtest(model_classes=model_classes, positions=positions)
+        if positions is not None
+        else run_backtest(model_classes=model_classes)
+    )
 
     if args.update_snapshot:
         _write_diagnostic_outputs(run)

@@ -107,6 +107,11 @@ def _normal_std_from_residuals(residuals: np.ndarray) -> float:
 _STUDENT_T_SCALE_FLOOR: Final[float] = 1e-3
 _STUDENT_T_DF_FLOOR: Final[float] = 2.5  # > 2 for finite variance
 
+# Shared alpha grid for all RidgeCV fits across this module and the
+# DecomposedBaselineModel subclass. Lifted to module level so any future
+# widening / refinement propagates to all callers automatically.
+_RIDGE_ALPHA_GRID: Final[np.ndarray] = np.logspace(-3, 3, 13)
+
 
 def _student_t_params_from_residuals(*, residuals: np.ndarray) -> tuple[float, float]:
     """MLE Student-t scale + df fit on the residual array.
@@ -560,7 +565,7 @@ class BaselineModel:
         x = feature_frame.to_numpy(dtype=np.float64)
 
         # Fit one RidgeCV per stat.
-        alphas = np.logspace(-3, 3, 13)
+        alphas = _RIDGE_ALPHA_GRID
         for stat in self.target_stats:
             y = truth_frame[stat.value].to_numpy(dtype=np.float64)
             ridge = RidgeCV(alphas=alphas)
@@ -673,6 +678,15 @@ class BaselineModel:
             f":{self.train_seasons[0]}-{self.train_seasons[1]}"
         )
 
+    def _persistable_dists_for_packing(
+        self, stat_dists: Mapping[Stat, Distribution]
+    ) -> Mapping[Stat, Distribution]:
+        """Hook for subclasses to convert non-codec-supported Distribution types
+        (e.g., FrozenSampledDistribution) into supported ones (QuantileDistribution)
+        before persistence. Default returns ``stat_dists`` unchanged.
+        """
+        return stat_dists
+
     def predict_distribution(self, features: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
         """Predict per-player-week fantasy-points distributions under ``ruleset``.
 
@@ -706,7 +720,7 @@ class BaselineModel:
                 ruleset_name=ruleset.name,
             )
             points = score_distribution(stat_dists, ruleset, n_samples=10_000, seed=seed)
-            family_blob = pack_per_stat_params(stat_dists)
+            family_blob = pack_per_stat_params(self._persistable_dists_for_packing(stat_dists))
             rows.append(
                 {
                     "gsis_id": feat_row["gsis_id"],

@@ -12,9 +12,11 @@ from projections.distributions.parametric import (
     ParametricStudentT,
 )
 from projections.distributions.quantile import QuantileDistribution
+from projections.distributions.sampled import FrozenSampledDistribution
 
 __all__ = [
     "Distribution",
+    "FrozenSampledDistribution",
     "MixtureDistribution",
     "ParametricGamma",
     "ParametricNegativeBinomial",
