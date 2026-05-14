@@ -1,0 +1,11 @@
+position,incumbent,candidate,year,metric,point,lo_95,hi_95,n_paired,verdict,reason
+WR,ensemble,decomposed-baseline,pooled,rmse_delta,0.010912557221911534,-0.007996337361116134,0.02854138993333368,8402,DO_NOT_ADOPT,"RMSE inconclusive: 95% CI [-0.008, +0.029] brackets / exceeds zero"
+WR,ensemble,decomposed-baseline,pooled,spearman_delta,-0.005234148807449657,-0.008733542177719,-0.0018034204016483452,8402,DO_NOT_ADOPT,"RMSE inconclusive: 95% CI [-0.008, +0.029] brackets / exceeds zero"
+WR,ensemble,decomposed-baseline,2021,rmse_delta,0.005657120925366854,-0.029676082394436375,0.041426239810898435,2099,,
+WR,ensemble,decomposed-baseline,2021,spearman_delta,-0.007083144430701793,-0.01390263280405643,-0.000445943331175136,2099,,
+WR,ensemble,decomposed-baseline,2022,rmse_delta,0.02167446783306204,-0.015729735401409185,0.057395496073827205,2085,,
+WR,ensemble,decomposed-baseline,2022,spearman_delta,-0.007648148286769296,-0.014915977826797728,0.0003054533576509802,2085,,
+WR,ensemble,decomposed-baseline,2023,rmse_delta,0.0014878335729830994,-0.03156207982643928,0.04072254599709286,2193,,
+WR,ensemble,decomposed-baseline,2023,spearman_delta,-0.0028531589195499585,-0.008836073865899765,0.003219197793905839,2193,,
+WR,ensemble,decomposed-baseline,2024,rmse_delta,0.015287426124028336,-0.020744118248045628,0.05572987847461812,2025,,
+WR,ensemble,decomposed-baseline,2024,spearman_delta,-0.00335214359277769,-0.01091094147489458,0.004154563184401562,2025,,
