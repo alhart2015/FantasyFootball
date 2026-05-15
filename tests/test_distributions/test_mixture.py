@@ -85,10 +85,21 @@ def test_quantile_invalid_q() -> None:
         mix.quantile(-0.1)
 
 
-def test_quantile_raises_when_q_outside_joint_support() -> None:
-    """When both children's cdfs clamp at a common minimum, q below that minimum
-    cannot be represented and quantile() raises rather than silently clipping."""
-    # Build a mixture of two QuantileDistributions both clamping at q=0.05 below.
+def test_quantile_with_quantile_distribution_component_handles_tail_q() -> None:
+    """MixtureDistribution.quantile(q) returns a finite extrapolated value
+    for q outside the QuantileDistribution component's persisted knot range.
+
+    Previously, QuantileDistribution.cdf clamped at qs[0] / qs[-1] while
+    QuantileDistribution.quantile linearly extrapolated past the knots; this
+    inconsistency capped the joint mixture cdf below 1.0 (and above 0.0 on
+    the lower tail), causing brentq to fail to bracket q values in the tails.
+
+    With cdf now extrapolating to match quantile (clipped to [0, 1]), tail
+    quantiles round-trip finitely. The first production code path that
+    surfaces this is the wr_ensemble_decomposed factory's
+    MixtureDistribution(QuantileDistribution-from-decomposed-baseline,
+    parametric-from-lgb-nb) under EnsembleModel.predict_distribution.
+    """
     a = QuantileDistribution(
         quantiles=np.array([0.05, 0.5, 0.95], dtype=np.float64),
         values=np.array([10.0, 20.0, 30.0], dtype=np.float64),
@@ -98,13 +109,14 @@ def test_quantile_raises_when_q_outside_joint_support() -> None:
         values=np.array([15.0, 25.0, 35.0], dtype=np.float64),
     )
     mix = MixtureDistribution(component_a=a, component_b=b, weight=0.5)
-    # q=0.02 is below both children's lowest stored quantile (0.05); cdf clamps
-    # at 0.05 for x below the lowest stored value, so cdf(lo) >= 0.05 > 0.02.
-    with pytest.raises(ValueError, match="below joint support"):
-        mix.quantile(0.02)
-    # Symmetric: q=0.98 is above both children's highest stored quantile (0.95).
-    with pytest.raises(ValueError, match="above joint support"):
-        mix.quantile(0.98)
+    for q in (0.02, 0.10, 0.50, 0.90, 0.98):
+        x = mix.quantile(q)
+        assert np.isfinite(x), f"mix.quantile({q}) returned non-finite: {x}"
+    # Lower-tail q=0.02 should land at a value below the lower stored value
+    # of either component (vs[0]=10 for component_a, vs[0]=15 for component_b).
+    assert mix.quantile(0.02) < 10.0
+    # Upper-tail q=0.98 should land above the upper stored values.
+    assert mix.quantile(0.98) > 35.0
 
 
 def test_sample_converges_to_analytic_moments() -> None:
@@ -158,3 +170,30 @@ def test_quantile_extreme_q_within_safe_bracket() -> None:
         x = mix.quantile(q)
         assert np.isfinite(x)
         assert mix.cdf(x) == pytest.approx(q, abs=1e-5)
+
+
+def test_quantile_distribution_plus_negative_binomial_tail_q_finite() -> None:
+    """Direct regression of the mixture-tail edge case the wr_ensemble_decomposed
+    integration surfaces: MixtureDistribution(QuantileDistribution,
+    ParametricNegativeBinomial).quantile(q) at tail q ∈ {0.10, 0.50, 0.90, 0.99}
+    returns finite values. Pre-fix: cdf of the QuantileDistribution component
+    clamped at qs[-1]=0.95, capping the joint cdf below 1.0 and breaking the
+    brentq inversion at q=0.99. Post-fix: cdf extrapolates linearly past knots
+    (clipped to [0, 1]) so the joint cdf reaches 1.0 cleanly.
+    """
+    quantile_dist = QuantileDistribution(
+        quantiles=np.arange(0.05, 0.96, 0.05),
+        values=np.linspace(0.0, 10.0, 19),
+    )
+    nb_dist = ParametricNegativeBinomial(mean=5.0, dispersion=2.0)
+    mix = MixtureDistribution(component_a=quantile_dist, component_b=nb_dist, weight=0.5)
+    for q in (0.10, 0.50, 0.90, 0.99):
+        x = mix.quantile(q)
+        assert np.isfinite(x), f"mix.quantile({q}) returned non-finite: {x}"
+        # Round-trip: cdf(quantile(q)) ~ q. Tolerance is loose because NB's
+        # cdf is a right-continuous step function (discrete distribution), so
+        # the joint mixture cdf has piecewise-constant segments where brentq
+        # locks onto the step's left edge — the cdf at the returned x can sit
+        # at the next step up. NB step heights at low dispersion / moderate
+        # mean are ~0.01-0.05 in this regime.
+        assert mix.cdf(x) == pytest.approx(q, abs=0.05)
