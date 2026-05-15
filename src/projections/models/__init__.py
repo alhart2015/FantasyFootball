@@ -42,6 +42,7 @@ from projections.models.ensemble import (
     rb_ensemble,
     te_ensemble,
     wr_ensemble,
+    wr_ensemble_decomposed,
 )
 from projections.models.lightgbm import (
     LightGBMModel,
@@ -101,6 +102,7 @@ __all__ = [
     "wr_baseline",
     "wr_decomposed_baseline",
     "wr_ensemble",
+    "wr_ensemble_decomposed",
     "wr_lightgbm",
     "wr_lightgbm_nb",
     "wr_lightgbm_tuned",
@@ -172,6 +174,7 @@ _WR_FACTORIES: dict[str, Callable[[], Model]] = {
     "lightgbm-tuned": wr_lightgbm_tuned,
     "lightgbm-nb": wr_lightgbm_nb,
     "ensemble": wr_ensemble,
+    "ensemble-decomposed": wr_ensemble_decomposed,
 }
 
 
