@@ -73,3 +73,27 @@ def test_backtest_cli_both_has_no_positions_restriction() -> None:
 
     assert captured.get("model_classes") == ("baseline", "lightgbm")
     assert "positions" not in captured
+
+
+def test_backtest_cli_ensemble_decomposed_restricts_to_wr_only() -> None:
+    """When --model ensemble-decomposed is selected, the CLI restricts
+    positions to (Position.WR,) — mirroring the decomposed-baseline
+    restriction, since ensemble-decomposed depends on
+    _WR_FACTORIES["decomposed-baseline"] as child A.
+    """
+    captured: dict[str, object] = {}
+
+    def fake_run_backtest(**kwargs: object) -> object:
+        captured.update(kwargs)
+        raise SystemExit(0)
+
+    with mock.patch.object(backtest, "run_backtest", fake_run_backtest):
+        with mock.patch.object(
+            sys, "argv", ["backtest", "--report", "--model", "ensemble-decomposed"]
+        ):
+            with pytest.raises(SystemExit) as ex_info:
+                backtest.main()
+            assert ex_info.value.code == 0
+
+    assert captured.get("model_classes") == ("ensemble-decomposed",)
+    assert captured.get("positions") == (Position.WR,)
