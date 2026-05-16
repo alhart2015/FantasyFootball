@@ -372,3 +372,64 @@ def test_min_bid_floor_preserved_under_negative_drift() -> None:
     ].to_string()
     # And the sum invariant still holds.
     assert int(in_pool["auction_dollars"].sum()) == cfg.total_budget
+
+
+def test_reference_prices_pass_through_matched_rows() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    # Build a partial reference table covering only the first two players.
+    first_two = df["gsis_id"].iloc[:2].tolist()
+    ref = pd.DataFrame(
+        {
+            "gsis_id": pd.array(first_two, dtype=pd.StringDtype("pyarrow")),
+            "reference_dollars": pd.array([45, 30], dtype=pd.Int64Dtype()),
+        }
+    )
+    out = generate_auction_values(df, cfg, reference_prices=ref)
+    matched = out[out["gsis_id"].isin(first_two)].sort_values("gsis_id")
+    expected_ref = ref.sort_values("gsis_id")
+    assert matched["reference_dollars"].tolist() == expected_ref["reference_dollars"].tolist()
+    # value_delta = auction_dollars - reference_dollars on matched rows
+    deltas = (matched["auction_dollars"] - expected_ref["reference_dollars"].values).tolist()
+    assert matched["value_delta"].tolist() == deltas
+
+
+def test_reference_prices_unmatched_rows_get_na() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    ref = pd.DataFrame(
+        {
+            "gsis_id": pd.array([df["gsis_id"].iloc[0]], dtype=pd.StringDtype("pyarrow")),
+            "reference_dollars": pd.array([45], dtype=pd.Int64Dtype()),
+        }
+    )
+    out = generate_auction_values(df, cfg, reference_prices=ref)
+    unmatched = out[out["gsis_id"] != df["gsis_id"].iloc[0]]
+    assert unmatched["reference_dollars"].isna().all()
+    assert unmatched["value_delta"].isna().all()
+
+
+def test_no_reference_prices_columns_all_na() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    out = generate_auction_values(df, cfg, reference_prices=None)
+    assert "reference_dollars" in out.columns
+    assert "value_delta" in out.columns
+    assert out["reference_dollars"].isna().all()
+    assert out["value_delta"].isna().all()
+
+
+def test_reference_prices_duplicate_gsis_id_rejected() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    ref = pd.DataFrame(
+        {
+            "gsis_id": pd.array(
+                [df["gsis_id"].iloc[0], df["gsis_id"].iloc[0]],
+                dtype=pd.StringDtype("pyarrow"),
+            ),
+            "reference_dollars": pd.array([45, 50], dtype=pd.Int64Dtype()),
+        }
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        generate_auction_values(df, cfg, reference_prices=ref)
