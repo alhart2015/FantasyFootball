@@ -305,16 +305,12 @@ def test_missing_required_position_raises() -> None:
         generate_snake_cheat_sheet(vorp, cfg)
 
 
-def test_empty_input_returns_empty() -> None:
-    """§5.1 #18 — empty VORP input → empty output, schema-valid.
+def test_empty_input_raises() -> None:
+    """§5.1 #18 — empty VORP input + non-empty config raises via _select_pool.
 
-    NOTE: Spec §3.6 originally said empty input → empty output. Actual algorithm
-    calls _select_pool first, which raises if it can't fill the config's
-    required positions. With empty input it can't fill any position. We test
-    the AS-IMPLEMENTED behavior: empty input + non-empty config raises
-    explicitly. Silently emitting an empty cheat sheet for a non-empty config
-    feels wrong — fail loudly when we can't compute. This is the stricter
-    contract; spec §3.6 will be updated to match.
+    The function calls _select_pool first, which raises if it can't fill the
+    config's required positions. Empty input can't fill anything. We fail
+    loudly rather than silently emit an empty cheat sheet.
     """
     cfg = _make_config()
     empty_df = pd.DataFrame(

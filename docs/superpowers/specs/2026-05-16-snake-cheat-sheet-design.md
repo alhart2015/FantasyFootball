@@ -226,7 +226,7 @@ Because tier breaks are picked from the top `N-1` gaps, a small VORP shift in an
 
 ### 3.6 Edge cases
 
-- **Empty VORP input.** `vorp_table.empty` → return an empty `SnakeCheatSheetSchema`-validated frame.
+- **Empty VORP input + non-empty `LeagueConfig.roster_slots`.** `_select_pool` raises `ValueError` ("cannot fill N {slot} slots") because no players are available to fill any required slot. The function fails loudly rather than emitting a zero-row cheat sheet for a non-empty league config. Tests pin this contract (§5.1 #18). If a future caller genuinely wants empty-in / empty-out, add an explicit `empty_ok=True` branch in a follow-up.
 - **`tiers_per_position = 1`.** Every in-pool player at every position is tier 1. Algorithm degrades cleanly (no gap to compute; tier array is all 1s).
 - **`tiers_per_position` larger than any position's `n_in_pool`.** Falls into the §3.2 step 2 branch for every position — each player is their own tier per position. Stays valid.
 - **All VORPs equal at a position.** All gaps are 0; the lexsort tie-break picks the lowest-index gaps, so tier 1 = rank 1, tier 2 = rank 2, …, tier N = ranks N..end. Reasonable behavior (no real cliff exists, so the algorithm produces an even split).
@@ -313,7 +313,7 @@ All tests in `tests/test_draft/test_snake_cheat_sheet.py` unless noted. Standard
 15. **Sort order.** Output sorted by `(position canonical order: QB, RB, WR, TE, K, DST), positional_rank ascending`. Pin the row sequence on a synthetic 4-position input.
 16. **Determinism.** Calling `generate_snake_cheat_sheet` twice with identical inputs produces byte-identical output (compared via `assert_frame_equal`).
 17. **Ruleset / roster_slots missing-position raises.** `LeagueConfig` requires K but VORP table has no K rows → raises `ValueError` matching `r"cannot fill \d+ K slots"` (delegated to `_select_pool`).
-18. **Empty input returns empty.** Empty `vorp_table` → empty output, schema-validated.
+18. **Empty input raises.** Empty `vorp_table` with non-empty `LeagueConfig.roster_slots` → `ValueError` matching `r"cannot fill"` raised from `_select_pool`. Stricter than an "empty-in, empty-out" contract: failing loudly is the correct behavior when the caller asked for rankings at positions with no input data.
 19. **`tiers_per_position = 1` produces all-tier-1.** Every in-pool player at every position has `tier = 1`.
 20. **`tiers_per_position ≤ 0` raises.** Validation guard.
 21. **Tier algorithm tie-break for equal-magnitude gaps.** Synthetic input with two identically-sized gaps competing for the N-1th-largest slot → the earlier (higher-rank) gap wins. Pin the exact partition.
