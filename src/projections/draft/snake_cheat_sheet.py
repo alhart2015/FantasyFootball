@@ -115,8 +115,7 @@ def generate_snake_cheat_sheet(
         # the whole frame by (position, vorp desc, gsis_id) above.
         vorps = df.loc[in_pool_idx, "vorp"].to_numpy(dtype=np.float64)
         tiers = _assign_tiers(vorps, tiers_per_position)
-        for idx, t in zip(in_pool_idx, tiers, strict=True):
-            tier_col[idx] = int(t)
+        tier_col[in_pool_idx] = tiers
     df["tier"] = tier_col
 
     # Display names: left-join optional map; fallback "—".
