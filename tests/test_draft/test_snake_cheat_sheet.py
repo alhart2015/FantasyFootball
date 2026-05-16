@@ -335,3 +335,38 @@ def test_tiers_per_position_zero_or_negative_raises() -> None:
         generate_snake_cheat_sheet(vorp, cfg, tiers_per_position=0)
     with pytest.raises(ValueError, match="tiers_per_position must be >= 1"):
         generate_snake_cheat_sheet(vorp, cfg, tiers_per_position=-3)
+
+
+def test_output_sorted_by_position_canonical_then_rank() -> None:
+    """§5.1 #15 — output sorted (QB, RB, WR, TE, K, DST), then positional_rank asc."""
+    cfg = _make_config()
+    vorp = _make_vorp_table({Position.WR: 12, Position.QB: 8, Position.RB: 12, Position.TE: 8})
+    out = generate_snake_cheat_sheet(vorp, cfg)
+    canonical = [Position.QB.value, Position.RB.value, Position.WR.value, Position.TE.value]
+    # Filter canonical to only positions actually present, preserving order.
+    expected_positions: list[str] = []
+    for pos_value in canonical:
+        sub = out[out["position"] == pos_value]
+        expected_positions.extend([pos_value] * len(sub))
+    assert list(out["position"]) == expected_positions
+    # Within each position, positional_rank is ascending.
+    for pos_value in out["position"].unique():
+        sub = out[out["position"] == pos_value]
+        assert list(sub["positional_rank"]) == sorted(sub["positional_rank"])
+
+
+def test_determinism_byte_identical_reruns() -> None:
+    """§5.1 #16 — same inputs → byte-identical output frame."""
+    cfg = _make_config()
+    vorp = _make_vorp_table({Position.QB: 8, Position.RB: 12, Position.WR: 12, Position.TE: 8})
+    display = pd.DataFrame(
+        {
+            "gsis_id": vorp["gsis_id"].astype(_PYARROW_STR),
+            "display_name": pd.Series(
+                [f"Player {i}" for i in range(len(vorp))], dtype=_PYARROW_STR
+            ),
+        }
+    )
+    out1 = generate_snake_cheat_sheet(vorp, cfg, display_names=display, tiers_per_position=6)
+    out2 = generate_snake_cheat_sheet(vorp, cfg, display_names=display, tiers_per_position=6)
+    pd.testing.assert_frame_equal(out1, out2)
