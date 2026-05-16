@@ -15,16 +15,26 @@ Spec: docs/superpowers/specs/2026-05-16-tweedie-yards-per-target-probe-design.md
 
 from __future__ import annotations
 
-from typing import Final
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Final, Literal
 
 import numpy as np
+import pandas as pd
 from sklearn.linear_model import RidgeCV, TweedieRegressor
 from sklearn.metrics import make_scorer, mean_tweedie_deviance
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from projections.models.baseline import _RIDGE_ALPHA_GRID
+from projections.backtest.adoption_gate import (
+    BootstrapDelta,
+    paired_bootstrap_rmse_delta,
+)
+from projections.models.baseline import _RIDGE_ALPHA_GRID, _WR_FEATURE_COLUMNS
+from projections.schemas import Position, Stat, WeeklyStatsSchema
+
+VerdictLabel = Literal["SIGNAL", "NULL", "REGRESSION"]
 
 # Reuse the canonical Ridge alpha grid from `BaselineModel`. The probe's
 # incumbent arm mirrors `DecomposedBaselineModel`'s unbounded-efficiency fit;
@@ -147,3 +157,187 @@ def _predict_yards_tweedie(
     mu_ratio: np.ndarray = tweedie_eff.predict(x_eval).astype(np.float64)
     result: np.ndarray = mu_targets * mu_ratio
     return result
+
+
+@dataclass(slots=True)
+class ProbeResults:
+    """Pooled per-row buffers from a walk-forward run.
+
+    Attributes:
+        actual_yards: (N,) ground-truth receiving_yards (float64).
+        pred_ridge: (N,) incumbent-arm receiving_yards predictions.
+        pred_tweedie: (N,) candidate-arm receiving_yards predictions.
+        year: (N,) eval year per row (int64).
+        coverage_per_year: per-eval-year fraction of WR rows with targets > 0.
+    """
+
+    actual_yards: np.ndarray
+    pred_ridge: np.ndarray
+    pred_tweedie: np.ndarray
+    year: np.ndarray
+    coverage_per_year: dict[int, float]
+
+
+@dataclass(slots=True, frozen=True)
+class PerStatVerdict:
+    """Per-stat verdict on the receiving_yards Delta-RMSE (tweedie minus ridge).
+
+    Mirrors `logit_catch_rate_probe.PerStatVerdict` but is local to this module
+    so the probe is self-contained.
+    """
+
+    stat: Stat
+    n_paired: int
+    rmse_delta: BootstrapDelta
+    verdict: VerdictLabel
+
+
+def _verdict_from_delta(delta: BootstrapDelta) -> VerdictLabel:
+    """Map a paired-bootstrap RMSE delta to a verdict label.
+
+    SIGNAL iff hi_95 < 0 (tweedie strictly improves over ridge).
+    REGRESSION iff lo_95 > 0 (tweedie strictly regresses).
+    NULL otherwise (CI brackets zero).
+    """
+    if delta.hi_95 < 0:
+        return "SIGNAL"
+    if delta.lo_95 > 0:
+        return "REGRESSION"
+    return "NULL"
+
+
+def walk_forward_residuals(
+    features: pd.DataFrame,
+    weekly_stats: pd.DataFrame,
+    eval_years: Iterable[int],
+) -> ProbeResults:
+    """For each eval year, train both arms on prior seasons, predict on the
+    eval year, collect per-row residuals.
+
+    Spec: docs/superpowers/specs/2026-05-16-tweedie-yards-per-target-probe-design.md
+    section 3.1 walk_forward_residuals.
+
+    The caller is responsible for schema-validating `features`. `weekly_stats`
+    is re-validated here so the join-key columns and dtypes are guaranteed.
+
+    Returns:
+        ProbeResults with pooled per-row predictions/actuals across all eval
+        years and a per-eval-year `targets > 0` coverage map. If an eval year
+        has no rows after the (features, weekly_stats) inner-join, the year is
+        skipped and omitted from `coverage_per_year`.
+    """
+    eval_years_list = sorted(int(y) for y in eval_years)
+    actual_buffer: list[np.ndarray] = []
+    ridge_buffer: list[np.ndarray] = []
+    tweedie_buffer: list[np.ndarray] = []
+    year_buffer: list[np.ndarray] = []
+    coverage_per_year: dict[int, float] = {}
+
+    ws = WeeklyStatsSchema.validate(weekly_stats)
+    ws_wr = ws[ws["position"] == Position.WR.value]
+
+    all_seasons = sorted(int(s) for s in features["season"].unique())
+    feat_cols = list(_WR_FEATURE_COLUMNS)
+
+    def _join_and_filter(season_mask: pd.Series) -> pd.DataFrame | None:
+        """Inner-join WR features <-> weekly_stats on (gsis_id, season, week),
+        then drop rows with any NaN feature column. Returns None if the join
+        is empty after filtering (so the caller can skip the fold)."""
+        feat_slice = features.loc[season_mask]
+        ws_slice = ws_wr.loc[ws_wr["season"].isin(feat_slice["season"].unique())]
+        joined = feat_slice.merge(
+            ws_slice[["gsis_id", "season", "week", "targets", "receiving_yards"]],
+            on=["gsis_id", "season", "week"],
+            how="inner",
+            validate="one_to_one",
+        )
+        joined = joined.loc[joined[feat_cols].notna().all(axis=1)]
+        return joined if not joined.empty else None
+
+    for eval_year in eval_years_list:
+        train_seasons = [s for s in all_seasons if s < eval_year]
+        if not train_seasons:
+            continue
+
+        train_join = _join_and_filter(features["season"].isin(train_seasons))
+        if train_join is None:
+            continue
+
+        x_train = train_join[feat_cols].to_numpy(dtype=np.float64)
+        targets_train = train_join["targets"].to_numpy(dtype=np.int64)
+        yards_train = train_join["receiving_yards"].to_numpy(dtype=np.float64)
+
+        # Shared volume fit on all rows (no targets > 0 filter); zero-target
+        # rows are valid low-volume observations.
+        volume = _fit_shared_volume(x_train, targets_train)
+
+        # Efficiency fits on rows with targets > 0 (ratio undefined at zero).
+        pos_mask = targets_train > 0
+        x_pos = x_train[pos_mask]
+        targets_pos = targets_train[pos_mask].astype(np.float64)
+        yards_pos = yards_train[pos_mask]
+        if x_pos.shape[0] == 0:
+            continue
+        ratio_pos = yards_pos / targets_pos
+
+        ridge_eff = _fit_ridge_efficiency(x_pos, ratio_pos)
+        tweedie_eff = _fit_tweedie_efficiency(x_pos, ratio_pos)
+
+        eval_join = _join_and_filter(features["season"] == eval_year)
+        if eval_join is None:
+            continue
+
+        x_eval = eval_join[feat_cols].to_numpy(dtype=np.float64)
+        eval_targets = eval_join["targets"].to_numpy(dtype=np.int64)
+        eval_yards = eval_join["receiving_yards"].to_numpy(dtype=np.float64)
+
+        mu_targets = volume.predict(x_eval).astype(np.float64)
+        pred_ridge = _predict_yards_ridge(mu_targets, x_eval, ridge_eff)
+        pred_tweedie = _predict_yards_tweedie(mu_targets, x_eval, tweedie_eff)
+
+        actual_buffer.append(eval_yards)
+        ridge_buffer.append(pred_ridge)
+        tweedie_buffer.append(pred_tweedie)
+        year_buffer.append(np.full(eval_yards.shape, eval_year, dtype=np.int64))
+
+        # Coverage: fraction of eval rows with targets > 0.
+        coverage_per_year[eval_year] = (
+            float((eval_targets > 0).mean()) if eval_targets.size > 0 else 0.0
+        )
+
+    return ProbeResults(
+        actual_yards=(
+            np.concatenate(actual_buffer) if actual_buffer else np.array([], dtype=np.float64)
+        ),
+        pred_ridge=(
+            np.concatenate(ridge_buffer) if ridge_buffer else np.array([], dtype=np.float64)
+        ),
+        pred_tweedie=(
+            np.concatenate(tweedie_buffer) if tweedie_buffer else np.array([], dtype=np.float64)
+        ),
+        year=np.concatenate(year_buffer) if year_buffer else np.array([], dtype=np.int64),
+        coverage_per_year=coverage_per_year,
+    )
+
+
+def compute_verdict(
+    results: ProbeResults, *, n_bootstrap: int = 1000, seed: int = 42
+) -> PerStatVerdict:
+    """Pooled paired-bootstrap CI on the receiving_yards Delta-RMSE (tweedie minus ridge).
+
+    The signed residuals fed to `paired_bootstrap_rmse_delta` are (actual - pred);
+    that function computes RMSE on each arm and returns (candidate - incumbent),
+    which matches our convention (tweedie - ridge).
+    """
+    inc_residuals = results.actual_yards - results.pred_ridge
+    cand_residuals = results.actual_yards - results.pred_tweedie
+    rmse_delta = paired_bootstrap_rmse_delta(
+        inc_residuals, cand_residuals, n_bootstrap=n_bootstrap, seed=seed
+    )
+
+    return PerStatVerdict(
+        stat=Stat.RECEIVING_YARDS,
+        n_paired=int(results.actual_yards.shape[0]),
+        rmse_delta=rmse_delta,
+        verdict=_verdict_from_delta(rmse_delta),
+    )
