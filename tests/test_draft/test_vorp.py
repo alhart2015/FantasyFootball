@@ -320,10 +320,19 @@ def test_position_in_input_but_not_in_config_dropped() -> None:
     out = generate_vorp_table(inputs, cfg)
     assert (out["position"] != Position.K.value).all()
     assert len(out) == 80  # K rows dropped, others kept
+    assert set(out["position"].unique()) == {
+        Position.QB.value,
+        Position.RB.value,
+        Position.WR.value,
+        Position.TE.value,
+    }
 
 
-def test_position_in_config_but_not_in_input_silent() -> None:
-    """LeagueConfig requires K but input has no K → _select_pool raises."""
+def test_position_in_config_but_not_in_input_raises() -> None:
+    """LeagueConfig requires K but input has no K → generate_vorp_table raises
+    from _select_pool's _take_top_n. Pool composition is undefined when a required
+    position has zero input rows; the function makes the failure explicit per spec §3.6.
+    """
     cfg = _make_config(
         roster_slots={
             RosterSlot.QB: 1,
@@ -337,7 +346,7 @@ def test_position_in_config_but_not_in_input_silent() -> None:
     )
     # Input has plenty of QB/RB/WR/TE but no K — _select_pool will raise on the K slot.
     inputs = _bulk_input({Position.QB: 20, Position.RB: 20, Position.WR: 20, Position.TE: 20})
-    with pytest.raises(ValueError, match="cannot fill"):
+    with pytest.raises(ValueError, match=r"cannot fill \d+ K slots"):
         generate_vorp_table(inputs, cfg)
 
 
