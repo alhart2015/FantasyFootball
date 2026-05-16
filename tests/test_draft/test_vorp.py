@@ -383,3 +383,32 @@ def test_underfilled_pool_raises() -> None:
     inputs = _bulk_input({Position.QB: 2, Position.RB: 2, Position.WR: 2, Position.TE: 2})
     with pytest.raises(ValueError, match="cannot fill"):
         generate_vorp_table(inputs, cfg)
+
+
+def test_determinism() -> None:
+    cfg = _make_config()
+    inputs = _bulk_input({Position.QB: 20, Position.RB: 20, Position.WR: 20, Position.TE: 20})
+    out1 = generate_vorp_table(inputs, cfg)
+    out2 = generate_vorp_table(inputs, cfg)
+    pd.testing.assert_frame_equal(out1, out2)
+
+
+def test_pool_equivalence_with_auction() -> None:
+    """The pool composition VORP computes against equals the pool auction computes against
+    when given VORP's output, modulo tie-breaks (which require equal season_mean_fpts to differ).
+
+    With distinct fpts at every row, the two pool calls produce identical sets.
+    """
+    from projections.draft._pool import _select_pool
+
+    cfg = _make_config()
+    inputs = _bulk_input({Position.QB: 20, Position.RB: 20, Position.WR: 20, Position.TE: 20})
+    vorp_out = generate_vorp_table(inputs, cfg)
+    # VORP's internal pool (run without vorp column)
+    pool_input_vorpless = inputs[["gsis_id", "position", "season_mean"]].rename(
+        columns={"season_mean": "season_mean_fpts"}
+    )
+    pool_internal = set(_select_pool(pool_input_vorpless, cfg))
+    # Auction's pool over the VORP table (run with vorp column, tie-breaks on it)
+    pool_auction = set(_select_pool(vorp_out, cfg))
+    assert pool_internal == pool_auction
