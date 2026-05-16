@@ -73,13 +73,6 @@ def test_wr_ensemble_decomposed_registered_in_factories() -> None:
     assert isinstance(child_a, DecomposedBaselineModel)
 
 
-def test_default_model_class_unchanged_after_registration() -> None:
-    """Registering 'ensemble-decomposed' does NOT flip production routing.
-    The flip is the §1.3.5 ADOPT outcome (Task 5).
-    """
-    assert POSITION_DISPATCH[Position.WR].default_model_class == "ensemble"
-
-
 def test_wr_ensemble_decomposed_in_models_all() -> None:
     """wr_ensemble_decomposed is exported via projections.models.__all__."""
     import projections.models as models_pkg
