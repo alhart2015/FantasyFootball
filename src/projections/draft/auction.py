@@ -238,9 +238,23 @@ def generate_auction_values(
     )
     out["in_pool"] = out["gsis_id"].isin(pool_set)
 
-    # Step 6 - attach reference prices (implemented in Task 6 - stub for now).
-    out["reference_dollars"] = pd.array([pd.NA] * len(out), dtype=pd.Int64Dtype())
-    out["value_delta"] = pd.array([pd.NA] * len(out), dtype=pd.Int64Dtype())
+    # Step 6 - attach reference prices.
+    if reference_prices is None:
+        out["reference_dollars"] = pd.array([pd.NA] * len(out), dtype=pd.Int64Dtype())
+        out["value_delta"] = pd.array([pd.NA] * len(out), dtype=pd.Int64Dtype())
+    else:
+        if reference_prices["gsis_id"].duplicated().any():
+            dup = reference_prices.loc[reference_prices["gsis_id"].duplicated(), "gsis_id"].iloc[0]
+            raise ValueError(
+                f"reference_prices has duplicate gsis_id rows (first duplicate: {dup})."
+            )
+        ref = reference_prices[["gsis_id", "reference_dollars"]].copy()
+        ref["reference_dollars"] = ref["reference_dollars"].astype(pd.Int64Dtype())
+        out = out.merge(ref, on="gsis_id", how="left")
+        # `merge` preserves Int64Dtype with NA for unmatched rows.
+        out["value_delta"] = (out["auction_dollars"] - out["reference_dollars"]).astype(
+            pd.Int64Dtype()
+        )
 
     # Re-order columns to match AuctionValuesSchema.
     out = out[
