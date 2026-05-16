@@ -195,20 +195,6 @@ class FactorResidualsByYear:
 
 
 @dataclass(frozen=True, slots=True)
-class CoverageByYear:
-    """Per-eval-year volume-positive rate on RB rows.
-
-    Defined as a frozen dataclass for export symmetry with the canonical sibling
-    (target_decomposition_probe.py). Production `walk_forward_residuals` emits
-    coverage as `dict[int, float]` keyed by eval_year — see `WalkForwardOutput`
-    fields. Future per-volume-axis aggregations can use this type directly.
-    """
-
-    eval_year: int
-    volume_positive_rate: float
-
-
-@dataclass(frozen=True, slots=True)
 class WalkForwardOutput:
     """Bundle of all walk-forward outputs.
 

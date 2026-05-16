@@ -12,7 +12,6 @@ from sklearn.linear_model import RidgeCV
 from projections.backtest.rb_decomposition_probe import (
     _RB_DECOMPS,
     _RIDGE_ALPHAS,
-    CoverageByYear,
     FactorResidualsByYear,
     StatResiduals,
     WalkForwardOutput,
@@ -369,8 +368,3 @@ def test_walk_forward_residuals_emits_factor_residuals_per_stat_per_year() -> No
             assert isinstance(entry, FactorResidualsByYear)
             assert entry.eval_year in {2020, 2021}
             assert entry.volume_residuals.shape == entry.efficiency_residuals.shape
-
-
-# Mark CoverageByYear as used (imported for export symmetry with the canonical
-# sibling API; production walk-forward uses dict[int, float] coverage dicts).
-_COVERAGE_BY_YEAR_IMPORTED: type = CoverageByYear
