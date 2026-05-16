@@ -14,12 +14,24 @@ Spec: docs/superpowers/specs/2026-05-15-logit-catch-rate-probe-design.md.
 
 from __future__ import annotations
 
-from typing import Final
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Final, Literal
 
 import numpy as np
+import pandas as pd
 from sklearn.linear_model import LogisticRegressionCV, RidgeCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
+from projections.backtest.adoption_gate import (
+    BootstrapDelta,
+    paired_bootstrap_rmse_delta,
+)
+from projections.models.baseline import _WR_FEATURE_COLUMNS
+from projections.schemas import Position, Stat, WeeklyStatsSchema
+
+VerdictLabel = Literal["SIGNAL", "NULL", "REGRESSION"]
 
 # Same alpha grid as `BaselineModel.fit` (src/projections/models/baseline.py) and
 # `target_decomposition_probe._fit_direct` so the two probe arms differ only in
@@ -180,3 +192,196 @@ def _predict_receptions_logit(
     p: np.ndarray = logit_eff.predict_proba(x_eval)[:, 1].astype(np.float64)
     result: np.ndarray = mu_targets * p
     return result
+
+
+@dataclass(slots=True)
+class ProbeResults:
+    """Pooled per-row buffers from a walk-forward run.
+
+    Attributes:
+        actual_receptions: (N,) ground-truth receptions (float64 for residual math).
+        pred_ridge: (N,) incumbent-arm receptions predictions.
+        pred_logit: (N,) candidate-arm receptions predictions.
+        year: (N,) eval year per row (int64).
+        coverage_per_year: per-eval-year fraction of WR rows with targets > 0.
+    """
+
+    actual_receptions: np.ndarray
+    pred_ridge: np.ndarray
+    pred_logit: np.ndarray
+    year: np.ndarray
+    coverage_per_year: dict[int, float]
+
+
+@dataclass(slots=True, frozen=True)
+class PerStatVerdict:
+    """Per-stat verdict on the receptions Delta-RMSE (logit minus ridge).
+
+    Mirrors `feature_probe.PerStatVerdict` but is local to this module so the
+    probe is self-contained.
+    """
+
+    stat: Stat
+    n_paired: int
+    rmse_delta: BootstrapDelta
+    verdict: VerdictLabel
+
+
+def _verdict_from_delta(delta: BootstrapDelta) -> VerdictLabel:
+    """Map a paired-bootstrap RMSE delta to a verdict label.
+
+    SIGNAL iff hi_95 < 0 (logit strictly improves over ridge).
+    REGRESSION iff lo_95 > 0 (logit strictly regresses).
+    NULL otherwise (CI brackets zero).
+    """
+    if delta.hi_95 < 0:
+        return "SIGNAL"
+    if delta.lo_95 > 0:
+        return "REGRESSION"
+    return "NULL"
+
+
+def walk_forward_residuals(
+    features: pd.DataFrame,
+    weekly_stats: pd.DataFrame,
+    eval_years: Iterable[int],
+) -> ProbeResults:
+    """For each eval year, train both arms on prior seasons, predict on the
+    eval year, collect per-row residuals.
+
+    Spec: docs/superpowers/specs/2026-05-15-logit-catch-rate-probe-design.md
+    section 3.1 walk_forward_residuals.
+
+    The caller is responsible for schema-validating `features`. `weekly_stats`
+    is re-validated here so the join-key columns and dtypes are guaranteed.
+
+    Returns:
+        ProbeResults with pooled per-row predictions/actuals across all eval
+        years and a per-eval-year `targets > 0` coverage map. If an eval year
+        has no rows after the (features, weekly_stats) inner-join, the year is
+        skipped and omitted from `coverage_per_year`.
+    """
+    eval_years_list = sorted(int(y) for y in eval_years)
+    actual_buffer: list[np.ndarray] = []
+    ridge_buffer: list[np.ndarray] = []
+    logit_buffer: list[np.ndarray] = []
+    year_buffer: list[np.ndarray] = []
+    coverage_per_year: dict[int, float] = {}
+
+    ws = WeeklyStatsSchema.validate(weekly_stats)
+    ws_wr = ws[ws["position"] == Position.WR.value].copy()
+
+    all_seasons = sorted(int(s) for s in features["season"].unique())
+    feat_cols = list(_WR_FEATURE_COLUMNS)
+
+    for eval_year in eval_years_list:
+        train_seasons = [s for s in all_seasons if s < eval_year]
+        if not train_seasons:
+            continue
+
+        # Train-window join (features <-> weekly_stats on (gsis_id, season, week)).
+        train_feat = features[features["season"].isin(train_seasons)]
+        train_ws = ws_wr[ws_wr["season"].isin(train_seasons)]
+        train_join = train_feat.merge(
+            train_ws[["gsis_id", "season", "week", "targets", "receptions"]],
+            on=["gsis_id", "season", "week"],
+            how="inner",
+            validate="one_to_one",
+        )
+        # Drop rows where any feature column is NaN — the BaselineModel
+        # fit/predict path does the same.
+        train_keep = train_join[feat_cols].notna().all(axis=1)
+        train_join = train_join.loc[train_keep]
+        if train_join.empty:
+            continue
+
+        x_train = train_join[feat_cols].to_numpy(dtype=np.float64)
+        targets_train = train_join["targets"].to_numpy(dtype=np.int64)
+        receptions_train = train_join["receptions"].to_numpy(dtype=np.int64)
+
+        # Shared volume fit (all train rows, including targets == 0).
+        volume = _fit_shared_volume(x_train, targets_train)
+
+        # Efficiency fits on rows with targets > 0 (catch_rate is undefined
+        # at zero targets, matching DecomposedBaselineModel).
+        pos_mask = targets_train > 0
+        x_pos = x_train[pos_mask]
+        targets_pos = targets_train[pos_mask]
+        receptions_pos = receptions_train[pos_mask]
+        if x_pos.shape[0] == 0:
+            continue
+        ratio_pos = receptions_pos.astype(np.float64) / targets_pos.astype(np.float64)
+
+        ridge_eff = _fit_ridge_efficiency(x_pos, ratio_pos)
+
+        x_trials, y_trials = _expand_to_trials(x_pos, receptions_pos, targets_pos)
+        logit_eff = _fit_logit_efficiency(x_trials, y_trials)
+
+        # Eval-year join + prediction.
+        eval_feat = features[features["season"] == eval_year]
+        eval_ws = ws_wr[ws_wr["season"] == eval_year]
+        eval_join = eval_feat.merge(
+            eval_ws[["gsis_id", "season", "week", "targets", "receptions"]],
+            on=["gsis_id", "season", "week"],
+            how="inner",
+            validate="one_to_one",
+        )
+        eval_keep = eval_join[feat_cols].notna().all(axis=1)
+        eval_join = eval_join.loc[eval_keep]
+        if eval_join.empty:
+            continue
+
+        x_eval = eval_join[feat_cols].to_numpy(dtype=np.float64)
+        eval_targets = eval_join["targets"].to_numpy(dtype=np.int64)
+        eval_receptions = eval_join["receptions"].to_numpy(dtype=np.float64)
+
+        mu_targets = volume.predict(x_eval).astype(np.float64)
+        pred_ridge = _predict_receptions_ridge(mu_targets, x_eval, ridge_eff)
+        pred_logit = _predict_receptions_logit(mu_targets, x_eval, logit_eff)
+
+        actual_buffer.append(eval_receptions)
+        ridge_buffer.append(pred_ridge)
+        logit_buffer.append(pred_logit)
+        year_buffer.append(np.full(eval_receptions.shape, eval_year, dtype=np.int64))
+
+        # Coverage: fraction of eval rows with targets > 0.
+        coverage_per_year[eval_year] = (
+            float((eval_targets > 0).mean()) if eval_targets.size > 0 else 0.0
+        )
+
+    return ProbeResults(
+        actual_receptions=(
+            np.concatenate(actual_buffer) if actual_buffer else np.array([], dtype=np.float64)
+        ),
+        pred_ridge=(
+            np.concatenate(ridge_buffer) if ridge_buffer else np.array([], dtype=np.float64)
+        ),
+        pred_logit=(
+            np.concatenate(logit_buffer) if logit_buffer else np.array([], dtype=np.float64)
+        ),
+        year=np.concatenate(year_buffer) if year_buffer else np.array([], dtype=np.int64),
+        coverage_per_year=coverage_per_year,
+    )
+
+
+def compute_verdict(
+    results: ProbeResults, *, n_bootstrap: int = 1000, seed: int = 42
+) -> PerStatVerdict:
+    """Pooled paired-bootstrap CI on the receptions Delta-RMSE (logit minus ridge).
+
+    The signed residuals fed to `paired_bootstrap_rmse_delta` are (actual - pred);
+    that function computes RMSE on each arm and returns (candidate - incumbent),
+    which matches our convention (logit - ridge).
+    """
+    inc_residuals = results.actual_receptions - results.pred_ridge
+    cand_residuals = results.actual_receptions - results.pred_logit
+    rmse_delta = paired_bootstrap_rmse_delta(
+        inc_residuals, cand_residuals, n_bootstrap=n_bootstrap, seed=seed
+    )
+
+    return PerStatVerdict(
+        stat=Stat.RECEPTIONS,
+        n_paired=int(results.actual_receptions.shape[0]),
+        rmse_delta=rmse_delta,
+        verdict=_verdict_from_delta(rmse_delta),
+    )
