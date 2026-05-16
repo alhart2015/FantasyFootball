@@ -18,6 +18,7 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from projections.backtest.rb_decomposition_probe import (
@@ -39,6 +40,46 @@ _COVERAGE_THRESHOLD: float = 0.95
 # (spec section 5 risk #6 / PR #39 follow-up).
 _MARGINAL_ZONE_FPTS: float = 0.005
 _RULESET: Ruleset = Ruleset.espn_ppr()
+
+
+def _factor_orthogonality_table(output: WalkForwardOutput) -> list[str]:
+    """Per-stat per-year Pearson rho between volume and efficiency residuals.
+
+    Spec section 5 risk #2 mitigation: if |rho| > 0.2 across years, decomposition
+    may double-count game-script suppression. All-zero / NaN rows are surfaced
+    as `nan` and flagged.
+    """
+    from projections.backtest.rb_decomposition_probe import _RB_DECOMPS
+
+    lines: list[str] = [
+        "## Factor orthogonality (Pearson rho on eval rows where volume > 0)",
+        "",
+        "Spec section 5 risk #2: |rho| > 0.2 across years flags decomposition "
+        "double-counting risk.",
+        "",
+        "| Stat |" + "".join(f" {y} |" for y in sorted(output.eval_years)) + " Max |rho| |",
+        "|---|" + "---:|" * len(output.eval_years) + "---:|",
+    ]
+    for stat in _RB_DECOMPS:
+        per_year_list = output.factor_residuals_by_year.get(stat, [])
+        rhos: dict[int, float] = {}
+        for entry in per_year_list:
+            if entry.volume_residuals.size < 2:
+                rhos[entry.eval_year] = float("nan")
+                continue
+            rho_matrix = np.corrcoef(entry.volume_residuals, entry.efficiency_residuals)
+            rho = float(rho_matrix[0, 1])
+            rhos[entry.eval_year] = rho
+        max_abs_rho = max((abs(r) for r in rhos.values() if not np.isnan(r)), default=float("nan"))
+        flag = " (>0.2)" if not np.isnan(max_abs_rho) and max_abs_rho > 0.2 else ""
+        row = f"| {stat.value} |"
+        for y in sorted(output.eval_years):
+            r = rhos.get(y, float("nan"))
+            row += f" {r:+.3f} |" if not np.isnan(r) else " nan |"
+        row += f" {max_abs_rho:+.3f}{flag} |"
+        lines.append(row)
+    lines.append("")
+    return lines
 
 
 def _load_inputs(
@@ -124,6 +165,8 @@ def _write_summary(
         flag = "" if rate >= coverage_threshold else " -- BELOW THRESHOLD"
         lines.append(f"- {year}: {rate:.4f}{flag}")
     lines.append("")
+
+    lines.extend(_factor_orthogonality_table(output))
 
     lines.append("## Mechanism caveat")
     lines.append("")

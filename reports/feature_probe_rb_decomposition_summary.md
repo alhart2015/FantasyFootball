@@ -30,6 +30,18 @@ Coverage threshold: 0.95 per volume axis per eval year.
 - 2023: 0.8518 -- BELOW THRESHOLD
 - 2024: 0.7799 -- BELOW THRESHOLD
 
+## Factor orthogonality (Pearson rho on eval rows where volume > 0)
+
+Spec section 5 risk #2: |rho| > 0.2 across years flags decomposition double-counting risk.
+
+| Stat | 2021 | 2022 | 2023 | 2024 | Max |rho| |
+|---|---:|---:|---:|---:|---:|
+| rushing_yards | +0.092 | +0.146 | +0.124 | +0.110 | +0.146 |
+| rushing_tds | +0.118 | +0.114 | +0.051 | +0.055 | +0.118 |
+| receptions | +0.065 | -0.008 | +0.016 | -0.045 | +0.065 |
+| receiving_yards | +0.092 | +0.038 | -0.006 | -0.032 | +0.092 |
+| receiving_tds | -0.023 | +0.035 | -0.039 | -0.019 | +0.039 |
+
 ## Mechanism caveat
 
 This probe tests decomposition with RidgeCV everywhere (the same model class on both arms). Factor-appropriate sub-model classes (Poisson, Gamma / Tweedie, logistic) are separate probe + integration cycles per spec section 1.4 #3. PR #39 / PR #44 closed two of these on WR with NULL verdicts; RB-side factor-class probes remain independent tests if any stat here SIGNALs.
