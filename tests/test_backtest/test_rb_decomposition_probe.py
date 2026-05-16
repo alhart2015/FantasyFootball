@@ -6,17 +6,23 @@ Spec: docs/superpowers/specs/2026-05-16-rb-decomposition-probe-design.md.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from sklearn.linear_model import RidgeCV
 
 from projections.backtest.rb_decomposition_probe import (
     _RB_DECOMPS,
     _RIDGE_ALPHAS,
+    CoverageByYear,
+    FactorResidualsByYear,
+    StatResiduals,
+    WalkForwardOutput,
     _fit_decomposed_efficiency,
     _fit_decomposed_volume,
     _fit_direct,
     _predict_decomposed,
     _predict_direct,
     _StatDecomp,
+    walk_forward_residuals,
 )
 from projections.schemas import Stat
 
@@ -198,3 +204,173 @@ def test_predict_decomposed_clips_negative_volume_to_zero() -> None:
     )
     # Volume clipped to 0 -> result is 0.
     assert pred[0] == 0.0
+
+
+def _synthetic_rb_inputs(seed: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build a small synthetic RB (features, weekly_stats) pair for walk-forward
+    integration testing.
+
+    4 seasons x 4 weeks x 8 players = 128 rows. Features uniform random;
+    truth uses two correlated volume axes (carries, targets) and matched
+    efficiency factors so both arms have signal to extract.
+    """
+    from projections.models import POSITION_DISPATCH
+    from projections.schemas import _PYARROW_STR, Position, WeeklyStatsSchema
+
+    rng = np.random.default_rng(seed=seed)
+    rows: list[dict[str, object]] = []
+    for season in range(2018, 2022):
+        for week in range(1, 5):
+            for p in range(8):
+                rows.append(
+                    {
+                        "gsis_id": f"00-{1_000_000 + p:07d}",
+                        "season": np.int64(season),
+                        "week": np.int64(week),
+                        "team": "KC",
+                        "opponent": "DEN",
+                    }
+                )
+    df = pd.DataFrame(rows)
+    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
+    df["team"] = df["team"].astype(_PYARROW_STR)
+    df["opponent"] = df["opponent"].astype(_PYARROW_STR)
+
+    feature_schema = POSITION_DISPATCH[Position.RB].feature_schema
+    schema_cols = feature_schema.to_schema().columns
+    for col_name, col in schema_cols.items():
+        if col_name in df.columns:
+            continue
+        dtype_str = str(col.dtype)
+        if "bool" in dtype_str.lower():
+            df[col_name] = rng.integers(0, 2, size=len(df)).astype(bool)
+        elif "int" in dtype_str.lower():
+            df[col_name] = rng.integers(1, 6, size=len(df)).astype(np.int64)
+        elif col_name == "age":
+            df[col_name] = rng.uniform(22.0, 30.0, size=len(df)).astype(np.float64)
+        else:
+            df[col_name] = rng.uniform(0.0, 1.0, size=len(df)).astype(np.float64)
+    features = feature_schema.validate(df)
+
+    ws = features[["gsis_id", "season", "week", "team", "opponent"]].copy()
+    ws["position"] = "RB"
+    n = len(ws)
+    carries_lambda = rng.uniform(8.0, 16.0, size=n)
+    carries = np.maximum(1, rng.poisson(carries_lambda)).astype(np.int64)
+    targets_lambda = rng.uniform(2.0, 6.0, size=n)
+    targets = np.maximum(1, rng.poisson(targets_lambda)).astype(np.int64)
+    # Yards per carry ~ N(4.3, 1.0); per-row mean from carries_lambda for signal.
+    ypc = np.maximum(0.0, 4.3 + 0.05 * carries_lambda + rng.normal(0, 0.5, size=n))
+    rushing_yards = np.clip(carries.astype(np.float64) * ypc, -50.0, 400.0)
+    # TD rate per carry — small, ~0.03; bumped a bit by goal-line indicator (proxy
+    # via carries_lambda).
+    td_rate_carry = np.clip(0.02 + 0.005 * (carries_lambda - 12.0), 0.0, 0.1)
+    rushing_tds = rng.binomial(carries, td_rate_carry).astype(np.int64)
+    # Catch_rate ~ 0.7 for RBs; small variability.
+    catch_rate = np.clip(0.7 + 0.05 * rng.normal(0, 1.0, size=n), 0.1, 1.0)
+    receptions = rng.binomial(targets, catch_rate).astype(np.int64)
+    # Yards per target ~ 6 yards (short routes for RBs).
+    ypt = np.maximum(0.0, 6.0 + 0.1 * targets_lambda + rng.normal(0, 0.5, size=n))
+    receiving_yards = np.clip(targets.astype(np.float64) * ypt, -50.0, 400.0).astype(np.float64)
+    td_rate_target = np.clip(0.04 + rng.normal(0, 0.02, size=n), 0.0, 0.2)
+    receiving_tds = rng.binomial(targets, td_rate_target).astype(np.int64)
+
+    ws["carries"] = carries
+    ws["targets"] = targets
+    ws["rushing_yards"] = rushing_yards
+    ws["rushing_tds"] = rushing_tds
+    ws["receptions"] = receptions
+    ws["receiving_yards"] = receiving_yards
+    ws["receiving_tds"] = receiving_tds
+    ws["fumbles_lost"] = np.zeros(n, dtype=np.int64)
+    ws["passing_yards"] = 0.0
+    ws["passing_tds"] = np.int64(0)
+    ws["interceptions"] = np.int64(0)
+
+    schema_cols_ws = WeeklyStatsSchema.to_schema().columns
+    for col_name, col in schema_cols_ws.items():
+        if col_name in ws.columns:
+            continue
+        dtype_str = str(col.dtype)
+        if "int" in dtype_str.lower():
+            ws[col_name] = np.zeros(n, dtype=np.int64)
+        elif "float" in dtype_str.lower():
+            ws[col_name] = np.zeros(n, dtype=np.float64)
+        else:
+            ws[col_name] = 0
+    return features, WeeklyStatsSchema.validate(ws)
+
+
+def test_walk_forward_residuals_populates_all_five_stat_buffers() -> None:
+    """Every entry in _RB_DECOMPS gets a StatResiduals; both arms populated."""
+    features, weekly_stats = _synthetic_rb_inputs()
+    output = walk_forward_residuals(features, weekly_stats, eval_years=(2020, 2021))
+
+    assert isinstance(output, WalkForwardOutput)
+    assert set(output.per_stat.keys()) == set(_RB_DECOMPS.keys())
+    for residuals in output.per_stat.values():
+        assert isinstance(residuals, StatResiduals)
+        assert residuals.actual.shape == residuals.mu_direct.shape
+        assert residuals.actual.shape == residuals.mu_decomposed.shape
+        assert residuals.n_paired == residuals.actual.shape[0]
+        assert residuals.n_paired > 0
+        # Decomposed predictions: rate-factor stats >= 0 (volume clip floors).
+        assert (residuals.mu_decomposed >= 0).all()
+
+
+def test_walk_forward_residuals_tracks_two_coverage_axes() -> None:
+    """Coverage tracked separately for the carries and targets axes."""
+    features, weekly_stats = _synthetic_rb_inputs()
+    output = walk_forward_residuals(features, weekly_stats, eval_years=(2020, 2021))
+
+    assert set(output.coverage_carries_by_year.keys()) == {2020, 2021}
+    assert set(output.coverage_targets_by_year.keys()) == {2020, 2021}
+    for year in {2020, 2021}:
+        assert 0.0 <= output.coverage_carries_by_year[year] <= 1.0
+        assert 0.0 <= output.coverage_targets_by_year[year] <= 1.0
+
+
+def test_walk_forward_residuals_arms_differ_on_some_rows() -> None:
+    """The decomposed and direct arms must NOT produce identical predictions
+    everywhere — a no-op fall-through would be a silent bug.
+    """
+    features, weekly_stats = _synthetic_rb_inputs(seed=12345)
+    output = walk_forward_residuals(features, weekly_stats, eval_years=(2021,))
+
+    for stat, residuals in output.per_stat.items():
+        n_different = int(np.sum(np.abs(residuals.mu_direct - residuals.mu_decomposed) > 1e-6))
+        assert n_different > 0, (
+            f"direct and decomposed arms produced identical predictions for {stat.value}"
+        )
+
+
+def test_walk_forward_residuals_skips_eval_year_with_no_train_data() -> None:
+    """When eval_year is the earliest season, no train data exists — skip cleanly."""
+    features, weekly_stats = _synthetic_rb_inputs()
+    output = walk_forward_residuals(features, weekly_stats, eval_years=(2018,))
+
+    # 2018 is the earliest season; train_seasons is empty -> coverage dict empty.
+    assert output.coverage_carries_by_year == {}
+    assert output.coverage_targets_by_year == {}
+    for residuals in output.per_stat.values():
+        assert residuals.n_paired == 0
+
+
+def test_walk_forward_residuals_emits_factor_residuals_per_stat_per_year() -> None:
+    """Per-stat per-year (volume_residual, efficiency_residual) for orthogonality check."""
+    features, weekly_stats = _synthetic_rb_inputs()
+    output = walk_forward_residuals(features, weekly_stats, eval_years=(2020, 2021))
+
+    for stat in _RB_DECOMPS:
+        assert stat in output.factor_residuals_by_year
+        per_year_list = output.factor_residuals_by_year[stat]
+        assert len(per_year_list) == 2  # one entry per eval year
+        for entry in per_year_list:
+            assert isinstance(entry, FactorResidualsByYear)
+            assert entry.eval_year in {2020, 2021}
+            assert entry.volume_residuals.shape == entry.efficiency_residuals.shape
+
+
+# Mark CoverageByYear as used (imported for export symmetry with the canonical
+# sibling API; production walk-forward uses dict[int, float] coverage dicts).
+_COVERAGE_BY_YEAR_IMPORTED: type = CoverageByYear
