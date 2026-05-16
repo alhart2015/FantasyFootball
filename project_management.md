@@ -4,6 +4,33 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## WR Ensemble — Decomposed-Baseline Child A Swap — verdict `ADOPT` (binding) (2026-05-15, on branch `feat/wr-ensemble-decomposed-child`)
+
+**Status:** New `wr_ensemble_decomposed()` factory swaps `EnsembleModel`'s child A from `wr_baseline` to `wr_decomposed_baseline`; lgb-nb child unchanged. Per-stat ensemble weights re-fit via pinball at q ∈ {0.10, 0.90}. Spec at `docs/superpowers/specs/2026-05-15-wr-ensemble-decomposed-child-design.md`.
+
+**Per-cell verdicts:**
+
+| Cell | Incumbent | Candidate | n_paired | RMSE Δ (fpts) | RMSE 95% CI | Spearman Δ | Verdict |
+|---|---|---|---:|---:|---|---:|:---:|
+| **Binding** (gates routing) | ensemble | ensemble-decomposed | 8460 | **-0.0038** | **[-0.0079, -0.0002]** | +0.0002 | **ADOPT** |
+| Informational | decomposed-baseline | ensemble-decomposed | 8460 | -0.0074 | [-0.0234, +0.0089] | **+0.0041** (strict pos) | DO_NOT_ADOPT (RMSE CI brackets zero) |
+
+**§1.3.5 outcome:** Routing flipped — `_PositionDispatch[Position.WR].default_model_class` changed from `"ensemble"` to `"ensemble-decomposed"` in `src/projections/models/__init__.py`. `tests/test_models/test_position_dispatch.py`'s `expected` dict updated. Backtest snapshot unchanged (pins only `baseline` model_class values; flip from ensemble→ensemble-decomposed is not in scope of the snapshot).
+
+**Probe-vs-gate magnitude flag.** Binding RMSE Δ -0.0038 fpts is below the 0.005 fpts marginal-zone threshold from PR #31's retrospective. CI is strictly negative ([-0.0079, -0.0002]) so the routing flip is mechanically justified, but the absolute magnitude is small. Flagged so future contributors know this routing flip was made on a 4-millifpts improvement that's statistically conclusive at the pooled-CI level but in the marginal zone in absolute terms.
+
+**Mechanism.** Informational-cell Spearman +0.0041 (strictly positive) is the cleanest evidence: ensemble's lgb-nb mixing adds rank-correlation lift even when child A is already decomposed. Two distinct mechanisms compound rather than cancel — decomposition improves the baseline's point predictions; lgb-nb captures residual non-linear structure ridges miss. Binding cell RMSE Δ -0.0038 (vs PR #36's predicted [0, -0.0103] range) lands in the bottom half of the band — substantial but not full compounding, consistent with some of decomposition's lift overlapping with what lgb-nb already captures.
+
+**Side-effect fix (commit `975cd52`):** `QuantileDistribution.cdf` extrapolates past knots (mirrors `quantile()`), clipped to [0, 1]. Pre-fix asymmetry capped the joint Mixture(Q, X) cdf at `1 - weight*0.05`, breaking brentq inversion in `MixtureDistribution.quantile()` for q in tail. Discovered while building Task 2's mixture-tail unit tests. Test `test_quantile_cdf_clamps_at_endpoints` was pinning the defect — renamed to `_extrapolates_past_endpoints` with a more thorough assertion set.
+
+**Recommended next direction:** factor-appropriate sub-model classes for `catch_rate` (logistic-link). Would lift the small adoption magnitude into the comfortable zone, address the [0, 1]-bounded ratio's tail-calibration weakness, and make decomposing additional stats (receiving_yards, receiving_tds) viable.
+
+**Plan-vs-execution deviations.** Backtest wall-clock ~3 hours (vs PR #36's 34 min) — third model class + slow new `MixtureDistribution.quantile()` path against `QuantileDistribution` components + external workload competition. Plan's hypothesis about the bug location (`mixture._bracket_for_components`) was wrong; actual fix was `QuantileDistribution.cdf`. Plan's assertion about RECEPTIONS `component_b == ParametricNegativeBinomial` was wrong (RECEPTIONS isn't in `COUNT_STATS_FOR_NB`); corrected to QuantileDistribution. `scripts/adoption_gate.py` requires `--position WR` explicit on WR-only data. Stdout em-dashes wrote as cp1252 `0x97` instead of UTF-8 — fixed post-hoc.
+
+See `reports/wr_ensemble_decomposed_summary.md` for the full decision log + per-cell + per-year tables.
+
+---
+
 ## WR Target Decomposition Integration — verdict `DO_NOT_ADOPT` (binding) + `ADOPT` (informational) (2026-05-13, on branch `feat/wr-target-decomposition`)
 
 **Status:** Production integration of `DecomposedBaselineModel` (peer to `BaselineModel`) with per-stat decomposition opt-in via constructor arg. v1 ships WR receptions-only decomposition (volume `targets` x efficiency `catch_rate` with sample-time clip `[0, 1]`). New `FrozenSampledDistribution` carries within-row coherent sampling through `score_distribution`; persistence uses `QuantileDistribution` summaries via the existing codec branch (no codec edits). Spec at `docs/superpowers/specs/2026-05-13-wr-target-decomposition-integration-design.md`.

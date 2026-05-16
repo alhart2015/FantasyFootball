@@ -37,13 +37,14 @@ def test_default_model_class_per_position() -> None:
     - QB: lightgbm-nb (3 ADOPTers; NB wins tie-break)
     - RB: baseline (no ADOPT verdict)
     - TE: baseline (no ADOPT verdict)
-    - WR: ensemble (sole ADOPTer)
+    - WR: ensemble-decomposed (2026-05-15 ADOPT; binding cell vs ensemble
+      RMSE delta -0.0038 fpts, CI [-0.0079, -0.0002] strictly negative)
     """
     expected = {
         Position.QB: "lightgbm-nb",
         Position.RB: "baseline",
         Position.TE: "baseline",
-        Position.WR: "ensemble",
+        Position.WR: "ensemble-decomposed",
     }
     for pos, want in expected.items():
         got = POSITION_DISPATCH[pos].default_model_class

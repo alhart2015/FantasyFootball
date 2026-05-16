@@ -124,6 +124,7 @@ def main() -> None:
             "lightgbm-tuned",
             "lightgbm-nb",
             "ensemble",
+            "ensemble-decomposed",
             "both",
             "all",
         ],
@@ -133,7 +134,9 @@ def main() -> None:
             "'both' = Model A + Model C (legacy default). "
             "'all' = Model A + Model C + Model C-tuned + Model C-NB + Ensemble (Model D). "
             "'decomposed-baseline' = WR decomposed-baseline only (other positions are skipped — "
-            "the factory is registered for WR only in v1)."
+            "the factory is registered for WR only in v1). "
+            "'ensemble-decomposed' = WR ensemble blending decomposed-baseline + Model C (WR-only; "
+            "depends on the WR-only decomposed-baseline factory as child A)."
         ),
     )
     args = parser.parse_args()
@@ -153,9 +156,11 @@ def main() -> None:
 
     # decomposed-baseline is registered only for WR (v1 receptions-only config);
     # other positions' _FACTORIES dicts don't contain the key. Restrict positions
-    # so the dispatch loop doesn't KeyError on QB/RB/TE.
+    # so the dispatch loop doesn't KeyError on QB/RB/TE. ensemble-decomposed
+    # consumes wr_decomposed_baseline as child A and is therefore likewise
+    # WR-only.
     positions: tuple[Position, ...] | None
-    if args.model == "decomposed-baseline":
+    if args.model in ("decomposed-baseline", "ensemble-decomposed"):
         positions = (Position.WR,)
     else:
         positions = None
