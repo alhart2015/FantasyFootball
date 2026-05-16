@@ -141,14 +141,11 @@ def test_vorp_equation() -> None:
 
 def test_replacement_level_pinned_per_position() -> None:
     """For a known input, replacement_fpts(pos) is the projection of the boundary player."""
-    # 4 teams, 1 QB + 2 RB + 2 WR + 1 TE + 1 FLEX + 1 BENCH = 8 picks/team = 32 picks total.
-    # Configured to be filled by an oversized per-position input so the boundaries are precise.
+    # Oversized per-position inputs (10-15 each) make every position contain a
+    # non-pool tail. Pin: replacement_fpts at each position must equal an actual
+    # input projection (set membership), and every player projected above
+    # replacement must have strictly positive VORP.
     cfg = _make_config()  # 4-team default
-    # 20 of each position; pool eats:
-    #   QBs:   4 (1 per team)   → replacement = 5th QB
-    #   RBs:   8 (2 per team) + FLEX share + BENCH share (depth-dependent)
-    #   ...
-    # Simpler pin: shrink the input to a tight pool boundary.
     rows: list[dict[str, object]] = []
     rows.extend(_bulk_rows(Position.QB, count=10, base_fpts=300.0))  # QBs 0..9 (300..291 fpts)
     rows.extend(_bulk_rows(Position.RB, count=15, base_fpts=280.0))  # RBs 0..14 (280..266 fpts)
