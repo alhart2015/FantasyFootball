@@ -1,12 +1,9 @@
-"""Pool-selection helper used by both auction-values and VORP.
+"""Pool-selection helper shared by auction-values and VORP.
 
 The pool is the set of players who would actually be drafted under a given
 `LeagueConfig`. Selection ranks by `season_mean_fpts` (descending) within each
-position pass, tie-broken by `vorp` (descending) if present then `gsis_id`
-(ascending). Filling order: position-specific slots → FLEX → SUPER_FLEX → BENCH.
-
-Module-private (leading underscore). Direct callers are `auction.py` (passes a
-vorp-populated frame) and `vorp.py` (passes a frame without `vorp`).
+position pass, tie-broken by `vorp` (descending) then `gsis_id` (ascending).
+Filling order: position-specific slots → FLEX → SUPER_FLEX → BENCH.
 """
 
 from __future__ import annotations
@@ -60,29 +57,25 @@ def _take_top_n(
         picked_set.add(gid)
 
 
+def _reject_duplicate_gsis_ids(df: pd.DataFrame, label: str) -> None:
+    if df["gsis_id"].duplicated().any():
+        dup = df.loc[df["gsis_id"].duplicated(), "gsis_id"].iloc[0]
+        raise ValueError(f"{label} has duplicate gsis_id rows (first duplicate: {dup}).")
+
+
 def _select_pool(vorp_table: pd.DataFrame, league_config: LeagueConfig) -> list[str]:
     """Select the in-pool `gsis_id`s per the auction-values spec §3.1 algorithm.
 
-    Returns a list of length `league_config.total_pool_size`. Selection order:
+    Returns a list of length `league_config.total_pool_size`. Filling order:
     position-specific slots, then FLEX, then SUPER_FLEX, then BENCH. Within each
-    pass, players are ranked by `season_mean_fpts` desc, tie-broken by `vorp` desc
-    (if column present) then `gsis_id` asc. Callers that don't yet have a VORP
-    value (e.g. the VORP generator itself) can omit the `vorp` column entirely;
-    the tie-break falls back to `gsis_id` alone.
+    pass, players are ranked by `season_mean_fpts` desc, `vorp` desc, `gsis_id` asc.
+    Callers without a meaningful VORP (e.g. VORP generation itself) pass `vorp=0.0`.
 
-    Raises `ValueError` if any required position is missing from `vorp_table`.
+    Raises `ValueError` if any required position cannot be filled.
     """
-    sort_cols = ["season_mean_fpts"]
-    sort_asc = [False]
-    if "vorp" in vorp_table.columns:
-        sort_cols.append("vorp")
-        sort_asc.append(False)
-    sort_cols.append("gsis_id")
-    sort_asc.append(True)
-
     sorted_df = vorp_table.sort_values(
-        by=sort_cols,
-        ascending=sort_asc,
+        by=["season_mean_fpts", "vorp", "gsis_id"],
+        ascending=[False, False, True],
         kind="mergesort",
     ).reset_index(drop=True)
 

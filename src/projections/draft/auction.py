@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from projections.draft._pool import _select_pool
+from projections.draft._pool import _reject_duplicate_gsis_ids, _select_pool
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import AuctionValuesSchema
 
@@ -28,12 +28,6 @@ _OUTPUT_COLUMNS: tuple[str, ...] = (
     "reference_dollars",
     "value_delta",
 )
-
-
-def _reject_duplicate_gsis_ids(df: pd.DataFrame, label: str) -> None:
-    if df["gsis_id"].duplicated().any():
-        dup = df.loc[df["gsis_id"].duplicated(), "gsis_id"].iloc[0]
-        raise ValueError(f"{label} has duplicate gsis_id rows (first duplicate: {dup}).")
 
 
 def generate_auction_values(
