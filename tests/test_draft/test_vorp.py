@@ -200,3 +200,57 @@ def test_sub_replacement_players_have_negative_vorp() -> None:
         pos_rows = out[out["position"] == pos.value].sort_values("season_mean_fpts")
         worst_vorp = float(pos_rows["vorp"].iloc[0])
         assert worst_vorp <= 0
+
+
+def _replacement_by_position(out: pd.DataFrame) -> dict[str, float]:
+    return {
+        str(pos): float(out[out["position"] == pos]["replacement_fpts"].iloc[0])
+        for pos in out["position"].unique()
+    }
+
+
+def test_flex_deepens_rb_wr_te_replacement() -> None:
+    """A LeagueConfig with FLEX=1 should produce ≤ replacement_fpts at RB/WR/TE vs FLEX=0."""
+    base_slots = {
+        RosterSlot.QB: 1,
+        RosterSlot.RB: 2,
+        RosterSlot.WR: 2,
+        RosterSlot.TE: 1,
+        RosterSlot.BENCH: 1,
+    }
+    cfg_no_flex = _make_config(roster_slots=base_slots)
+    cfg_with_flex = _make_config(roster_slots={**base_slots, RosterSlot.FLEX: 1})
+    inputs = _bulk_input({Position.QB: 20, Position.RB: 30, Position.WR: 30, Position.TE: 20})
+
+    out_no_flex = generate_vorp_table(inputs, cfg_no_flex)
+    out_with_flex = generate_vorp_table(inputs, cfg_with_flex)
+
+    repl_no_flex = _replacement_by_position(out_no_flex)
+    repl_with_flex = _replacement_by_position(out_with_flex)
+
+    for pos in (Position.RB.value, Position.WR.value, Position.TE.value):
+        assert repl_with_flex[pos] <= repl_no_flex[pos], (
+            f"{pos} replacement should deepen (lower) when FLEX is added: "
+            f"no_flex={repl_no_flex[pos]} with_flex={repl_with_flex[pos]}"
+        )
+
+
+def test_super_flex_deepens_qb_replacement() -> None:
+    base_slots = {
+        RosterSlot.QB: 1,
+        RosterSlot.RB: 2,
+        RosterSlot.WR: 2,
+        RosterSlot.TE: 1,
+        RosterSlot.BENCH: 1,
+    }
+    cfg_no_sf = _make_config(roster_slots=base_slots)
+    cfg_with_sf = _make_config(roster_slots={**base_slots, RosterSlot.SUPER_FLEX: 1})
+    inputs = _bulk_input({Position.QB: 20, Position.RB: 30, Position.WR: 30, Position.TE: 20})
+
+    out_no_sf = generate_vorp_table(inputs, cfg_no_sf)
+    out_with_sf = generate_vorp_table(inputs, cfg_with_sf)
+
+    repl_no_sf = _replacement_by_position(out_no_sf)
+    repl_with_sf = _replacement_by_position(out_with_sf)
+
+    assert repl_with_sf[Position.QB.value] <= repl_no_sf[Position.QB.value]
