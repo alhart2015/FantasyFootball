@@ -847,6 +847,30 @@ class VorpTableSchema(pa.DataFrameModel):
         coerce = True
 
 
+class SnakeCheatSheetSchema(pa.DataFrameModel):
+    """Per-player snake-draft cheat sheet. End-user surface for draft day.
+
+    One row per player in the input VORP table. In-pool players get a numeric
+    tier (1..N); out-of-pool players get tier = NA. `display_name` is
+    best-effort from id_map.parquet; falls back to '—' for players without
+    an id_map row.
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", unique=True)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    display_name: Series[str]
+    positional_rank: Series[pd.Int64Dtype] = pa.Field(ge=1)
+    season_mean_fpts: Series[float]
+    vorp: Series[float]
+    replacement_fpts: Series[float]
+    is_in_pool: Series[bool]
+    tier: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
 class AuctionValuesSchema(pa.DataFrameModel):
     """Per-player auction $ allocation. Consumer-facing output of the auction-values generator.
 
