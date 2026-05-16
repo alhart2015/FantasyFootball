@@ -4,6 +4,18 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Logit catch_rate Probe — verdict `NULL` (2026-05-16, on branch `feat/probe-logit-catch-rate`)
+
+**Status:** New probe `src/projections/backtest/logit_catch_rate_probe.py` tests whether replacing the catch_rate efficiency sub-model class from `RidgeCV` on the ratio (current production via PR #36/#38) with `LogisticRegressionCV` via Bernoulli-trial row expansion (factor-appropriate for the [0, 1]-bounded ratio response) lowers per-stat receptions RMSE on WR rows. Both arms share the same shared-volume RidgeCV on `targets`; only the catch_rate efficiency sub-model class differs. Spec at `docs/superpowers/specs/2026-05-15-logit-catch-rate-probe-design.md`.
+
+**Verdict:** `NULL` — RMSE Δ -0.0018 receptions (95% CI [-0.0047, +0.0009]), n_paired = 5195. Magnitude flag fired: |Δ| 0.0018 < 0.005 receptions threshold per PR #31's retrospective rule (marginal zone — but moot here because the CI brackets zero regardless).
+
+**Mechanism interpretation:** The CI brackets zero (just barely on the upper side at +0.0009), so the logit-link sub-model is statistically indistinguishable from the Ridge-on-clipped-ratio incumbent on per-stat receptions RMSE over the 2021-2024 pooled WR rows. Per-year breakdown is consistent with this: 3 of 4 years lean slightly negative (2021, 2022, 2024) with 2022 the only year whose CI nearly excludes zero on the negative side (point -0.0052, hi +0.0007); 2023 is essentially flat at +0.0011. The mechanistic story this rules out: logit's proper [0, 1] support without a hard-clip does NOT meaningfully outperform the RidgeCV approximation on the WR data we have. Coverage is comfortably above 0.95 across all eval years (0.989-0.996), so the verdict is not muddied by the `targets > 0` filter.
+
+**Recommended next direction:** Close the catch_rate factor-appropriate direction — the [0, 1]-bounded ratio's tail-calibration weakness is not large enough on real WR data to justify the class swap. Next slot per spec §6 is a `yards_per_target` factor-appropriate probe (log-link Gamma or Tweedie family on the strictly-positive, right-skewed efficiency factor) under the same shared-volume / single-factor-swap design pattern. That probe is the highest-leverage remaining factor-class swap because `yards_per_target` carries more receiving-yards variance than `catch_rate` carries receptions variance, and a Gaussian-on-ratio Ridge is a worse approximation to a Gamma response than to a Bernoulli-mean.
+
+See `reports/feature_probe_logit_catch_rate_summary.md` for full decision log.
+
 ## WR Ensemble — Decomposed-Baseline Child A Swap — verdict `ADOPT` (binding) (2026-05-15, on branch `feat/wr-ensemble-decomposed-child`)
 
 **Status:** New `wr_ensemble_decomposed()` factory swaps `EnsembleModel`'s child A from `wr_baseline` to `wr_decomposed_baseline`; lgb-nb child unchanged. Per-stat ensemble weights re-fit via pinball at q ∈ {0.10, 0.90}. Spec at `docs/superpowers/specs/2026-05-15-wr-ensemble-decomposed-child-design.md`.
