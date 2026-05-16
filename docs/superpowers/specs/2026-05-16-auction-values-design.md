@@ -224,10 +224,10 @@ If `reference_prices` provided, left-join on `gsis_id`. `value_delta = auction_d
 
 12-team standard PPR, $200 budget, roster slots `{QB: 1, RB: 2, WR: 3, TE: 1, FLEX: 1, K: 1, DST: 1, BENCH: 7}`, `min_bid = $1`:
 
-- `roster_size = 16`, `total_pool_size = 192`, `total_budget = $2400`, `reserve = $192`, `surplus = $2208`.
+- `roster_size = 17`, `total_pool_size = 204`, `total_budget = $2400`, `reserve = $204`, `surplus = $2196`.
 - Suppose `positive_vorp_sum = 4400` after pool selection.
-- Christian McCaffrey (VORP 130) → `1 + (130/4400)×2208 ≈ $66`.
-- Bench WR with VORP 5 → `1 + (5/4400)×2208 ≈ $3.5` → `$4` (rounding).
+- Christian McCaffrey (VORP 130) → `1 + (130/4400)×2196 ≈ $66`.
+- Bench WR with VORP 5 → `1 + (5/4400)×2196 ≈ $3.5` → `$4` (rounding).
 - WR ranked 35th with VORP -2 (in pool because his projection puts him in the WR top-`12×4`+FLEX pool) → `$1`.
 - WR ranked 100th — not in pool → `$0`.
 - After integer rounding, drift might be e.g. `-2`; we adjust the two players with the smallest fractional remainders downward by $1.
