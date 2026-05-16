@@ -142,3 +142,32 @@ def test_cli_end_to_end_happy_path(tmp_path: Path) -> None:
     assert set(df.columns) >= expected_cols
     assert len(df) == len(vorp)
     assert (df["display_name"] != "—").any()
+
+
+def test_cli_missing_id_map_logs_warning_and_falls_back(tmp_path: Path) -> None:
+    """§5.3 #24 — --id-map points at a non-existent file → warning + '—' names + exit 0."""
+    vorp_path = tmp_path / "vorp.parquet"
+    _write_synthetic_vorp(vorp_path)
+    cfg_path = tmp_path / "league.json"
+    _write_league_config(cfg_path)
+    out_path = tmp_path / "cheat_sheet.csv"
+    missing_id_map = tmp_path / "nope.parquet"  # doesn't exist
+
+    result = _run_cli(
+        [
+            "--season",
+            "2026",
+            "--league-config",
+            str(cfg_path),
+            "--vorp-input",
+            str(vorp_path),
+            "--id-map",
+            str(missing_id_map),
+            "--out",
+            str(out_path),
+        ]
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert "id_map parquet not found" in result.stderr
+    df = pd.read_csv(out_path)
+    assert (df["display_name"] == "—").all()

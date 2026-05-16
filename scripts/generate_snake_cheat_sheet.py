@@ -84,11 +84,11 @@ def _write_output(df: pd.DataFrame, path: Path) -> None:
         )
 
 
-def _log_per_position_summary(df: pd.DataFrame, n_tiers: int, ruleset: str) -> None:
+def _log_per_position_summary(df: pd.DataFrame, n_tiers: int, ruleset: str, season: int) -> None:
     n_total = len(df)
     print(
-        f"Snake cheat sheet written: {n_total} players, ruleset={ruleset}, "
-        f"tiers_per_position={n_tiers}"
+        f"Snake cheat sheet written: {n_total} players, season={season}, "
+        f"ruleset={ruleset}, tiers_per_position={n_tiers}"
     )
     print()
     print("Position summary (n_in_pool | tier-1 size | top-3):")
@@ -120,7 +120,9 @@ def main() -> int:
         tiers_per_position=int(args.tiers_per_position),
     )
     _write_output(sheet, args.out)
-    _log_per_position_summary(sheet, int(args.tiers_per_position), cfg.ruleset.name)
+    _log_per_position_summary(
+        sheet, int(args.tiers_per_position), cfg.ruleset.name, int(args.season)
+    )
     return 0
 
 
