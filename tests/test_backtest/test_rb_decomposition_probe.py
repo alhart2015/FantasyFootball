@@ -464,3 +464,20 @@ def test_compute_verdicts_returns_one_per_stat_in_output() -> None:
     for v in verdicts:
         assert v.verdict in {"SIGNAL", "NULL", "REGRESSION"}
         assert isinstance(v.rmse_delta, BootstrapDelta)
+
+
+def test_compute_verdicts_sentinel_for_empty_residuals() -> None:
+    """When walk_forward skips an eval year (no train data), each stat's
+    StatResiduals has n_paired=0. compute_verdicts must return sentinel NULL
+    verdicts with zero CI rather than crashing in paired_bootstrap_rmse_delta.
+    """
+    features, weekly_stats = _synthetic_rb_inputs()
+    output = walk_forward_residuals(features, weekly_stats, eval_years=(2018,))
+
+    verdicts = compute_verdicts(output)
+
+    assert len(verdicts) == 5
+    assert all(v.verdict == "NULL" for v in verdicts)
+    assert all(v.n_paired == 0 for v in verdicts)
+    assert all(v.rmse_delta.point == 0.0 for v in verdicts)
+    assert all(v.rmse_delta.n_paired_rows == 0 for v in verdicts)

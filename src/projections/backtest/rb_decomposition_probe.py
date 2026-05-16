@@ -26,6 +26,7 @@ import pandas as pd
 from sklearn.linear_model import RidgeCV
 
 from projections.backtest.adoption_gate import (
+    _MIN_PAIRED_ROWS,
     BootstrapDelta,
     paired_bootstrap_rmse_delta,
 )
@@ -427,17 +428,19 @@ def compute_verdicts(
     """
     verdicts: list[PerStatVerdict] = []
     for stat, residuals in output.per_stat.items():
-        if residuals.n_paired == 0:
-            # Empty residuals -> a sentinel "NULL" with zero CI.
+        if residuals.n_paired < _MIN_PAIRED_ROWS:
+            # Too few rows for a meaningful paired-bootstrap CI -> sentinel NULL.
+            # paired_bootstrap_rmse_delta raises below this floor; we record the
+            # actual row count so a future 1-99 case is visible in the output.
             verdicts.append(
                 PerStatVerdict(
                     stat=stat,
-                    n_paired=0,
+                    n_paired=residuals.n_paired,
                     rmse_delta=BootstrapDelta(
                         point=0.0,
                         lo_95=0.0,
                         hi_95=0.0,
-                        n_paired_rows=0,
+                        n_paired_rows=residuals.n_paired,
                         n_bootstrap=0,
                     ),
                     verdict="NULL",
