@@ -840,7 +840,7 @@ class VorpTableSchema(pa.DataFrameModel):
     position: Series[str] = pa.Field(isin=_POSITION_VALUES)
     season_mean_fpts: Series[float]
     vorp: Series[float]
-    replacement_fpts: Series[float]
+    replacement_fpts: Series[float] = pa.Field(ge=0)
 
     class Config:
         strict = "filter"
