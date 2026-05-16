@@ -4,6 +4,41 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## VORP Generator — feature shipped (2026-05-16, on branch `feat/vorp`)
+
+**Status:** Spec + plan + impl on `feat/vorp`. Pool-boundary replacement-level method: replacement at position P is the season-mean projection of the worst player at P that makes it into the drafted pool (the `_select_pool` output, lifted from the auction module so both specs share one definition). VORP = `season_mean_fpts − replacement_fpts(P)`. Output parquet is the input contract for the already-shipped auction $ generator and the upcoming snake-draft cheat sheet. Spec at `docs/superpowers/specs/2026-05-16-vorp-design.md`; plan at `docs/superpowers/plans/2026-05-16-vorp.md`.
+
+**Shipped surface:**
+- `src/projections/draft/vorp.py` — `generate_vorp_table(projections, league_config)` public function.
+- `src/projections/draft/_pool.py` — new module-private `_select_pool` (lifted from `auction.py`; generalized to accept inputs without a `vorp` column so VORP itself can call it).
+- `src/projections/draft/auction.py` — re-imports `_select_pool` from `_pool`; no behavioral change.
+- `src/projections/schemas.py` — appended `VorpTableSchema`.
+- `scripts/generate_vorp_table.py` — CLI with `--season --league-config --projections-input --out` flags; CSV and parquet output; per-position stdout summary including `replacement_fpts` for eyeball sanity (mitigates the "pool-boundary is one specific definition" risk).
+- ~28 new tests: 22 in `tests/test_draft/test_vorp.py`, 3 in `tests/test_draft/test_pool.py`, 3 in `tests/test_scripts/test_generate_vorp_table_cli.py`, 1 schema round-trip appended to `tests/test_schemas/test_dataframe_schemas.py`. All passing; mypy + ruff + format clean across 191 source files. The 21-test auction regression gate (`tests/test_draft/test_auction.py`) passes unchanged after the `_select_pool` lift.
+
+**Decision log:**
+- **Pool-boundary replacement-level (§3.1)** chosen over the two alternatives. §3.2 strict-positional (replacement = `N_teams × starters_at_P + 1`) ignores FLEX / SUPER_FLEX / BENCH and produces wrong replacement levels for any non-trivial roster. §3.3 bench-buffer adds a free parameter (`buffer_size`) that has no principled value. Pool-boundary naturally accounts for FLEX/SUPER_FLEX/BENCH composition and is internally consistent with the auction generator (both call the same `_select_pool`).
+- **K/DST out of scope for v1.** TODO #10. VORP raises explicitly if `LeagueConfig.roster_slots` requires a position not present in the projections input — the pool composition is undefined otherwise, and silently producing partial output would propagate a sign error into the downstream auction $ table.
+- **Column rename at the VORP boundary** (`season_mean` → `season_mean_fpts`), with an inline comment explaining the rationale. Cross-spec consistency (renaming the upstream projections column too) deferred per spec §6.
+- **Refactor:** `_select_pool` lifted from `src/projections/draft/auction.py` into module-private `src/projections/draft/_pool.py`, generalized to accept inputs without a `vorp` column. Auction's 21-test regression gate passes unchanged.
+
+**Risks logged (spec §6):**
+- **Pool-boundary is one specific definition.** Magnitudes will differ from public ESPN / Yahoo / FantasyPros cheat sheets, which typically use strict-positional or implicit-bench replacement. **Mitigation shipped:** CLI emits per-position `replacement_fpts` in the stdout summary for user eyeball before trusting numbers downstream.
+
+**Plan-vs-execution deviations:**
+- **Spec contradiction caught mid-implementation.** Original §3.6 said VORP is "silent + downstream auction error" on a required-but-missing position. Code correctly raises, since with no projections for a required position the pool composition is undefined. Spec amended in commits `9504b0e` (§3.6 + §5.1 #17) and `6e4b719` (§5.4 #26 + §4 stdout example) to reflect the raise-on-missing behavior.
+- **Lowercase `"espn_ppr"` bug in plan fixtures.** `Ruleset.espn_ppr().name` is uppercase `"ESPN_PPR"`. Task 4 implementer caught and fixed the fixture; Task 11 fixture was pre-fixed.
+- **Multiple small cleanup commits between major tasks** — spec docstring tightenings, dead-branch removal, enum-vs-string-constant import substitution, test comment trim, defensive assertion additions. All from reviewer feedback, none material to the algorithm.
+
+**Recommended next direction:**
+1. **Snake-draft cheat sheet** (`draft_ready_checklist.md` §2b.1) — the other VORP consumer, same input contract (the parquet this spec produces), different output surface (per-position ordered list with VORP / ADP delta / tier / confidence band).
+2. **`predict_season.py` generalization** (`draft_ready_checklist.md` §1b) — required for any post-2024 VORP run. The current projection generator is pinned to a specific season; generalize before season-start draft prep.
+3. **K/DST projection generation** (TODO #10) — unblocks K/DST VORP and finishes the league-config story for standard ESPN/Yahoo formats.
+
+See `docs/superpowers/specs/2026-05-16-vorp-design.md` and `docs/superpowers/plans/2026-05-16-vorp.md`. Draft-readiness status: `draft_ready_checklist.md` §2a.1 flipped to `[x]`.
+
+---
+
 ## Auction Values $ Generator — feature shipped (2026-05-16, on branch `feat/auction-values`)
 
 **Status:** Spec + plan + impl on `feat/auction-values`. First module of the Draft Hub sub-project. Standard SOS allocation: reserve `min_bid` per drafted slot, distribute remaining budget proportionally to positive VORP among the rostered pool. Strategy-agnostic — one $ per player; downstream live-bid recommender owns aggressiveness / roster-shape knobs. Spec at `docs/superpowers/specs/2026-05-16-auction-values-design.md`; plan at `docs/superpowers/plans/2026-05-16-auction-values.md`.

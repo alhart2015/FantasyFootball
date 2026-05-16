@@ -23,6 +23,7 @@ from projections.schemas import (
     SchedulesSchema,
     SnapCountsSchema,
     TeFeaturesSchema,
+    VorpTableSchema,
     WeeklyStatsSchema,
     WrFeaturesSchema,
 )
@@ -862,3 +863,25 @@ def test_auction_values_schema_round_trip() -> None:
     bad.loc[bad.index[0], "auction_dollars"] = -5
     with pytest.raises(SchemaError):
         AuctionValuesSchema.validate(bad)
+
+
+def test_vorp_table_schema_round_trip() -> None:
+    """Build a minimal VORP table, validate, re-validate; accepts the shape and is idempotent."""
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-1000001", "00-2000001"], dtype=_PYARROW_STR),
+            "position": pd.array([Position.QB.value, Position.RB.value], dtype=_PYARROW_STR),
+            "season_mean_fpts": pd.array([320.0, 260.0], dtype="float64"),
+            "vorp": pd.array([80.0, 30.0], dtype="float64"),
+            "replacement_fpts": pd.array([240.0, 230.0], dtype="float64"),
+        }
+    )
+    validated = VorpTableSchema.validate(df)
+    revalidated = VorpTableSchema.validate(validated)
+    pd.testing.assert_frame_equal(validated, revalidated)
+
+    # Regression guard: duplicate gsis_id must be rejected.
+    bad = df.copy()
+    bad.loc[bad.index[1], "gsis_id"] = bad.loc[bad.index[0], "gsis_id"]
+    with pytest.raises(SchemaError):
+        VorpTableSchema.validate(bad)
