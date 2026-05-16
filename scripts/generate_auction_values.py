@@ -19,7 +19,7 @@ import pandas as pd
 
 from projections.draft.auction import generate_auction_values
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import Position
+from projections.schemas import _PYARROW_STR, Position
 
 
 def _parse_args() -> argparse.Namespace:
@@ -38,15 +38,13 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _read_vorp(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(f"vorp-input parquet does not exist: {path}")
     df = pd.read_parquet(path)
     required = {"gsis_id", "position", "season_mean_fpts", "vorp"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"vorp-input parquet is missing required columns: {sorted(missing)}")
-    df["gsis_id"] = df["gsis_id"].astype(pd.StringDtype("pyarrow"))
-    df["position"] = df["position"].astype(pd.StringDtype("pyarrow"))
+    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
+    df["position"] = df["position"].astype(_PYARROW_STR)
     df["season_mean_fpts"] = df["season_mean_fpts"].astype("float64")
     df["vorp"] = df["vorp"].astype("float64")
     return df
@@ -55,14 +53,12 @@ def _read_vorp(path: Path) -> pd.DataFrame:
 def _read_reference_prices(path: Path | None) -> pd.DataFrame | None:
     if path is None:
         return None
-    if not path.exists():
-        raise FileNotFoundError(f"reference-prices CSV does not exist: {path}")
     df = pd.read_csv(path)
     required = {"gsis_id", "reference_dollars"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"reference-prices CSV is missing required columns: {sorted(missing)}")
-    df["gsis_id"] = df["gsis_id"].astype(pd.StringDtype("pyarrow"))
+    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["reference_dollars"] = df["reference_dollars"].astype(pd.Int64Dtype())
     return df
 
