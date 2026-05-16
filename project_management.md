@@ -23,6 +23,81 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 See `reports/feature_probe_tweedie_yards_per_target_summary.md` for the full decision log + per-year tables + coverage + magnitude flag + deviations section.
 
+---
+
+## VORP Generator — feature shipped (2026-05-16, on branch `feat/vorp`)
+
+**Status:** Spec + plan + impl on `feat/vorp`. Pool-boundary replacement-level method: replacement at position P is the season-mean projection of the worst player at P that makes it into the drafted pool (the `_select_pool` output, lifted from the auction module so both specs share one definition). VORP = `season_mean_fpts − replacement_fpts(P)`. Output parquet is the input contract for the already-shipped auction $ generator and the upcoming snake-draft cheat sheet. Spec at `docs/superpowers/specs/2026-05-16-vorp-design.md`; plan at `docs/superpowers/plans/2026-05-16-vorp.md`.
+
+**Shipped surface:**
+- `src/projections/draft/vorp.py` — `generate_vorp_table(projections, league_config)` public function.
+- `src/projections/draft/_pool.py` — new module-private `_select_pool` (lifted from `auction.py`; generalized to accept inputs without a `vorp` column so VORP itself can call it).
+- `src/projections/draft/auction.py` — re-imports `_select_pool` from `_pool`; no behavioral change.
+- `src/projections/schemas.py` — appended `VorpTableSchema`.
+- `scripts/generate_vorp_table.py` — CLI with `--season --league-config --projections-input --out` flags; CSV and parquet output; per-position stdout summary including `replacement_fpts` for eyeball sanity (mitigates the "pool-boundary is one specific definition" risk).
+- ~28 new tests: 22 in `tests/test_draft/test_vorp.py`, 3 in `tests/test_draft/test_pool.py`, 3 in `tests/test_scripts/test_generate_vorp_table_cli.py`, 1 schema round-trip appended to `tests/test_schemas/test_dataframe_schemas.py`. All passing; mypy + ruff + format clean across 191 source files. The 21-test auction regression gate (`tests/test_draft/test_auction.py`) passes unchanged after the `_select_pool` lift.
+
+**Decision log:**
+- **Pool-boundary replacement-level (§3.1)** chosen over the two alternatives. §3.2 strict-positional (replacement = `N_teams × starters_at_P + 1`) ignores FLEX / SUPER_FLEX / BENCH and produces wrong replacement levels for any non-trivial roster. §3.3 bench-buffer adds a free parameter (`buffer_size`) that has no principled value. Pool-boundary naturally accounts for FLEX/SUPER_FLEX/BENCH composition and is internally consistent with the auction generator (both call the same `_select_pool`).
+- **K/DST out of scope for v1.** TODO #10. VORP raises explicitly if `LeagueConfig.roster_slots` requires a position not present in the projections input — the pool composition is undefined otherwise, and silently producing partial output would propagate a sign error into the downstream auction $ table.
+- **Column rename at the VORP boundary** (`season_mean` → `season_mean_fpts`), with an inline comment explaining the rationale. Cross-spec consistency (renaming the upstream projections column too) deferred per spec §6.
+- **Refactor:** `_select_pool` lifted from `src/projections/draft/auction.py` into module-private `src/projections/draft/_pool.py`, generalized to accept inputs without a `vorp` column. Auction's 21-test regression gate passes unchanged.
+
+**Risks logged (spec §6):**
+- **Pool-boundary is one specific definition.** Magnitudes will differ from public ESPN / Yahoo / FantasyPros cheat sheets, which typically use strict-positional or implicit-bench replacement. **Mitigation shipped:** CLI emits per-position `replacement_fpts` in the stdout summary for user eyeball before trusting numbers downstream.
+
+**Plan-vs-execution deviations:**
+- **Spec contradiction caught mid-implementation.** Original §3.6 said VORP is "silent + downstream auction error" on a required-but-missing position. Code correctly raises, since with no projections for a required position the pool composition is undefined. Spec amended in commits `9504b0e` (§3.6 + §5.1 #17) and `6e4b719` (§5.4 #26 + §4 stdout example) to reflect the raise-on-missing behavior.
+- **Lowercase `"espn_ppr"` bug in plan fixtures.** `Ruleset.espn_ppr().name` is uppercase `"ESPN_PPR"`. Task 4 implementer caught and fixed the fixture; Task 11 fixture was pre-fixed.
+- **Multiple small cleanup commits between major tasks** — spec docstring tightenings, dead-branch removal, enum-vs-string-constant import substitution, test comment trim, defensive assertion additions. All from reviewer feedback, none material to the algorithm.
+
+**Recommended next direction:**
+1. **Snake-draft cheat sheet** (`draft_ready_checklist.md` §2b.1) — the other VORP consumer, same input contract (the parquet this spec produces), different output surface (per-position ordered list with VORP / ADP delta / tier / confidence band).
+2. **`predict_season.py` generalization** (`draft_ready_checklist.md` §1b) — required for any post-2024 VORP run. The current projection generator is pinned to a specific season; generalize before season-start draft prep.
+3. **K/DST projection generation** (TODO #10) — unblocks K/DST VORP and finishes the league-config story for standard ESPN/Yahoo formats.
+
+See `docs/superpowers/specs/2026-05-16-vorp-design.md` and `docs/superpowers/plans/2026-05-16-vorp.md`. Draft-readiness status: `draft_ready_checklist.md` §2a.1 flipped to `[x]`.
+
+---
+
+## Auction Values $ Generator — feature shipped (2026-05-16, on branch `feat/auction-values`)
+
+**Status:** Spec + plan + impl on `feat/auction-values`. First module of the Draft Hub sub-project. Standard SOS allocation: reserve `min_bid` per drafted slot, distribute remaining budget proportionally to positive VORP among the rostered pool. Strategy-agnostic — one $ per player; downstream live-bid recommender owns aggressiveness / roster-shape knobs. Spec at `docs/superpowers/specs/2026-05-16-auction-values-design.md`; plan at `docs/superpowers/plans/2026-05-16-auction-values.md`.
+
+**Shipped surface:**
+- `src/projections/draft/` — new subpackage (Draft Hub seed). `LeagueConfig` (frozen pydantic, shared with VORP/snake specs), `_select_pool` helper, `generate_auction_values` public function.
+- `src/projections/schemas.py` — appended `AuctionValuesSchema`.
+- `scripts/generate_auction_values.py` — CLI with `--season --league-config --vorp-input [--reference-prices] --out` flags; CSV and parquet output supported; per-position stdout summary as VORP-quality eyeball mitigation (spec §6 risk).
+- `configs/league_espn_ppr_12team.json` + `configs/league_espn_half_10team.json` — example league configs.
+- 33 tests in `tests/test_draft/`, 3 integration tests in `tests/test_scripts/test_generate_auction_values_cli.py`, 1 schema round-trip test appended to `tests/test_schemas/test_dataframe_schemas.py`. All passing; mypy + ruff + format clean across 186 source files.
+
+**Decision log:**
+- **Algorithm A only.** Pure VORP-to-$ (no per-position market scaling, no ADP anchor). Self-contained, no new ingest. `--reference-prices` flag allows pasting an external $ sheet for sanity comparison without baking calibration into the algorithm. Algorithms B/C (market scaling / ADP anchor) deferred to separate specs blocked on data-ingest scope that doesn't exist.
+- **VORP is a sibling spec, not bundled.** This spec consumes a `vorp_table` parquet; the VORP spec will be its own (smaller) PR. Script errors clearly if the parquet is missing.
+- **Strategy is downstream.** $ generator is strategy-agnostic; live-bid recommender will accept the strategy knobs in a follow-up spec.
+- **Pool selection is projection-rank, not VORP-rank.** Spec §3 step 1 — actual drafts assign players to roster slots which have positional structure, so a high-VORP QB18 doesn't go on a roster when QB1-QB12 are already drafted. Pool fills position-specific → FLEX → SUPER_FLEX → BENCH.
+
+**Risks logged (spec §6):**
+- **Calibration vs real auction markets.** Algorithm A reflects model's view of value, not market clearing prices. Trigger to spec B/C if draft-day curve feels wrong.
+- **VORP-spec coupling.** Broken VORP produces silently-broken $; schema invariants pass either way. **Mitigation shipped:** CLI emits per-position summary (top-3 $, in-pool count, min/median/max VORP within pool) for user eyeball before trusting output.
+
+**Plan-vs-execution deviations:**
+- Spec / plan worked-example listed `roster_size = 16` for the standard 12-team ESPN PPR config; actual sum is 17 (1 QB + 2 RB + 3 WR + 1 TE + 1 FLEX + 1 K + 1 DST + 7 BENCH). Spec corrected post-hoc. Pool-size invariant tests had the same off-by-one; implementer corrected mid-flight.
+- Plan's `_bulk_position_rows` test helper embedded letters into the GSIS_ID-regex digit slots (`f"00-{position.value}{i:05d}"[:10]` → `00-QB000001`), which fails `AuctionValuesSchema`'s `\d{2}-\d{7}` constraint when the fixture is run through `validate`. Implementer swapped to a per-position digit prefix scheme (e.g. `00-1000001` for QB).
+- Code review caught a real Important bug in the rounding-drift correction: with negative drift and small/skewed pools, the smallest-fractional candidates (the floor players) would be selected for `-1` adjustment, dropping them below `min_bid`. Reviewer reproduced with `n_teams=5, budget=2, min_bid=1, roster=QB:1, vorps=[1,1,1,0,0]` producing `[3,3,3,0,1]`. Fixed by excluding `rounded == min_bid` rows from the negative-drift candidate set. Regression test pinned.
+- `LeagueConfig` initially permitted IR-only roster_slots (passing `min_length=1` but yielding `roster_size = 0`, which would have `ZeroDivisionError`'d the auction algorithm). Code review caught it before Task 5; added `model_validator(mode="after")` asserting `roster_size >= 1`.
+- Task 7 used `env={**os.environ, "PYTHONPATH": str(repo_root / "src")}` in the integration test's subprocess — the project `.venv` editable install currently points at `.worktrees/feat-probe-logit-catch-rate/src`, so the subprocess can't import `projections.draft` otherwise. Defensive workaround; survives any future repointing.
+
+**Recommended next direction:**
+1. **VORP spec** — required dependency. Per-position replacement-level + `season_mean_fpts − replacement_fpts`. Small spec. Until VORP ships, `generate_auction_values` can be called against a hand-built VORP parquet but won't produce real draft-day values.
+2. **Live auction bid recommender** — primary downstream consumer; owns aggressiveness / roster-shape strategy knobs.
+3. **Snake-draft cheat sheet** (`draft_ready_checklist.md` §2b.1) — also consumes VORP; can ship in parallel.
+4. **Algorithms B/C** (market scaling / ADP anchor) — only if draft-day experience with A reveals a market-divergence problem.
+
+See `docs/superpowers/specs/2026-05-16-auction-values-design.md` and `docs/superpowers/plans/2026-05-16-auction-values.md`. Draft-readiness status: `draft_ready_checklist.md` §2c.1 flipped to `[x]`.
+
+---
+
 ## Logit catch_rate Probe — verdict `NULL` (2026-05-16, on branch `feat/probe-logit-catch-rate`)
 
 **Status:** New probe `src/projections/backtest/logit_catch_rate_probe.py` tests whether replacing the catch_rate efficiency sub-model class from `RidgeCV` on the ratio (current production via PR #36/#38) with `LogisticRegressionCV` via Bernoulli-trial row expansion (factor-appropriate for the [0, 1]-bounded ratio response) lowers per-stat receptions RMSE on WR rows. Both arms share the same shared-volume RidgeCV on `targets`; only the catch_rate efficiency sub-model class differs. Spec at `docs/superpowers/specs/2026-05-15-logit-catch-rate-probe-design.md`.
@@ -34,6 +109,8 @@ See `reports/feature_probe_tweedie_yards_per_target_summary.md` for the full dec
 **Recommended next direction:** Close the catch_rate factor-appropriate direction — the [0, 1]-bounded ratio's tail-calibration weakness is not large enough on real WR data to justify the class swap. Next slot per spec §6 is a `yards_per_target` factor-appropriate probe (log-link Gamma or Tweedie family on the strictly-positive, right-skewed efficiency factor) under the same shared-volume / single-factor-swap design pattern. That probe is the highest-leverage remaining factor-class swap because `yards_per_target` carries more receiving-yards variance than `catch_rate` carries receptions variance, and a Gaussian-on-ratio Ridge is a worse approximation to a Gamma response than to a Bernoulli-mean.
 
 See `reports/feature_probe_logit_catch_rate_summary.md` for full decision log.
+
+---
 
 ## WR Ensemble — Decomposed-Baseline Child A Swap — verdict `ADOPT` (binding) (2026-05-15, on branch `feat/wr-ensemble-decomposed-child`)
 
