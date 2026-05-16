@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest  # noqa: F401  # used in later tasks per plan
 
+from projections.draft._pool import _select_pool
 from projections.draft.league_config import LeagueConfig
 from projections.draft.snake_cheat_sheet import _assign_tiers, generate_snake_cheat_sheet
 from projections.schemas import (
@@ -140,3 +141,78 @@ def test_row_count_preserved() -> None:
     vorp = _make_vorp_table({Position.QB: 8, Position.RB: 12, Position.WR: 12, Position.TE: 8})
     out = generate_snake_cheat_sheet(vorp, cfg)
     assert len(out) == len(vorp)
+
+
+def test_positional_rank_strictly_monotonic_within_position() -> None:
+    """§5.1 #3 — positional_rank is 1, 2, 3, ... by vorp desc within each position."""
+    cfg = _make_config()
+    vorp = _make_vorp_table({Position.QB: 8, Position.RB: 12, Position.WR: 12, Position.TE: 8})
+    out = generate_snake_cheat_sheet(vorp, cfg)
+    for pos_value in out["position"].unique():
+        sub = out[out["position"] == pos_value].sort_values("positional_rank")
+        assert list(sub["positional_rank"]) == list(range(1, len(sub) + 1))
+        # vorp must be non-increasing as positional_rank increases
+        vorps = sub["vorp"].to_numpy()
+        assert (vorps[:-1] >= vorps[1:]).all()
+
+
+def test_positional_rank_tie_break_by_gsis_id() -> None:
+    """§5.1 #4 — equal-vorp rows tie-break by gsis_id ascending."""
+    # Construct two QBs with identical VORP and explicit gsis_id ordering.
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.Series(["00-1000002", "00-1000001"], dtype=_PYARROW_STR),
+            "position": pd.Series(["QB", "QB"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [300.0, 300.0],
+            "vorp": [50.0, 50.0],
+            "replacement_fpts": [250.0, 250.0],
+        }
+    )
+    vorp = VorpTableSchema.validate(df)
+    # n_teams=2 with QB:1 → pool needs 2 QBs; we have exactly 2. (LeagueConfig
+    # rejects n_teams=1 — must be >1. BENCH would force the pool past 2.)
+    cfg = _make_config(
+        roster_slots={RosterSlot.QB: 1},
+        n_teams=2,
+    )
+    out = generate_snake_cheat_sheet(vorp, cfg)
+    ranked = out.sort_values("positional_rank").reset_index(drop=True)
+    assert ranked.loc[0, "gsis_id"] == "00-1000001"  # lower gsis_id first on tie
+    assert ranked.loc[1, "gsis_id"] == "00-1000002"
+
+
+def test_is_in_pool_matches_select_pool() -> None:
+    """§5.1 #5 — set of is_in_pool=True gsis_ids equals _select_pool's output."""
+    cfg = _make_config()
+    vorp = _make_vorp_table({Position.QB: 8, Position.RB: 12, Position.WR: 12, Position.TE: 8})
+    out = generate_snake_cheat_sheet(vorp, cfg)
+    expected_pool = set(_select_pool(vorp, cfg))
+    actual_pool = set(out.loc[out["is_in_pool"], "gsis_id"])
+    assert actual_pool == expected_pool
+
+
+def test_tier_dtype_is_nullable_int64() -> None:
+    """§5.1 #6 — tier is pd.Int64Dtype(); in-pool rows int, out-of-pool rows NA."""
+    cfg = _make_config()
+    # Deliberately oversized inputs so some are out of pool.
+    vorp = _make_vorp_table({Position.QB: 20, Position.RB: 30, Position.WR: 30, Position.TE: 20})
+    out = generate_snake_cheat_sheet(vorp, cfg)
+    assert out["tier"].dtype == pd.Int64Dtype()
+    assert out.loc[out["is_in_pool"], "tier"].notna().all()
+    assert out.loc[~out["is_in_pool"], "tier"].isna().all()
+
+
+def test_tier_monotonic_with_vorp_within_position() -> None:
+    """§5.1 #7 — tier T's min vorp >= tier T+1's max vorp (contiguous partition)."""
+    cfg = _make_config()
+    vorp = _make_vorp_table({Position.QB: 20, Position.RB: 30, Position.WR: 30, Position.TE: 20})
+    out = generate_snake_cheat_sheet(vorp, cfg)
+    in_pool = out[out["is_in_pool"]]
+    for pos_value in in_pool["position"].unique():
+        sub = in_pool[in_pool["position"] == pos_value]
+        for t in sorted(sub["tier"].dropna().unique())[:-1]:
+            tier_t_min = sub.loc[sub["tier"] == t, "vorp"].min()
+            tier_t1_max = sub.loc[sub["tier"] == t + 1, "vorp"].max()
+            assert tier_t_min >= tier_t1_max, (
+                f"tier {t} min vorp ({tier_t_min}) < tier {t + 1} max vorp ({tier_t1_max})"
+            )
