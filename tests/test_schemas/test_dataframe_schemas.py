@@ -8,6 +8,7 @@ from pandera.errors import SchemaError
 
 from projections.schemas import (
     _PYARROW_STR,
+    AuctionValuesSchema,
     DepthChartsSchema,
     DraftPicksSchema,
     IdMapSchema,
@@ -15,6 +16,7 @@ from projections.schemas import (
     NgsReceivingSchema,
     NgsRushingSchema,
     PbpSchema,
+    Position,
     ProjectionWeeklySchema,
     QbFeaturesSchema,
     RbFeaturesSchema,
@@ -836,3 +838,27 @@ def test_draft_picks_schema_allows_nullable_optional_columns() -> None:
         }
     )
     DraftPicksSchema.validate(df)
+
+
+def test_auction_values_schema_round_trip() -> None:
+    """`AuctionValuesSchema.validate` accepts a well-formed frame and rejects bad rows."""
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036912", "00-0034857"], dtype=_PYARROW_STR),
+            "position": pd.array([Position.RB.value, Position.WR.value], dtype=_PYARROW_STR),
+            "season_mean_fpts": pd.array([280.0, 240.0], dtype="float64"),
+            "vorp": pd.array([130.0, 50.0], dtype="float64"),
+            "in_pool": pd.array([True, True], dtype="bool"),
+            "auction_dollars": pd.array([66, 30], dtype=pd.Int64Dtype()),
+            "pool_rank": pd.array([1, 2], dtype=pd.Int64Dtype()),
+            "reference_dollars": pd.array([pd.NA, pd.NA], dtype=pd.Int64Dtype()),
+            "value_delta": pd.array([pd.NA, pd.NA], dtype=pd.Int64Dtype()),
+        }
+    )
+    validated = AuctionValuesSchema.validate(df)
+    assert len(validated) == 2
+
+    bad = df.copy()
+    bad.loc[bad.index[0], "auction_dollars"] = -5
+    with pytest.raises(SchemaError):
+        AuctionValuesSchema.validate(bad)
