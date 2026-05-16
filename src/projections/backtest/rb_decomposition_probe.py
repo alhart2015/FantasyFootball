@@ -281,6 +281,16 @@ def walk_forward_residuals(
         if train_join is None or eval_join is None:
             continue
 
+        # Strict separation defense in depth.
+        if not train_join.empty:
+            assert int(train_join["season"].max()) < eval_year, (
+                f"Train rows for eval {eval_year} contain season >= eval year; "
+                f"max train season is {int(train_join['season'].max())}"
+            )
+        assert (eval_join["season"] == eval_year).all(), (
+            f"Eval rows for {eval_year} contain rows from other seasons"
+        )
+
         # Boolean -> int8 coercion (matches BaselineModel.fit recipe).
         train_x_frame = train_join[feat_cols].copy()
         eval_x_frame = eval_join[feat_cols].copy()
@@ -310,9 +320,7 @@ def walk_forward_residuals(
             volume_train = train_join[decomp.volume_stat.value].to_numpy(dtype=np.int64)
 
             direct_ridge = _fit_direct(x_train, numerator_train)
-            efficiency_ridge = _fit_decomposed_efficiency(
-                x_train, numerator_train.astype(np.int64), volume_train
-            )
+            efficiency_ridge = _fit_decomposed_efficiency(x_train, numerator_train, volume_train)
 
             mu_direct = _predict_direct(direct_ridge, x_eval)
             mu_decomposed = _predict_decomposed(
