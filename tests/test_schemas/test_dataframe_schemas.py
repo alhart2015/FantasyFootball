@@ -862,3 +862,25 @@ def test_auction_values_schema_round_trip() -> None:
     bad.loc[bad.index[0], "auction_dollars"] = -5
     with pytest.raises(SchemaError):
         AuctionValuesSchema.validate(bad)
+
+
+def test_vorp_table_schema_round_trip() -> None:
+    """Build a minimal VORP table, validate, re-validate; accepts the shape and is idempotent."""
+    import pandas as pd
+
+    from projections.schemas import _PYARROW_STR, VorpTableSchema
+
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1000001", "00-2000001"],
+            "position": ["QB", "RB"],
+            "season_mean_fpts": [320.0, 260.0],
+            "vorp": [80.0, 30.0],
+            "replacement_fpts": [240.0, 230.0],
+        }
+    )
+    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
+    df["position"] = df["position"].astype(_PYARROW_STR)
+    validated = VorpTableSchema.validate(df)
+    revalidated = VorpTableSchema.validate(validated)
+    pd.testing.assert_frame_equal(validated, revalidated)
