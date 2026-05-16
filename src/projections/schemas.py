@@ -825,3 +825,26 @@ class ProjectionSeasonSchema(pa.DataFrameModel):
     class Config:
         strict = "filter"
         coerce = True
+
+
+class AuctionValuesSchema(pa.DataFrameModel):
+    """Per-player auction $ allocation. Consumer-facing output of the auction-values generator.
+
+    One row per player VORP knows about. `in_pool=False` rows have `auction_dollars=0`
+    and `pool_rank=NA`. `reference_dollars` and `value_delta` are present in every
+    output frame; both are all-NA when the caller didn't supply a reference-prices CSV.
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", unique=True)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    season_mean_fpts: Series[float]
+    vorp: Series[float]
+    in_pool: Series[bool]
+    auction_dollars: Series[pd.Int64Dtype] = pa.Field(ge=0)
+    pool_rank: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
+    reference_dollars: Series[pd.Int64Dtype] = pa.Field(ge=0, nullable=True)
+    value_delta: Series[pd.Int64Dtype] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
