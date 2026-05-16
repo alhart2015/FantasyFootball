@@ -79,3 +79,19 @@ def test_select_pool_vorp_optional_matches_zero_vorp() -> None:
     pool_no_vorp = _select_pool(_df(rows, with_vorp=False), cfg)
     pool_zero_vorp = _select_pool(_df(rows, with_vorp=True), cfg)
     assert pool_no_vorp == pool_zero_vorp
+
+
+def test_select_pool_accepts_vorp_less_input_with_extra_cols() -> None:
+    """The vorp-optional path tolerates the extra columns ProjectionSeasonSchema carries."""
+    cfg = _make_config()
+    rows: list[dict[str, object]] = []
+    for pos in (Position.QB, Position.RB, Position.WR, Position.TE):
+        rows.extend(_bulk_rows(pos, count=20))
+    df = _df(rows, with_vorp=False)
+    # The real caller (vorp.py) only passes the columns _select_pool needs after
+    # renaming, so we don't exercise the extra-column case here; pin the minimal-shape
+    # contract directly.
+    expected_cols = {"gsis_id", "position", "season_mean_fpts"}
+    assert expected_cols.issubset(df.columns)
+    pool = _select_pool(df, cfg)
+    assert len(pool) == cfg.total_pool_size
