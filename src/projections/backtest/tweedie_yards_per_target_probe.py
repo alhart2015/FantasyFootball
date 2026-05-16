@@ -20,10 +20,12 @@ from typing import Final
 import numpy as np
 from sklearn.linear_model import RidgeCV
 
-# Same alpha grid as BaselineModel.fit (src/projections/models/baseline.py) and
-# logit_catch_rate_probe._RIDGE_ALPHAS so the volume + Ridge arm differ from
-# production only in the per-stat dispatch, not the regularization scale.
-_RIDGE_ALPHAS: Final[np.ndarray] = np.logspace(-3, 3, 13)
+from projections.models.baseline import _RIDGE_ALPHA_GRID
+
+# Reuse the canonical Ridge alpha grid from `BaselineModel`. The probe's
+# incumbent arm mirrors `DecomposedBaselineModel`'s unbounded-efficiency fit;
+# the alphas MUST match or the comparison is no longer ridge-vs-ridge.
+_RIDGE_ALPHAS: Final[np.ndarray] = _RIDGE_ALPHA_GRID
 
 
 def _fit_shared_volume(x: np.ndarray, targets: np.ndarray) -> RidgeCV:
