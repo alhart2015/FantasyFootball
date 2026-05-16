@@ -87,6 +87,12 @@ def generate_vorp_table(
     Returns a DataFrame validated against `VorpTableSchema`. One row per input
     player whose `position` is in `league_config.roster_slots`. Rows at out-of-scope
     positions are dropped. See spec §3 for the pool-boundary algorithm.
+
+    Raises:
+        ValueError: If `season_projections` contains mixed rulesets, a ruleset
+            that does not match `league_config.ruleset.name`, multiple seasons,
+            or duplicate `gsis_id` rows. These preconditions are enforced by
+            `_validate_input`.
     """
     df = _validate_input(season_projections, league_config)
 
@@ -101,6 +107,8 @@ def generate_vorp_table(
             empty[col] = empty[col].astype("float64")
         return VorpTableSchema.validate(empty)
 
+    # Single rename boundary per VORP spec §6: bridge ProjectionSeasonSchema.season_mean
+    # to the auction layer's season_mean_fpts. Do NOT add a second rename elsewhere.
     pool_input = df[["gsis_id", "position", "season_mean"]].rename(
         columns={"season_mean": "season_mean_fpts"}
     )
