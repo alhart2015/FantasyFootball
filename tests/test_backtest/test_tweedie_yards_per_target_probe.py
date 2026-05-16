@@ -330,6 +330,36 @@ def test_walk_forward_residuals_arms_differ_on_some_rows() -> None:
     assert n_different > 0, "ridge and tweedie arms produced identical predictions"
 
 
+def test_walk_forward_residuals_handles_negative_yards_training_rows() -> None:
+    """Negative receiving_yards rows in training data (real NFL laterals /
+    lost yards) must not crash Tweedie's HalfTweedieLoss domain check.
+
+    Regression guard against accidentally reverting the y >= 0 training-mask
+    introduced in Task 5 of the original probe build. Pre-fix this would raise:
+        ValueError: Some value(s) of y are out of the valid range of the loss
+                    'HalfTweedieLoss'.
+    """
+    features, weekly_stats = _synthetic_wr_inputs(seed=99)
+
+    # Inject negative receiving_yards into ~5% of training rows (seasons < 2021).
+    # WeeklyStatsSchema allows receiving_yards >= -50, so -5.0 is in-bounds and
+    # mirrors the real NFL laterals/lost-yards distribution.
+    ws_mut = weekly_stats.copy()
+    train_mask = ws_mut["season"] < 2021
+    train_indices = ws_mut.index[train_mask].tolist()
+    rng = np.random.default_rng(seed=99)
+    inject_indices = rng.choice(train_indices, size=max(1, len(train_indices) // 20), replace=False)
+    ws_mut.loc[inject_indices, "receiving_yards"] = -5.0
+    ws_mut = WeeklyStatsSchema.validate(ws_mut)
+
+    # Should not raise.
+    results = walk_forward_residuals(features, ws_mut, eval_years=(2021,))
+
+    assert results.actual_yards.size > 0
+    assert (results.pred_ridge >= 0).all()
+    assert (results.pred_tweedie > 0).all()
+
+
 def test_compute_verdict_signal_when_ci_strictly_negative() -> None:
     """Synthetic ProbeResults where tweedie clearly beats ridge -> SIGNAL."""
     rng = np.random.default_rng(seed=2041)
