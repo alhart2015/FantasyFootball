@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pandas as pd
-import pytest  # noqa: F401  # reused by later tasks (5-9) for raises/parametrize.
+import pytest
 
 from projections.draft.league_config import LeagueConfig
 from projections.draft.vorp import generate_vorp_table
@@ -254,3 +254,49 @@ def test_super_flex_deepens_qb_replacement() -> None:
     repl_with_sf = _replacement_by_position(out_with_sf)
 
     assert repl_with_sf[Position.QB.value] <= repl_no_sf[Position.QB.value]
+
+
+def test_ruleset_mismatch_raises() -> None:
+    cfg = _make_config(ruleset=Ruleset.espn_ppr())
+    rows = _bulk_rows(Position.QB, count=10, ruleset_name="STANDARD")
+    rows.extend(_bulk_rows(Position.RB, count=15, ruleset_name="STANDARD"))
+    inputs = _make_season_projections(rows)
+    with pytest.raises(ValueError, match="ruleset"):
+        generate_vorp_table(inputs, cfg)
+
+
+def test_mixed_ruleset_raises() -> None:
+    cfg = _make_config()
+    rows = _bulk_rows(Position.QB, count=10, ruleset_name="ESPN_PPR")
+    rows.extend(_bulk_rows(Position.RB, count=15, ruleset_name="STANDARD"))
+    inputs = _make_season_projections(rows)
+    with pytest.raises(ValueError, match="mixed rulesets"):
+        generate_vorp_table(inputs, cfg)
+
+
+def test_mixed_season_raises() -> None:
+    cfg = _make_config()
+    rows = _bulk_rows(Position.QB, count=10, season=2025)
+    rows.extend(_bulk_rows(Position.RB, count=15, season=2026))
+    inputs = _make_season_projections(rows)
+    with pytest.raises(ValueError, match="multiple seasons"):
+        generate_vorp_table(inputs, cfg)
+
+
+def test_duplicate_gsis_id_raises() -> None:
+    cfg = _make_config()
+    rows = _bulk_rows(Position.QB, count=10)
+    rows.extend(_bulk_rows(Position.RB, count=15))
+    # Inject a duplicate by copying the first QB row's gsis_id onto a new row.
+    dup_row = dict(rows[0])
+    dup_row["season_mean"] = 250.0
+    rows.append(dup_row)
+    df = pd.DataFrame(rows)
+    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
+    df["position"] = df["position"].astype(_PYARROW_STR)
+    df["ruleset"] = df["ruleset"].astype(_PYARROW_STR)
+    df["model_id"] = df["model_id"].astype(_PYARROW_STR)
+    # Bypass ProjectionSeasonSchema.validate (which doesn't enforce uniqueness)
+    # by NOT calling _make_season_projections.
+    with pytest.raises(ValueError, match="duplicate gsis_id"):
+        generate_vorp_table(df, cfg)
