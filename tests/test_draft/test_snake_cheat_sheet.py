@@ -216,3 +216,76 @@ def test_tier_monotonic_with_vorp_within_position() -> None:
             assert tier_t_min >= tier_t1_max, (
                 f"tier {t} min vorp ({tier_t_min}) < tier {t + 1} max vorp ({tier_t1_max})"
             )
+
+
+def test_display_name_join_happy_path() -> None:
+    """§5.1 #12 — every gsis_id in display_names gets its mapped name."""
+    cfg = _make_config()
+    # Pool needs ≥8 RBs/WRs under default n_teams=4 roster (incl. FLEX); use
+    # the same sizing as the schema/regression tests above.
+    vorp = _make_vorp_table({Position.QB: 8, Position.RB: 12, Position.WR: 12, Position.TE: 8})
+    display = pd.DataFrame(
+        {
+            "gsis_id": vorp["gsis_id"].astype(_PYARROW_STR),
+            "display_name": pd.Series(
+                [f"Player {i}" for i in range(len(vorp))], dtype=_PYARROW_STR
+            ),
+        }
+    )
+    out = generate_snake_cheat_sheet(vorp, cfg, display_names=display)
+    for _, row in out.iterrows():
+        expected = display.loc[display["gsis_id"] == row["gsis_id"], "display_name"].iloc[0]
+        assert row["display_name"] == expected
+
+
+def test_display_name_missing_rows_fall_back_to_em_dash() -> None:
+    """§5.1 #13 — uncovered gsis_ids get '—'."""
+    cfg = _make_config()
+    vorp = _make_vorp_table({Position.QB: 8, Position.RB: 12, Position.WR: 12, Position.TE: 8})
+    # Cover only the first half.
+    half = vorp.head(len(vorp) // 2)
+    display = pd.DataFrame(
+        {
+            "gsis_id": half["gsis_id"].astype(_PYARROW_STR),
+            "display_name": pd.Series(
+                [f"Player {i}" for i in range(len(half))], dtype=_PYARROW_STR
+            ),
+        }
+    )
+    out = generate_snake_cheat_sheet(vorp, cfg, display_names=display)
+    covered_ids = set(display["gsis_id"])
+    for _, row in out.iterrows():
+        if row["gsis_id"] in covered_ids:
+            assert row["display_name"] != "—"
+        else:
+            assert row["display_name"] == "—"
+
+
+def test_display_name_none_yields_all_em_dash() -> None:
+    """§5.1 #14 — display_names=None → every row has display_name '—'."""
+    cfg = _make_config()
+    vorp = _make_vorp_table({Position.QB: 8, Position.RB: 12, Position.WR: 12, Position.TE: 8})
+    out = generate_snake_cheat_sheet(vorp, cfg, display_names=None)
+    assert (out["display_name"] == "—").all()
+
+
+def test_position_with_no_in_pool_rows_emits_rank_but_no_tier() -> None:
+    """§5.1 #11 — a position whose players are all squeezed out of the pool
+    (no in-pool rows but rows do exist in input) still appears in output with
+    positional_rank populated and tier = NA.
+
+    Construct: 2-team league with roster {QB:1} consuming exactly 2 players.
+    Provide 2 QBs (in-pool) and 2 RBs (out-of-pool — RB not in roster_slots).
+    RB rows have is_in_pool=False, tier=NA, positional_rank 1 and 2.
+    """
+    cfg = _make_config(
+        n_teams=2,
+        roster_slots={RosterSlot.QB: 1},
+    )
+    vorp = _make_vorp_table({Position.QB: 2, Position.RB: 2})
+    out = generate_snake_cheat_sheet(vorp, cfg)
+    rb = out[out["position"] == "RB"]
+    assert len(rb) == 2
+    assert (~rb["is_in_pool"]).all()
+    assert rb["tier"].isna().all()
+    assert list(rb.sort_values("positional_rank")["positional_rank"]) == [1, 2]
