@@ -4,6 +4,44 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction Values $ Generator — feature shipped (2026-05-16, on branch `feat/auction-values`)
+
+**Status:** Spec + plan + impl on `feat/auction-values`. First module of the Draft Hub sub-project. Standard SOS allocation: reserve `min_bid` per drafted slot, distribute remaining budget proportionally to positive VORP among the rostered pool. Strategy-agnostic — one $ per player; downstream live-bid recommender owns aggressiveness / roster-shape knobs. Spec at `docs/superpowers/specs/2026-05-16-auction-values-design.md`; plan at `docs/superpowers/plans/2026-05-16-auction-values.md`.
+
+**Shipped surface:**
+- `src/projections/draft/` — new subpackage (Draft Hub seed). `LeagueConfig` (frozen pydantic, shared with VORP/snake specs), `_select_pool` helper, `generate_auction_values` public function.
+- `src/projections/schemas.py` — appended `AuctionValuesSchema`.
+- `scripts/generate_auction_values.py` — CLI with `--season --league-config --vorp-input [--reference-prices] --out` flags; CSV and parquet output supported; per-position stdout summary as VORP-quality eyeball mitigation (spec §6 risk).
+- `configs/league_espn_ppr_12team.json` + `configs/league_espn_half_10team.json` — example league configs.
+- 33 tests in `tests/test_draft/`, 3 integration tests in `tests/test_scripts/test_generate_auction_values_cli.py`, 1 schema round-trip test appended to `tests/test_schemas/test_dataframe_schemas.py`. All passing; mypy + ruff + format clean across 186 source files.
+
+**Decision log:**
+- **Algorithm A only.** Pure VORP-to-$ (no per-position market scaling, no ADP anchor). Self-contained, no new ingest. `--reference-prices` flag allows pasting an external $ sheet for sanity comparison without baking calibration into the algorithm. Algorithms B/C (market scaling / ADP anchor) deferred to separate specs blocked on data-ingest scope that doesn't exist.
+- **VORP is a sibling spec, not bundled.** This spec consumes a `vorp_table` parquet; the VORP spec will be its own (smaller) PR. Script errors clearly if the parquet is missing.
+- **Strategy is downstream.** $ generator is strategy-agnostic; live-bid recommender will accept the strategy knobs in a follow-up spec.
+- **Pool selection is projection-rank, not VORP-rank.** Spec §3 step 1 — actual drafts assign players to roster slots which have positional structure, so a high-VORP QB18 doesn't go on a roster when QB1-QB12 are already drafted. Pool fills position-specific → FLEX → SUPER_FLEX → BENCH.
+
+**Risks logged (spec §6):**
+- **Calibration vs real auction markets.** Algorithm A reflects model's view of value, not market clearing prices. Trigger to spec B/C if draft-day curve feels wrong.
+- **VORP-spec coupling.** Broken VORP produces silently-broken $; schema invariants pass either way. **Mitigation shipped:** CLI emits per-position summary (top-3 $, in-pool count, min/median/max VORP within pool) for user eyeball before trusting output.
+
+**Plan-vs-execution deviations:**
+- Spec / plan worked-example listed `roster_size = 16` for the standard 12-team ESPN PPR config; actual sum is 17 (1 QB + 2 RB + 3 WR + 1 TE + 1 FLEX + 1 K + 1 DST + 7 BENCH). Spec corrected post-hoc. Pool-size invariant tests had the same off-by-one; implementer corrected mid-flight.
+- Plan's `_bulk_position_rows` test helper embedded letters into the GSIS_ID-regex digit slots (`f"00-{position.value}{i:05d}"[:10]` → `00-QB000001`), which fails `AuctionValuesSchema`'s `\d{2}-\d{7}` constraint when the fixture is run through `validate`. Implementer swapped to a per-position digit prefix scheme (e.g. `00-1000001` for QB).
+- Code review caught a real Important bug in the rounding-drift correction: with negative drift and small/skewed pools, the smallest-fractional candidates (the floor players) would be selected for `-1` adjustment, dropping them below `min_bid`. Reviewer reproduced with `n_teams=5, budget=2, min_bid=1, roster=QB:1, vorps=[1,1,1,0,0]` producing `[3,3,3,0,1]`. Fixed by excluding `rounded == min_bid` rows from the negative-drift candidate set. Regression test pinned.
+- `LeagueConfig` initially permitted IR-only roster_slots (passing `min_length=1` but yielding `roster_size = 0`, which would have `ZeroDivisionError`'d the auction algorithm). Code review caught it before Task 5; added `model_validator(mode="after")` asserting `roster_size >= 1`.
+- Task 7 used `env={**os.environ, "PYTHONPATH": str(repo_root / "src")}` in the integration test's subprocess — the project `.venv` editable install currently points at `.worktrees/feat-probe-logit-catch-rate/src`, so the subprocess can't import `projections.draft` otherwise. Defensive workaround; survives any future repointing.
+
+**Recommended next direction:**
+1. **VORP spec** — required dependency. Per-position replacement-level + `season_mean_fpts − replacement_fpts`. Small spec. Until VORP ships, `generate_auction_values` can be called against a hand-built VORP parquet but won't produce real draft-day values.
+2. **Live auction bid recommender** — primary downstream consumer; owns aggressiveness / roster-shape strategy knobs.
+3. **Snake-draft cheat sheet** (`draft_ready_checklist.md` §2b.1) — also consumes VORP; can ship in parallel.
+4. **Algorithms B/C** (market scaling / ADP anchor) — only if draft-day experience with A reveals a market-divergence problem.
+
+See `docs/superpowers/specs/2026-05-16-auction-values-design.md` and `docs/superpowers/plans/2026-05-16-auction-values.md`. Draft-readiness status: `draft_ready_checklist.md` §2c.1 flipped to `[x]`.
+
+---
+
 ## WR Ensemble — Decomposed-Baseline Child A Swap — verdict `ADOPT` (binding) (2026-05-15, on branch `feat/wr-ensemble-decomposed-child`)
 
 **Status:** New `wr_ensemble_decomposed()` factory swaps `EnsembleModel`'s child A from `wr_baseline` to `wr_decomposed_baseline`; lgb-nb child unchanged. Per-stat ensemble weights re-fit via pinball at q ∈ {0.10, 0.90}. Spec at `docs/superpowers/specs/2026-05-15-wr-ensemble-decomposed-child-design.md`.
