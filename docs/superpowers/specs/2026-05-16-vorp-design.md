@@ -199,7 +199,7 @@ When the same `_select_pool` is later called from `auction.py` against the publi
 - **One position only.** League with only QB (`{QB: 1, BENCH: 0}`) — `replacement_fpts(QB) = best non-pool QB` works fine; if every QB fits in the pool (`n_teams × 1 = 12`), use `min(season_mean_fpts)` over QBs.
 - **All players at one position fit in the pool.** Per §3.1 step 3: replacement = min. The bottom QB has VORP 0; everyone else has VORP > 0. This is the right behavior — there's no "waiver wire" QB if the league rosters every projectable QB.
 - **Position in projection input but not in `LeagueConfig.roster_slots`.** VORP drops those rows from the output entirely. (Alternative considered: keep them with NaN `vorp`. Rejected — the auction-values consumer's schema is non-nullable on `vorp`, and downstream tools shouldn't have to defend against undraftable rows. The CLI logs the dropped count by position for transparency.)
-- **Position in `LeagueConfig.roster_slots` but not in projection input.** VORP emits no rows for that position. The CLI logs a clear warning naming the position and the projection input. Auction's existing error (per its spec §6) catches this downstream with a clear message.
+- **Position in `LeagueConfig.roster_slots` but not in projection input.** VORP raises `ValueError` from `_select_pool`'s `_take_top_n` helper — the message names the missing slot and the (zero) count of eligible players. Pool composition is undefined when a required position has no input rows, so silent truncation would produce a meaningless output. The CLI surfaces the raise to the user; the caller fixes `LeagueConfig` (drop the position) OR adds projections for that position. (Earlier draft of this spec said "silent + CLI-warns + auction errors downstream" — that design was incoherent because the pool can't be computed; reconsidered.)
 
 ---
 
@@ -279,7 +279,7 @@ All tests under `tests/test_draft/test_vorp.py` unless noted. Standard pandera-v
 14. **Mixed season raises.** Input with rows from two seasons raises `ValueError`.
 15. **Duplicate `gsis_id` raises.** Same as auction's check; raises before any computation.
 16. **Empty input returns empty.** Empty input → empty output, schema-validated.
-17. **Position in config but missing from input.** `LeagueConfig` requires K, input has no K rows; function returns a frame with no K rows (doesn't error — the CLI warns, but the function is silent). Document that this is the contract.
+17. **Position in config but not in input.** `LeagueConfig` requires K but `season_projections` has no K rows → `generate_vorp_table` raises `ValueError` matching `r"cannot fill \d+ K slots"` (raised from `_select_pool`'s `_take_top_n` helper). Pool composition is undefined in this case; the function makes the failure explicit rather than silently truncating.
 18. **Position in input but not in config.** Input has K rows, `LeagueConfig` has no K slot; function drops K rows from the output. Output row count == count of input rows whose `position` is in `LeagueConfig.roster_slots`.
 19. **All players at one position fit in pool.** Synthetic input with 12 QBs in a 12-team 1QB league → `replacement_fpts(QB) = min(season_mean_fpts of QBs)`; the bottom QB has VORP 0.
 20. **Underfilled pool raises.** `season_projections` smaller than `total_pool_size` → `_select_pool` raises `ValueError` with the existing message naming the under-filled slot. Pin this as the documented contract — VORP does not silently emit a degraded output on insufficient input.
