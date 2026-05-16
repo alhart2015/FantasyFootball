@@ -55,6 +55,12 @@ markers = [
 filterwarnings = [
     "ignore:.*reported value.*already reported.*:UserWarning",
     "ignore::UserWarning:lightgbm",
+    # sklearn 1.8 began emitting FutureWarnings about upcoming 1.10 changes
+    # to LogisticRegressionCV (l1_ratios, penalty, use_legacy_attributes).
+    # The probe in logit_catch_rate_probe.py uses the current API; the
+    # warnings are upgrade-path notices that will need to be addressed in a
+    # future sklearn-version bump, not bugs in our code.
+    "ignore::FutureWarning:sklearn.linear_model._logistic",
 ]
 
 [tool.mypy]
