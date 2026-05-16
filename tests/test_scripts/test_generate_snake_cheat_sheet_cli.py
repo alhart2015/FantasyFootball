@@ -171,3 +171,37 @@ def test_cli_missing_id_map_logs_warning_and_falls_back(tmp_path: Path) -> None:
     assert "id_map parquet not found" in result.stderr
     df = pd.read_csv(out_path)
     assert (df["display_name"] == "—").all()
+
+
+def test_cli_tiers_per_position_flag_propagates(tmp_path: Path) -> None:
+    """§5.3 #25 — --tiers-per-position 3 caps output tiers at 3 per position."""
+    vorp_path = tmp_path / "vorp.parquet"
+    _write_synthetic_vorp(vorp_path)
+    cfg_path = tmp_path / "league.json"
+    _write_league_config(cfg_path)
+    out_path = tmp_path / "cheat_sheet.csv"
+
+    result = _run_cli(
+        [
+            "--season",
+            "2026",
+            "--league-config",
+            str(cfg_path),
+            "--vorp-input",
+            str(vorp_path),
+            "--id-map",
+            str(tmp_path / "id_map_missing.parquet"),
+            "--tiers-per-position",
+            "3",
+            "--out",
+            str(out_path),
+        ]
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    df = pd.read_csv(out_path)
+    in_pool = df[df["is_in_pool"]]
+    for pos_value in in_pool["position"].unique():
+        sub = in_pool[in_pool["position"] == pos_value]
+        # tier column comes back as float64 from CSV when there are NaNs;
+        # but in_pool rows have integer tiers, so max() is well-defined.
+        assert sub["tier"].max() <= 3, f"position {pos_value} has tier > 3"
