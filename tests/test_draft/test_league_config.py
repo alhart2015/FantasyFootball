@@ -101,3 +101,19 @@ def test_frozen() -> None:
     cfg = LeagueConfig(**_base_kwargs())  # type: ignore[arg-type]
     with pytest.raises(ValidationError):
         cfg.n_teams = 14
+
+
+def test_rejects_ir_only_roster_slots() -> None:
+    """A config with only IR slots is rejected — roster_size would be 0."""
+    kwargs = _base_kwargs()
+    kwargs["roster_slots"] = {RosterSlot.IR: 1}
+    with pytest.raises(ValidationError, match="at least one non-IR slot"):
+        LeagueConfig(**kwargs)  # type: ignore[arg-type]
+
+
+def test_rejects_unknown_ruleset_preset_string() -> None:
+    """`field_validator` raises a clear error on an unrecognized preset name."""
+    kwargs = _base_kwargs()
+    kwargs["ruleset"] = "made_up_preset"
+    with pytest.raises(ValidationError, match=r"Unknown ruleset preset 'made_up_preset'"):
+        LeagueConfig(**kwargs)  # type: ignore[arg-type]
