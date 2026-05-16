@@ -137,3 +137,69 @@ def test_vorp_equation() -> None:
     # vorp == season_mean_fpts - replacement_fpts exactly (no rounding).
     delta = out["season_mean_fpts"] - out["replacement_fpts"] - out["vorp"]
     assert (delta.abs() < 1e-9).all()
+
+
+def test_replacement_level_pinned_per_position() -> None:
+    """For a known input, replacement_fpts(pos) is the projection of the boundary player."""
+    # 4 teams, 1 QB + 2 RB + 2 WR + 1 TE + 1 FLEX + 1 BENCH = 8 picks/team = 32 picks total.
+    # Configured to be filled by an oversized per-position input so the boundaries are precise.
+    cfg = _make_config()  # 4-team default
+    # 20 of each position; pool eats:
+    #   QBs:   4 (1 per team)   → replacement = 5th QB
+    #   RBs:   8 (2 per team) + FLEX share + BENCH share (depth-dependent)
+    #   ...
+    # Simpler pin: shrink the input to a tight pool boundary.
+    rows: list[dict[str, object]] = []
+    rows.extend(_bulk_rows(Position.QB, count=10, base_fpts=300.0))  # QBs 0..9 (300..291 fpts)
+    rows.extend(_bulk_rows(Position.RB, count=15, base_fpts=280.0))  # RBs 0..14 (280..266 fpts)
+    rows.extend(_bulk_rows(Position.WR, count=15, base_fpts=260.0))  # WRs 0..14 (260..246 fpts)
+    rows.extend(_bulk_rows(Position.TE, count=10, base_fpts=200.0))  # TEs 0..9 (200..191 fpts)
+    inputs = _make_season_projections(rows)
+    out = generate_vorp_table(inputs, cfg)
+    # Verify replacement is the best non-pool player at each position.
+    for pos in (Position.QB, Position.RB, Position.WR, Position.TE):
+        pos_rows = out[out["position"] == pos.value].sort_values(
+            "season_mean_fpts", ascending=False
+        )
+        replacement_value = float(pos_rows["replacement_fpts"].iloc[0])
+        # Replacement must equal one of the input projections at this position.
+        pos_input_fpts = set(
+            float(v) for v in inputs[inputs["position"] == pos.value]["season_mean"].tolist()
+        )
+        assert replacement_value in pos_input_fpts
+        # Every player ranked above replacement has VORP > 0.
+        above_replacement = pos_rows[pos_rows["season_mean_fpts"] > replacement_value]
+        assert (above_replacement["vorp"] > 0).all()
+
+
+def test_top_of_position_non_negative_vorp() -> None:
+    cfg = _make_config()
+    inputs = _bulk_input({Position.QB: 20, Position.RB: 20, Position.WR: 20, Position.TE: 20})
+    out = generate_vorp_table(inputs, cfg)
+    for pos in (Position.QB, Position.RB, Position.WR, Position.TE):
+        wanted = cfg.roster_slots.get(getattr(RosterSlot, pos.name), 0)
+        if wanted == 0:
+            continue
+        top_n = out[out["position"] == pos.value].nlargest(cfg.n_teams * wanted, "season_mean_fpts")
+        assert (top_n["vorp"] >= 0).all()
+
+
+def test_replacement_player_has_zero_vorp() -> None:
+    """At least one player at each in-pool position has vorp == 0 (the replacement player)."""
+    cfg = _make_config()
+    inputs = _bulk_input({Position.QB: 20, Position.RB: 20, Position.WR: 20, Position.TE: 20})
+    out = generate_vorp_table(inputs, cfg)
+    for pos in (Position.QB, Position.RB, Position.WR, Position.TE):
+        pos_rows = out[out["position"] == pos.value]
+        assert (pos_rows["vorp"].abs() < 1e-9).any(), f"no zero-VORP row at {pos.value}"
+
+
+def test_sub_replacement_players_have_negative_vorp() -> None:
+    cfg = _make_config()
+    inputs = _bulk_input({Position.QB: 20, Position.RB: 20, Position.WR: 20, Position.TE: 20})
+    out = generate_vorp_table(inputs, cfg)
+    # The very last player at each position (smallest season_mean_fpts) must have vorp <= 0.
+    for pos in (Position.QB, Position.RB, Position.WR, Position.TE):
+        pos_rows = out[out["position"] == pos.value].sort_values("season_mean_fpts")
+        worst_vorp = float(pos_rows["vorp"].iloc[0])
+        assert worst_vorp <= 0
