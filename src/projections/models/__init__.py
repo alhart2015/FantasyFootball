@@ -205,7 +205,7 @@ POSITION_DISPATCH: Mapping[Position, _PositionDispatch] = {
         feature_builder=build_wr_features,
         feature_schema=WrFeaturesSchema,
         ngs_stat_type="receiving",
-        default_model_class="ensemble",
+        default_model_class="ensemble-decomposed",
     ),
 }
 
