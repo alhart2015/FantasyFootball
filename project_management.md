@@ -4,6 +4,32 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## RB Rushing + Receiving Decomposition Probe — verdicts 5x NULL (2026-05-16, on branch `feat/probe-rb-decomposition`)
+
+**Status:** New probe `src/projections/backtest/rb_decomposition_probe.py` tests whether decomposing RB stats into two shared volume axes (carries, targets) x per-stat efficiency factors beats per-stat direct RidgeCV. 5 composed stats: rushing_yards, rushing_tds (carries axis) + receptions, receiving_yards, receiving_tds (targets axis). Sub-model = RidgeCV everywhere (decomposition-only test; factor-appropriate sub-models are separate cycles). Spec at `docs/superpowers/specs/2026-05-16-rb-decomposition-probe-design.md`.
+
+**Per-stat verdicts:**
+
+| Stat | n_paired | RMSE delta | 95% CI | Composite-fpts equiv | Verdict |
+|---|---:|---:|---|---:|:---:|
+| rushing_yards | 3291 | -0.0931 | [-0.1915, +0.0058] | -0.0093 fpts | NULL |
+| rushing_tds | 3291 | +0.0010 | [-0.0014, +0.0033] | +0.0062 fpts | NULL |
+| receptions | 3291 | -0.0004 | [-0.0022, +0.0016] | -0.0004 fpts | NULL |
+| receiving_yards | 3291 | -0.0344 | [-0.0850, +0.0150] | -0.0034 fpts | NULL |
+| receiving_tds | 3291 | -0.0003 | [-0.0012, +0.0006] | -0.0017 fpts | NULL |
+
+**Coverage:** carries > 0 rate 0.9638-0.9761 across 2021-2024 (above 0.95 threshold every year); targets > 0 rate 0.7799-0.8518 across 2021-2024 (**BELOW THRESHOLD for all four eval years**). The receiving-axis coverage flag is structural for RBs — a meaningful fraction of RB-weeks have zero targets, which is a legitimate observation of low-volume / out-of-rotation usage rather than a data-quality issue. Receiving-stat verdicts therefore rest on the targets > 0 subset (rough effective n on the order of 0.80 × 3291 ≈ 2600); rushing-stat verdicts are at full eval coverage. The MARGINAL magnitude flag fires on 3 stats (receptions, receiving_yards, receiving_tds) whose |fpts delta| sits below the 0.005-fpts threshold per PR #31's retrospective rule.
+
+**Plan-vs-execution deviation:** RB feature cache (`data/features/rb/...`) for seasons 2018-2020 predated the weather-column additions in commit `09e0d76` and didn't carry `wind_speed_mph` / `is_high_wind` / `temperature_f` / `is_grass_surface`, so `read_features` failed pandera validation on the first probe invocation. Resolved by running `scripts/refresh_features.py rb --seasons 2018-2024` once before the probe (85 s wall-clock); no code change. Probe itself ran in 5.4 s.
+
+**Mechanism interpretation:** Decomposition with RidgeCV on every sub-model is statistically indistinguishable from direct RidgeCV on RB rushing AND receiving stats. The four CIs that lean negative (everything except rushing_tds) cluster their upper bounds within 0.015 of zero — there's no hidden SIGNAL being masked by noise. This is the cleanest possible NULL outcome: same model class, same residual variance, every stat. Compare against the WR target-decomposition probe (PR #32), where the same Ridge-vs-Ridge recipe found a marginal SIGNAL on WR receptions; the same recipe finds nothing on RB receptions. Two distinct mechanistic stories rule out: (1) the volume / efficiency separation does not, by itself, expose RB-specific signal that direct RidgeCV misses; (2) PR #32 / PR #33's marginal WR-receptions SIGNAL does NOT generalize to RB even on the same stat — RB receiving-volume targets are too sparse (≤85% coverage) and too correlated with the rushing-volume features for the decomposition to find independent leverage.
+
+**Recommended next direction:** Close the RB decomposition direction at this Ridge-only unit. Per spec §4 "all 5 NULL" branch, no integration plan is greenlit. Factor-appropriate RB sub-model probes (Poisson on carries / targets, Gamma on yards-per-X, logit on rate factors) are NOT next — those are conditional on at least one RB Ridge-vs-Ridge SIGNAL per spec §1.4 #3 — none here. With this PR landed, three consecutive factor-class / decomposition probes have now returned NULL (logit catch_rate PR #39, Tweedie yards_per_target PR #44, RB decomposition this PR); the decomposition-and-factor-class axis on receiving stats is empirically exhausted on Ridge-vs-class without independent mechanism evidence. Higher-leverage next directions remain: (1) refined-unit feature work under TODOs #24 / #25 that proved productive on WR / TE; (2) entirely different mechanism families (deeper-unit player-trajectory, new ingest sources). The RB decomposition recipe should not be re-tested without independent mechanism evidence that something has changed (new features, new sub-model classes proven elsewhere first).
+
+See `reports/feature_probe_rb_decomposition_summary.md` for full per-stat tables + coverage flags + plan-vs-execution-deviations.
+
+---
+
 ## Tweedie yards_per_target Probe — verdict `NULL` (2026-05-16, on branch `feat/probe-tweedie-yards-per-target`)
 
 **Status:** New probe `src/projections/backtest/tweedie_yards_per_target_probe.py` tests whether replacing the yards_per_target efficiency sub-model class from `RidgeCV` on the ratio + clip(>=0) to `TweedieRegressor(power=1.5, link="log")` with alpha CV-selected lowers per-stat receiving_yards RMSE on WR rows. Spec at `docs/superpowers/specs/2026-05-16-tweedie-yards-per-target-probe-design.md`.
