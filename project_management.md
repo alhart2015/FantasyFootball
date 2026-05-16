@@ -4,6 +4,54 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Snake-Draft Cheat Sheet — feature shipped (2026-05-16, on branch `feat/snake-cheat-sheet`)
+
+**Status:** Spec + plan + impl on `feat/snake-cheat-sheet`. Third surface of the Draft Hub sub-project (auction $ generator → VORP → snake cheat sheet). Reads a `VorpTableSchema` parquet + `id_map.parquet` + `LeagueConfig`, emits a per-player table sorted by `(position canonical order, positional_rank)` with gap-based tier breaks (1..N for in-pool, NA otherwise). v1 scope: VORP + tier breaks only. ADP delta and p10/p90 confidence band deferred to follow-up specs. Spec at `docs/superpowers/specs/2026-05-16-snake-cheat-sheet-design.md`; plan at `docs/superpowers/plans/2026-05-16-snake-cheat-sheet.md`.
+
+**Shipped surface:**
+- `src/projections/draft/snake_cheat_sheet.py` — `generate_snake_cheat_sheet` public function + `_assign_tiers` private numpy helper (gap-based with fixed-N tiers; n≤N falls back to 1-per-tier).
+- `src/projections/schemas.py` — appended `SnakeCheatSheetSchema` (9 cols including nullable Int64 `tier`).
+- `src/projections/draft/__init__.py` — re-exports `generate_snake_cheat_sheet`.
+- `scripts/generate_snake_cheat_sheet.py` — CLI with `--season --league-config --vorp-input --id-map --tiers-per-position --out` flags; CSV and parquet output supported; per-position stdout summary (top-3 with tier-1 cliff size) as eyeball mitigation.
+- 22 tests in `tests/test_draft/test_snake_cheat_sheet.py`, 3 integration tests in `tests/test_scripts/test_generate_snake_cheat_sheet_cli.py`, 1 schema round-trip test appended to `tests/test_schemas/test_dataframe_schemas.py`. All passing.
+
+**Decision log:**
+- **Tier algorithm: gap-based, fixed N (default 8).** Captures "talent cliffs" rather than smoothing distributions into arbitrary buckets. N is configurable via `--tiers-per-position`. Alternatives (variable-N gap threshold, k-means, fixed buckets) documented in spec §3.2 and rejected with reason. `np.lexsort` tie-break prefers earlier (higher-rank) gap when tied magnitudes compete for the N-1th-largest slot.
+- **Show all players, tier only in-pool.** Output includes out-of-pool players (positional_rank computed across both) so the sheet doubles as a waiver-wire lookup. Out-of-pool rows get `tier = NA`.
+- **Display names from `id_map.parquet`, not `depth_charts`.** First draft of the spec named depth_charts as the name source — fact-check during spec-writing revealed `DepthChartsSchema` carries no name column. `IdMapSchema.full_name` is the canonical name source in this codebase (built by `build_id_map` from `nflreadpy.load_ff_playerids()`). Roster-wide, so 2026 pre-season name coverage is good.
+- **ADP delta and confidence band deferred.** Spec §1.2 — each blocks on infrastructure that doesn't exist (no ADP ingest; no p10/p90 plumbed through `VorpTableSchema`). Follow-up specs.
+- **Empty-input contract stricter than original spec §3.6 said.** Spec originally said "empty input → empty output." Actual impl calls `_select_pool` first, which raises "cannot fill N {slot} slots" because no players can fill any required position. Spec §3.6 + §5.1 #18 updated mid-implementation to match the as-implemented "raise on empty input + non-empty config" contract — failing loudly is correct when the caller asks for rankings at positions with no input.
+
+**Risks logged (spec §6):**
+- **No ADP signal means cheat sheet reflects model view, not room view.** Manual ADP cross-reference required during draft for v1.
+- **Tier instability across runs.** Gap-based tiers can flip if a small VORP shift moves which gap is "Nth largest." Stdout `tier-1 size` per position surfaces cliff stability for eyeball-check.
+- **`_select_pool` now has three callers** (`auction.py`, `vorp.py`, `snake_cheat_sheet.py`). Pool refactors must consider all three; auction test suite remains the regression gate.
+
+**Plan-vs-execution deviations:**
+- `LeagueConfig` requires `n_teams > 1`; plan's Task 4 + Task 5 corner-case tests originally specified `n_teams=1` configs which raise validation. Adapted to `n_teams=2, roster_slots={QB: 1}` — same invariants exercised.
+- Plan's `_make_vorp_table` sizing of `{QB:4, RB:6, WR:6, TE:4}` for the display-name tests + sort-order test was too small for default 4-team config's RB requirements (2 RB × 4 teams = 8 RB starter slots, + FLEX). Grew to `{QB:8, RB:12, WR:12, TE:8}` (same sizing as the §5.1 #1-2 schema tests). Display-name semantics are pool-size-independent.
+- **Spec §3.6 + §5.1 #18 updated mid-implementation** to match the stricter "empty input raises" behavior (commit `3a867f7`). Test originally named `test_empty_input_returns_empty` was renamed to `test_empty_input_raises` in the same commit.
+- **Vectorized tier assignment** (code-review polish, commit `9c59924`): plan's `for idx, t in zip(...): tier_col[idx] = int(t)` was replaced with `tier_col[in_pool_idx] = tiers` — `pd.array(dtype=pd.Int64Dtype())` supports numpy fancy-indexed assignment.
+- **`--season` parsed-but-unused in initial CLI (Task 8)**; threaded into stdout banner in Task 9 to close the spec §4 inconsistency.
+- **Synthetic id_map position derivation fixed in Task 8** — plan-quoted `"QB" if gid.startswith("00-1") else "RB"` would have mismarked WR/TE rows as RB. Implementer derived position from the gsis_id prefix character properly.
+- **F401 noqa carry-over:** `pytest` import was noqa-suppressed in Tasks 2-5 (unused); removed in Task 6 when `pytest.raises` was first used.
+- **Pre-commit + venv interaction learning:** the inline `PATH=... git commit` syntax doesn't propagate to pre-commit hook subprocesses; must use `export PATH=...; git commit`. Discovered mid-implementation. Worth recording for future sessions.
+- **`/simplify` follow-up cleanup commit** (`79b739c`): replaced stringly-typed `for pos_value in df["position"].unique()` with explicit `for pos in Position` enum iteration; deleted duplicated `_POSITION_ORDER` constant; replaced TOCTOU `path.exists()` with `try/except FileNotFoundError`; removed narrating "Stage N:" comments; promoted `_DISPLAY_NAME_FALLBACK` → `DISPLAY_NAME_FALLBACK` so tests import the constant instead of hardcoding "—".
+
+**Recommended next direction:**
+1. **ADP ingest + ADP-delta column** (`draft_ready_checklist.md` §2b.3). The biggest decision-relevance lift to the cheat sheet. FantasyPros has a free CSV export; Sleeper API exposes it. Either lands as an ingest spec + a small schema extension on `SnakeCheatSheetSchema`.
+2. **Confidence band — p10/p90 floor/ceiling rank.** Plumb `season_p10` and `season_p90` through to the cheat sheet. Either extend `VorpTableSchema` to carry them (forces upstream/downstream changes) OR have this CLI re-aggregate from `weekly_projections` directly. Decide in the follow-up spec.
+3. **Live snake-draft recommender** (`draft_ready_checklist.md` §2b.2). The other §2b consumer. Two viable approaches sketched: greedy (highest-VORP available at position of need) and lookahead (ADP-simulated opponents). The latter is ADP-blocked.
+4. **Tier-stability variants.** If users find the default gap-based tiers too wobbly across runs, add `--tier-algorithm` flag accepting `gap` (default), `kmeans`, `fixed-buckets`. Trigger: user feedback after first real draft.
+5. **Cross-Draft-Hub-CLI refactor follow-up** (surfaced by /simplify but out-of-scope for this PR): consolidate the duplicated `_make_config` / `_POSITION_ID_PREFIX` / `_make_vorp_table` test fixtures across `tests/test_draft/test_auction.py`, `test_vorp.py`, `test_snake_cheat_sheet.py` into a `tests/test_draft/conftest.py`; extract a shared `_write_output(df, path)` helper (the auction CLI version has a `.suffix` case-sensitivity bug — fix it in the same pass).
+
+**Known pre-existing test failure (NOT introduced by this feature):**
+`tests/test_models/test_decomposed_baseline.py::test_dispatch_default_model_class_for_wr_is_unchanged` — same stale pin flagged in PR #40 and PR #41 reviews. WR routing was flipped to `ensemble-decomposed` in the 2026-05-15 WR ensemble PR; this pre-gate test asserts the old `ensemble` value. Fails on `main` too. Worth a small follow-up to clean up.
+
+See `docs/superpowers/specs/2026-05-16-snake-cheat-sheet-design.md` and `docs/superpowers/plans/2026-05-16-snake-cheat-sheet.md`. Draft-readiness status: `draft_ready_checklist.md` §2b.1 flipped to `[x]`.
+
+---
+
 ## RB Rushing + Receiving Decomposition Probe — verdicts 5x NULL (2026-05-16, on branch `feat/probe-rb-decomposition`)
 
 **Status:** New probe `src/projections/backtest/rb_decomposition_probe.py` tests whether decomposing RB stats into two shared volume axes (carries, targets) x per-stat efficiency factors beats per-stat direct RidgeCV. 5 composed stats: rushing_yards, rushing_tds (carries axis) + receptions, receiving_yards, receiving_tds (targets axis). Sub-model = RidgeCV everywhere (decomposition-only test; factor-appropriate sub-models are separate cycles). Spec at `docs/superpowers/specs/2026-05-16-rb-decomposition-probe-design.md`.

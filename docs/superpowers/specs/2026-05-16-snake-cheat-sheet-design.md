@@ -275,7 +275,7 @@ python scripts/generate_snake_cheat_sheet.py \
 **Per-position stdout summary (eyeball mitigation):**
 
 ```
-Snake cheat sheet written: 300 players, ruleset=ESPN_PPR, tiers_per_position=8
+Snake cheat sheet written: 300 players, season=2026, ruleset=ESPN_PPR, tiers_per_position=8
 
 Position summary (n_in_pool | tier-1 size | top-3):
   QB  in_pool= 14  tier1= 2  top: Patrick Mahomes (QB1, T1, VORP+91.3), Josh Allen (QB2, T1, VORP+78.0), Jalen Hurts (QB3, T2, VORP+72.5)

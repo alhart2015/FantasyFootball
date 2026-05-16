@@ -65,7 +65,7 @@ Everything below decomposes those gaps into actionable items.
 
 ### 2b. Snake draft
 
-- [ ] **Pre-draft cheat sheet.** Per-position ordered list with VORP, ADP delta, tier, and confidence band. Static export (CSV / markdown) is enough for v1.
+- [x] **Pre-draft cheat sheet.** Per-position ordered list with VORP, tier (gap-based, default N=8), display_name from id_map.parquet, and is_in_pool flag. ADP delta and confidence band deferred (own specs). Shipped on `feat/snake-cheat-sheet` (2026-05-16): `src/projections/draft/snake_cheat_sheet.py` + `scripts/generate_snake_cheat_sheet.py` + `tests/test_draft/test_snake_cheat_sheet.py` (22 tests) + `tests/test_scripts/test_generate_snake_cheat_sheet_cli.py` (3 tests). CSV and parquet output supported.
 - [ ] **Live snake recommender.** Given current roster + remaining player pool + next pick number, recommend top-K picks. Two viable approaches:
   - Greedy: highest-VORP available at a position of need.
   - Lookahead: simulate opponents picking via ADP, optimize expected total VORP across remaining rounds.
