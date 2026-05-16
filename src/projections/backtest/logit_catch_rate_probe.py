@@ -28,15 +28,15 @@ from projections.backtest.adoption_gate import (
     BootstrapDelta,
     paired_bootstrap_rmse_delta,
 )
-from projections.models.baseline import _WR_FEATURE_COLUMNS
+from projections.models.baseline import _RIDGE_ALPHA_GRID, _WR_FEATURE_COLUMNS
 from projections.schemas import Position, Stat, WeeklyStatsSchema
 
 VerdictLabel = Literal["SIGNAL", "NULL", "REGRESSION"]
 
-# Same alpha grid as `BaselineModel.fit` (src/projections/models/baseline.py) and
-# `target_decomposition_probe._fit_direct` so the two probe arms differ only in
-# the catch_rate sub-model class, not the regularization scale.
-_RIDGE_ALPHAS: Final[np.ndarray] = np.logspace(-3, 3, 13)
+# Reuse the canonical Ridge alpha grid from `BaselineModel`. The probe's
+# incumbent arm mirrors `DecomposedBaselineModel`'s catch_rate fit; the alphas
+# MUST match or the comparison is no longer ridge-vs-ridge.
+_RIDGE_ALPHAS: Final[np.ndarray] = _RIDGE_ALPHA_GRID
 
 # Cs grid for LogisticRegressionCV. C = 1 / alpha (sklearn's inverse-penalty
 # convention). 5 points spanning 3 orders of magnitude — matches the
@@ -89,10 +89,8 @@ def _expand_to_trials(
     successes_kept = successes[keep].astype(np.int64)
     trials_kept = trials[keep].astype(np.int64)
 
-    # Repeat each kept row T times along axis 0.
     x_trials = np.repeat(x_kept, trials_kept, axis=0)
 
-    # Build y per kept row: S ones followed by (T - S) zeros.
     failures_kept = trials_kept - successes_kept
     y_trials_parts: list[np.ndarray] = []
     for s, f in zip(successes_kept, failures_kept, strict=True):
@@ -269,37 +267,39 @@ def walk_forward_residuals(
     coverage_per_year: dict[int, float] = {}
 
     ws = WeeklyStatsSchema.validate(weekly_stats)
-    ws_wr = ws[ws["position"] == Position.WR.value].copy()
+    ws_wr = ws[ws["position"] == Position.WR.value]
 
     all_seasons = sorted(int(s) for s in features["season"].unique())
     feat_cols = list(_WR_FEATURE_COLUMNS)
+
+    def _join_and_filter(season_mask: pd.Series) -> pd.DataFrame | None:
+        """Inner-join WR features <-> weekly_stats on (gsis_id, season, week),
+        then drop rows with any NaN feature column. Returns None if the join
+        is empty after filtering (so the caller can skip the fold)."""
+        feat_slice = features.loc[season_mask]
+        ws_slice = ws_wr.loc[ws_wr["season"].isin(feat_slice["season"].unique())]
+        joined = feat_slice.merge(
+            ws_slice[["gsis_id", "season", "week", "targets", "receptions"]],
+            on=["gsis_id", "season", "week"],
+            how="inner",
+            validate="one_to_one",
+        )
+        joined = joined.loc[joined[feat_cols].notna().all(axis=1)]
+        return joined if not joined.empty else None
 
     for eval_year in eval_years_list:
         train_seasons = [s for s in all_seasons if s < eval_year]
         if not train_seasons:
             continue
 
-        # Train-window join (features <-> weekly_stats on (gsis_id, season, week)).
-        train_feat = features[features["season"].isin(train_seasons)]
-        train_ws = ws_wr[ws_wr["season"].isin(train_seasons)]
-        train_join = train_feat.merge(
-            train_ws[["gsis_id", "season", "week", "targets", "receptions"]],
-            on=["gsis_id", "season", "week"],
-            how="inner",
-            validate="one_to_one",
-        )
-        # Drop rows where any feature column is NaN — the BaselineModel
-        # fit/predict path does the same.
-        train_keep = train_join[feat_cols].notna().all(axis=1)
-        train_join = train_join.loc[train_keep]
-        if train_join.empty:
+        train_join = _join_and_filter(features["season"].isin(train_seasons))
+        if train_join is None:
             continue
 
         x_train = train_join[feat_cols].to_numpy(dtype=np.float64)
         targets_train = train_join["targets"].to_numpy(dtype=np.int64)
         receptions_train = train_join["receptions"].to_numpy(dtype=np.int64)
 
-        # Shared volume fit (all train rows, including targets == 0).
         volume = _fit_shared_volume(x_train, targets_train)
 
         # Efficiency fits on rows with targets > 0 (catch_rate is undefined
@@ -317,18 +317,8 @@ def walk_forward_residuals(
         x_trials, y_trials = _expand_to_trials(x_pos, receptions_pos, targets_pos)
         logit_eff = _fit_logit_efficiency(x_trials, y_trials)
 
-        # Eval-year join + prediction.
-        eval_feat = features[features["season"] == eval_year]
-        eval_ws = ws_wr[ws_wr["season"] == eval_year]
-        eval_join = eval_feat.merge(
-            eval_ws[["gsis_id", "season", "week", "targets", "receptions"]],
-            on=["gsis_id", "season", "week"],
-            how="inner",
-            validate="one_to_one",
-        )
-        eval_keep = eval_join[feat_cols].notna().all(axis=1)
-        eval_join = eval_join.loc[eval_keep]
-        if eval_join.empty:
+        eval_join = _join_and_filter(features["season"] == eval_year)
+        if eval_join is None:
             continue
 
         x_eval = eval_join[feat_cols].to_numpy(dtype=np.float64)

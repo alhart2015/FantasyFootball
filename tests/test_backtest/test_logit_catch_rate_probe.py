@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 from sklearn.linear_model import LogisticRegressionCV, RidgeCV
 from sklearn.pipeline import Pipeline
 
@@ -24,6 +25,8 @@ from projections.backtest.logit_catch_rate_probe import (
     compute_verdict,
     walk_forward_residuals,
 )
+from projections.models import POSITION_DISPATCH
+from projections.schemas import _PYARROW_STR, Position, WeeklyStatsSchema
 
 
 def test_expand_to_trials_basic_shape_and_labels() -> None:
@@ -68,8 +71,6 @@ def test_expand_to_trials_validates_successes_le_trials() -> None:
     """successes[i] > trials[i] is a bug in the caller. Raise ValueError
     rather than producing a corrupt expansion.
     """
-    import pytest
-
     x = np.array([[1.0]], dtype=np.float64)
     successes = np.array([5], dtype=np.int64)
     trials = np.array([3], dtype=np.int64)
@@ -199,8 +200,6 @@ def _synthetic_wr_inputs(seed: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]:
     truth uses a known catch_rate-from-features generative model with targets
     correlated with one feature so volume_ridge has signal.
     """
-    from projections.schemas import _PYARROW_STR, WeeklyStatsSchema
-
     rng = np.random.default_rng(seed=seed)
     rows: list[dict[str, object]] = []
     for season in range(2018, 2022):
@@ -220,19 +219,18 @@ def _synthetic_wr_inputs(seed: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]:
     df["team"] = df["team"].astype(_PYARROW_STR)
     df["opponent"] = df["opponent"].astype(_PYARROW_STR)
 
-    # Use the WR feature schema's columns; fill plausibles for the rest.
-    from projections.models import POSITION_DISPATCH
-    from projections.schemas import Position
-
     feature_schema = POSITION_DISPATCH[Position.WR].feature_schema
     schema_cols = feature_schema.to_schema().columns
     for col_name, col in schema_cols.items():
         if col_name in df.columns:
             continue
-        dtype_str = str(col.dtype)
-        if "bool" in dtype_str.lower():
+        # pandera Column.dtype is a pandera-internal wrapper; stringify before
+        # dispatching so the test fixture works across nullable Int64,
+        # numpy int64, bool, and float variants.
+        dtype_str = str(col.dtype).lower()
+        if "bool" in dtype_str:
             df[col_name] = rng.integers(0, 2, size=len(df)).astype(bool)
-        elif "int" in dtype_str.lower():
+        elif "int" in dtype_str:
             df[col_name] = rng.integers(1, 6, size=len(df)).astype(np.int64)
         elif col_name == "age":
             df[col_name] = rng.uniform(22.0, 30.0, size=len(df)).astype(np.float64)
@@ -241,7 +239,7 @@ def _synthetic_wr_inputs(seed: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]:
     features = feature_schema.validate(df)
 
     ws = features[["gsis_id", "season", "week", "team", "opponent"]].copy()
-    ws["position"] = "WR"
+    ws["position"] = Position.WR.value
     n = len(ws)
     target_lambda = rng.uniform(3.0, 12.0, size=n)
     targets = np.maximum(1, rng.poisson(target_lambda)).astype(np.int64)
@@ -261,18 +259,18 @@ def _synthetic_wr_inputs(seed: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]:
     ws["rushing_yards"] = np.zeros(n, dtype=np.float64)
     ws["rushing_tds"] = np.zeros(n, dtype=np.int64)
     ws["fumbles_lost"] = np.zeros(n, dtype=np.int64)
-    ws["passing_yards"] = 0.0
-    ws["passing_tds"] = np.int64(0)
-    ws["interceptions"] = np.int64(0)
+    ws["passing_yards"] = np.zeros(n, dtype=np.float64)
+    ws["passing_tds"] = np.zeros(n, dtype=np.int64)
+    ws["interceptions"] = np.zeros(n, dtype=np.int64)
 
     schema_cols_ws = WeeklyStatsSchema.to_schema().columns
     for col_name, col in schema_cols_ws.items():
         if col_name in ws.columns:
             continue
-        dtype_str = str(col.dtype)
-        if "int" in dtype_str.lower():
+        dtype_str = str(col.dtype).lower()
+        if "int" in dtype_str:
             ws[col_name] = np.zeros(n, dtype=np.int64)
-        elif "float" in dtype_str.lower():
+        elif "float" in dtype_str:
             ws[col_name] = np.zeros(n, dtype=np.float64)
         else:
             ws[col_name] = 0

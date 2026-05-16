@@ -80,7 +80,7 @@ def test_cli_writes_summary_and_csv(tmp_path: Path) -> None:
     # Per-year rows + pooled.
     assert "2021" in csv
     assert "2022" in csv
-    assert "pooled" in csv.lower() or "all" in csv.lower()
+    assert "pooled" in csv.lower()
 
 
 def test_cli_rejects_unknown_year(tmp_path: Path) -> None:

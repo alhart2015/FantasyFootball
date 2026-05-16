@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from projections.backtest.adoption_gate import paired_bootstrap_rmse_delta
 from projections.backtest.logit_catch_rate_probe import (
     PerStatVerdict,
     ProbeResults,
@@ -48,7 +49,7 @@ def _load_inputs(
 
     Train span starts at 2018 (matches BaselineModel.fit's lower bound).
     """
-    seasons_needed = sorted({*_VALID_YEARS[: _VALID_YEARS.index(max(eval_years)) + 1]})
+    seasons_needed = [y for y in _VALID_YEARS if y <= max(eval_years)]
     feat_parts = [
         read_features(Position.WR, s, features_root=features_root) for s in seasons_needed
     ]
@@ -61,8 +62,6 @@ def _load_inputs(
 
 def _per_year_breakdown(results: ProbeResults, *, n_bootstrap: int, seed: int) -> pd.DataFrame:
     """One-row-per-year breakdown of Δ-RMSE point + CI."""
-    from projections.backtest.adoption_gate import paired_bootstrap_rmse_delta
-
     rows: list[dict[str, object]] = []
     for year in np.unique(results.year):
         mask = results.year == year
