@@ -271,8 +271,14 @@ def walk_forward_residuals(
         # rows are valid low-volume observations.
         volume = _fit_shared_volume(x_train, targets_train)
 
-        # Efficiency fits on rows with targets > 0 (ratio undefined at zero).
-        pos_mask = targets_train > 0
+        # Efficiency fits on rows with targets > 0 AND receiving_yards >= 0.
+        # The yards >= 0 filter is required because real NFL data has rare
+        # negative-yardage WR receptions (~0.6% of targets > 0 rows, e.g.
+        # laterals/lost yards), and Tweedie deviance loss is undefined for
+        # y < 0. Applied to BOTH arms so the comparison stays apples-to-apples
+        # (identical training-row set; the incumbent arm tolerates negatives
+        # but the candidate arm cannot, so we filter both).
+        pos_mask = (targets_train > 0) & (yards_train >= 0.0)
         x_pos = x_train[pos_mask]
         targets_pos = targets_train[pos_mask].astype(np.float64)
         yards_pos = yards_train[pos_mask]

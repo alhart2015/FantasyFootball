@@ -4,6 +4,25 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Tweedie yards_per_target Probe — verdict `NULL` (2026-05-16, on branch `feat/probe-tweedie-yards-per-target`)
+
+**Status:** New probe `src/projections/backtest/tweedie_yards_per_target_probe.py` tests whether replacing the yards_per_target efficiency sub-model class from `RidgeCV` on the ratio + clip(>=0) to `TweedieRegressor(power=1.5, link="log")` with alpha CV-selected lowers per-stat receiving_yards RMSE on WR rows. Spec at `docs/superpowers/specs/2026-05-16-tweedie-yards-per-target-probe-design.md`.
+
+**Verdict:** `NULL` — RMSE delta -0.0121 yards (95% CI [-0.0564, +0.0353]), n_paired = 5195. Composite-fpts equivalent -0.0012 fpts. Magnitude flag fired: |delta| 0.0121 < 0.050 yards (|delta_fpts| < 0.005) per PR #31's retrospective rule (marginal zone — moot here because the CI brackets zero regardless).
+
+**Mechanism interpretation:** The CI brackets zero with the upper limit well into positive territory (+0.0353 yards), so the Tweedie log-link sub-model is statistically indistinguishable from the Ridge-on-clipped-ratio incumbent on per-stat receiving_yards RMSE over the 2021-2024 pooled WR rows. Per-year breakdown shows directional noise around zero: 2021 +0.034, 2022 -0.036, 2023 +0.025, 2024 -0.075 — no single eval year's CI excludes zero (2024 comes closest at hi +0.007). The mechanistic story this rules out: Tweedie's compound-Poisson-Gamma shape on yards_per_target does NOT materially outperform the Ridge-on-ratio + clip(>=0) approximation on the WR data we have. Coverage is comfortably above 0.95 across all eval years (0.989-0.996), so the verdict is not muddied by the `targets > 0` filter.
+
+**Mechanism caveat:** Incumbent arm (Ridge-decomp) is NOT current production for receiving_yards; production is direct RidgeCV via `ensemble-decomposed` (which decomposes Stat.RECEPTIONS only per PR #36/#38). A SIGNAL verdict at this gate would NOT have implied Tweedie-decomp beats current production; that comparison is the integration adoption-gate's question. The NULL verdict short-circuits that question — no integration cycle is warranted.
+
+**Recommended next direction:** Close the yards_per_target factor-appropriate direction — the strictly-positive right-skewed efficiency factor's distributional shape is not large enough on real WR data to justify the class swap. Next slot per spec §6 is a `td_rate_per_target` factor-appropriate probe (Poisson or logistic, depending on whether td-per-target is treated as a count-per-trial or a Bernoulli rate) on a separate cycle. With both catch_rate (NULL, PR #39) and yards_per_target (NULL, this PR) now closed factor-appropriate, the factor-class-swap line of attack on WR receiving has produced two NULLs in a row — the recipe-change axis (decomposition itself, PR #36/#38) carries more weight than the sub-model-class axis on this data.
+
+**Plan-vs-execution deviations:**
+- **Negative-yardage filter on efficiency training rows.** Tweedie deviance requires y >= 0; ~0.6% of WR `targets > 0` rows have negative `receiving_yards` (real-data laterals / lost yards on receptions). `walk_forward_residuals` was tightened from `targets_train > 0` to `(targets_train > 0) & (yards_train >= 0.0)` on the efficiency-fit row mask, applied to BOTH arms so the comparison stays apples-to-apples. Eval rows are NOT filtered. Impact: minimal — <1% of training rows dropped per fold, applied symmetrically.
+- **No ConvergenceWarning fired** during the run.
+- **Wall-clock ~7 seconds** (well under the 5-15 min plan estimate; n_rows-per-fold smaller than worst-case).
+
+See `reports/feature_probe_tweedie_yards_per_target_summary.md` for the full decision log + per-year tables + coverage + magnitude flag + deviations section.
+
 ## Logit catch_rate Probe — verdict `NULL` (2026-05-16, on branch `feat/probe-logit-catch-rate`)
 
 **Status:** New probe `src/projections/backtest/logit_catch_rate_probe.py` tests whether replacing the catch_rate efficiency sub-model class from `RidgeCV` on the ratio (current production via PR #36/#38) with `LogisticRegressionCV` via Bernoulli-trial row expansion (factor-appropriate for the [0, 1]-bounded ratio response) lowers per-stat receptions RMSE on WR rows. Both arms share the same shared-volume RidgeCV on `targets`; only the catch_rate efficiency sub-model class differs. Spec at `docs/superpowers/specs/2026-05-15-logit-catch-rate-probe-design.md`.
