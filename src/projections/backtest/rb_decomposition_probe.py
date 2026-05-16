@@ -19,14 +19,20 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import RidgeCV
 
+from projections.backtest.adoption_gate import (
+    BootstrapDelta,
+    paired_bootstrap_rmse_delta,
+)
 from projections.models.baseline import _RB_FEATURE_COLUMNS, _RIDGE_ALPHA_GRID
 from projections.schemas import Position, Stat, WeeklyStatsSchema
+
+VerdictLabel = Literal["SIGNAL", "NULL", "REGRESSION"]
 
 # Canonical Ridge alpha grid shared with BaselineModel.fit. The probe's
 # incumbent (direct) arm and decomposed arm both use this grid, so any SIGNAL
@@ -389,3 +395,69 @@ def walk_forward_residuals(
         coverage_targets_by_year=coverage_targets_by_year,
         eval_years=tuple(eval_years_list),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class PerStatVerdict:
+    """Per-stat verdict on the per-stat Delta-RMSE (decomposed - direct)."""
+
+    stat: Stat
+    n_paired: int
+    rmse_delta: BootstrapDelta
+    verdict: VerdictLabel
+
+
+def _verdict_from_delta(delta: BootstrapDelta) -> VerdictLabel:
+    """SIGNAL iff hi_95 < 0; REGRESSION iff lo_95 > 0; else NULL."""
+    if delta.hi_95 < 0:
+        return "SIGNAL"
+    if delta.lo_95 > 0:
+        return "REGRESSION"
+    return "NULL"
+
+
+def compute_verdicts(
+    output: WalkForwardOutput, *, n_bootstrap: int = 1000, seed: int = 42
+) -> list[PerStatVerdict]:
+    """Pooled paired-bootstrap CI per stat on (decomposed - direct) Delta-RMSE.
+
+    Signed residuals are (actual - pred); paired_bootstrap_rmse_delta(inc, cand)
+    returns RMSE(cand) - RMSE(inc), so direct=inc and decomposed=cand gives the
+    convention (decomposed - direct).
+    """
+    verdicts: list[PerStatVerdict] = []
+    for stat, residuals in output.per_stat.items():
+        if residuals.n_paired == 0:
+            # Empty residuals -> a sentinel "NULL" with zero CI.
+            verdicts.append(
+                PerStatVerdict(
+                    stat=stat,
+                    n_paired=0,
+                    rmse_delta=BootstrapDelta(
+                        point=0.0,
+                        lo_95=0.0,
+                        hi_95=0.0,
+                        n_paired_rows=0,
+                        n_bootstrap=0,
+                    ),
+                    verdict="NULL",
+                )
+            )
+            continue
+        inc_residuals = residuals.actual - residuals.mu_direct
+        cand_residuals = residuals.actual - residuals.mu_decomposed
+        rmse_delta = paired_bootstrap_rmse_delta(
+            inc_residuals,
+            cand_residuals,
+            n_bootstrap=n_bootstrap,
+            seed=seed,
+        )
+        verdicts.append(
+            PerStatVerdict(
+                stat=stat,
+                n_paired=residuals.n_paired,
+                rmse_delta=rmse_delta,
+                verdict=_verdict_from_delta(rmse_delta),
+            )
+        )
+    return verdicts
