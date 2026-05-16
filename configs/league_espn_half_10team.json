@@ -1,0 +1,17 @@
+{
+  "name": "espn_half_10team_2026",
+  "n_teams": 10,
+  "budget": 200,
+  "min_bid": 1,
+  "roster_slots": {
+    "QB": 1,
+    "RB": 2,
+    "WR": 2,
+    "TE": 1,
+    "FLEX": 1,
+    "K": 1,
+    "DST": 1,
+    "BENCH": 6
+  },
+  "ruleset": "espn_half"
+}
