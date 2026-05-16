@@ -7,11 +7,11 @@ import pytest
 
 from projections.draft.auction import (
     _select_pool,
-    generate_auction_values,  # noqa: F401 — re-exported for Task 5+ tests; smoke-imports the placeholder
+    generate_auction_values,
 )
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import (
-    AuctionValuesSchema,  # noqa: F401 — re-exported for Task 5+ tests; smoke-imports the schema
+    AuctionValuesSchema,
     Position,
     RosterSlot,
     Ruleset,
@@ -55,15 +55,28 @@ def _make_vorp_table(rows: list[dict[str, object]]) -> pd.DataFrame:
     return df
 
 
+# Map positions to a per-position digit so synthetic gsis_ids stay within the
+# canonical `\d{2}-\d{7}` regex enforced by AuctionValuesSchema.
+_POSITION_ID_PREFIX: dict[Position, int] = {
+    Position.QB: 1,
+    Position.RB: 2,
+    Position.WR: 3,
+    Position.TE: 4,
+    Position.K: 5,
+    Position.DST: 6,
+}
+
+
 def _bulk_position_rows(
     position: Position, count: int, base_fpts: float = 200.0
 ) -> list[dict[str, object]]:
     """Generate `count` rows for `position` with descending season_mean_fpts and matching VORP."""
+    prefix = _POSITION_ID_PREFIX[position]
     out: list[dict[str, object]] = []
     for i in range(count):
         out.append(
             {
-                "gsis_id": f"00-{position.value}{i:05d}"[:10],
+                "gsis_id": f"00-{prefix}{i:06d}",
                 "position": position.value,
                 "season_mean_fpts": base_fpts - i,
                 "vorp": (base_fpts - i) - 100.0,
@@ -171,3 +184,154 @@ def test_select_pool_errors_on_missing_required_position() -> None:
     df = _make_vorp_table(rows)
     with pytest.raises(ValueError, match=r"\bK\b"):
         _select_pool(df, cfg)
+
+
+def _full_pool_vorp_table(cfg: LeagueConfig, extra_per_position: int = 5) -> pd.DataFrame:
+    """Build a VORP table large enough to fill `cfg`'s pool plus a buffer of out-of-pool rows."""
+    rows: list[dict[str, object]] = []
+    for pos in (Position.QB, Position.RB, Position.WR, Position.TE, Position.K, Position.DST):
+        slot = RosterSlot(pos.value)
+        # Skip positions the league does not roster
+        if cfg.roster_slots.get(slot, 0) == 0 and pos not in (
+            Position.RB,
+            Position.WR,
+            Position.TE,
+        ):
+            continue
+        rows.extend(_bulk_position_rows(pos, count=cfg.n_teams * 4 + extra_per_position))
+    return _make_vorp_table(rows)
+
+
+def test_sum_invariant_matches_total_budget() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    out = generate_auction_values(df, cfg)
+    assert int(out["auction_dollars"].sum()) == cfg.total_budget
+
+
+def test_min_bid_floor_for_in_pool_players() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    out = generate_auction_values(df, cfg)
+    in_pool = out[out["in_pool"]]
+    assert (in_pool["auction_dollars"] >= cfg.min_bid).all()
+
+
+def test_out_of_pool_players_get_zero_dollars() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    out = generate_auction_values(df, cfg)
+    out_of_pool = out[~out["in_pool"]]
+    assert (out_of_pool["auction_dollars"] == 0).all()
+    assert out_of_pool["pool_rank"].isna().all()
+
+
+def test_pool_size_exactly_total_pool_size() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    out = generate_auction_values(df, cfg)
+    assert int(out["in_pool"].sum()) == cfg.total_pool_size
+
+
+def test_negative_vorp_in_pool_gets_min_bid() -> None:
+    """In-pool players with vorp <= 0 should get exactly min_bid (modulo drift adjustments
+    that never reach this part of the curve in realistic test sizes)."""
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    out = generate_auction_values(df, cfg)
+    in_pool = out[out["in_pool"]]
+    neg_vorp = in_pool[in_pool["vorp"] <= 0]
+    if len(neg_vorp) > 0:
+        # Drift adjustments only land on players with the largest fractional parts,
+        # which are mid-pack high-VORP players, never the min-bid floor.
+        assert (neg_vorp["auction_dollars"] == cfg.min_bid).all()
+
+
+def test_vorp_scale_invariance() -> None:
+    """Doubling all positive VORPs leaves auction_dollars unchanged (proportional allocation)."""
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    out_a = generate_auction_values(df, cfg)
+    df_scaled = df.copy()
+    df_scaled["vorp"] = df_scaled["vorp"] * 2.0
+    out_b = generate_auction_values(df_scaled, cfg)
+    merged = out_a.merge(
+        out_b[["gsis_id", "auction_dollars"]],
+        on="gsis_id",
+        suffixes=("_a", "_b"),
+    )
+    assert (merged["auction_dollars_a"] == merged["auction_dollars_b"]).all()
+
+
+def test_higher_budget_scales_surplus() -> None:
+    """With identical VORPs but budget=200 vs budget=100, in-pool players get
+    approximately 2x the dollars (exactly 2x after subtracting min_bid)."""
+    cfg_a = _make_config(budget=100)
+    cfg_b = _make_config(budget=200)
+    df = _full_pool_vorp_table(cfg_a)
+    out_a = generate_auction_values(df, cfg_a)
+    out_b = generate_auction_values(df, cfg_b)
+    merged = out_a[out_a["in_pool"]].merge(
+        out_b[["gsis_id", "auction_dollars"]],
+        on="gsis_id",
+        suffixes=("_a", "_b"),
+    )
+    # Compare expected and actual extras above min_bid
+    expected_b = 2 * (merged["auction_dollars_a"] - cfg_a.min_bid) + cfg_b.min_bid
+    # Allow +/- 2 for rounding-drift redistribution: each run rounds independently
+    # (up to +/- 1 from the float allocation) and the drift-correction step adds
+    # up to another +/- 1, so the two runs can diverge by 2 units even though the
+    # underlying float allocations are exactly proportional.
+    diff = (merged["auction_dollars_b"] - expected_b).abs()
+    assert (diff <= 2).all()
+
+
+def test_pool_rank_is_dense_and_ordered() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    out = generate_auction_values(df, cfg)
+    in_pool = out[out["in_pool"]].sort_values("pool_rank")
+    assert in_pool["pool_rank"].tolist() == list(range(1, cfg.total_pool_size + 1))
+    # auction_dollars is non-increasing with pool_rank
+    dollars = in_pool["auction_dollars"].tolist()
+    assert dollars == sorted(dollars, reverse=True)
+
+
+def test_output_validates_against_schema() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    out = generate_auction_values(df, cfg)
+    AuctionValuesSchema.validate(out)
+
+
+def test_degenerate_zero_positive_vorp_distributes_uniformly() -> None:
+    """If every in-pool player has vorp <= 0, distribute surplus uniformly."""
+    cfg = _make_config(
+        n_teams=2, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.BENCH: 0}
+    )
+    # 4 players total; all VORP = 0
+    rows = [
+        {"gsis_id": "00-1000001", "position": "QB", "season_mean_fpts": 200.0, "vorp": 0.0},
+        {"gsis_id": "00-1000002", "position": "QB", "season_mean_fpts": 190.0, "vorp": 0.0},
+        {"gsis_id": "00-2000001", "position": "RB", "season_mean_fpts": 180.0, "vorp": 0.0},
+        {"gsis_id": "00-2000002", "position": "RB", "season_mean_fpts": 170.0, "vorp": 0.0},
+    ]
+    df = _make_vorp_table(rows)
+    out = generate_auction_values(df, cfg)
+    in_pool = out[out["in_pool"]]
+    # total_budget = 200, total_pool_size = 4 -> $50 each
+    assert in_pool["auction_dollars"].tolist() == [50, 50, 50, 50] or (
+        sorted(in_pool["auction_dollars"].tolist()) in ([49, 50, 50, 51], [50, 50, 50, 50])
+    )
+    assert int(in_pool["auction_dollars"].sum()) == cfg.total_budget
+
+
+def test_duplicate_gsis_id_rejected() -> None:
+    cfg = _make_config(n_teams=2, roster_slots={RosterSlot.QB: 1, RosterSlot.BENCH: 0})
+    rows = [
+        {"gsis_id": "00-1000001", "position": "QB", "season_mean_fpts": 200.0, "vorp": 50.0},
+        {"gsis_id": "00-1000001", "position": "QB", "season_mean_fpts": 190.0, "vorp": 40.0},
+    ]
+    df = _make_vorp_table(rows)
+    with pytest.raises(ValueError, match="duplicate"):
+        generate_auction_values(df, cfg)

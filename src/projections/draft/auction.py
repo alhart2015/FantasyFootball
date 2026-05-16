@@ -14,7 +14,7 @@ from __future__ import annotations
 import pandas as pd
 
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import Position, RosterSlot
+from projections.schemas import AuctionValuesSchema, Position, RosterSlot
 
 # RosterSlot keys that consume position-specific picks at draft. FLEX, SUPER_FLEX, BENCH
 # fill from the remainder. IR is excluded (post-draft).
@@ -130,8 +130,120 @@ def generate_auction_values(
     league_config: LeagueConfig,
     reference_prices: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Placeholder. Implemented in Task 5."""
-    raise NotImplementedError
+    """Convert per-player VORP into per-player auction dollars under `league_config`.
+
+    Returns a DataFrame validated against `AuctionValuesSchema`. One row per player
+    in `vorp_table`. Players not in the rostered pool get `auction_dollars=0` and
+    `pool_rank=NA`. `reference_dollars` and `value_delta` are present in the output
+    regardless of whether `reference_prices` was passed (all-NA when not passed).
+
+    See spec §3 for the SOS algorithm and §6 for edge-case decisions.
+    """
+    # Input validation.
+    if vorp_table["gsis_id"].duplicated().any():
+        dup = vorp_table.loc[vorp_table["gsis_id"].duplicated(), "gsis_id"].iloc[0]
+        raise ValueError(f"vorp_table has duplicate gsis_id rows (first duplicate: {dup}).")
+
+    # Step 1 - build the rostered pool.
+    pool_ids = _select_pool(vorp_table, league_config)
+    pool_set = set(pool_ids)
+
+    # Step 2 - compute the surplus.
+    total_budget = league_config.total_budget
+    reserve = league_config.total_pool_size * league_config.min_bid
+    surplus = total_budget - reserve
+
+    # Step 3 - allocate surplus to positive VORP.
+    pool_df = vorp_table[vorp_table["gsis_id"].isin(pool_set)].copy()
+    positive_vorp = pool_df["vorp"].clip(lower=0.0)
+    positive_vorp_sum = float(positive_vorp.sum())
+
+    if positive_vorp_sum > 0:
+        extra_float = (positive_vorp / positive_vorp_sum) * surplus
+    else:
+        # Degenerate case: distribute surplus uniformly.
+        extra_float = pd.Series(surplus / league_config.total_pool_size, index=pool_df.index)
+
+    pool_df["_dollars_float"] = league_config.min_bid + extra_float
+
+    # Step 4 - round and close drift.
+    rounded = pool_df["_dollars_float"].round().astype("int64")
+    drift = total_budget - int(rounded.sum())
+    if drift != 0:
+        fractional = pool_df["_dollars_float"] - pool_df["_dollars_float"].astype("int64")
+        # When drift > 0 we need to add: pick rows with largest fractional parts.
+        # When drift < 0 we need to subtract: pick rows with smallest fractional parts.
+        order = fractional.sort_values(ascending=(drift < 0)).index
+        step = 1 if drift > 0 else -1
+        for idx in order[: abs(drift)]:
+            rounded.loc[idx] = rounded.loc[idx] + step
+    pool_df["auction_dollars"] = rounded.astype(pd.Int64Dtype())
+
+    # Step 5 - rank within pool.
+    rank_sort = pool_df.sort_values(
+        by=["auction_dollars", "vorp", "season_mean_fpts", "gsis_id"],
+        ascending=[False, False, False, True],
+        kind="mergesort",
+    )
+    rank_sort["pool_rank"] = range(1, len(rank_sort) + 1)
+    pool_df = pool_df.merge(
+        rank_sort[["gsis_id", "pool_rank"]],
+        on="gsis_id",
+        how="left",
+    )
+
+    # Assemble the full output: pool + non-pool rows.
+    non_pool_df = vorp_table[~vorp_table["gsis_id"].isin(pool_set)].copy()
+    non_pool_df["auction_dollars"] = pd.array([0] * len(non_pool_df), dtype=pd.Int64Dtype())
+    non_pool_df["pool_rank"] = pd.array([pd.NA] * len(non_pool_df), dtype=pd.Int64Dtype())
+
+    out = pd.concat(
+        [
+            pool_df[
+                [
+                    "gsis_id",
+                    "position",
+                    "season_mean_fpts",
+                    "vorp",
+                    "auction_dollars",
+                    "pool_rank",
+                ]
+            ],
+            non_pool_df[
+                [
+                    "gsis_id",
+                    "position",
+                    "season_mean_fpts",
+                    "vorp",
+                    "auction_dollars",
+                    "pool_rank",
+                ]
+            ],
+        ],
+        ignore_index=True,
+    )
+    out["in_pool"] = out["gsis_id"].isin(pool_set)
+
+    # Step 6 - attach reference prices (implemented in Task 6 - stub for now).
+    out["reference_dollars"] = pd.array([pd.NA] * len(out), dtype=pd.Int64Dtype())
+    out["value_delta"] = pd.array([pd.NA] * len(out), dtype=pd.Int64Dtype())
+
+    # Re-order columns to match AuctionValuesSchema.
+    out = out[
+        [
+            "gsis_id",
+            "position",
+            "season_mean_fpts",
+            "vorp",
+            "in_pool",
+            "auction_dollars",
+            "pool_rank",
+            "reference_dollars",
+            "value_delta",
+        ]
+    ]
+
+    return AuctionValuesSchema.validate(out)
 
 
 __all__ = ["generate_auction_values"]
