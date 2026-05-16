@@ -5,8 +5,11 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from projections.draft._pool import _FLEX_ELIGIBLE, _select_pool
-from projections.draft.auction import generate_auction_values
+from projections.draft.auction import (
+    _FLEX_ELIGIBLE,
+    _select_pool,
+    generate_auction_values,
+)
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import (
     _PYARROW_STR,

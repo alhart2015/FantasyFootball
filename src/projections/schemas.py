@@ -827,26 +827,6 @@ class ProjectionSeasonSchema(pa.DataFrameModel):
         coerce = True
 
 
-class VorpTableSchema(pa.DataFrameModel):
-    """Per-player VORP table. Consumer-facing output of the VORP generator.
-
-    Direct input contract for `AuctionValuesSchema`'s upstream and for the
-    snake-draft cheat sheet. One row per player at a position present in the
-    caller's `LeagueConfig.roster_slots`; rows at out-of-scope positions are
-    dropped by the generator. `vorp` may be negative (sub-replacement players).
-    """
-
-    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", unique=True)
-    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
-    season_mean_fpts: Series[float]
-    vorp: Series[float]
-    replacement_fpts: Series[float] = pa.Field(ge=0)
-
-    class Config:
-        strict = "filter"
-        coerce = True
-
-
 class AuctionValuesSchema(pa.DataFrameModel):
     """Per-player auction $ allocation. Consumer-facing output of the auction-values generator.
 

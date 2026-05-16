@@ -59,7 +59,7 @@ Everything below decomposes those gaps into actionable items.
 
 ### 2a. Foundational valuation
 
-- [x] **Replacement-level / VORP per position.** From season-mean projections, derive `mean_fpts − replacement_fpts(pos, league_size, roster_slots)`. Need league config (size, slots, scoring) as an input. Shipped on `feat/vorp` (2026-05-16) via `src/projections/draft/vorp.py` + `scripts/generate_vorp_table.py` (pool-boundary method; spec `2026-05-16-vorp-design.md`). Output is the input contract for the shipped auction-values CLI and the upcoming snake-draft cheat sheet.
+- [ ] **Replacement-level / VORP per position.** From season-mean projections, derive `mean_fpts − replacement_fpts(pos, league_size, roster_slots)`. Need league config (size, slots, scoring) as an input.
 - [ ] **Tier breaks.** Cluster players within position by season-mean (or by 90th-percentile for upside formats) so the live recommender can flag "last player in tier X" cliffs.
 - [ ] **Confidence bands per ranking.** Translate `season_p10 / p90` into a "floor rank" and "ceiling rank" so the UI can show range, not just point estimate.
 
