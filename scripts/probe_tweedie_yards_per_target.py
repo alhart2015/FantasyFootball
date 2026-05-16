@@ -29,18 +29,25 @@ from projections.backtest.tweedie_yards_per_target_probe import (
     walk_forward_residuals,
 )
 from projections.features.cache import read_features
-from projections.schemas import Position
+from projections.schemas import Position, Ruleset
 from projections.store import read_partition
 
 _DEFAULT_EVAL_YEARS: tuple[int, ...] = (2021, 2022, 2023, 2024)
 _VALID_YEARS: tuple[int, ...] = (2018, 2019, 2020, 2021, 2022, 2023, 2024)
 _COVERAGE_THRESHOLD: float = 0.95
 
-# Marginal-zone threshold on receiving_yards: 0.05 yards is the per-stat
-# equivalent of PR #31's 0.005 fpts composite-fpts threshold, given PPR yards
-# coefficient = 0.1 fpts/yard. ASCII text only in stdout/file output to avoid
-# Windows cp1252 encoding crashes (spec section 5 risk #8).
-_MARGINAL_ZONE_THRESHOLD: float = 0.05
+# Marginal-zone threshold per PR #31's retrospective rule (|delta_fpts| < 0.005
+# composite-fpts). The probe works in yards space (the per-stat unit), so the
+# yards threshold is derived from the canonical PPR scoring constant rather
+# than hardcoded. ASCII text only in stdout/file output to avoid Windows cp1252
+# encoding crashes (spec section 5 risk #8).
+_YARDS_PER_FPT: float = Ruleset.espn_ppr().receiving_yds_per_pt
+_MARGINAL_ZONE_FPTS: float = 0.005
+_MARGINAL_ZONE_THRESHOLD: float = _MARGINAL_ZONE_FPTS * _YARDS_PER_FPT
+
+# Minimum paired-row count for a per-year bootstrap CI to be meaningful. Below
+# this, _per_year_breakdown emits NaN deltas for the year.
+_MIN_ROWS_PER_YEAR_BOOTSTRAP: int = 100
 
 
 def _load_inputs(
@@ -69,30 +76,24 @@ def _per_year_breakdown(results: ProbeResults, *, n_bootstrap: int, seed: int) -
     rows: list[dict[str, object]] = []
     for year in np.unique(results.year):
         mask = results.year == year
-        if mask.sum() < 100:
-            rows.append(
-                {
-                    "year": int(year),
-                    "n_paired": int(mask.sum()),
-                    "rmse_delta_point": float("nan"),
-                    "rmse_delta_lo": float("nan"),
-                    "rmse_delta_hi": float("nan"),
-                    "coverage": results.coverage_per_year.get(int(year), float("nan")),
-                }
+        n_paired = int(mask.sum())
+        point: float = float("nan")
+        lo: float = float("nan")
+        hi: float = float("nan")
+        if n_paired >= _MIN_ROWS_PER_YEAR_BOOTSTRAP:
+            inc_residuals = results.actual_yards[mask] - results.pred_ridge[mask]
+            cand_residuals = results.actual_yards[mask] - results.pred_tweedie[mask]
+            delta = paired_bootstrap_rmse_delta(
+                inc_residuals, cand_residuals, n_bootstrap=n_bootstrap, seed=seed
             )
-            continue
-        inc_residuals = results.actual_yards[mask] - results.pred_ridge[mask]
-        cand_residuals = results.actual_yards[mask] - results.pred_tweedie[mask]
-        delta = paired_bootstrap_rmse_delta(
-            inc_residuals, cand_residuals, n_bootstrap=n_bootstrap, seed=seed
-        )
+            point, lo, hi = delta.point, delta.lo_95, delta.hi_95
         rows.append(
             {
                 "year": int(year),
-                "n_paired": int(mask.sum()),
-                "rmse_delta_point": delta.point,
-                "rmse_delta_lo": delta.lo_95,
-                "rmse_delta_hi": delta.hi_95,
+                "n_paired": n_paired,
+                "rmse_delta_point": point,
+                "rmse_delta_lo": lo,
+                "rmse_delta_hi": hi,
                 "coverage": results.coverage_per_year.get(int(year), float("nan")),
             }
         )
@@ -124,14 +125,17 @@ def _write_summary(
             f"(95% CI [{verdict.rmse_delta.lo_95:+.4f}, "
             f"{verdict.rmse_delta.hi_95:+.4f}])"
         ),
-        (f"- Composite-fpts equivalent (yards * 0.1): {verdict.rmse_delta.point * 0.1:+.4f} fpts"),
+        (
+            f"- Composite-fpts equivalent (yards / {_YARDS_PER_FPT:g}): "
+            f"{verdict.rmse_delta.point / _YARDS_PER_FPT:+.4f} fpts"
+        ),
         "",
     ]
     if abs(verdict.rmse_delta.point) < _MARGINAL_ZONE_THRESHOLD:
         lines.append(
             f"**Magnitude flag:** |delta| {abs(verdict.rmse_delta.point):.4f} < "
             f"{_MARGINAL_ZONE_THRESHOLD:.3f} yards "
-            "(|delta_fpts| < 0.005) -- in the marginal zone per PR #31's "
+            f"(|delta_fpts| < {_MARGINAL_ZONE_FPTS}) -- in the marginal zone per PR #31's "
             "retrospective rule. Integration go/no-go must weight CI strength "
             "against magnitude."
         )
