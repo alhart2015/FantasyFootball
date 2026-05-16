@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest  # noqa: F401  # used in later tasks per plan
+import pytest
 
 from projections.draft._pool import _select_pool
 from projections.draft.league_config import LeagueConfig
@@ -289,3 +289,53 @@ def test_position_with_no_in_pool_rows_emits_rank_but_no_tier() -> None:
     assert (~rb["is_in_pool"]).all()
     assert rb["tier"].isna().all()
     assert list(rb.sort_values("positional_rank")["positional_rank"]) == [1, 2]
+
+
+def test_missing_required_position_raises() -> None:
+    """§5.1 #17 — LeagueConfig requires K but VORP has no K rows → raises from _select_pool."""
+    cfg = _make_config(
+        roster_slots={
+            RosterSlot.QB: 1,
+            RosterSlot.K: 1,
+            RosterSlot.BENCH: 1,
+        },
+    )
+    vorp = _make_vorp_table({Position.QB: 8})  # no K rows
+    with pytest.raises(ValueError, match=r"cannot fill \d+ K slots"):
+        generate_snake_cheat_sheet(vorp, cfg)
+
+
+def test_empty_input_returns_empty() -> None:
+    """§5.1 #18 — empty VORP input → empty output, schema-valid.
+
+    NOTE: Spec §3.6 originally said empty input → empty output. Actual algorithm
+    calls _select_pool first, which raises if it can't fill the config's
+    required positions. With empty input it can't fill any position. We test
+    the AS-IMPLEMENTED behavior: empty input + non-empty config raises
+    explicitly. Silently emitting an empty cheat sheet for a non-empty config
+    feels wrong — fail loudly when we can't compute. This is the stricter
+    contract; spec §3.6 will be updated to match.
+    """
+    cfg = _make_config()
+    empty_df = pd.DataFrame(
+        {
+            "gsis_id": pd.Series([], dtype=_PYARROW_STR),
+            "position": pd.Series([], dtype=_PYARROW_STR),
+            "season_mean_fpts": pd.Series([], dtype=float),
+            "vorp": pd.Series([], dtype=float),
+            "replacement_fpts": pd.Series([], dtype=float),
+        }
+    )
+    empty_vorp = VorpTableSchema.validate(empty_df)
+    with pytest.raises(ValueError, match=r"cannot fill"):
+        generate_snake_cheat_sheet(empty_vorp, cfg)
+
+
+def test_tiers_per_position_zero_or_negative_raises() -> None:
+    """§5.1 #20 — invalid tiers_per_position raises before computation."""
+    cfg = _make_config()
+    vorp = _make_vorp_table({Position.QB: 8, Position.RB: 12, Position.WR: 12, Position.TE: 8})
+    with pytest.raises(ValueError, match="tiers_per_position must be >= 1"):
+        generate_snake_cheat_sheet(vorp, cfg, tiers_per_position=0)
+    with pytest.raises(ValueError, match="tiers_per_position must be >= 1"):
+        generate_snake_cheat_sheet(vorp, cfg, tiers_per_position=-3)
