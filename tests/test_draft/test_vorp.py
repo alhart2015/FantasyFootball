@@ -394,21 +394,20 @@ def test_determinism() -> None:
 
 
 def test_pool_equivalence_with_auction() -> None:
-    """The pool composition VORP computes against equals the pool auction computes against
-    when given VORP's output, modulo tie-breaks (which require equal season_mean_fpts to differ).
+    """VORP's internal pool selection matches auction's pool over VORP's output.
 
-    With distinct fpts at every row, the two pool calls produce identical sets.
+    With distinct fpts at every row, ties play no role and the two pool calls
+    produce identical sets.
     """
     from projections.draft._pool import _select_pool
 
     cfg = _make_config()
     inputs = _bulk_input({Position.QB: 20, Position.RB: 20, Position.WR: 20, Position.TE: 20})
     vorp_out = generate_vorp_table(inputs, cfg)
-    # VORP's internal pool (run without vorp column)
-    pool_input_vorpless = inputs[["gsis_id", "position", "season_mean"]].rename(
+    pool_input_internal = inputs[["gsis_id", "position", "season_mean"]].rename(
         columns={"season_mean": "season_mean_fpts"}
     )
-    pool_internal = set(_select_pool(pool_input_vorpless, cfg))
-    # Auction's pool over the VORP table (run with vorp column, tie-breaks on it)
+    pool_input_internal["vorp"] = 0.0
+    pool_internal = set(_select_pool(pool_input_internal, cfg))
     pool_auction = set(_select_pool(vorp_out, cfg))
     assert pool_internal == pool_auction

@@ -30,7 +30,6 @@ from projections.schemas import (
 )
 from projections.scoring import derive_row_seed, score_distribution
 
-# Pattern adapted from tests/test_aggregation/test_season.py::_build_weekly_row.
 _RULESET = Ruleset.espn_ppr()
 
 _POSITION_ID_PREFIX = {Position.QB: 1, Position.RB: 2, Position.WR: 3, Position.TE: 4}
@@ -44,11 +43,7 @@ def _build_weekly_row(
     position: str,
     ruleset_name: str,
 ) -> dict[str, Any]:
-    """Materialize one ProjectionWeeklySchema-valid row with SAMPLED_SUMMARY codec.
-
-    Pattern lifted from tests/test_aggregation/test_season.py — the canonical
-    way to build a weekly-projection fixture in this repo.
-    """
+    """Materialize one ProjectionWeeklySchema-valid row with SAMPLED_SUMMARY codec."""
     per_stat_dists: dict[Stat, Distribution] = {
         Stat.RECEIVING_YARDS: ParametricNormal(mean=50.0, std=18.0),
         Stat.RECEPTIONS: ParametricGamma(shape=4.0, scale=0.7),
@@ -142,9 +137,8 @@ def cli_inputs(tmp_path: Path) -> dict[str, Path]:
         )
     )
     weekly_root = tmp_path / "weekly" / "ruleset=espn_ppr"
-    # IMPORTANT: ruleset_name in the weekly partition rows MUST match
-    # Ruleset.espn_ppr().name which is "ESPN_PPR" (uppercase), not "espn_ppr".
-    # See aggregate_to_season's strict ruleset check.
+    # `ruleset_name` in the partition rows must equal `Ruleset.espn_ppr().name`
+    # ("ESPN_PPR", uppercase) — aggregate_to_season's ruleset check is exact.
     _make_weekly_partition(
         partition_root=weekly_root,
         season=2026,

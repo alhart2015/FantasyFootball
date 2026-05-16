@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import pandas as pd
 
-from projections.draft._pool import _POSITION_SLOTS, _select_pool
+from projections.draft._pool import (
+    _POSITION_SLOTS,
+    _reject_duplicate_gsis_ids,
+    _select_pool,
+)
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import (
     _PYARROW_STR,
@@ -46,11 +50,6 @@ def _in_scope_positions(league_config: LeagueConfig) -> frozenset[str]:
 
 
 def _validate_input(season_projections: pd.DataFrame, league_config: LeagueConfig) -> pd.DataFrame:
-    """Run pandera + cross-row contract checks; return the validated frame.
-
-    Raises ValueError on: mixed ruleset, mismatched ruleset, mixed season,
-    duplicate gsis_id. Empty input returns an empty validated frame.
-    """
     df = ProjectionSeasonSchema.validate(season_projections)
     if df.empty:
         return df
@@ -71,10 +70,7 @@ def _validate_input(season_projections: pd.DataFrame, league_config: LeagueConfi
             f"season_projections contains multiple seasons: {sorted(seasons.tolist())}"
         )
 
-    if df["gsis_id"].duplicated().any():
-        dup = df.loc[df["gsis_id"].duplicated(), "gsis_id"].iloc[0]
-        raise ValueError(f"season_projections has duplicate gsis_id rows (first duplicate: {dup}).")
-
+    _reject_duplicate_gsis_ids(df, "season_projections")
     return df
 
 
@@ -97,7 +93,7 @@ def generate_vorp_table(
     df = _validate_input(season_projections, league_config)
 
     in_scope = _in_scope_positions(league_config)
-    df = df[df["position"].isin(in_scope)].copy()
+    df = df[df["position"].isin(in_scope)]
 
     if df.empty:
         empty = pd.DataFrame(columns=list(_OUTPUT_COLUMNS))
@@ -107,44 +103,39 @@ def generate_vorp_table(
             empty[col] = empty[col].astype("float64")
         return VorpTableSchema.validate(empty)
 
-    # Single rename boundary per VORP spec §6: bridge ProjectionSeasonSchema.season_mean
-    # to the auction layer's season_mean_fpts. Do NOT add a second rename elsewhere.
+    # ProjectionSeasonSchema uses `season_mean`; the auction layer (and _select_pool)
+    # uses `season_mean_fpts`. Bridge here so all downstream code sees one name.
     pool_input = df[["gsis_id", "position", "season_mean"]].rename(
         columns={"season_mean": "season_mean_fpts"}
     )
+    pool_input["vorp"] = 0.0
     pool_ids = set(_select_pool(pool_input, league_config))
 
     replacement_by_position: dict[str, float] = {}
     for pos in in_scope:
         pos_rows = df[df["position"] == pos]
         if pos_rows.empty:
-            # Position is in the league but absent from projections; nothing
-            # to broadcast — skip and rely on the in-scope filter above to
-            # ensure no surviving row references it.
             continue
         non_pool = pos_rows[~pos_rows["gsis_id"].isin(pool_ids)]
         if non_pool.empty:
-            # Every player at this position is in the pool — replacement is
-            # the min projection at the position (the bottom player ends up
-            # at VORP 0). See spec §3.1 step 3.
+            # All players at this position are in the pool — replacement is the
+            # min projection (bottom player lands at VORP 0). Spec §3.1 step 3.
             replacement_by_position[pos] = float(pos_rows["season_mean"].min())
         else:
             replacement_by_position[pos] = float(non_pool["season_mean"].max())
 
+    season_mean_fpts = df["season_mean"].astype("float64").to_numpy()
+    replacement_fpts = df["position"].map(replacement_by_position).astype("float64").to_numpy()
     out = pd.DataFrame(
         {
-            "gsis_id": df["gsis_id"].astype(_PYARROW_STR).values,
-            "position": df["position"].astype(_PYARROW_STR).values,
-            "season_mean_fpts": df["season_mean"].astype("float64").values,
-            "replacement_fpts": df["position"]
-            .map(replacement_by_position)
-            .astype("float64")
-            .values,
+            "gsis_id": df["gsis_id"].astype(_PYARROW_STR).to_numpy(),
+            "position": df["position"].astype(_PYARROW_STR).to_numpy(),
+            "season_mean_fpts": season_mean_fpts,
+            "vorp": season_mean_fpts - replacement_fpts,
+            "replacement_fpts": replacement_fpts,
         }
     )
-    out["vorp"] = (out["season_mean_fpts"] - out["replacement_fpts"]).astype("float64")
-    out = out[list(_OUTPUT_COLUMNS)]
-    return VorpTableSchema.validate(out)
+    return VorpTableSchema.validate(out[list(_OUTPUT_COLUMNS)])
 
 
 __all__ = ["generate_vorp_table"]

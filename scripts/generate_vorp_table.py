@@ -17,6 +17,7 @@ from projections.aggregation.season import aggregate_to_season
 from projections.draft.league_config import LeagueConfig
 from projections.draft.vorp import generate_vorp_table
 from projections.schemas import Position, ProjectionWeeklySchema
+from projections.store import read_partition
 
 
 def _parse_args() -> argparse.Namespace:
@@ -44,20 +45,6 @@ def _parse_args() -> argparse.Namespace:
         help="Output path; .csv or .parquet (sniffed by extension).",
     )
     return parser.parse_args()
-
-
-def _read_weekly_partition(root: Path, season: int) -> pd.DataFrame:
-    """Read every part.parquet under `root/season=YYYY/week=WW/`. Errors if zero files."""
-    season_dir = root / f"season={season}"
-    if not season_dir.exists():
-        raise FileNotFoundError(
-            f"No partition directory at {season_dir!s}. Did predict_*.py run for this season?"
-        )
-    paths = sorted(season_dir.glob("week=*/part.parquet"))
-    if not paths:
-        raise FileNotFoundError(f"No week=*/part.parquet files under {season_dir!s}.")
-    frames = [pd.read_parquet(p) for p in paths]
-    return pd.concat(frames, ignore_index=True)
 
 
 def _log_per_position_summary(
@@ -92,16 +79,9 @@ def main() -> int:
     args = _parse_args()
     league_config = LeagueConfig.model_validate_json(args.league_config.read_text())
 
-    weekly = _read_weekly_partition(args.weekly_projections, args.season)
+    weekly_root: Path = args.weekly_projections
+    weekly = read_partition(weekly_root.parent, table=weekly_root.name, season=args.season)
     weekly = ProjectionWeeklySchema.validate(weekly)
-    weekly = weekly[weekly["ruleset"] == league_config.ruleset.name]
-    if weekly.empty:
-        print(
-            f"ERROR: no rows in {args.weekly_projections!s} match "
-            f"ruleset={league_config.ruleset.name}",
-            file=sys.stderr,
-        )
-        return 1
 
     season_proj = aggregate_to_season(weekly, ruleset=league_config.ruleset)
 
