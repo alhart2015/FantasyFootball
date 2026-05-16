@@ -16,7 +16,7 @@ import pandas as pd
 from projections.aggregation.season import aggregate_to_season
 from projections.draft.league_config import LeagueConfig
 from projections.draft.vorp import generate_vorp_table
-from projections.schemas import _POSITION_VALUES, ProjectionWeeklySchema
+from projections.schemas import Position, ProjectionWeeklySchema
 
 
 def _parse_args() -> argparse.Namespace:
@@ -70,17 +70,10 @@ def _log_per_position_summary(
     print(f"VORP table written: {len(vorp_table)} players, ruleset={league_config.ruleset.name}")
     print()
     print("Position summary (replacement_fpts | in-scope row count | top-3 by VORP):")
-    for pos in _POSITION_VALUES:
-        in_config = any(
-            slot.value == pos and count > 0 for slot, count in league_config.roster_slots.items()
-        )
+    for pos_enum in Position:
+        pos = pos_enum.value
         pos_rows = vorp_table[vorp_table["position"] == pos]
         if pos_rows.empty:
-            if in_config:
-                print(
-                    f"  {pos:>3}  MISSING from projection input — "
-                    f"required by LeagueConfig; auction-values will error."
-                )
             continue
         replacement = float(pos_rows["replacement_fpts"].iloc[0])
         top3 = pos_rows.nlargest(3, "vorp")[["gsis_id", "vorp"]]
