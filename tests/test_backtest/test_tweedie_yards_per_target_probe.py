@@ -170,7 +170,9 @@ def test_predict_yards_ridge_clips_negative_to_zero() -> None:
 
 
 def test_predict_yards_tweedie_uses_inverse_log_link() -> None:
-    """Tweedie prediction equals mu_targets * pipeline.predict(X)."""
+    """Tweedie prediction equals mu_targets * pipeline.predict(X), AND the
+    pipeline applies the inverse-log link exp(scaled_X @ coef + intercept).
+    """
     rng = np.random.default_rng(seed=2034)
     n = 250
     x, y, _ = _synthetic_tweedie_fixture(rng, n=n, b0=1.8, b1=0.4)
@@ -182,7 +184,21 @@ def test_predict_yards_tweedie_uses_inverse_log_link() -> None:
 
     pred = _predict_yards_tweedie(mu_targets, x_eval, pipeline)
 
+    # Composition arm: _predict_yards_tweedie multiplies mu_targets by the
+    # Pipeline's mean prediction.
     expected = mu_targets * pipeline.predict(x_eval).astype(np.float64)
     assert np.allclose(pred, expected)
-    # All Tweedie predictions strictly positive (log link).
+
+    # Inverse-log-link arm: reconstruct Pipeline.predict by manually applying
+    # exp(scaler.transform(x_eval) @ coef_ + intercept_). Pins that the log
+    # link is actually applied (would catch a regression to link="identity").
+    scaler = pipeline.named_steps["scaler"]
+    gscv = pipeline.named_steps["gscv"]
+    tweedie = gscv.best_estimator_
+    x_scaled = scaler.transform(x_eval)
+    linear_pred = x_scaled @ tweedie.coef_ + tweedie.intercept_
+    reconstructed = np.exp(linear_pred)
+    assert np.allclose(pipeline.predict(x_eval).astype(np.float64), reconstructed)
+
+    # All Tweedie predictions strictly positive (log link guarantees this).
     assert (pred > 0).all()
