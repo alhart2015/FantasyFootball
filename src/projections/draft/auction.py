@@ -171,9 +171,23 @@ def generate_auction_values(
     drift = total_budget - int(rounded.sum())
     if drift != 0:
         fractional = pool_df["_dollars_float"] - pool_df["_dollars_float"].astype("int64")
-        # When drift > 0 we need to add: pick rows with largest fractional parts.
-        # When drift < 0 we need to subtract: pick rows with smallest fractional parts.
-        order = fractional.sort_values(ascending=(drift < 0)).index
+        if drift > 0:
+            # Add 1 to the rows whose float is closest to the next integer up.
+            order = fractional.sort_values(ascending=False).index
+        else:
+            # Subtract 1 from the rows whose float is closest to the next integer down,
+            # but exclude rows already at min_bid (the floor) — those can't absorb -1.
+            adjustable_mask = rounded > league_config.min_bid
+            order = fractional[adjustable_mask].sort_values(ascending=True).index
+            if len(order) < abs(drift):
+                # Pathologically small pool where the floor blocks closure. This shouldn't
+                # happen on real auction inputs (it requires extreme rounding pressure),
+                # but if it does, we surface it rather than silently violate the floor.
+                raise ValueError(
+                    f"Cannot close rounding drift of {drift} without violating min_bid "
+                    f"floor of ${league_config.min_bid}. This usually indicates an extreme "
+                    f"degenerate input (e.g., very small budget per slot)."
+                )
         step = 1 if drift > 0 else -1
         for idx in order[: abs(drift)]:
             rounded.loc[idx] = rounded.loc[idx] + step
