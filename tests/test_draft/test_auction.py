@@ -335,3 +335,40 @@ def test_duplicate_gsis_id_rejected() -> None:
     df = _make_vorp_table(rows)
     with pytest.raises(ValueError, match="duplicate"):
         generate_auction_values(df, cfg)
+
+
+def test_min_bid_floor_preserved_under_negative_drift() -> None:
+    """Regression: drift-correction step must NOT push in-pool players below min_bid.
+
+    Setup: tiny pool where naive rounding produces negative drift AND the
+    smallest-fractional candidates are already at the min_bid floor. Without
+    the floor-protection in step 4, one player ends up at $0.
+    """
+    cfg = LeagueConfig(
+        name="tiny_drift_case",
+        n_teams=5,
+        budget=2,
+        min_bid=1,
+        roster_slots={RosterSlot.QB: 1},
+        ruleset=Ruleset.standard(),
+    )
+    # 5 QBs, vorps [1, 1, 1, 0, 0] → extras [1.667, 1.667, 1.667, 0, 0]
+    # → _dollars_float [2.667, 2.667, 2.667, 1.0, 1.0]
+    # → round [3, 3, 3, 1, 1], sum=11, drift=-1
+    # Without the fix, one of the floor players gets adjusted to 0.
+    rows = [
+        {"gsis_id": "00-1000001", "position": "QB", "season_mean_fpts": 200.0, "vorp": 1.0},
+        {"gsis_id": "00-1000002", "position": "QB", "season_mean_fpts": 190.0, "vorp": 1.0},
+        {"gsis_id": "00-1000003", "position": "QB", "season_mean_fpts": 180.0, "vorp": 1.0},
+        {"gsis_id": "00-1000004", "position": "QB", "season_mean_fpts": 170.0, "vorp": 0.0},
+        {"gsis_id": "00-1000005", "position": "QB", "season_mean_fpts": 160.0, "vorp": 0.0},
+    ]
+    df = _make_vorp_table(rows)
+    out = generate_auction_values(df, cfg)
+    in_pool = out[out["in_pool"]]
+    # Every in-pool player must be at least min_bid.
+    assert (in_pool["auction_dollars"] >= cfg.min_bid).all(), in_pool[
+        ["gsis_id", "auction_dollars"]
+    ].to_string()
+    # And the sum invariant still holds.
+    assert int(in_pool["auction_dollars"].sum()) == cfg.total_budget
