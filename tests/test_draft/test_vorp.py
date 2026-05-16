@@ -300,3 +300,77 @@ def test_duplicate_gsis_id_raises() -> None:
     # by NOT calling _make_season_projections.
     with pytest.raises(ValueError, match="duplicate gsis_id"):
         generate_vorp_table(df, cfg)
+
+
+def test_empty_input_returns_empty() -> None:
+    cfg = _make_config()
+    empty_cols = list(ProjectionSeasonSchema.to_schema().columns.keys())
+    empty = pd.DataFrame(columns=empty_cols)
+    out = generate_vorp_table(empty, cfg)
+    assert out.empty
+    VorpTableSchema.validate(out)
+
+
+def test_position_in_input_but_not_in_config_dropped() -> None:
+    """K rows in input but no K slot in LeagueConfig → K rows dropped."""
+    cfg = _make_config()  # no K, no DST
+    inputs = _bulk_input(
+        {Position.QB: 20, Position.RB: 20, Position.WR: 20, Position.TE: 20, Position.K: 10}
+    )
+    out = generate_vorp_table(inputs, cfg)
+    assert (out["position"] != Position.K.value).all()
+    assert len(out) == 80  # K rows dropped, others kept
+
+
+def test_position_in_config_but_not_in_input_silent() -> None:
+    """LeagueConfig requires K but input has no K → _select_pool raises."""
+    cfg = _make_config(
+        roster_slots={
+            RosterSlot.QB: 1,
+            RosterSlot.RB: 2,
+            RosterSlot.WR: 2,
+            RosterSlot.TE: 1,
+            RosterSlot.FLEX: 1,
+            RosterSlot.K: 1,  # required by config
+            RosterSlot.BENCH: 1,
+        }
+    )
+    # Input has plenty of QB/RB/WR/TE but no K — _select_pool will raise on the K slot.
+    inputs = _bulk_input({Position.QB: 20, Position.RB: 20, Position.WR: 20, Position.TE: 20})
+    with pytest.raises(ValueError, match="cannot fill"):
+        generate_vorp_table(inputs, cfg)
+
+
+def test_all_players_at_position_fit_in_pool() -> None:
+    """Exactly enough QBs for the pool → replacement = min(QB fpts), bottom VORP = 0."""
+    cfg = _make_config(
+        n_teams=4,
+        roster_slots={
+            RosterSlot.QB: 1,
+            RosterSlot.RB: 2,
+            RosterSlot.WR: 2,
+            RosterSlot.TE: 1,
+            RosterSlot.BENCH: 0,
+        },
+    )
+    # n_teams * roster_size = 4 * 6 = 24 picks total. QBs needed: 4 (slot). Provide exactly 4 QBs.
+    rows: list[dict[str, object]] = []
+    rows.extend(_bulk_rows(Position.QB, count=4, base_fpts=300.0))
+    rows.extend(_bulk_rows(Position.RB, count=20, base_fpts=280.0))
+    rows.extend(_bulk_rows(Position.WR, count=20, base_fpts=260.0))
+    rows.extend(_bulk_rows(Position.TE, count=10, base_fpts=200.0))
+    inputs = _make_season_projections(rows)
+    out = generate_vorp_table(inputs, cfg)
+    qb_rows = out[out["position"] == Position.QB.value].sort_values("season_mean_fpts")
+    # Bottom QB has vorp == 0 (replacement = its own projection).
+    assert abs(float(qb_rows["vorp"].iloc[0])) < 1e-9
+    # Replacement for QB equals the minimum QB projection.
+    expected = float(inputs[inputs["position"] == Position.QB.value]["season_mean"].min())
+    assert abs(float(qb_rows["replacement_fpts"].iloc[0]) - expected) < 1e-9
+
+
+def test_underfilled_pool_raises() -> None:
+    cfg = _make_config()  # needs 32 picks (4 teams x 8 roster slots)
+    inputs = _bulk_input({Position.QB: 2, Position.RB: 2, Position.WR: 2, Position.TE: 2})
+    with pytest.raises(ValueError, match="cannot fill"):
+        generate_vorp_table(inputs, cfg)
