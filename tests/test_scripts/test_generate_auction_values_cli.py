@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from projections.schemas import AuctionValuesSchema, Position, RosterSlot
+from projections.schemas import _PYARROW_STR, AuctionValuesSchema, Position, RosterSlot
 
 
 @pytest.fixture
@@ -73,8 +73,8 @@ def cli_inputs(tmp_path: Path) -> dict[str, Path]:
         },
     ]
     df = pd.DataFrame(rows)
-    df["gsis_id"] = df["gsis_id"].astype(pd.StringDtype("pyarrow"))
-    df["position"] = df["position"].astype(pd.StringDtype("pyarrow"))
+    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
+    df["position"] = df["position"].astype(_PYARROW_STR)
     vorp_path = tmp_path / "vorp.parquet"
     df.to_parquet(vorp_path, index=False)
     return {
@@ -146,4 +146,5 @@ def test_cli_errors_on_missing_vorp_input(cli_inputs: dict[str, Path], tmp_path:
             "--out",
             str(cli_inputs["out_csv"]),
         )
-    assert "vorp" in exc_info.value.stderr.lower() or "not exist" in exc_info.value.stderr.lower()
+    stderr = exc_info.value.stderr.lower()
+    assert "no such file" in stderr or "does_not_exist" in stderr

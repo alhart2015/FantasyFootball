@@ -6,11 +6,13 @@ import pandas as pd
 import pytest
 
 from projections.draft.auction import (
+    _FLEX_ELIGIBLE,
     _select_pool,
     generate_auction_values,
 )
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import (
+    _PYARROW_STR,
     AuctionValuesSchema,
     Position,
     RosterSlot,
@@ -48,8 +50,8 @@ def _make_vorp_table(rows: list[dict[str, object]]) -> pd.DataFrame:
     Required keys: gsis_id, position, season_mean_fpts, vorp.
     """
     df = pd.DataFrame(rows)
-    df["gsis_id"] = df["gsis_id"].astype(pd.StringDtype("pyarrow"))
-    df["position"] = df["position"].astype(pd.StringDtype("pyarrow"))
+    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
+    df["position"] = df["position"].astype(_PYARROW_STR)
     df["season_mean_fpts"] = df["season_mean_fpts"].astype("float64")
     df["vorp"] = df["vorp"].astype("float64")
     return df
@@ -190,15 +192,9 @@ def _full_pool_vorp_table(cfg: LeagueConfig, extra_per_position: int = 5) -> pd.
     """Build a VORP table large enough to fill `cfg`'s pool plus a buffer of out-of-pool rows."""
     rows: list[dict[str, object]] = []
     for pos in (Position.QB, Position.RB, Position.WR, Position.TE, Position.K, Position.DST):
-        slot = RosterSlot(pos.value)
-        # Skip positions the league does not roster
-        if cfg.roster_slots.get(slot, 0) == 0 and pos not in (
-            Position.RB,
-            Position.WR,
-            Position.TE,
-        ):
-            continue
-        rows.extend(_bulk_position_rows(pos, count=cfg.n_teams * 4 + extra_per_position))
+        rostered = cfg.roster_slots.get(RosterSlot(pos.value), 0) > 0
+        if rostered or pos in _FLEX_ELIGIBLE:
+            rows.extend(_bulk_position_rows(pos, count=cfg.n_teams * 4 + extra_per_position))
     return _make_vorp_table(rows)
 
 
@@ -319,9 +315,10 @@ def test_degenerate_zero_positive_vorp_distributes_uniformly() -> None:
     df = _make_vorp_table(rows)
     out = generate_auction_values(df, cfg)
     in_pool = out[out["in_pool"]]
-    # total_budget = 200, total_pool_size = 4 -> $50 each
-    assert in_pool["auction_dollars"].tolist() == [50, 50, 50, 50] or (
-        sorted(in_pool["auction_dollars"].tolist()) in ([49, 50, 50, 51], [50, 50, 50, 50])
+    # total_budget = 200, total_pool_size = 4 -> $50 each (or +/-1 if drift redistributes).
+    assert sorted(in_pool["auction_dollars"].tolist()) in (
+        [50, 50, 50, 50],
+        [49, 50, 50, 51],
     )
     assert int(in_pool["auction_dollars"].sum()) == cfg.total_budget
 
@@ -381,7 +378,7 @@ def test_reference_prices_pass_through_matched_rows() -> None:
     first_two = df["gsis_id"].iloc[:2].tolist()
     ref = pd.DataFrame(
         {
-            "gsis_id": pd.array(first_two, dtype=pd.StringDtype("pyarrow")),
+            "gsis_id": pd.array(first_two, dtype=_PYARROW_STR),
             "reference_dollars": pd.array([45, 30], dtype=pd.Int64Dtype()),
         }
     )
@@ -399,7 +396,7 @@ def test_reference_prices_unmatched_rows_get_na() -> None:
     df = _full_pool_vorp_table(cfg)
     ref = pd.DataFrame(
         {
-            "gsis_id": pd.array([df["gsis_id"].iloc[0]], dtype=pd.StringDtype("pyarrow")),
+            "gsis_id": pd.array([df["gsis_id"].iloc[0]], dtype=_PYARROW_STR),
             "reference_dollars": pd.array([45], dtype=pd.Int64Dtype()),
         }
     )
@@ -426,7 +423,7 @@ def test_reference_prices_duplicate_gsis_id_rejected() -> None:
         {
             "gsis_id": pd.array(
                 [df["gsis_id"].iloc[0], df["gsis_id"].iloc[0]],
-                dtype=pd.StringDtype("pyarrow"),
+                dtype=_PYARROW_STR,
             ),
             "reference_dollars": pd.array([45, 50], dtype=pd.Int64Dtype()),
         }
