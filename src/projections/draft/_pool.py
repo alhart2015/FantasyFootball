@@ -66,13 +66,23 @@ def _select_pool(vorp_table: pd.DataFrame, league_config: LeagueConfig) -> list[
     Returns a list of length `league_config.total_pool_size`. Selection order:
     position-specific slots, then FLEX, then SUPER_FLEX, then BENCH. Within each
     pass, players are ranked by `season_mean_fpts` desc, tie-broken by `vorp` desc
-    then `gsis_id` asc.
+    (if column present) then `gsis_id` asc. Callers that don't yet have a VORP
+    value (e.g. the VORP generator itself) can omit the `vorp` column entirely;
+    the tie-break falls back to `gsis_id` alone.
 
     Raises `ValueError` if any required position is missing from `vorp_table`.
     """
+    sort_cols = ["season_mean_fpts"]
+    sort_asc = [False]
+    if "vorp" in vorp_table.columns:
+        sort_cols.append("vorp")
+        sort_asc.append(False)
+    sort_cols.append("gsis_id")
+    sort_asc.append(True)
+
     sorted_df = vorp_table.sort_values(
-        by=["season_mean_fpts", "vorp", "gsis_id"],
-        ascending=[False, False, True],
+        by=sort_cols,
+        ascending=sort_asc,
         kind="mergesort",
     ).reset_index(drop=True)
 
