@@ -238,22 +238,18 @@ python scripts/generate_vorp_table.py \
 **Per-position stdout summary (eyeball mitigation):**
 
 ```
-VORP table written to reports/vorp_2026.parquet (300 players, ruleset=espn_ppr)
+VORP table written: 300 players, ruleset=ESPN_PPR
 
-Position summary (replacement-fpts per position, top-3 by VORP, in-pool count):
-  QB  replacement=242.1 fpts   in_pool=14   top: P.Mahomes (VORP+91.3), J.Allen (VORP+78.0), L.Jackson (VORP+72.5)
-  RB  replacement= 98.4 fpts   in_pool=50   top: C.McCaffrey (VORP+181.2), B.Robinson (VORP+109.0), ...
-  WR  replacement=130.9 fpts   in_pool=62   top: J.Chase (VORP+115.7), ...
-  TE  replacement= 87.2 fpts   in_pool=19   top: T.Kelce (VORP+62.1), ...
-  K   replacement=NaN           in_pool=0    SKIPPED (no K rows in projection input)
-  DST replacement=NaN           in_pool=0    SKIPPED (no DST rows in projection input)
-
-WARNING: LeagueConfig requires K, DST but VORP produced no rows for these positions.
-         Auction-values generation will fail unless --league-config is changed or K/DST
-         projections are added (see TODO.md #10).
+Position summary (replacement_fpts | in-scope row count | top-3 by VORP):
+  QB  replacement= 242.10  rows= 14  top: 00-0033873(VORP+91.3), 00-0034796(VORP+78.0), 00-0034857(VORP+72.5)
+  RB  replacement=  98.40  rows= 50  top: 00-0034681(VORP+181.2), 00-0036244(VORP+109.0), 00-0036414(VORP+95.4)
+  WR  replacement= 130.90  rows= 62  top: 00-0036442(VORP+115.7), 00-0033921(VORP+88.2), 00-0036414(VORP+79.9)
+  TE  replacement=  87.20  rows= 19  top: 00-0030506(VORP+62.1), 00-0032764(VORP+44.5), 00-0035245(VORP+31.2)
 ```
 
 The user can sanity-check that replacement-level looks reasonable (~RB30-ish region projecting to ~100 fpts is plausible) and that the top of each position list makes sense. Cheap, no extra schema.
+
+Note: positions that are absent from the projection input (today: K and DST) simply don't appear in the summary — `_log_per_position_summary` skips empty position-row sets. If `LeagueConfig.roster_slots` requires a position with zero input rows, the function raises from `_select_pool` before reaching this summary; the CLI surfaces the raise as a non-zero exit with a "cannot fill N {slot} slots" message. See §3.6 / §5.1 #17 and §5.4 #26.
 
 ---
 
@@ -299,7 +295,7 @@ Appended to `tests/test_schemas/test_dataframe_schemas.py`:
 ### 5.4 CLI integration test in `test_generate_vorp_table_cli.py`
 
 25. **End-to-end with a known fixture.** Synthetic weekly-projections parquet partition + known `LeagueConfig` JSON → script produces an output parquet with expected per-position VORP values. Asserts the pin on a small canonical output snippet and the per-position replacement-fpts values. Uses the same `env={..., "PYTHONPATH": str(repo_root / "src")}` subprocess workaround as the auction CLI test (see PM doc deviation #5 from auction PR).
-26. **K/DST warning surfaces.** Run with a `LeagueConfig` requiring K but with no K rows in the input; assert the warning text appears in stdout and the output is missing K rows. Exit code is 0 (warn, don't error).
+26. **CLI errors when config requires a position missing from input.** Run with a `LeagueConfig` requiring K but with no K rows in the input; assert non-zero exit code and that combined stderr+stdout contains "cannot fill" and the slot label "K" (the raise text from `_select_pool`'s `_take_top_n`). Per §3.6 / §5.1 #17, the failure is explicit, not silent — the function raises before the per-position summary can print, so there is no "warning" stdout to assert against.
 27. **Ruleset mismatch errors cleanly.** Run with mismatched LeagueConfig ruleset vs input ruleset; assert non-zero exit and the error message names both rulesets.
 
 ### 5.5 What's deliberately not tested
