@@ -805,3 +805,37 @@ def test_build_wr_features_attach_weather_outdoor_nan_data_propagates_nan(
     assert (out["is_grass_surface"] == 0.0).all(), (
         "NaN surface coerces to False => 0.0 per compute_weather_features"
     )
+
+
+def test_build_wr_features_emits_vegas_team_context_cols(
+    wr_weekly_stats: pd.DataFrame,
+    wr_snap_counts: pd.DataFrame,
+    wr_depth_charts: pd.DataFrame,
+    wr_ngs_receiving: pd.DataFrame,
+    wr_schedules: pd.DataFrame,
+    wr_draft_picks: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """build_wr_features attaches the four Vegas team-context cols and the
+    output validates against the extended WrFeaturesSchema."""
+    out = build_wr_features(
+        weekly_stats=wr_weekly_stats,
+        snap_counts=wr_snap_counts,
+        depth_charts=wr_depth_charts,
+        ngs_receiving=wr_ngs_receiving,
+        schedules=wr_schedules,
+        draft_picks=wr_draft_picks,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    for col in (
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    ):
+        assert col in out.columns
+    # At least one row has a non-NaN preseason value (every team in the fixture
+    # has at least one schedule row, so broadcast must populate).
+    assert out["preseason_implied_team_total"].notna().any()
