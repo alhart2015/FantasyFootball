@@ -262,6 +262,7 @@ _SKILL_POSITION_VALUES = [
 _TEAM_VALUES = [t.value for t in Team]
 _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
 _RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD"]
+_BACKTEST_VERDICT_VALUES = ["ADOPT", "NULL", "DO_NOT_ADOPT"]
 
 
 class WeeklyStatsSchema(pa.DataFrameModel):
@@ -1080,6 +1081,28 @@ class PreseasonProjectionSchema(pa.DataFrameModel):
     receiving_tds_season_total_p10: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
     receiving_tds_season_total_p50: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
     receiving_tds_season_total_p90: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
+class PreseasonBacktestSchema(pa.DataFrameModel):
+    """One row per (target_season, position, model_class) — output of the v1
+    preseason backtest harness. See spec §7."""
+
+    target_season: Series[int] = pa.Field(ge=2018, le=2100)
+    position: Series[str] = pa.Field(isin=_SKILL_POSITION_VALUES)
+    model_class: Series[str]
+    ruleset: Series[str] = pa.Field(isin=_RULESET_NAME_VALUES)
+    rmse: Series[float] = pa.Field(ge=0)
+    rmse_naive_baseline: Series[float] = pa.Field(ge=0)
+    rmse_delta_pct: Series[float]  # signed; can be negative (model beats naive)
+    spearman_top50: Series[float] = pa.Field(ge=-1, le=1)
+    n_players: Series[int] = pa.Field(ge=0)
+    coverage_diff_projected_not_played: Series[int] = pa.Field(ge=0)
+    coverage_diff_played_not_projected: Series[int] = pa.Field(ge=0)
+    verdict: Series[str] = pa.Field(isin=_BACKTEST_VERDICT_VALUES)
 
     class Config:
         strict = "filter"

@@ -17,6 +17,7 @@ from projections.schemas import (
     NgsRushingSchema,
     PbpSchema,
     Position,
+    PreseasonBacktestSchema,
     PreseasonFeaturesSchema,
     PreseasonProjectionSchema,
     ProjectionWeeklySchema,
@@ -995,3 +996,45 @@ def test_preseason_projection_schema_rejects_negative_fpts() -> None:
     )
     with pytest.raises(SchemaError, match="season_total_fpts_mean"):
         PreseasonProjectionSchema.validate(df)
+
+
+def test_preseason_backtest_schema_validates_golden_row() -> None:
+    df = pd.DataFrame(
+        {
+            "target_season": pd.array([2024], dtype="int32"),
+            "position": ["QB"],
+            "model_class": ["naive-preseason-v1"],
+            "ruleset": ["ESPN_PPR"],
+            "rmse": pd.array([35.0], dtype="float32"),
+            "rmse_naive_baseline": pd.array([35.0], dtype="float32"),
+            "rmse_delta_pct": pd.array([0.0], dtype="float32"),
+            "spearman_top50": pd.array([0.72], dtype="float32"),
+            "n_players": pd.array([28], dtype="Int64"),
+            "coverage_diff_projected_not_played": pd.array([3], dtype="Int64"),
+            "coverage_diff_played_not_projected": pd.array([1], dtype="Int64"),
+            "verdict": ["NULL"],
+        }
+    )
+    out = PreseasonBacktestSchema.validate(df)
+    assert len(out) == 1
+
+
+def test_preseason_backtest_schema_rejects_invalid_verdict() -> None:
+    df = pd.DataFrame(
+        {
+            "target_season": pd.array([2024], dtype="int32"),
+            "position": ["QB"],
+            "model_class": ["naive-preseason-v1"],
+            "ruleset": ["ESPN_PPR"],
+            "rmse": pd.array([35.0], dtype="float32"),
+            "rmse_naive_baseline": pd.array([35.0], dtype="float32"),
+            "rmse_delta_pct": pd.array([0.0], dtype="float32"),
+            "spearman_top50": pd.array([0.72], dtype="float32"),
+            "n_players": pd.array([28], dtype="Int64"),
+            "coverage_diff_projected_not_played": pd.array([0], dtype="Int64"),
+            "coverage_diff_played_not_projected": pd.array([0], dtype="Int64"),
+            "verdict": ["ADOPTED"],  # not in {ADOPT, NULL, DO_NOT_ADOPT}
+        }
+    )
+    with pytest.raises(SchemaError, match="verdict"):
+        PreseasonBacktestSchema.validate(df)
