@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from projections.preseason.features import build_preseason_features
-from projections.schemas import Position, Team
+from projections.schemas import Position, PreseasonFeaturesSchema, Team
 
 
 def _empty_weekly_stats() -> pd.DataFrame:
@@ -217,3 +217,70 @@ def test_build_preseason_features_drops_players_missing_id_map(tmp_path: Path) -
     dropped = pd.read_csv(tmp_path / "dropped.csv")
     assert dropped["gsis_id"].tolist() == ["00-9999999"]
     assert dropped["drop_reason"].tolist() == ["missing_id_map"]
+
+
+def test_build_preseason_features_raises_on_duplicate_gsis_id() -> None:
+    depth = _make_depth_charts(
+        [
+            ("00-1000001", 1, "QB", "KC", 1),
+            ("00-1000001", 1, "QB", "KC", 2),  # duplicate gsis_id at week=1
+        ]
+    )
+    id_map = _make_id_map([("00-1000001", "Patrick Mahomes", "1995-09-17")])
+    with pytest.raises(ValueError, match="Duplicate gsis_id"):
+        build_preseason_features(
+            weekly_stats=_empty_weekly_stats(),
+            depth_charts_target=depth,
+            draft_picks=_make_draft_picks([("00-1000001", 2017, 1, 10)]),
+            id_map=id_map,
+            target_season=2026,
+        )
+
+
+def test_build_preseason_features_raises_on_no_week_1_rows() -> None:
+    """Builder requires week=1 snapshot rows."""
+    depth = _make_depth_charts([("00-1000001", 5, "QB", "KC", 1)])  # week=5 only
+    id_map = _make_id_map([("00-1000001", "Patrick Mahomes", "1995-09-17")])
+    with pytest.raises(ValueError, match="no week=1 rows"):
+        build_preseason_features(
+            weekly_stats=_empty_weekly_stats(),
+            depth_charts_target=depth,
+            draft_picks=_make_draft_picks([("00-1000001", 2017, 1, 10)]),
+            id_map=id_map,
+            target_season=2026,
+        )
+
+
+def test_build_preseason_features_output_passes_schema_validation() -> None:
+    """Sanity test: the builder's output validates a second time without further coercion."""
+    weekly = _make_weekly_stats(
+        [
+            {
+                "gsis_id": "00-1000001",
+                "season": 2023,
+                "week": 1,
+                "position": "QB",
+                "team": "KC",
+                "passing_yards": 250.0,
+                "passing_tds": 2,
+                "interceptions": 1,
+                "rushing_yards": 30.0,
+                "rushing_tds": 0,
+                "receptions": 0,
+                "receiving_yards": 0.0,
+                "receiving_tds": 0,
+            },
+        ]
+    )
+    depth = _make_depth_charts([("00-1000001", 1, "QB", "KC", 1)])
+    id_map = _make_id_map([("00-1000001", "Patrick Mahomes", "1995-09-17")])
+    out = build_preseason_features(
+        weekly_stats=weekly,
+        depth_charts_target=depth,
+        draft_picks=_make_draft_picks([("00-1000001", 2017, 1, 10)]),
+        id_map=id_map,
+        target_season=2024,
+    )
+    # Re-validate as a sanity check.
+    out2 = PreseasonFeaturesSchema.validate(out)
+    assert len(out2) == 1
