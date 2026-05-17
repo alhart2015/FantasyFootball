@@ -21,6 +21,7 @@ from projections.schemas import (
     QbFeaturesSchema,
     RbFeaturesSchema,
     SchedulesSchema,
+    SnakeCheatSheetSchema,
     SnapCountsSchema,
     TeFeaturesSchema,
     VorpTableSchema,
@@ -885,3 +886,24 @@ def test_vorp_table_schema_round_trip() -> None:
     bad.loc[bad.index[1], "gsis_id"] = bad.loc[bad.index[0], "gsis_id"]
     with pytest.raises(SchemaError):
         VorpTableSchema.validate(bad)
+
+
+def test_snake_cheat_sheet_schema_round_trip() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.Series(["00-1000001", "00-2000001"], dtype=_PYARROW_STR),
+            "position": pd.Series(["QB", "RB"], dtype=_PYARROW_STR),
+            "display_name": pd.Series(
+                ["Patrick Mahomes", "Christian McCaffrey"], dtype=_PYARROW_STR
+            ),
+            "positional_rank": pd.array([1, 1], dtype=pd.Int64Dtype()),
+            "season_mean_fpts": [333.5, 280.1],
+            "vorp": [91.3, 181.2],
+            "replacement_fpts": [242.2, 98.9],
+            "is_in_pool": [True, True],
+            "tier": pd.array([1, 1], dtype=pd.Int64Dtype()),
+        }
+    )
+    validated = SnakeCheatSheetSchema.validate(df)
+    revalidated = SnakeCheatSheetSchema.validate(validated)
+    pd.testing.assert_frame_equal(validated, revalidated)
