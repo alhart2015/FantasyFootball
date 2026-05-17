@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from scipy.stats import kendalltau
 
@@ -193,15 +194,16 @@ def assemble_season_diagnostic(
     df["blend_70_30"] = 0.7 * df["mean"] + 0.3 * df["p90"]
 
     # 3. p_elite per row: P(season_samples >= elite_threshold[position]).
+    # Pre-flatten samples dict for O(1) per-row lookup (single-season input).
+    samples_by_gsis: dict[str, np.ndarray] = {gid: arr for (gid, _ssn), arr in samples.items()}
+
     def _p_elite_for(row: pd.Series) -> float:
         pos = Position(row["position"])
         threshold = elite_thresholds[pos]
-        # samples keyed by (gsis_id, season); look up by gsis_id only since
-        # this function is called per-single-season weekly input.
-        matching = [arr for (gid, _ssn), arr in samples.items() if gid == row["gsis_id"]]
-        if not matching:
+        arr = samples_by_gsis.get(row["gsis_id"])
+        if arr is None:
             return float("nan")
-        return float((matching[0] >= threshold).mean())
+        return float((arr >= threshold).mean())
 
     df["p_elite"] = df.apply(_p_elite_for, axis=1)
 
