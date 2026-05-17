@@ -378,33 +378,25 @@ Revisit when Plan 6 (EnsembleModel) lands — that's the natural moment to redes
 the Protocol surface as more model classes need to share the contract. Until then,
 the `cast()` pattern in CLI scripts is the trade-off accepted.
 
-### 28. Widen aggregate_to_season to accept QUANTILE / MIXED family
+### 28. Widen aggregate_to_season to accept QUANTILE / MIXED family — closed 2026-05-17
 
-Surfaced in Plan 5 Task 12. The harness gates season-aggregation on
-`(predictions["family"] == SAMPLED_SUMMARY).all()`, so LightGBM cells skip
-`season_calibration_p10p90` and `season_calibration_le_p90` rows.
-`aggregate_to_season` could accept `QuantileDistribution` instances —
-inverse-CDF sampling already works (Monte Carlo via `score_distribution`
-uses the Distribution Protocol's `.sample()`). Only the explicit
-family-restriction guard at the top of `aggregate_to_season` blocks reuse.
+**Closed during upside-ranking-diagnostic T11.** Surfaced as a real blocker
+(not just a metric-coverage gap): `scripts/project_season.py --season 2024`
+raised `ValueError: aggregate_to_season requires family=SAMPLED_SUMMARY,
+found ['MIXED']` because the production QB / WR models (`lightgbm-nb`,
+`ensemble-decomposed`) emit per-row `family=MIXED`.
 
-Plan 5c (Model C-NB) extends the asymmetry to the `MIXED` family — every
-NB row's per-stat distributions are NB-2 / QuantileDistribution mixtures
-encoded inside the params blob; `unpack_per_stat_params` would already
-return mixture-aware Distribution instances ready for sampling. Same
-single-line guard widening covers both QUANTILE and MIXED.
-
-Land alongside Plan 6 to give Model C / Model C-tuned / Model C-NB
-complete metric coverage (would add ~96 rows to model_metrics.json:
-32 each for QUANTILE, QUANTILE-tuned, MIXED).
-
-**Update 2026-04-29 (Plan 6):** Plan 6 ships Model D (ensemble) as a fifth
-peer with row-level family `MIXED` — same `SAMPLED_SUMMARY`-only family
-gate skips its 32 season_calibration rows. Widening `aggregate_to_season`
-would now add ~128 rows total (32 each for QUANTILE, QUANTILE-tuned,
-MIXED, MIXED-via-MIXTURE). Single-line guard widening covers all four
-families. Still deferred; not load-bearing for any planned downstream
-consumer.
+The single-line guard in `src/projections/aggregation/season.py:86` was
+widened to accept `{SAMPLED_SUMMARY, QUANTILE, MIXED}`. The codec's
+`_unpack_single` already handles every per-stat family (NORMAL, GAMMA,
+NEGATIVE_BINOMIAL, STUDENT_T, QUANTILE, MIXTURE) regardless of the
+row-level tag, and `score_distribution` consumes Distribution Protocol
+instances — so composition of weekly samples to season totals works
+unchanged for all three allowed row-level families. Coverage added in
+`tests/test_aggregation/test_aggregate_mixed_family.py` (MIXED with
+NORMAL+GAMMA+NEGATIVE_BINOMIAL per-stat mix; pure QUANTILE row;
+determinism check) plus regression for unsupported families
+(`test_disallowed_family_raises`, `test_schema_valid_but_disallowed_family_lists_allowed_set`).
 
 ### 29. Prune Model C-tuned from POSITION_DISPATCH (deferred until Model C-NB soaks)
 

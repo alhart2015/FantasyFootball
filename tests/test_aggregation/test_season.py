@@ -150,13 +150,35 @@ def test_traded_player_modal_position() -> None:
     assert out["position"].iloc[0] == "WR"
 
 
-def test_non_sampled_summary_family_raises() -> None:
+def test_disallowed_family_raises() -> None:
+    """family=SAMPLED is not in the allowed set; the codec doesn't decode raw
+    sample arrays from the params blob, so the guard rejects it. Error message
+    should list the new allowed set."""
     rows = [
         _build_weekly_row(week=1, family=DistributionFamily.SAMPLED.value),
     ]
     weekly = _to_weekly_frame(rows)
+    # New error message lists the full allowed set (sorted); match a stable
+    # substring rather than asserting the full ordering.
     with pytest.raises(ValueError, match="SAMPLED_SUMMARY"):
         aggregate_to_season(weekly, ruleset=_RULESET)
+
+
+def test_schema_valid_but_disallowed_family_lists_allowed_set() -> None:
+    """A family value that is in the ProjectionWeeklySchema enum but NOT in
+    aggregate_to_season's allowed set (e.g., NORMAL — a per-stat-only family,
+    never a row-level tag) gets past schema validation and is rejected by the
+    function's own guard. The error message must list the currently allowed
+    set so callers can see what's accepted."""
+    rows = [_build_weekly_row(week=1, family=DistributionFamily.NORMAL.value)]
+    weekly = _to_weekly_frame(rows)
+    with pytest.raises(ValueError) as excinfo:
+        aggregate_to_season(weekly, ruleset=_RULESET)
+    msg = str(excinfo.value)
+    assert "NORMAL" in msg  # surfaced in 'found' list
+    assert "SAMPLED_SUMMARY" in msg
+    assert "QUANTILE" in msg
+    assert "MIXED" in msg
 
 
 def test_mixed_ruleset_input_raises() -> None:

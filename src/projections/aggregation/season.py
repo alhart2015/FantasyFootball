@@ -59,9 +59,11 @@ def aggregate_to_season(
     """Aggregate weekly per-player projections into season-total distributions.
 
     The input is validated against ProjectionWeeklySchema. Every row must have
-    family == DistributionFamily.SAMPLED_SUMMARY and ruleset == ruleset.name --
-    a mixed-ruleset frame or a row written before Plan 3d's codec swap raises
-    ValueError immediately.
+    family in {SAMPLED_SUMMARY, QUANTILE, MIXED} and ruleset == ruleset.name --
+    a mixed-ruleset frame or a row with an unsupported family raises ValueError
+    immediately. The codec in projections.distributions handles each family's
+    params blob; this function composes per-week samples and sums to season
+    totals regardless of the row-level family tag.
 
     Returns a ProjectionSeasonSchema-validated DataFrame with one row per
     (gsis_id, season). position is the modal value across the input rows for
@@ -83,10 +85,15 @@ def aggregate_to_season(
             return empty_validated, {}
         return empty_validated
 
-    bad_family = weekly[weekly["family"] != DistributionFamily.SAMPLED_SUMMARY.value]
+    _allowed_families = {
+        DistributionFamily.SAMPLED_SUMMARY.value,
+        DistributionFamily.QUANTILE.value,
+        DistributionFamily.MIXED.value,
+    }
+    bad_family = weekly[~weekly["family"].isin(_allowed_families)]
     if not bad_family.empty:
         raise ValueError(
-            f"aggregate_to_season requires family={DistributionFamily.SAMPLED_SUMMARY.value}, "
+            f"aggregate_to_season requires family in {sorted(_allowed_families)}, "
             f"found {bad_family['family'].unique().tolist()}"
         )
 
