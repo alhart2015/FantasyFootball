@@ -26,7 +26,8 @@ from projections.backtest.rb_decomposition_probe import (
     compute_verdicts,
     walk_forward_residuals,
 )
-from projections.schemas import Stat
+from projections.models import POSITION_DISPATCH
+from projections.schemas import _PYARROW_STR, Position, Stat, WeeklyStatsSchema
 
 
 def test_rb_decomps_registry_has_five_stats_across_two_volume_axes() -> None:
@@ -218,9 +219,6 @@ def _synthetic_rb_inputs(seed: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]:
     the natural 8) keeps the per-eval-year row count above paired-bootstrap
     floor of 100 in compute_verdicts when used with (2020, 2021).
     """
-    from projections.models import POSITION_DISPATCH
-    from projections.schemas import _PYARROW_STR, Position, WeeklyStatsSchema
-
     rng = np.random.default_rng(seed=seed)
     rows: list[dict[str, object]] = []
     for season in range(2018, 2022):

@@ -237,7 +237,6 @@ def walk_forward_residuals(
     Spec: probe-design section 3.3.
     """
     eval_years_list = sorted(int(y) for y in eval_years)
-    features_validated = features  # caller is responsible for schema validation
     ws = WeeklyStatsSchema.validate(weekly_stats)
     ws_rb = ws[ws["position"] == Position.RB.value].copy()
 
@@ -250,7 +249,7 @@ def walk_forward_residuals(
     coverage_carries_by_year: dict[int, float] = {}
     coverage_targets_by_year: dict[int, float] = {}
 
-    all_seasons = sorted(int(s) for s in features_validated["season"].unique())
+    all_seasons = sorted(int(s) for s in features["season"].unique())
     feat_cols = list(_RB_FEATURE_COLUMNS)
     # The seven stat columns the harness joins from weekly_stats.
     stat_cols = [
@@ -267,7 +266,7 @@ def walk_forward_residuals(
         """Inner-join features <-> weekly_stats, drop NaN feature rows."""
         if not seasons:
             return None
-        feat_slice = features_validated[features_validated["season"].isin(seasons)]
+        feat_slice = features[features["season"].isin(seasons)]
         ws_slice = ws_rb[ws_rb["season"].isin(seasons)]
         joined = feat_slice.merge(
             ws_slice[["gsis_id", "season", "week", *stat_cols]],
