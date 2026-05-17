@@ -261,6 +261,7 @@ _SKILL_POSITION_VALUES = [
 ]
 _TEAM_VALUES = [t.value for t in Team]
 _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
+_RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD"]
 
 
 class WeeklyStatsSchema(pa.DataFrameModel):
@@ -1003,4 +1004,83 @@ class PreseasonFeaturesSchema(pa.DataFrameModel):
         # season + age + per-game floats) are upcast to int64/float64 to match
         # `Series[int]` / `Series[float]` rather than rejected with a dtype
         # error. See WrFeaturesSchema.Config for the same pattern.
+        coerce = True
+
+
+class PreseasonProjectionSchema(pa.DataFrameModel):
+    """One row per (gsis_id, season, ruleset) — the v1 preseason output.
+
+    Per-stat season-total quartets `<stat>_season_total_{mean,p10,p50,p90}` are
+    populated per the player's position's stat set:
+        QB: passing_yards, passing_tds, passing_interceptions,
+            rushing_yards, rushing_tds.
+        RB: rushing_yards, rushing_tds, receptions, receiving_yards,
+            receiving_tds.
+        WR: receptions, receiving_yards, receiving_tds, rushing_yards,
+            rushing_tds.
+        TE: receptions, receiving_yards, receiving_tds.
+    Columns not modeled for a position are absent; strict="filter" + Series[T] | None
+    on per-stat fields lets per-position frames validate cleanly.
+    """
+
+    # Identity
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=2018, le=2100)
+    position: Series[str] = pa.Field(isin=_SKILL_POSITION_VALUES)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    ruleset: Series[str] = pa.Field(isin=_RULESET_NAME_VALUES)
+    model_id: Series[str]
+
+    # Scored fpts — required for every row.
+    season_total_fpts_mean: Series[float] = pa.Field(ge=0, le=700)
+    season_total_fpts_p10: Series[float] = pa.Field(ge=0, le=700)
+    season_total_fpts_p50: Series[float] = pa.Field(ge=0, le=700)
+    season_total_fpts_p90: Series[float] = pa.Field(ge=0, le=700)
+
+    # Per-stat season totals — UNION of stats across positions; Series[T] | None
+    # so per-position frames missing the column validate. strict="filter" drops
+    # extras at validate time.
+    passing_yards_season_total_mean: Series[float] | None = pa.Field(ge=0, le=7000, nullable=True)
+    passing_yards_season_total_p10: Series[float] | None = pa.Field(ge=0, le=7000, nullable=True)
+    passing_yards_season_total_p50: Series[float] | None = pa.Field(ge=0, le=7000, nullable=True)
+    passing_yards_season_total_p90: Series[float] | None = pa.Field(ge=0, le=7000, nullable=True)
+    passing_tds_season_total_mean: Series[float] | None = pa.Field(ge=0, le=80, nullable=True)
+    passing_tds_season_total_p10: Series[float] | None = pa.Field(ge=0, le=80, nullable=True)
+    passing_tds_season_total_p50: Series[float] | None = pa.Field(ge=0, le=80, nullable=True)
+    passing_tds_season_total_p90: Series[float] | None = pa.Field(ge=0, le=80, nullable=True)
+    passing_interceptions_season_total_mean: Series[float] | None = pa.Field(
+        ge=0, le=40, nullable=True
+    )
+    passing_interceptions_season_total_p10: Series[float] | None = pa.Field(
+        ge=0, le=40, nullable=True
+    )
+    passing_interceptions_season_total_p50: Series[float] | None = pa.Field(
+        ge=0, le=40, nullable=True
+    )
+    passing_interceptions_season_total_p90: Series[float] | None = pa.Field(
+        ge=0, le=40, nullable=True
+    )
+    rushing_yards_season_total_mean: Series[float] | None = pa.Field(ge=0, le=3000, nullable=True)
+    rushing_yards_season_total_p10: Series[float] | None = pa.Field(ge=0, le=3000, nullable=True)
+    rushing_yards_season_total_p50: Series[float] | None = pa.Field(ge=0, le=3000, nullable=True)
+    rushing_yards_season_total_p90: Series[float] | None = pa.Field(ge=0, le=3000, nullable=True)
+    rushing_tds_season_total_mean: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
+    rushing_tds_season_total_p10: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
+    rushing_tds_season_total_p50: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
+    rushing_tds_season_total_p90: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
+    receptions_season_total_mean: Series[float] | None = pa.Field(ge=0, le=200, nullable=True)
+    receptions_season_total_p10: Series[float] | None = pa.Field(ge=0, le=200, nullable=True)
+    receptions_season_total_p50: Series[float] | None = pa.Field(ge=0, le=200, nullable=True)
+    receptions_season_total_p90: Series[float] | None = pa.Field(ge=0, le=200, nullable=True)
+    receiving_yards_season_total_mean: Series[float] | None = pa.Field(ge=0, le=3000, nullable=True)
+    receiving_yards_season_total_p10: Series[float] | None = pa.Field(ge=0, le=3000, nullable=True)
+    receiving_yards_season_total_p50: Series[float] | None = pa.Field(ge=0, le=3000, nullable=True)
+    receiving_yards_season_total_p90: Series[float] | None = pa.Field(ge=0, le=3000, nullable=True)
+    receiving_tds_season_total_mean: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
+    receiving_tds_season_total_p10: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
+    receiving_tds_season_total_p50: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
+    receiving_tds_season_total_p90: Series[float] | None = pa.Field(ge=0, le=40, nullable=True)
+
+    class Config:
+        strict = "filter"
         coerce = True

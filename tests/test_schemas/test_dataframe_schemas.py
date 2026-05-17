@@ -18,6 +18,7 @@ from projections.schemas import (
     PbpSchema,
     Position,
     PreseasonFeaturesSchema,
+    PreseasonProjectionSchema,
     ProjectionWeeklySchema,
     QbFeaturesSchema,
     RbFeaturesSchema,
@@ -951,3 +952,46 @@ def test_preseason_features_schema_rejects_bad_position() -> None:
     )
     with pytest.raises(SchemaError, match="position"):
         PreseasonFeaturesSchema.validate(df)
+
+
+def test_preseason_projection_schema_validates_golden_row() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["QB"],
+            "team": ["KC"],
+            "ruleset": ["ESPN_PPR"],
+            "model_id": ["naive-preseason-v1"],
+            "season_total_fpts_mean": pd.array([380.0], dtype="float32"),
+            "season_total_fpts_p10": pd.array([380.0], dtype="float32"),
+            "season_total_fpts_p50": pd.array([380.0], dtype="float32"),
+            "season_total_fpts_p90": pd.array([380.0], dtype="float32"),
+            "passing_yards_season_total_mean": pd.array([4400.0], dtype="float32"),
+            "passing_yards_season_total_p10": pd.array([4400.0], dtype="float32"),
+            "passing_yards_season_total_p50": pd.array([4400.0], dtype="float32"),
+            "passing_yards_season_total_p90": pd.array([4400.0], dtype="float32"),
+        }
+    )
+    out = PreseasonProjectionSchema.validate(df)
+    assert len(out) == 1
+    assert out["ruleset"].iloc[0] in {"ESPN_PPR", "ESPN_HALF", "STANDARD"}
+
+
+def test_preseason_projection_schema_rejects_negative_fpts() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["QB"],
+            "team": ["KC"],
+            "ruleset": ["ESPN_PPR"],
+            "model_id": ["naive-preseason-v1"],
+            "season_total_fpts_mean": pd.array([-10.0], dtype="float32"),  # negative
+            "season_total_fpts_p10": pd.array([0.0], dtype="float32"),
+            "season_total_fpts_p50": pd.array([0.0], dtype="float32"),
+            "season_total_fpts_p90": pd.array([0.0], dtype="float32"),
+        }
+    )
+    with pytest.raises(SchemaError, match="season_total_fpts_mean"):
+        PreseasonProjectionSchema.validate(df)
