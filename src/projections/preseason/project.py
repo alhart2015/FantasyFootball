@@ -74,12 +74,21 @@ def project_preseason(
     draft_picks_frames: list[pd.DataFrame] = []
     for s in range(1980, target_season + 1):
         try:
-            draft_picks_frames.append(read_partition(raw_root, "draft_picks", season=s))
+            df = read_partition(raw_root, "draft_picks", season=s)
+            df["season"] = s
+            draft_picks_frames.append(df)
         except FileNotFoundError:
             continue
     draft_picks = (
         pd.concat(draft_picks_frames, ignore_index=True) if draft_picks_frames else pd.DataFrame()
     )
+    # Canonical DraftPicksSchema uses `draft_year`/`draft_round`/`draft_overall_pick`;
+    # downstream preseason code (features.py, model.py) expects `season`/`round`/`pick`.
+    # Adapt at this seam. (`season` is added from the partition path above.)
+    if not draft_picks.empty:
+        draft_picks = draft_picks.rename(
+            columns={"draft_round": "round", "draft_overall_pick": "pick"}
+        )
 
     id_map = read_partition(raw_root, "id_map")
 

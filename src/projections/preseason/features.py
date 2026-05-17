@@ -103,13 +103,18 @@ def build_preseason_features(
             target_season,
         )
 
-    # 3. Duplicate detection.
-    dup_mask = dc.duplicated(subset=["gsis_id"], keep=False)
-    if dup_mask.any():
-        dup_ids = dc.loc[dup_mask, "gsis_id"].unique().tolist()
-        raise ValueError(
-            f"Duplicate gsis_id rows in depth_charts_target week=1: {dup_ids[:5]!r}. "
-            "Upstream depth_charts dedup bug; never silently swallow."
+    # 3. Duplicate-gsis_id handling. The legacy depth_charts format (pre-2025)
+    # can list a single player at multiple positions (e.g., a WR also listed
+    # as a returner at depth_rank=3). Keep the row with the lowest depth_rank
+    # (= the player's primary/highest assignment) so the player appears once.
+    n_pre_dedup = len(dc)
+    dc = dc.sort_values("depth_rank").drop_duplicates(subset=["gsis_id"], keep="first")
+    n_dedup = n_pre_dedup - len(dc)
+    if n_dedup:
+        logger.info(
+            "build_preseason_features: deduped %d gsis_id row(s) appearing at "
+            "multiple positions; kept lowest depth_rank.",
+            n_dedup,
         )
 
     # 4. Project identity columns.
@@ -146,16 +151,22 @@ def build_preseason_features(
             dropped.to_csv(dropped_csv_path, index=False)
         out = out.loc[~missing_mask].reset_index(drop=True)
 
-    # ---- Age (from id_map.birth_date) ----
-    id_map_lookup = id_map.set_index("gsis_id")
-    birth_dates = pd.to_datetime(
-        out["gsis_id"].map(id_map_lookup["birth_date"]),
-        errors="coerce",
-    )
-    out["age"] = pd.array(
-        [float(target_season - bd.year) if pd.notna(bd) else None for bd in birth_dates],
-        dtype="Float32",
-    )
+    # ---- Age (from id_map.birth_date if present; otherwise all-NaN) ----
+    # The canonical id_map ingest does not currently include birth_date. Age is
+    # left NaN-valued in that case; the v1 naive baseline does not consume it.
+    # When birth_date IS present, compute age = target_season - birth_year.
+    if "birth_date" in id_map.columns:
+        id_map_lookup = id_map.set_index("gsis_id")
+        birth_dates = pd.to_datetime(
+            out["gsis_id"].map(id_map_lookup["birth_date"]),
+            errors="coerce",
+        )
+        out["age"] = pd.array(
+            [float(target_season - bd.year) if pd.notna(bd) else None for bd in birth_dates],
+            dtype="Float32",
+        )
+    else:
+        out["age"] = pd.array([None] * len(out), dtype="Float32")
 
     # ---- Rookie detection ----
     # A player is a rookie if they have NO prior-season NFL history. "Prior
@@ -210,8 +221,12 @@ def build_preseason_features(
 
     for n in (1, 2, 3):
         prior_season = target_season - n
+        # Regular-season only — playoff weeks (>=18) inflate the games_played
+        # denominator and would violate PreseasonFeaturesSchema's le=17 bound.
         per_game = _aggregate_to_per_game(
-            weekly_stats.loc[weekly_stats["season"] == prior_season],
+            weekly_stats.loc[
+                (weekly_stats["season"] == prior_season) & (weekly_stats["week"] <= 17)
+            ],
             stats=stats_to_aggregate,
         )
         if per_game.empty:

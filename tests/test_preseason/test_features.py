@@ -219,22 +219,27 @@ def test_build_preseason_features_drops_players_missing_id_map(tmp_path: Path) -
     assert dropped["drop_reason"].tolist() == ["missing_id_map"]
 
 
-def test_build_preseason_features_raises_on_duplicate_gsis_id() -> None:
+def test_build_preseason_features_dedupes_multi_position_player() -> None:
+    """Legacy depth_charts lists same player at multiple positions (e.g., WR
+    also listed as RB3). Builder dedupes by gsis_id keeping lowest depth_rank."""
     depth = _make_depth_charts(
         [
-            ("00-1000001", 1, "QB", "KC", 1),
-            ("00-1000001", 1, "QB", "KC", 2),  # duplicate gsis_id at week=1
+            ("00-1000001", 1, "WR", "KC", 1),  # primary: WR1
+            ("00-1000001", 1, "RB", "KC", 3),  # secondary: RB3
         ]
     )
     id_map = _make_id_map([("00-1000001", "Patrick Mahomes", "1995-09-17")])
-    with pytest.raises(ValueError, match="Duplicate gsis_id"):
-        build_preseason_features(
-            weekly_stats=_empty_weekly_stats(),
-            depth_charts_target=depth,
-            draft_picks=_make_draft_picks([("00-1000001", 2017, 1, 10)]),
-            id_map=id_map,
-            target_season=2026,
-        )
+    out = build_preseason_features(
+        weekly_stats=_empty_weekly_stats(),
+        depth_charts_target=depth,
+        draft_picks=_make_draft_picks([("00-1000001", 2017, 1, 10)]),
+        id_map=id_map,
+        target_season=2026,
+    )
+    # Keeps the row with depth_rank=1 (the WR row).
+    assert len(out) == 1
+    assert out["position"].iloc[0] == "WR"
+    assert int(out["depth_chart_rank"].iloc[0]) == 1
 
 
 def test_build_preseason_features_raises_on_no_week_1_rows() -> None:
