@@ -4,6 +4,60 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Vegas Team-Context Feature Family Probe — SIGNAL at lgb-nb swap QB+WR (2026-05-17, on branch `feat/probe-vegas-team-context`)
+
+**Status:** Spec + plan + impl + 4 probe runs + audit + summary on `feat/probe-vegas-team-context`. Phase 1 of TODO #33c. New compute module `src/projections/features/vegas_team_context_features.py` produces 4 candidate cols (`preseason_implied_team_total`, `preseason_spread`, `season_avg_implied_team_total`, `season_avg_spread`) from `SchedulesSchema`'s already-ingested `spread_line` / `total_line`. Override generator CLI `scripts/build_vegas_team_context_override.py`. Probe runs via existing `scripts/probe_feature_signal.py` (no changes). Spec at `docs/superpowers/specs/2026-05-17-vegas-team-context-probe-design.md`; plan at `docs/superpowers/plans/2026-05-17-vegas-team-context-probe.md`.
+
+**Verdict: SIGNAL.** lgb-nb × swap composite returns 2/4 ADOPT — **QB −0.0587 fpts (CI [−0.092, −0.028]) + WR −0.0130 fpts (CI [−0.022, −0.003])**. RB just misses ADOPT (−0.0113, CI [−0.023, +0.001]); TE NULL. Phase 2 fires via `--force-composite` on lgb-nb because Phase 1 is RidgeCV (which actually *REGRESSES* on QB pooled `passing_yards` at +0.34 fpts augment / +0.22 fpts swap — the recurring "QB augment regression" pattern from PRs #23/#24/#25/#28). The lgb-nb augment is 0/4 ADOPT — the SIGNAL only emerges when the 4 new cols *replace* per-game `implied_team_total` + `spread`, not when they augment them. **Mechanism: trees overfit per-game line noise; smoother preseason + season-to-date signals generalize better at the lgb-nb swap level.**
+
+**Pre-registered prediction (spec §1.2) vs observed:**
+- Predicted RB swap as most likely SIGNAL → WRONG; RB just misses, QB + WR carry the signal instead.
+- Predicted Phase 1 SIGNAL at QB/WR `passing_yards` / `receiving_yards` → WRONG; Phase 1 REGRESSES on those cells.
+- Predicted TE NULL → CORRECT.
+- Predicted lgb-nb augment tautological → CORRECT (0/4 ADOPT, all CIs bracket zero).
+
+**Shipped surface:**
+- `src/projections/features/vegas_team_context_features.py` — `compute_vegas_team_context_features` (wraps `_shared.build_game_environment` + preseason broadcast + expanding-mean-shift-1) + `attach_vegas_team_context_features` + `build_vegas_team_context_overrides` (with input validation: required cols, gsis_id format, dup-key rejection, row-count invariant).
+- `scripts/build_vegas_team_context_override.py` — override generator CLI mirroring `scripts/build_weather_override.py`.
+- 20 new tests (15 feature + 5 CLI); all gates clean (mypy + ruff + ruff format).
+- 7 report artifacts: override audit + 4 probe outputs (.md + .csv each) + summary.
+- `data/features_probe/vegas_team_context.parquet` generated (56,652 rows, 100% preseason coverage / 94.13% season_avg coverage); NOT committed (regenerable).
+
+**Decision log:**
+- Hybrid 4-col bundle (preseason × 2 + season-to-date × 2) per spec §3.
+- Coverage threshold relaxed to 0.90 for week-1 cold-start NaN on `season_avg_*`; actual coverage 100% / 94.13% so the relaxation was unused in practice.
+- Eval window 2021–2024 holdout; 2025 deferred (would require `refresh_features --seasons 2025`).
+- Schema integration deferred — probe-only.
+- `--force-composite` on lgb-nb runs was load-bearing: without it Phase 2 wouldn't have fired (Phase 1 returned no pooled SIGNAL), and the lgb-nb swap SIGNAL would have been missed.
+- Task 1 implementation got a dtype-contract fix in code review (`season_avg_*` cols were dropping from Float64 to float64 through `expanding().mean()`; cast back at commit `715509b`).
+- Plan estimated 1–2 hr per lgb-nb run; actual was ~8 min each. Plan estimate was conservative.
+
+**Recommended next direction (concrete):**
+
+Greenlight a **per-position integration plan for QB + WR only** (lgb-nb / ensemble-decomposed routes). Specs / decisions for the integration plan:
+1. **Schema-swap on lgb-nb only:** Keep `implied_team_total` / `spread` in `{Qb,Wr}FeaturesSchema` (BaselineModel + ensemble Ridge children still need them); rewire lgb-nb's `_X_FEATURE_COLUMNS` to read the 4 new cols instead of the per-game cols. More surgical than schema-augment; preserves Ridge children's signal.
+2. **Extend `_shared.build_game_environment` (or sibling)** to emit the 4 new cols per team-game row.
+3. **Refresh feature caches** under `data/features/{qb,wr}/`.
+4. **Run dual-run adoption gate** on QB + WR with production routing (QB → lgb-nb directly; WR → ensemble-decomposed). Confirms probe Phase 2 matches gate verdict.
+5. **TE: do NOT integrate** (no SIGNAL).
+6. **RB: defer.** Phase 2 just misses; a follow-up probe with `preseason_*`-only (drop `season_avg_*`) may cross the threshold.
+
+**Caveats on impact magnitude:**
+- The SIGNAL is at *composite ΔRMSE*, not at elite-season magnitude. A QB Phase 2 ΔRMSE of −0.06 fpts is a ~1–2% per-week RMSE reduction; the 33d Chase 250 → 403 gap (a +150 fpts season miss) won't be closed by this integration alone.
+- The integration is **necessary but not sufficient** for the elite-season problem. The right framing: this is one step along the 33c axis, not the closing step.
+- If integration confirms ADOPT but elite-magnitude persists, the next step is **external preseason Vegas data** (genuine May win totals, OC/HC tenure, FA flags) — a richer encoding of the same mechanism the pbp-derivable proxy partially captures.
+
+**Plan-vs-execution deviations:**
+- Task 1 dtype contract fix (caught in code review, fixed at `715509b`).
+- Task 4 fixture extension: `_make_schedule_rows([])` early-return branch added for empty-input rejection tests.
+- Task 8 audit "unique preseason_spread values per season": shows 30–32 per season rather than always 32 due to coincidental ties (e.g., two teams favored by identical margins in week 1). Not missing data — `preseason_*` coverage is 100%.
+- Task 10 stderr handling: first lgb-nb run polluted .md output with sklearn `UserWarning`s; killed and re-ran with `-W ignore::UserWarning` + stderr to separate log. No data loss.
+- Verdict interpretation flipped during execution: pre-registered prediction was NULL-leaning with RB as most-likely SIGNAL; lgb-nb swap result flipped it to SIGNAL on QB + WR. Summary captures this honestly.
+
+See `reports/feature_probe_vegas_team_context_summary.md` for the full per-(model, mode) verdict + mechanism annotation, and `reports/feature_probe_vegas_team_context_override_audit.md` for the override audit.
+
+---
+
 ## Upside-Sensitive Ranking Diagnostic — Phase 1 verdict NO GREENLIGHT (2026-05-17, on branch `feat/upside-ranking-diagnostic`)
 
 **Status:** Spec + plan + diagnostic CLI on `feat/upside-ranking-diagnostic`. Phase 1 of TODO #33d. New module `scripts/diagnose_upside_ranking.py` consumes the new `season_projection_weekly_<season>.parquet` + `season_projection_distributions_<season>.csv` artifacts (now emitted by extended `scripts/project_season.py` alongside the unchanged naive CSV) and produces a markdown verdict report comparing per-player ranks under `mean / p90 / blend_70_30 / p_elite`. Spec at `docs/superpowers/specs/2026-05-16-upside-sensitive-ranking-diagnostic-design.md`; plan at `docs/superpowers/plans/2026-05-16-upside-sensitive-ranking-diagnostic.md`.

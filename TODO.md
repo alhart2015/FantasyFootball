@@ -632,3 +632,11 @@ Two open design questions before the spike: (a) what timezone is `dt` published 
 **Side-effect closure: TODO #28 also closed.** `aggregate_to_season` was widened to accept MIXED + QUANTILE family rows in commit `ffdd334` (required by the diagnostic because QB lgb-nb + WR ensemble-decomposed both emit MIXED family rows). Single-line guard widening + 3 new tests + docstring update; no behavior change for SAMPLED_SUMMARY callers.
 
 See `reports/upside_ranking_diagnostic.md` for the full per-(position, season) verdict tables and `reports/upside_ranking_diagnostic_table.csv` for the per-player drill-down.
+
+**33c — Phase 1 family probe complete, 2026-05-17: SIGNAL at lgb-nb swap (QB + WR composite).** Probe shipped on branch `feat/probe-vegas-team-context`. 4-col bundle (`preseason_implied_team_total`, `preseason_spread`, `season_avg_implied_team_total`, `season_avg_spread`) from already-ingested `spread_line` / `total_line`. Probe matrix: BaselineModel × {augment, swap} + lgb-nb × {augment, swap} with `--force-composite`. Result: **lgb-nb swap composite returns 2/4 ADOPT — QB −0.0587 fpts (CI [−0.092, −0.028]) + WR −0.0130 fpts (CI [−0.022, −0.003]). RB just misses ADOPT; TE NULL.** Ridge runs all REGRESS on QB pooled `passing_yards`; the SIGNAL only emerges under trees when the 4 new cols *replace* per-game `implied_team_total` + `spread` (not when they augment). Mechanism: trees overfit per-game line noise; smoother preseason + season-to-date signals generalize better.
+
+Next step: greenlight a **per-position integration plan for QB + WR only** (lgb-nb / ensemble-decomposed routes). Schema-swap on lgb-nb only (preserves Ridge children's signal in the ensemble). TE skipped; RB deferred for a follow-up probe with `preseason_*`-only.
+
+Caveats: ΔRMSE −0.06 fpts at QB is ~1–2% per-week — the Chase 250→403 gap is not closed by this alone. The integration is necessary but not sufficient for elite-magnitude. If gate confirms ADOPT but elite-magnitude persists, next is **external preseason Vegas data** (genuine May win totals, OC/HC tenure, FA flags).
+
+See `reports/feature_probe_vegas_team_context_summary.md`.
