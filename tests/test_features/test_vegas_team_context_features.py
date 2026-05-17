@@ -341,3 +341,120 @@ def test_compute_returns_sorted_by_season_week_team() -> None:
     out = compute_vegas_team_context_features(sch)
     # Lexicographic on (season, week, team)
     assert list(out["week"]) == [1, 1, 3, 3]
+
+
+def _make_index_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
+    """Build a synthetic player-team-week index with canonical dtypes."""
+    defaults: dict[str, object] = {
+        "gsis_id": "00-0033873",
+        "season": 2024,
+        "week": 1,
+        "team": "KC",
+        "opp": "BAL",
+        "position": "QB",
+    }
+    out = []
+    for r in rows:
+        out.append({**defaults, **r})
+    df = pd.DataFrame(out)
+    return df.astype(
+        {
+            "gsis_id": pd.StringDtype("pyarrow"),
+            "season": pd.Int64Dtype(),
+            "week": pd.Int64Dtype(),
+            "team": pd.StringDtype("pyarrow"),
+            "opp": pd.StringDtype("pyarrow"),
+            "position": pd.StringDtype("pyarrow"),
+        }
+    )
+
+
+def test_attach_appends_four_feature_cols_via_left_merge() -> None:
+    """attach_vegas_team_context_features adds the 4 feature cols to the
+    index by left-merge on (season, week, team)."""
+    from projections.features.vegas_team_context_features import (
+        attach_vegas_team_context_features,
+    )
+
+    idx = _make_index_rows(
+        [
+            {"gsis_id": "00-0033873", "season": 2024, "week": 1, "team": "KC"},
+            {"gsis_id": "00-0033873", "season": 2024, "week": 2, "team": "KC"},
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "spread_line": 3.0,
+                "total_line": 48.0,
+            },
+            {
+                "season": 2024,
+                "week": 2,
+                "home_team": "PHI",
+                "away_team": "KC",
+                "spread_line": -1.0,
+                "total_line": 46.0,
+            },
+        ]
+    )
+    out = attach_vegas_team_context_features(idx, sch)
+
+    assert len(out) == 2
+    assert set(out.columns) >= {
+        "gsis_id",
+        "season",
+        "week",
+        "team",
+        "opp",
+        "position",
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    }
+    wk1 = out.loc[out["week"] == 1].iloc[0]
+    wk2 = out.loc[out["week"] == 2].iloc[0]
+    # Preseason values identical across weeks (broadcast from week 1)
+    assert wk1["preseason_spread"] == wk2["preseason_spread"] == -3.0
+    # Week 2 season_avg sees week 1 only
+    assert wk2["season_avg_spread"] == -3.0
+
+
+def test_attach_index_row_without_matching_schedule_gets_nan() -> None:
+    """Index row whose (season, week, team) doesn't match any schedule
+    retains NaN in all 4 feature cols."""
+    from projections.features.vegas_team_context_features import (
+        attach_vegas_team_context_features,
+    )
+
+    idx = _make_index_rows(
+        [
+            # Index has KC week 1 + week 3; schedule has only week 1.
+            {"gsis_id": "00-0033873", "season": 2024, "week": 1, "team": "KC"},
+            {"gsis_id": "00-0033873", "season": 2024, "week": 3, "team": "KC"},
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "spread_line": 3.0,
+                "total_line": 48.0,
+            },
+        ]
+    )
+    out = attach_vegas_team_context_features(idx, sch)
+
+    wk3 = out.loc[out["week"] == 3].iloc[0]
+    assert pd.isna(wk3["preseason_spread"])
+    assert pd.isna(wk3["preseason_implied_team_total"])
+    assert pd.isna(wk3["season_avg_spread"])
+    assert pd.isna(wk3["season_avg_implied_team_total"])

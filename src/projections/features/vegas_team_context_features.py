@@ -113,3 +113,27 @@ def compute_vegas_team_context_features(schedules: pd.DataFrame) -> pd.DataFrame
         .sort_values(["season", "week", "team"])
         .reset_index(drop=True)
     )
+
+
+def attach_vegas_team_context_features(
+    index: pd.DataFrame,
+    schedules: pd.DataFrame,
+) -> pd.DataFrame:
+    """Left-merge the four Vegas team-context features onto a player-team-week index.
+
+    Args:
+        index: frame with at least (season, week, team) columns. Typically
+            the player-team-week index from
+            `scripts.build_vegas_team_context_override._build_player_team_week_index`,
+            carrying (gsis_id, season, week, team, opp, position).
+        schedules: frame validated against `SchedulesSchema`.
+
+    Returns:
+        Copy of index with four nullable Float64 cols appended:
+        preseason_implied_team_total, preseason_spread,
+        season_avg_implied_team_total, season_avg_spread.
+        Index rows without a matching (season, week, team) in schedules
+        retain NaN in all four cols.
+    """
+    feats = compute_vegas_team_context_features(schedules)
+    return index.merge(feats, on=["season", "week", "team"], how="left")
