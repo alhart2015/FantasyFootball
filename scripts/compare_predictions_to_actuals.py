@@ -11,15 +11,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _actuals_helper import actual_ppr_total
-
 from projections.schemas import Ruleset
+from projections.scoring import actual_season_total
 from projections.store import read_partition
 
 
@@ -39,7 +36,7 @@ def main() -> None:
 
     print(f"Loading {args.season} weekly_stats actuals", flush=True)
     ws = read_partition(args.raw_root, "weekly_stats", season=args.season)
-    actuals = actual_ppr_total(ws, Ruleset.espn_ppr())
+    actuals = actual_season_total(ws, Ruleset.espn_ppr())
 
     # Within-position actual rank (for context: "Nabers was predicted #1 WR; he was actually #N").
     actuals["actual_pos_rank"] = (

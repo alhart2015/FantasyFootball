@@ -1,34 +1,17 @@
-"""Parity test: actual_ppr_total in scripts/_actuals_helper.py reproduces the
-inline helper that previously lived in scripts/compare_predictions_to_actuals.py."""
+"""Tests for projections.scoring.actuals.actual_season_total — parity with the
+legacy inline helper at scripts/compare_predictions_to_actuals.py."""
 
 from __future__ import annotations
-
-import importlib.util
-import sys
-from pathlib import Path
-from types import ModuleType
 
 import pandas as pd
 import pytest
 
 from projections.schemas import Ruleset
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _import_actuals_helper() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "_actuals_helper", _REPO_ROOT / "scripts" / "_actuals_helper.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["_actuals_helper"] = module
-    spec.loader.exec_module(module)
-    return module
+from projections.scoring.actuals import actual_season_total
 
 
 def _synthetic_weekly_stats() -> pd.DataFrame:
-    """Two players x two weeks, exercising both passing + rushing + receiving stat sums."""
+    """Two players, two weeks each. Exercises passing + rushing + receiving stat sums."""
     return pd.DataFrame(
         {
             "gsis_id": ["00-0000001", "00-0000001", "00-0000002", "00-0000002"],
@@ -48,10 +31,8 @@ def _synthetic_weekly_stats() -> pd.DataFrame:
     )
 
 
-def test_actual_ppr_total_groups_by_gsis_id_position() -> None:
-    helper = _import_actuals_helper()
-    actual_ppr_total = helper.actual_ppr_total
-    out = actual_ppr_total(_synthetic_weekly_stats(), Ruleset.espn_ppr())
+def test_actual_season_total_groups_by_gsis_id_position() -> None:
+    out = actual_season_total(_synthetic_weekly_stats(), Ruleset.espn_ppr())
     assert set(out.columns) >= {"gsis_id", "position", "actual_total", "actual_n_weeks"}
     assert len(out) == 2
     qb_row = out[out["gsis_id"] == "00-0000001"].iloc[0]
