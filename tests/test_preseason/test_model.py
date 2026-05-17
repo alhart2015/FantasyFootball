@@ -8,8 +8,13 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from projections.preseason.model import NaivePreseasonModel, PreseasonModel
-from projections.schemas import PreseasonFeaturesSchema, Ruleset
+from projections.preseason.model import (
+    NaivePreseasonModel,
+    NaivePriorOnlyModel,
+    PreseasonModel,
+)
+from projections.schemas import PreseasonFeaturesSchema, Ruleset, Stat
+from projections.scoring import scoring_coefficients
 
 
 def test_naive_preseason_model_implements_protocol() -> None:
@@ -444,3 +449,92 @@ def test_naive_model_save_and_load_roundtrip(tmp_path: Path) -> None:
     reloaded = NaivePreseasonModel.load(path)
     assert reloaded.model_id == model.model_id
     assert reloaded._rookie_glm == model._rookie_glm
+
+
+def test_naive_prior_only_model_implements_protocol() -> None:
+    """NaivePriorOnlyModel satisfies the PreseasonModel Protocol."""
+    m = NaivePriorOnlyModel()
+    assert isinstance(m, PreseasonModel)
+    assert m.model_id == "naive-prior-only-v1"
+
+
+def test_naive_prior_only_model_drops_rookies_and_prior_1_missing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Three input rows: vet-with-prior-1, rookie, comeback-vet-missing-prior-1.
+
+    Only the vet should survive. Per-stat math is `prior_1_per_game * 16` and
+    fpts uses the canonical scoring coefficient map.
+    """
+    vet_row = _make_features_row(
+        gsis_id="00-1111111",
+        prior_1_season_games_played=pd.array([17], dtype="Int64"),
+        prior_1_season_per_game_passing_yards=pd.array([275.0], dtype="float32"),
+        prior_1_season_per_game_passing_tds=pd.array([2.0], dtype="float32"),
+        prior_1_season_per_game_passing_interceptions=pd.array([0.5], dtype="float32"),
+        prior_1_season_per_game_rushing_yards=pd.array([12.0], dtype="float32"),
+        prior_1_season_per_game_rushing_tds=pd.array([0.1], dtype="float32"),
+    )
+    rookie_row = _make_features_row(
+        gsis_id="00-2222222",
+        is_rookie=True,
+        years_exp=pd.array([0], dtype="Int64"),
+        draft_round=pd.array([1], dtype="Int64"),
+        draft_pick_overall=pd.array([10], dtype="Int64"),
+    )
+    comeback_vet_row = _make_features_row(
+        gsis_id="00-3333333",
+        is_rookie=False,
+        # All prior_* columns are NA via _make_features_row defaults.
+    )
+    features = pd.concat([vet_row, rookie_row, comeback_vet_row], ignore_index=True)
+    features = PreseasonFeaturesSchema.validate(features)
+
+    model = NaivePriorOnlyModel()
+    with caplog.at_level(logging.WARNING):
+        out = model.predict_season_distribution(features, ruleset=Ruleset.espn_ppr())
+
+    # Only the veteran with prior_1 history is retained.
+    assert len(out) == 1
+    assert out["gsis_id"].iloc[0] == "00-1111111"
+    assert "dropping 2 player(s)" in caplog.text
+
+    # prior_1 * 16 math:
+    assert float(out["passing_yards_season_total_mean"].iloc[0]) == pytest.approx(275.0 * 16)
+    assert float(out["passing_tds_season_total_mean"].iloc[0]) == pytest.approx(2.0 * 16)
+    # Degenerate distribution: mean == p10 == p50 == p90.
+    assert float(out["passing_yards_season_total_p10"].iloc[0]) == pytest.approx(275.0 * 16)
+    assert float(out["passing_yards_season_total_p90"].iloc[0]) == pytest.approx(275.0 * 16)
+
+    # fpts via canonical scoring coefficients:
+    coef = scoring_coefficients(Ruleset.espn_ppr())
+    expected_fpts = (
+        275.0 * 16 * coef[Stat.PASSING_YARDS]
+        + 2.0 * 16 * coef[Stat.PASSING_TDS]
+        + 0.5 * 16 * coef[Stat.INTERCEPTIONS]
+        + 12.0 * 16 * coef[Stat.RUSHING_YARDS]
+        + 0.1 * 16 * coef[Stat.RUSHING_TDS]
+    )
+    assert float(out["season_total_fpts_mean"].iloc[0]) == pytest.approx(expected_fpts, rel=1e-3)
+
+
+def test_naive_prior_only_model_save_and_load_roundtrip(tmp_path: Path) -> None:
+    """Round-trip a stateless NaivePriorOnlyModel via joblib."""
+    model = NaivePriorOnlyModel()
+    path = tmp_path / "naive-prior-only-test.joblib"
+    model.save(path)
+    assert path.exists()
+
+    reloaded = NaivePriorOnlyModel.load(path)
+    assert reloaded.model_id == model.model_id
+    assert isinstance(reloaded, NaivePriorOnlyModel)
+
+
+def test_naive_prior_only_model_load_rejects_wrong_artifact(tmp_path: Path) -> None:
+    """Loading a non-matching artifact (e.g., NaivePreseason) should raise."""
+    import joblib
+
+    path = tmp_path / "wrong-model.joblib"
+    joblib.dump({"model_id": "naive-preseason-v1", "rookie_glm": {}}, path)
+    with pytest.raises(ValueError, match="does not match"):
+        NaivePriorOnlyModel.load(path)

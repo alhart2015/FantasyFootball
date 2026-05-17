@@ -17,6 +17,11 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
+from projections.preseason.model import (
+    NaivePreseasonModel,
+    NaivePriorOnlyModel,
+    PreseasonModel,
+)
 from projections.preseason.project import project_preseason
 from projections.schemas import (
     Position,
@@ -122,57 +127,70 @@ def walk_forward_backtest(
     target_seasons: list[int],
     train_start: int,
     ruleset: Ruleset,
+    model_under_test: PreseasonModel | None = None,
+    baseline_model: PreseasonModel | None = None,
 ) -> pd.DataFrame:
-    """Run walk-forward eval over `target_seasons`.
+    """Walk-forward eval over `target_seasons`.
 
-    For each target_season:
-      1. project_preseason(target_season) using train_start..target_season-1.
-      2. Aggregate weekly_stats[season=target_season] to actuals.
-      3. Inner-join, compute per-(position) RMSE + Spearman + coverage diff.
-      4. Compute rmse_naive_baseline (prior_1 per-game * 16).
-      5. Build verdict.
+    `model_under_test` defaults to `NaivePreseasonModel` (the v1.0 production
+    model — what actually goes into the canonical partition write).
+    `baseline_model` defaults to `NaivePriorOnlyModel` and provides the
+    comparison floor that gates the per-cell verdict.
+
+    For v1.0, model_under_test == NaivePreseasonModel and baseline_model
+    == NaivePriorOnlyModel; the resulting `rmse_delta_pct` measures the diff
+    between "full naive with rookies + multi-tier prior fallback" and "strict
+    veteran prior_1 only". For v1.5+, swap `model_under_test` for the trained
+    model and keep the same NaivePriorOnlyModel floor.
+
+    Both models run through the same `project_preseason` pipeline; the
+    canonical partition is written for `model_under_test` only — the baseline
+    runs with `write_partition=False` so its in-memory frame doesn't clobber
+    the disk artifact.
 
     Returns a PreseasonBacktestSchema-validated frame.
     """
     rows: list[dict[str, object]] = []
+    mut = model_under_test if model_under_test is not None else NaivePreseasonModel()
+    baseline = baseline_model if baseline_model is not None else NaivePriorOnlyModel()
+    model_class_id = mut.model_id
+
     for target_season in target_seasons:
+        # Production projection — written to disk.
         projections = project_preseason(
             raw_root=raw_root,
             projections_root=projections_root,
             target_season=target_season,
             train_start=train_start,
             ruleset=ruleset,
+            model=mut,
+            write_partition=True,
+        )
+        # Baseline projection — in-memory only; floor for the verdict gate.
+        baseline_projections = project_preseason(
+            raw_root=raw_root,
+            projections_root=projections_root,
+            target_season=target_season,
+            train_start=train_start,
+            ruleset=ruleset,
+            model=baseline,
+            write_partition=False,
         )
 
         actuals_weekly = read_partition(raw_root, "weekly_stats", season=target_season)
         actuals_weekly["season"] = actuals_weekly["season"].astype("int32")
         actuals = _aggregate_actuals(actuals_weekly, ruleset=ruleset, season=target_season)
 
-        # Naive baseline: prior_1_per_game * 16 from target_season-1 actuals.
-        prior_weekly = read_partition(raw_root, "weekly_stats", season=target_season - 1)
-        naive_actuals = _aggregate_actuals(prior_weekly, ruleset=ruleset, season=target_season - 1)
-        # games_played from prior season for per-game * 16 conversion
-        prior_games = prior_weekly.groupby("gsis_id")["week"].count()
-        naive_actuals["games_played"] = (
-            naive_actuals["gsis_id"].map(prior_games).fillna(1).astype("float64")
-        )
-        naive_actuals["season_total_fpts_mean"] = (
-            naive_actuals["actual_season_total_fpts"].astype("float64")
-            / naive_actuals["games_played"]
-            * 16
-        ).astype("float32")
-        naive_actuals = naive_actuals[["gsis_id", "position", "season_total_fpts_mean"]]
-
         for position in (Position.QB, Position.RB, Position.WR, Position.TE):
             pred_pos = projections.loc[projections["position"] == position.value]
+            base_pos = baseline_projections.loc[baseline_projections["position"] == position.value]
             actual_pos = actuals.loc[actuals["position"] == position.value]
-            naive_pos = naive_actuals.loc[naive_actuals["position"] == position.value]
 
             rmse, spearman_top50, n_players = compute_rmse_and_spearman(
                 predicted=pred_pos, actual=actual_pos, top_n=50
             )
             rmse_naive, _, _ = compute_rmse_and_spearman(
-                predicted=naive_pos, actual=actual_pos, top_n=50
+                predicted=base_pos, actual=actual_pos, top_n=50
             )
             rmse_delta_pct = (
                 float("nan")
@@ -197,7 +215,7 @@ def walk_forward_backtest(
                 {
                     "target_season": target_season,
                     "position": position.value,
-                    "model_class": "naive-preseason-v1",
+                    "model_class": model_class_id,
                     "ruleset": ruleset.name,
                     "rmse": float(rmse) if not np.isnan(rmse) else 0.0,
                     "rmse_naive_baseline": (float(rmse_naive) if not np.isnan(rmse_naive) else 0.0),

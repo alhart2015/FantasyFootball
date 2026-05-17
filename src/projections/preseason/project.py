@@ -20,7 +20,8 @@ from projections.schemas import (
     PreseasonProjectionSchema,
     Ruleset,
 )
-from projections.store import read_partition, write_partition
+from projections.store import read_partition
+from projections.store import write_partition as _store_write_partition
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ def project_preseason(
     ruleset: Ruleset,
     model: PreseasonModel | None = None,
     dropped_csv_path: Path | None = None,
+    write_partition: bool = True,
 ) -> pd.DataFrame:
     """Run the end-to-end preseason pipeline. Returns the projection frame.
 
@@ -45,6 +47,11 @@ def project_preseason(
         ruleset: scoring rules.
         model: optional pre-fit model. If None, fits a fresh NaivePreseasonModel.
         dropped_csv_path: optional path to write dropped-player side-channel CSV.
+        write_partition: when True (default), persist the projection frame to the
+            canonical parquet partition under `projections_root`. Backtests run
+            multiple models per target season and only one canonical write per
+            season is allowed — call with False for baseline/comparison models
+            so the in-memory frame is returned without disk side effects.
 
     Returns:
         DataFrame validated against PreseasonProjectionSchema.
@@ -103,17 +110,28 @@ def project_preseason(
 
     if model is None:
         model = NaivePreseasonModel()
-        model.fit(weekly_stats=weekly_stats, draft_picks=draft_picks, id_map=id_map)
+    # Always fit on the current training window. For walk-forward backtests the
+    # window shifts per target season, so the caller-supplied model must be
+    # (re-)fit here; baseline models whose `fit` is a no-op pay nothing.
+    model.fit(weekly_stats=weekly_stats, draft_picks=draft_picks, id_map=id_map)
     projections = model.predict_season_distribution(features, ruleset=ruleset)
 
     projections = PreseasonProjectionSchema.validate(projections)
-    table = f"preseason/ruleset={ruleset.name}"
-    target = write_partition(
-        projections_root,
-        table,
-        projections,
-        season=target_season,
-        week=None,
-    )
-    logger.info("project_preseason: wrote %d rows -> %s", len(projections), target)
+    if write_partition:
+        table = f"preseason/ruleset={ruleset.name}"
+        target = _store_write_partition(
+            projections_root,
+            table,
+            projections,
+            season=target_season,
+            week=None,
+        )
+        logger.info("project_preseason: wrote %d rows -> %s", len(projections), target)
+    else:
+        logger.info(
+            "project_preseason: produced %d rows for season=%d (in-memory only; "
+            "write_partition=False)",
+            len(projections),
+            target_season,
+        )
     return projections

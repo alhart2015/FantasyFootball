@@ -329,3 +329,127 @@ class NaivePreseasonModel:
         m = cls()
         m._rookie_glm = state["rookie_glm"]
         return m
+
+
+class NaivePriorOnlyModel:
+    """Strictly-simpler baseline for v1.5+ benchmarking.
+
+    Veterans with `prior_1_season_games_played > 0` only. Per-stat prediction
+    is `prior_1_season_per_game_<stat> * 16`. No fallback to prior_2/prior_3.
+    No rookie branch. Players missing prior-1 (rookies, IR-comeback veterans)
+    are dropped from the output with a single aggregate WARNING.
+
+    This is the floor that `NaivePreseasonModel` (and any future trained
+    model) is gated against. Keep it deliberately simple — the diff between
+    this and `NaivePreseasonModel` measures the value of the rookie GLM and
+    fallback chain.
+    """
+
+    model_id: str = "naive-prior-only-v1"
+
+    def __init__(self) -> None:
+        pass  # No fitted state; this model has no parameters.
+
+    def fit(
+        self,
+        *,
+        weekly_stats: pd.DataFrame,
+        draft_picks: pd.DataFrame,
+        id_map: pd.DataFrame,
+    ) -> None:
+        """No-op: this model has no parameters. Accepts the same signature as
+        the Protocol so it's swap-in compatible with NaivePreseasonModel."""
+        del weekly_stats, draft_picks, id_map  # reserved for Protocol shape
+
+    def predict_season_distribution(
+        self,
+        features: pd.DataFrame,
+        *,
+        ruleset: Ruleset,
+    ) -> pd.DataFrame:
+        features = PreseasonFeaturesSchema.validate(features)
+
+        # Veterans with prior_1 games only. Drop everyone else.
+        gp1 = features["prior_1_season_games_played"].fillna(0)
+        keep_mask = gp1 > 0
+        n_dropped = int((~keep_mask).sum())
+        if n_dropped:
+            logger.warning(
+                "NaivePriorOnlyModel: dropping %d player(s) with no prior_1 history "
+                "(rookies + comeback vets); this model only projects strict veterans.",
+                n_dropped,
+            )
+        retained = features.loc[keep_mask].copy()
+
+        stats = (
+            "passing_yards",
+            "passing_tds",
+            "passing_interceptions",
+            "rushing_yards",
+            "rushing_tds",
+            "receptions",
+            "receiving_yards",
+            "receiving_tds",
+        )
+
+        per_stat: dict[str, pd.Series] = {}
+        for stat in stats:
+            col_in = f"prior_1_season_per_game_{stat}"
+            col_out = f"{stat}_season_total"
+            if col_in not in retained.columns:
+                continue
+            per_stat[col_out] = (
+                (retained[col_in].fillna(0).astype("float64") * _PROJECTED_GAMES_PLAYED)
+                .clip(lower=0)
+                .astype("float32")
+            )
+
+        # fpts via canonical scoring (reuse the same path NaivePreseasonModel uses).
+        fpts = self._compute_fpts_from_stats(per_stat, ruleset)
+
+        out = retained[["gsis_id", "season", "position", "team"]].copy()
+        out["ruleset"] = ruleset.name
+        out["model_id"] = self.model_id
+        for col, vals in per_stat.items():
+            for q in ("mean", "p10", "p50", "p90"):
+                out[f"{col}_{q}"] = vals
+        for q in ("mean", "p10", "p50", "p90"):
+            out[f"season_total_fpts_{q}"] = fpts
+
+        out = PreseasonProjectionSchema.validate(out)
+        return out
+
+    def _compute_fpts_from_stats(
+        self, per_stat: dict[str, pd.Series], ruleset: Ruleset
+    ) -> pd.Series:
+        """Identical logic to NaivePreseasonModel._compute_fpts_from_stats. Both
+        use scoring_coefficients(ruleset). Duplication here is small; deeper
+        DRY would extract a module-level _compute_fpts helper if a 3rd model
+        ever needed it."""
+        if not per_stat:
+            return pd.Series([], dtype="float32")
+        coef_map = scoring_coefficients(ruleset)
+        sample = next(iter(per_stat.values()))
+        fpts = pd.Series(0.0, index=sample.index, dtype="float64")
+        for col, vals in per_stat.items():
+            stat_name = col.replace("_season_total", "")
+            stat = _STAT_BY_SCHEMA_NAME[stat_name]
+            coef = coef_map.get(stat, 0.0)
+            fpts = fpts + vals.fillna(0).astype("float64") * coef
+        return fpts.clip(lower=0).astype("float32")
+
+    def save(self, path: Path) -> None:
+        """No fitted state to persist; create the directory + write an empty
+        sentinel file so external callers can still expect a path to exist."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump({"model_id": self.model_id}, path)
+
+    @classmethod
+    def load(cls, path: Path) -> NaivePriorOnlyModel:
+        state = joblib.load(path)
+        if state.get("model_id") != cls.model_id:
+            raise ValueError(
+                f"Artifact model_id={state.get('model_id')!r} does not match "
+                f"NaivePriorOnlyModel.model_id={cls.model_id!r}"
+            )
+        return cls()

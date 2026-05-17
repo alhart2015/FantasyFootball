@@ -7,10 +7,15 @@ to the season-total target rather than per-week. See
 """
 
 from projections.preseason.features import build_preseason_features
-from projections.preseason.model import NaivePreseasonModel, PreseasonModel
+from projections.preseason.model import (
+    NaivePreseasonModel,
+    NaivePriorOnlyModel,
+    PreseasonModel,
+)
 
 __all__ = [
     "NaivePreseasonModel",
+    "NaivePriorOnlyModel",
     "PreseasonModel",
     "build_preseason_features",
 ]
