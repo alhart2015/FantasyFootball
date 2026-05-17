@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import GammaRegressor
@@ -310,10 +311,21 @@ class NaivePreseasonModel:
         return fpts.clip(lower=0).astype("float32")
 
     def save(self, path: Path) -> None:
-        """Persist rookie GLM coefficients via joblib. Implemented in Task 16."""
-        raise NotImplementedError("save not yet implemented (Task 16)")
+        """Persist rookie GLM coefficients via joblib."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(
+            {"model_id": self.model_id, "rookie_glm": self._rookie_glm},
+            path,
+        )
 
     @classmethod
     def load(cls, path: Path) -> NaivePreseasonModel:
-        """Load a saved NaivePreseasonModel. Implemented in Task 16."""
-        raise NotImplementedError("load not yet implemented (Task 16)")
+        state = joblib.load(path)
+        if state.get("model_id") != cls.model_id:
+            raise ValueError(
+                f"Artifact model_id={state.get('model_id')!r} does not match "
+                f"NaivePreseasonModel.model_id={cls.model_id!r}"
+            )
+        m = cls()
+        m._rookie_glm = state["rookie_glm"]
+        return m

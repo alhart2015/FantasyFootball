@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -404,3 +405,42 @@ def test_naive_predict_fpts_uses_canonical_scoring() -> None:
     # Total: 281.6
     expected = 250 * 16 / 25 + 2 * 16 * 4 + 1 * 16 * -2 + 10 * 16 / 10 + 0.1 * 16 * 6
     assert float(out["season_total_fpts_mean"].iloc[0]) == pytest.approx(expected, rel=0.02)
+
+
+def test_naive_model_save_and_load_roundtrip(tmp_path: Path) -> None:
+    weekly = pd.DataFrame(
+        [
+            {
+                "gsis_id": "00-3000001",
+                "season": 2021,
+                "week": 1,
+                "position": "WR",
+                "team": "KC",
+                "passing_yards": 0.0,
+                "passing_tds": 0,
+                "interceptions": 0,
+                "rushing_yards": 0.0,
+                "rushing_tds": 0,
+                "receptions": 5,
+                "receiving_yards": 70.0,
+                "receiving_tds": 1,
+            },
+        ]
+    )
+    weekly["season"] = weekly["season"].astype("int32")
+    weekly["week"] = weekly["week"].astype("int32")
+    draft = pd.DataFrame(
+        [("00-3000001", 2021, 1, 10)],
+        columns=["gsis_id", "season", "round", "pick"],
+    ).astype({"season": "int32", "round": "Int64", "pick": "Int64"})
+    id_map = pd.DataFrame({"gsis_id": ["00-3000001"], "full_name": ["x"], "birth_date": [pd.NaT]})
+
+    model = NaivePreseasonModel()
+    model.fit(weekly_stats=weekly, draft_picks=draft, id_map=id_map)
+    path = tmp_path / "naive-preseason-test.joblib"
+    model.save(path)
+    assert path.exists()
+
+    reloaded = NaivePreseasonModel.load(path)
+    assert reloaded.model_id == model.model_id
+    assert reloaded._rookie_glm == model._rookie_glm
