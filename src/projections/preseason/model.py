@@ -96,10 +96,10 @@ class NaivePreseasonModel:
         ruleset: Ruleset,
     ) -> pd.DataFrame:
         features = PreseasonFeaturesSchema.validate(features)
-        per_stat_predictions = self._predict_per_stat(features)
+        per_stat_predictions, retained = self._predict_per_stat(features)
         fpts_mean = self._stub_fpts_from_stats(per_stat_predictions, ruleset)
 
-        out = features[["gsis_id", "season", "position", "team"]].copy()
+        out = retained[["gsis_id", "season", "position", "team"]].copy()
         out["ruleset"] = ruleset.name
         out["model_id"] = self.model_id
 
@@ -113,11 +113,19 @@ class NaivePreseasonModel:
         out = PreseasonProjectionSchema.validate(out)
         return out
 
-    def _predict_per_stat(self, features: pd.DataFrame) -> dict[str, pd.Series]:
-        """Veteran branch (Task 11): prior_1_per_game * 16 per stat.
+    def _predict_per_stat(
+        self, features: pd.DataFrame
+    ) -> tuple[dict[str, pd.Series], pd.DataFrame]:
+        """Per-stat predictions with prior_1 -> prior_2 -> prior_3 fallback.
 
-        Tasks 12 (prior-2/3 fallback) + 14 (rookie GLM) add layered branches.
-        Returns a dict mapping `<stat>_season_total` -> Series indexed like features.
+        Veterans whose effective prior is empty across all 3 seasons are
+        dropped with a WARNING (returned `retained` excludes them).
+
+        Rookies are kept in `retained` (Task 14 overlays the GLM branch on
+        top of the NaN per-stat values produced here for them).
+
+        Returns:
+            (per_stat_series, retained_features)
         """
         stats = (
             "passing_yards",
@@ -129,14 +137,44 @@ class NaivePreseasonModel:
             "receiving_yards",
             "receiving_tds",
         )
+
+        # For each row, determine the "effective prior" tier:
+        # 3 if only prior_3 has games, 2 if prior_2 (or 2+3) has games,
+        # 1 if prior_1 (any combo) has games, 0 if all NA.
+        gp1 = features["prior_1_season_games_played"].fillna(0)
+        gp2 = features["prior_2_season_games_played"].fillna(0)
+        gp3 = features["prior_3_season_games_played"].fillna(0)
+        effective_prior = pd.Series(0, index=features.index, dtype="int8")
+        effective_prior = effective_prior.mask(gp3 > 0, 3)
+        effective_prior = effective_prior.mask(gp2 > 0, 2)
+        effective_prior = effective_prior.mask(gp1 > 0, 1)
+
+        # Drop veterans with no_prior_3_seasons.
+        is_vet = ~features["is_rookie"].astype(bool)
+        drop_mask = (effective_prior == 0) & is_vet
+        if drop_mask.any():
+            dropped_ids = features.loc[drop_mask, "gsis_id"].tolist()
+            logger.warning(
+                "NaivePreseasonModel: dropping %d veteran(s) with no_prior_3_seasons: %s",
+                len(dropped_ids),
+                dropped_ids[:5],
+            )
+        retained = features.loc[~drop_mask].copy()
+        effective_prior = effective_prior.loc[retained.index]
+
         result: dict[str, pd.Series] = {}
         for stat in stats:
-            col_in = f"prior_1_season_per_game_{stat}"
-            col_out = f"{stat}_season_total"
-            if col_in not in features.columns:
-                continue
-            result[col_out] = (features[col_in] * _PROJECTED_GAMES_PLAYED).astype("float32")
-        return result
+            chosen = pd.Series(float("nan"), index=retained.index, dtype="float64")
+            for tier in (1, 2, 3):
+                tier_mask = effective_prior == tier
+                if not tier_mask.any():
+                    continue
+                col = f"prior_{tier}_season_per_game_{stat}"
+                if col not in retained.columns:
+                    continue
+                chosen.loc[tier_mask] = retained.loc[tier_mask, col].astype("float64")
+            result[f"{stat}_season_total"] = (chosen * _PROJECTED_GAMES_PLAYED).astype("float32")
+        return result, retained
 
     def _stub_fpts_from_stats(self, per_stat: dict[str, pd.Series], ruleset: Ruleset) -> pd.Series:
         """Placeholder fpts computation -- replaced by `_compute_fpts_from_stats`

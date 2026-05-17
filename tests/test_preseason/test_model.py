@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 import pytest
 
@@ -79,3 +81,47 @@ def test_naive_predict_veteran_branch_prior_1() -> None:
     # Degenerate distribution: all quantiles equal.
     assert float(out["passing_yards_season_total_p10"].iloc[0]) == pytest.approx(4400.0)
     assert float(out["passing_yards_season_total_p90"].iloc[0]) == pytest.approx(4400.0)
+
+
+def test_naive_predict_fallback_to_prior_2() -> None:
+    """Veteran missing prior_1 but has prior_2: falls through to prior_2."""
+    features = _make_features_row(
+        prior_1_season_games_played=pd.array([pd.NA], dtype="Int64"),
+        prior_1_season_per_game_passing_yards=pd.array([pd.NA], dtype="Float32"),
+        prior_2_season_games_played=pd.array([14], dtype="Int64"),
+        prior_2_season_per_game_passing_yards=pd.array([300.0], dtype="Float32"),
+    )
+    model = NaivePreseasonModel()
+    out = model.predict_season_distribution(features, ruleset=Ruleset.espn_ppr())
+    # Falls back: 300 * 16 = 4800.
+    assert float(out["passing_yards_season_total_mean"].iloc[0]) == pytest.approx(4800.0)
+
+
+def test_naive_predict_fallback_to_prior_3() -> None:
+    """Veteran missing prior_1 and prior_2: falls through to prior_3."""
+    features = _make_features_row(
+        prior_1_season_games_played=pd.array([pd.NA], dtype="Int64"),
+        prior_2_season_games_played=pd.array([pd.NA], dtype="Int64"),
+        prior_3_season_games_played=pd.array([16], dtype="Int64"),
+        prior_3_season_per_game_passing_yards=pd.array([250.0], dtype="Float32"),
+    )
+    model = NaivePreseasonModel()
+    out = model.predict_season_distribution(features, ruleset=Ruleset.espn_ppr())
+    assert float(out["passing_yards_season_total_mean"].iloc[0]) == pytest.approx(4000.0)
+
+
+def test_naive_predict_drops_player_with_all_priors_missing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Veteran with no prior 1/2/3 history: dropped with WARNING."""
+    features = _make_features_row(
+        is_rookie=False,
+        prior_1_season_games_played=pd.array([pd.NA], dtype="Int64"),
+        prior_2_season_games_played=pd.array([pd.NA], dtype="Int64"),
+        prior_3_season_games_played=pd.array([pd.NA], dtype="Int64"),
+    )
+    model = NaivePreseasonModel()
+    with caplog.at_level(logging.WARNING):
+        out = model.predict_season_distribution(features, ruleset=Ruleset.espn_ppr())
+    assert len(out) == 0
+    assert "no_prior_3_seasons" in caplog.text
