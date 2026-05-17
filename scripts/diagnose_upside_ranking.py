@@ -78,3 +78,25 @@ def kendall_tau_filtered(
     actual_e = actual_score.loc[eligible]
     result = kendalltau(pred_e.to_numpy(), actual_e.to_numpy())
     return float(result.statistic), len(eligible)
+
+
+def cell_verdict(
+    *,
+    metric_top12: float,
+    mean_top12: float,
+    metric_rank_err: float,
+    mean_rank_err: float,
+    top12_delta_threshold: float = 1.0 / 12.0,
+) -> str:
+    """Per-cell verdict per spec §3.5. Returns one of: SIGNAL, MARGINAL, NULL, REGRESSION."""
+    top12_better = metric_top12 - mean_top12 >= top12_delta_threshold
+    rankerr_better = metric_rank_err < mean_rank_err
+    top12_worse = metric_top12 < mean_top12
+    rankerr_worse = metric_rank_err > mean_rank_err
+    if top12_better and rankerr_better:
+        return "SIGNAL"
+    if top12_worse and rankerr_worse:
+        return "REGRESSION"
+    if top12_better or rankerr_better:
+        return "MARGINAL"
+    return "NULL"

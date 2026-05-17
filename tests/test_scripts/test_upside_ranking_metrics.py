@@ -103,3 +103,52 @@ def test_kendall_tau_filtered_excludes_low_nweeks() -> None:
     # 'd' is excluded; perfect rank agreement on the remaining 3 -> tau = 1.0, n = 3
     assert tau == pytest.approx(1.0)
     assert n == 3
+
+
+def test_cell_verdict_signal() -> None:
+    from diagnose_upside_ranking import cell_verdict
+
+    # Metric beats mean by >= 1/12 on top-12 overlap AND beats mean on top-5 rank-err.
+    verdict = cell_verdict(
+        metric_top12=0.92,
+        mean_top12=0.83,  # delta = 0.09 >= 1/12 ~ 0.083
+        metric_rank_err=0.5,
+        mean_rank_err=1.5,
+    )
+    assert verdict == "SIGNAL"
+
+
+def test_cell_verdict_marginal_one_dim() -> None:
+    from diagnose_upside_ranking import cell_verdict
+
+    verdict = cell_verdict(
+        metric_top12=0.92,
+        mean_top12=0.83,
+        metric_rank_err=1.5,
+        mean_rank_err=1.5,  # tie -> not "better" on this dim
+    )
+    assert verdict == "MARGINAL"
+
+
+def test_cell_verdict_null() -> None:
+    from diagnose_upside_ranking import cell_verdict
+
+    verdict = cell_verdict(
+        metric_top12=0.83,
+        mean_top12=0.83,
+        metric_rank_err=1.5,
+        mean_rank_err=1.5,
+    )
+    assert verdict == "NULL"
+
+
+def test_cell_verdict_regression() -> None:
+    from diagnose_upside_ranking import cell_verdict
+
+    verdict = cell_verdict(
+        metric_top12=0.50,
+        mean_top12=0.83,
+        metric_rank_err=3.0,
+        mean_rank_err=1.5,
+    )
+    assert verdict == "REGRESSION"
