@@ -362,3 +362,24 @@ def test_code_hash_files_nb_includes_vegas_team_context_features() -> None:
         assert vegas_in_set, (
             f"vegas_team_context_features.py missing from _code_hash_files_nb({pos})"
         )
+
+
+def test_te_lightgbm_nb_feature_columns_unchanged_by_vegas_integration() -> None:
+    """TE was NULL in the probe -- not adopted; feature list must not carry
+    the four Vegas cols and must still include per-game implied_team_total +
+    spread (whatever the TE schema produces)."""
+    from projections.models.lightgbm import _TE_FEATURE_COLUMNS, _filter_features
+
+    model = te_lightgbm_nb()
+    expected = _filter_features(_TE_FEATURE_COLUMNS)
+    assert model._config.feature_columns == expected
+
+
+def test_rb_lightgbm_nb_feature_columns_unchanged_by_vegas_integration() -> None:
+    """RB just-missed-ADOPT in the probe and is deferred to a separate
+    preseason_*-only follow-up. Feature list must be the same as pre-#33c."""
+    from projections.models.lightgbm import _RB_FEATURE_COLUMNS, _filter_features
+
+    model = rb_lightgbm_nb()
+    expected = _filter_features(_RB_FEATURE_COLUMNS)
+    assert model._config.feature_columns == expected
