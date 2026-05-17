@@ -525,7 +525,7 @@ QB-specific accuracy ever matters more than uniform routing.
 
 **Workflow recommendation.** Spec → plan → execute on a dedicated branch. First plan should be the brainstorm + roadmap (which mechanism first? what's the cheapest path to a credible preseason rank?). Treat it as Project-level work, not a single feature plan.
 
-**Status.** Required by the Draft Hub. Not yet on the roadmap. Surfaced 2026-05-11 during a 2025-retrospective sanity check that prompted the user to flag the gap.
+**Status.** **CLOSED 2026-05-17.** Spec + plan + impl shipped on `worktree-feat+preseason-projections`. Sub-package `src/projections/preseason/` (features.py / model.py / project.py / backtest.py); 3 new schemas; 2 new CLI scripts; walk-forward backtest harness gating v1.5+ trained models on ≥6/8 cells ADOPT. See `project_management.md` entry for full status and `docs/superpowers/specs/2026-05-17-preseason-projections-design.md` for design.
 
 ### 32. Migrate ingest off `nfl_data_py` to `nflreadpy` (blocks in-season 2026 projections)
 

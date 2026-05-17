@@ -27,7 +27,7 @@ Everything below decomposes those gaps into actionable items.
 
 ### 1a. Data the prediction depends on
 
-- [ ] **Ingest 2025 season.** `data/raw/` currently stops at 2024. Trailing-N features and 2025-baseline residuals require this. Action: run `refresh()` for 2025 (and 2026 partials as they appear). Verify the opt-in network smoke (`pytest -m network --run-network`) catches any `nfl_data_py` column drift first — eight ingest patches were needed last time (TODO #16).
+- [x] **Ingest 2025 season.** Shipped 2026-05-11 via `nflreadpy` migration (TODO #32). All 8 ingest sources cover 2018-2025; weekly_stats / depth_charts / pbp / snap_counts / NGS / schedules / draft_picks / id_map all current.
 - [ ] **Pre-season roster source for 2026.** Today's `predict_2024.py` uses `dc_curr = read_partition("depth_charts", season=2024)` — pre-season 2026 has no depth chart yet. Pick a source and ingest it:
   - ESPN league API rosters (preferred — needed anyway for league-aware tools).
   - Sleeper rosters API (no auth required).
@@ -41,7 +41,7 @@ Everything below decomposes those gaps into actionable items.
 ### 1b. Code surface
 
 - [~] **Per-position weekly projection — QB / RB / TE / WR.** Works today via `scripts/predict_2024.py`. Production routing per position (`POSITION_DISPATCH[*].default_model_class`): QB → `lightgbm-nb`, RB → `baseline`, TE → `baseline`, WR → `ensemble`.
-- [ ] **Generalize `predict_2024.py` to `predict_season.py SEASON`.** The constant `_PROJECTION_SEASON = 2024` is hardcoded; the script also assumes `depth_charts` partition exists for the target season. Needs a `--roster-source` flag plus a path that doesn't depend on in-season depth charts for pre-season runs.
+- [x] **Generalize `predict_2024.py` to `predict_season.py SEASON`.** Shipped 2026-05-17 as `scripts/preseason_project_season.py` backed by the new `src/projections/preseason/` sub-package (parallel to the in-season weekly pipeline). Spec at `docs/superpowers/specs/2026-05-17-preseason-projections-design.md`. Pre-season roster source comes from `depth_charts_<season>` ingest; rookies handled via draft-capital Gamma GLM with UDFA imputation. v1.0 ships naive baseline (point-mass distribution); v1.5 trained model is the next spec.
 - [x] **Season aggregation.** `aggregation/season.py:aggregate_to_season` rebuilds per-week samples from per-row seeds and sums them — gives `season_mean / p10 / p50 / p90`.
 - [x] **Multi-ruleset scoring.** `Ruleset.espn_ppr() / espn_half() / standard()` already wired through scoring + season aggregation.
 - [ ] **One end-to-end "produce 2026 season projections" entry point.** Currently you'd run `predict_season.py` per position, four times, then concat + aggregate by hand. Wrap into one script.
