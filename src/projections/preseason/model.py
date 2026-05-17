@@ -17,7 +17,13 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import GammaRegressor
 
-from projections.schemas import PreseasonFeaturesSchema, PreseasonProjectionSchema, Ruleset
+from projections.schemas import (
+    PreseasonFeaturesSchema,
+    PreseasonProjectionSchema,
+    Ruleset,
+    Stat,
+)
+from projections.scoring import scoring_coefficients
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +34,18 @@ _PROJECTED_GAMES_PLAYED = 16
 # v1 constant: UDFA rookies (not in draft_picks for their target season) are
 # imputed at this overall pick before running through the rookie GLM.
 _UDFA_IMPUTED_PICK = 300
+
+# Schema-stat-name -> Stat enum, for scoring-layer coefficient lookup.
+_STAT_BY_SCHEMA_NAME: dict[str, Stat] = {
+    "passing_yards": Stat.PASSING_YARDS,
+    "passing_tds": Stat.PASSING_TDS,
+    "passing_interceptions": Stat.INTERCEPTIONS,
+    "rushing_yards": Stat.RUSHING_YARDS,
+    "rushing_tds": Stat.RUSHING_TDS,
+    "receptions": Stat.RECEPTIONS,
+    "receiving_yards": Stat.RECEIVING_YARDS,
+    "receiving_tds": Stat.RECEIVING_TDS,
+}
 
 
 @runtime_checkable
@@ -174,7 +192,7 @@ class NaivePreseasonModel:
     ) -> pd.DataFrame:
         features = PreseasonFeaturesSchema.validate(features)
         per_stat_predictions, retained = self._predict_per_stat(features)
-        fpts_mean = self._stub_fpts_from_stats(per_stat_predictions, ruleset)
+        fpts_mean = self._compute_fpts_from_stats(per_stat_predictions, ruleset)
 
         out = retained[["gsis_id", "season", "position", "team"]].copy()
         out["ruleset"] = ruleset.name
@@ -271,38 +289,24 @@ class NaivePreseasonModel:
 
         return result, retained
 
-    def _stub_fpts_from_stats(self, per_stat: dict[str, pd.Series], ruleset: Ruleset) -> pd.Series:
-        """Placeholder fpts computation -- replaced by `_compute_fpts_from_stats`
-        in Task 15 once `projections.scoring.scoring_coefficients` is wired up.
+    def _compute_fpts_from_stats(
+        self, per_stat: dict[str, pd.Series], ruleset: Ruleset
+    ) -> pd.Series:
+        """Vectorized fpts computation using the canonical scoring coefficient map.
 
-        Currently applies the ruleset's coefficients directly to each per-stat
-        season total. Returns a float32 Series clipped at 0.
+        Degenerate per-stat distributions are scalar means, so total fpts is a
+        linear combination via `scoring_coefficients(ruleset)`.
         """
-        # Pick any non-empty series to set the index -- degenerate fpts is
-        # zero-indexed if per_stat is empty (no veteran branch fired).
         if not per_stat:
             return pd.Series([], dtype="float32")
+        coef_map = scoring_coefficients(ruleset)
         sample = next(iter(per_stat.values()))
         fpts = pd.Series(0.0, index=sample.index, dtype="float64")
         for col, vals in per_stat.items():
-            stat = col.replace("_season_total", "")
-            v = vals.fillna(0).astype("float64")
-            if stat == "passing_yards":
-                fpts = fpts + v / ruleset.passing_yds_per_pt
-            elif stat == "passing_tds":
-                fpts = fpts + v * ruleset.passing_td_pts
-            elif stat == "passing_interceptions":
-                fpts = fpts + v * ruleset.interception_pts
-            elif stat == "rushing_yards":
-                fpts = fpts + v / ruleset.rushing_yds_per_pt
-            elif stat == "rushing_tds":
-                fpts = fpts + v * ruleset.rushing_td_pts
-            elif stat == "receptions":
-                fpts = fpts + v * ruleset.reception_pts
-            elif stat == "receiving_yards":
-                fpts = fpts + v / ruleset.receiving_yds_per_pt
-            elif stat == "receiving_tds":
-                fpts = fpts + v * ruleset.receiving_td_pts
+            stat_name = col.replace("_season_total", "")
+            stat = _STAT_BY_SCHEMA_NAME[stat_name]
+            coef = coef_map.get(stat, 0.0)
+            fpts = fpts + vals.fillna(0).astype("float64") * coef
         return fpts.clip(lower=0).astype("float32")
 
     def save(self, path: Path) -> None:

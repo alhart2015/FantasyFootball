@@ -381,3 +381,26 @@ def test_naive_predict_rookie_udfa_imputed_to_pick_300() -> None:
     assert len(out) == 1
     # Should still produce a value (imputed pick=300).
     assert float(out["receiving_yards_season_total_mean"].iloc[0]) >= 0
+
+
+def test_naive_predict_fpts_uses_canonical_scoring() -> None:
+    """fpts must be computed via projections.scoring (canonical path), not local math."""
+    features = _make_features_row(
+        prior_1_season_games_played=pd.array([17], dtype="Int64"),
+        prior_1_season_per_game_passing_yards=pd.array([250.0], dtype="float32"),
+        prior_1_season_per_game_passing_tds=pd.array([2.0], dtype="float32"),
+        prior_1_season_per_game_passing_interceptions=pd.array([1.0], dtype="float32"),
+        prior_1_season_per_game_rushing_yards=pd.array([10.0], dtype="float32"),
+        prior_1_season_per_game_rushing_tds=pd.array([0.1], dtype="float32"),
+    )
+    model = NaivePreseasonModel()
+    out = model.predict_season_distribution(features, ruleset=Ruleset.espn_ppr())
+    # Computed via canonical scoring coefficients:
+    # passing_yards / 25  = 250 * 16 / 25  = 160
+    # passing_tds * 4     = 2.0 * 16 * 4   = 128
+    # interceptions * -2  = 1.0 * 16 * -2  = -32
+    # rushing_yards / 10  = 10 * 16 / 10   = 16
+    # rushing_tds * 6     = 0.1 * 16 * 6   = 9.6
+    # Total: 281.6
+    expected = 250 * 16 / 25 + 2 * 16 * 4 + 1 * 16 * -2 + 10 * 16 / 10 + 0.1 * 16 * 6
+    assert float(out["season_total_fpts_mean"].iloc[0]) == pytest.approx(expected, rel=0.02)

@@ -9,6 +9,9 @@ from projections.scoring.score_distribution import (
     derive_row_seed,
     score_distribution,
 )
+from projections.scoring.score_distribution import (
+    _scoring_coefficients as scoring_coefficients,
+)
 
 __all__ = [
     "INTEGER_STATS",
@@ -17,4 +20,5 @@ __all__ = [
     "derive_row_seed",
     "score",
     "score_distribution",
+    "scoring_coefficients",
 ]
