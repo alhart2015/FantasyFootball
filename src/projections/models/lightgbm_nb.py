@@ -407,7 +407,7 @@ def qb_lightgbm_nb() -> LightGBMNbModel:
         config=_LightGBMConfig(
             position=Position.QB,
             target_stats=_QB_TARGET_STATS,
-            feature_columns=_filter_features(_QB_FEATURE_COLUMNS),
+            feature_columns=_QB_FEATURE_COLUMNS_NB,  # TODO #33c Vegas swap
             feature_schema=QbFeaturesSchema,
             non_negative_stats=_QB_NON_NEGATIVE,
         )
@@ -443,7 +443,7 @@ def wr_lightgbm_nb() -> LightGBMNbModel:
         config=_LightGBMConfig(
             position=Position.WR,
             target_stats=_WR_TARGET_STATS,
-            feature_columns=_filter_features(_WR_FEATURE_COLUMNS),
+            feature_columns=_WR_FEATURE_COLUMNS_NB,  # TODO #33c Vegas swap
             feature_schema=WrFeaturesSchema,
             non_negative_stats=_WR_NON_NEGATIVE,
         )

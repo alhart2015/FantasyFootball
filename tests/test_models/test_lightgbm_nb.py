@@ -184,30 +184,43 @@ def test_codec_round_trip_yields_correct_per_stat_distribution_types() -> None:
 
 
 def test_yards_stat_predictions_match_tuned_baseline() -> None:
-    """Yards-stat predictions from LightGBMNbModel should be bit-exact identical
-    to LightGBMTunedModel's on the same fixture, since LightGBMNbModel inherits
-    yards-stat training and only overrides count-stat training. Checks the
-    `p10`, `p50`, `p90` columns are NOT bit-exact at the composite level (count
-    stats differ between the two), but per-stat yards quantile predictions are.
+    """Yards-stat training inheritance from LightGBMTunedModel was originally
+    observable as identical `best_iters` between wr_lightgbm_nb and
+    wr_lightgbm_tuned on the same fixture. After TODO #33c integration,
+    wr_lightgbm_nb uses the Vegas-swap feature list (drops implied_team_total
+    + spread, adds 4 preseason_* / season_avg_* cols) while wr_lightgbm_tuned
+    keeps the schema-derived (augment) list. The two now have DIFFERENT feature
+    columns, so sub-models necessarily diverge -- best_iters equality no longer
+    holds for WR.
 
-    The simplest way to verify this without exposing internals: compare
-    yards-stat sub-models' best_iters between the two models. They should match
-    when fitted on identical data with identical hyperparameters."""
-    features = _build_synthetic_wr_features()
-    weekly = _build_synthetic_wr_weekly_stats(features)
-
+    The inheritance mechanism is preserved: LightGBMNbModel still extends
+    LightGBMTunedModel and overrides only count-stat fit logic. Verified here
+    by class hierarchy + by confirming the two models' yards-stat config
+    blocks are identical *modulo* feature_columns."""
     nb = wr_lightgbm_nb()
     tuned = wr_lightgbm_tuned()
-    nb.fit(features, weekly)
-    tuned.fit(features, weekly)
-
-    yards_stats = (Stat.RECEPTIONS, Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS)
-    for stat in yards_stats:
-        for q in (0.05, 0.10, 0.50, 0.90, 0.95):
-            assert nb._best_iters[(stat, q)] == tuned._best_iters[(stat, q)], (
-                f"{stat} q={q}: NB best_iter {nb._best_iters[(stat, q)]} "
-                f"differs from tuned {tuned._best_iters[(stat, q)]}"
-            )
+    # Class hierarchy: NB subclasses Tuned, so quantile-yards training path
+    # is inherited unchanged.
+    assert isinstance(nb, type(tuned))
+    # Per-stat target_stats + non_negative_stats configurations are identical
+    # (both share _WR_TARGET_STATS and _WR_NON_NEGATIVE).
+    assert nb._config.target_stats == tuned._config.target_stats
+    assert nb._config.non_negative_stats == tuned._config.non_negative_stats
+    # Feature columns INTENTIONALLY differ post-#33c.
+    assert set(nb._config.feature_columns) != set(tuned._config.feature_columns)
+    swap_added = {
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    }
+    swap_removed = {"implied_team_total", "spread"}
+    nb_cols = set(nb._config.feature_columns)
+    tuned_cols = set(tuned._config.feature_columns)
+    assert swap_added.issubset(nb_cols)
+    assert swap_added.issubset(tuned_cols)  # tuned auto-picks them up via schema
+    assert swap_removed.isdisjoint(nb_cols)  # nb drops them
+    assert swap_removed.issubset(tuned_cols)  # tuned keeps them
 
 
 def test_model_id_uses_nb_prefix() -> None:
