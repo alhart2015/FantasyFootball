@@ -130,33 +130,14 @@ def walk_forward_backtest(
     model_under_test: PreseasonModel | None = None,
     baseline_model: PreseasonModel | None = None,
 ) -> pd.DataFrame:
-    """Walk-forward eval over `target_seasons`.
-
-    `model_under_test` defaults to `NaivePreseasonModel` (the v1.0 production
-    model — what actually goes into the canonical partition write).
-    `baseline_model` defaults to `NaivePriorOnlyModel` and provides the
-    comparison floor that gates the per-cell verdict.
-
-    For v1.0, model_under_test == NaivePreseasonModel and baseline_model
-    == NaivePriorOnlyModel; the resulting `rmse_delta_pct` measures the diff
-    between "full naive with rookies + multi-tier prior fallback" and "strict
-    veteran prior_1 only". For v1.5+, swap `model_under_test` for the trained
-    model and keep the same NaivePriorOnlyModel floor.
-
-    Both models run through the same `project_preseason` pipeline; the
-    canonical partition is written for `model_under_test` only — the baseline
-    runs with `write_partition=False` so its in-memory frame doesn't clobber
-    the disk artifact.
-
-    Returns a PreseasonBacktestSchema-validated frame.
-    """
+    """Walk-forward eval over `target_seasons`. Defaults: model_under_test =
+    NaivePreseasonModel, baseline_model = NaivePriorOnlyModel (the gating floor)."""
     rows: list[dict[str, object]] = []
     mut = model_under_test if model_under_test is not None else NaivePreseasonModel()
     baseline = baseline_model if baseline_model is not None else NaivePriorOnlyModel()
     model_class_id = mut.model_id
 
     for target_season in target_seasons:
-        # Production projection — written to disk.
         projections = project_preseason(
             raw_root=raw_root,
             projections_root=projections_root,
@@ -164,9 +145,8 @@ def walk_forward_backtest(
             train_start=train_start,
             ruleset=ruleset,
             model=mut,
-            write_partition=True,
+            persist=True,
         )
-        # Baseline projection — in-memory only; floor for the verdict gate.
         baseline_projections = project_preseason(
             raw_root=raw_root,
             projections_root=projections_root,
@@ -174,7 +154,7 @@ def walk_forward_backtest(
             train_start=train_start,
             ruleset=ruleset,
             model=baseline,
-            write_partition=False,
+            persist=False,
         )
 
         actuals_weekly = read_partition(raw_root, "weekly_stats", season=target_season)

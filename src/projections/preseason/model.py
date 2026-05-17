@@ -48,6 +48,27 @@ _STAT_BY_SCHEMA_NAME: dict[str, Stat] = {
     "receiving_tds": Stat.RECEIVING_TDS,
 }
 
+# Ordered tuple of schema stat names, derived from the mapping above. Both
+# naive model implementations iterate over this set; the dict-key order is
+# the single source of truth.
+_SCORABLE_SCHEMA_STATS: tuple[str, ...] = tuple(_STAT_BY_SCHEMA_NAME)
+
+
+def _compute_fpts_from_stats(per_stat: dict[str, pd.Series], ruleset: Ruleset) -> pd.Series:
+    """Linear combination of per-stat season totals using the canonical
+    scoring coefficient map. Returns a float32 Series clipped at 0."""
+    if not per_stat:
+        return pd.Series([], dtype="float32")
+    coef_map = scoring_coefficients(ruleset)
+    sample = next(iter(per_stat.values()))
+    fpts = pd.Series(0.0, index=sample.index, dtype="float64")
+    for col, vals in per_stat.items():
+        stat_name = col.replace("_season_total", "")
+        stat = _STAT_BY_SCHEMA_NAME[stat_name]
+        coef = coef_map.get(stat, 0.0)
+        fpts = fpts + vals.fillna(0).astype("float64") * coef
+    return fpts.clip(lower=0).astype("float32")
+
 
 @runtime_checkable
 class PreseasonModel(Protocol):
@@ -193,7 +214,7 @@ class NaivePreseasonModel:
     ) -> pd.DataFrame:
         features = PreseasonFeaturesSchema.validate(features)
         per_stat_predictions, retained = self._predict_per_stat(features)
-        fpts_mean = self._compute_fpts_from_stats(per_stat_predictions, ruleset)
+        fpts_mean = _compute_fpts_from_stats(per_stat_predictions, ruleset)
 
         out = retained[["gsis_id", "season", "position", "team"]].copy()
         out["ruleset"] = ruleset.name
@@ -218,16 +239,7 @@ class NaivePreseasonModel:
 
         Veterans with no_prior_3_seasons are dropped with a WARNING.
         """
-        stats = (
-            "passing_yards",
-            "passing_tds",
-            "passing_interceptions",
-            "rushing_yards",
-            "rushing_tds",
-            "receptions",
-            "receiving_yards",
-            "receiving_tds",
-        )
+        stats = _SCORABLE_SCHEMA_STATS
 
         # Effective-prior tier per row (veterans).
         gp1 = features["prior_1_season_games_played"].fillna(0)
@@ -289,26 +301,6 @@ class NaivePreseasonModel:
             result[f"{stat}_season_total"] = chosen.fillna(0.0).clip(lower=0.0).astype("float32")
 
         return result, retained
-
-    def _compute_fpts_from_stats(
-        self, per_stat: dict[str, pd.Series], ruleset: Ruleset
-    ) -> pd.Series:
-        """Vectorized fpts computation using the canonical scoring coefficient map.
-
-        Degenerate per-stat distributions are scalar means, so total fpts is a
-        linear combination via `scoring_coefficients(ruleset)`.
-        """
-        if not per_stat:
-            return pd.Series([], dtype="float32")
-        coef_map = scoring_coefficients(ruleset)
-        sample = next(iter(per_stat.values()))
-        fpts = pd.Series(0.0, index=sample.index, dtype="float64")
-        for col, vals in per_stat.items():
-            stat_name = col.replace("_season_total", "")
-            stat = _STAT_BY_SCHEMA_NAME[stat_name]
-            coef = coef_map.get(stat, 0.0)
-            fpts = fpts + vals.fillna(0).astype("float64") * coef
-        return fpts.clip(lower=0).astype("float32")
 
     def save(self, path: Path) -> None:
         """Persist rookie GLM coefficients via joblib."""
@@ -381,19 +373,8 @@ class NaivePriorOnlyModel:
             )
         retained = features.loc[keep_mask].copy()
 
-        stats = (
-            "passing_yards",
-            "passing_tds",
-            "passing_interceptions",
-            "rushing_yards",
-            "rushing_tds",
-            "receptions",
-            "receiving_yards",
-            "receiving_tds",
-        )
-
         per_stat: dict[str, pd.Series] = {}
-        for stat in stats:
+        for stat in _SCORABLE_SCHEMA_STATS:
             col_in = f"prior_1_season_per_game_{stat}"
             col_out = f"{stat}_season_total"
             if col_in not in retained.columns:
@@ -404,8 +385,7 @@ class NaivePriorOnlyModel:
                 .astype("float32")
             )
 
-        # fpts via canonical scoring (reuse the same path NaivePreseasonModel uses).
-        fpts = self._compute_fpts_from_stats(per_stat, ruleset)
+        fpts = _compute_fpts_from_stats(per_stat, ruleset)
 
         out = retained[["gsis_id", "season", "position", "team"]].copy()
         out["ruleset"] = ruleset.name
@@ -418,25 +398,6 @@ class NaivePriorOnlyModel:
 
         out = PreseasonProjectionSchema.validate(out)
         return out
-
-    def _compute_fpts_from_stats(
-        self, per_stat: dict[str, pd.Series], ruleset: Ruleset
-    ) -> pd.Series:
-        """Identical logic to NaivePreseasonModel._compute_fpts_from_stats. Both
-        use scoring_coefficients(ruleset). Duplication here is small; deeper
-        DRY would extract a module-level _compute_fpts helper if a 3rd model
-        ever needed it."""
-        if not per_stat:
-            return pd.Series([], dtype="float32")
-        coef_map = scoring_coefficients(ruleset)
-        sample = next(iter(per_stat.values()))
-        fpts = pd.Series(0.0, index=sample.index, dtype="float64")
-        for col, vals in per_stat.items():
-            stat_name = col.replace("_season_total", "")
-            stat = _STAT_BY_SCHEMA_NAME[stat_name]
-            coef = coef_map.get(stat, 0.0)
-            fpts = fpts + vals.fillna(0).astype("float64") * coef
-        return fpts.clip(lower=0).astype("float32")
 
     def save(self, path: Path) -> None:
         """No fitted state to persist; create the directory + write an empty

@@ -20,8 +20,7 @@ from projections.schemas import (
     PreseasonProjectionSchema,
     Ruleset,
 )
-from projections.store import read_partition
-from projections.store import write_partition as _store_write_partition
+from projections.store import read_partition, write_partition
 
 logger = logging.getLogger(__name__)
 
@@ -35,26 +34,17 @@ def project_preseason(
     ruleset: Ruleset,
     model: PreseasonModel | None = None,
     dropped_csv_path: Path | None = None,
-    write_partition: bool = True,
+    persist: bool = True,
 ) -> pd.DataFrame:
     """Run the end-to-end preseason pipeline. Returns the projection frame.
 
-    Args:
-        raw_root: data/raw root directory.
-        projections_root: data/projections root directory.
-        target_season: the year to project (e.g., 2026).
-        train_start: earliest season in the training window (default 2018).
-        ruleset: scoring rules.
-        model: optional pre-fit model. If None, fits a fresh NaivePreseasonModel.
-        dropped_csv_path: optional path to write dropped-player side-channel CSV.
-        write_partition: when True (default), persist the projection frame to the
-            canonical parquet partition under `projections_root`. Backtests run
-            multiple models per target season and only one canonical write per
-            season is allowed — call with False for baseline/comparison models
-            so the in-memory frame is returned without disk side effects.
+    `model` defaults to a fresh NaivePreseasonModel. Caller-supplied models are
+    always re-fit on the resolved training window — pass instances, not
+    already-fit state, since the window changes per target season in backtests.
 
-    Returns:
-        DataFrame validated against PreseasonProjectionSchema.
+    `persist=False` skips the canonical parquet write under `projections_root`;
+    backtests use this to run a baseline model in-memory without clobbering the
+    model-under-test's partition.
     """
     weekly_stats_frames: list[pd.DataFrame] = []
     for s in range(train_start, target_season):
@@ -110,16 +100,13 @@ def project_preseason(
 
     if model is None:
         model = NaivePreseasonModel()
-    # Always fit on the current training window. For walk-forward backtests the
-    # window shifts per target season, so the caller-supplied model must be
-    # (re-)fit here; baseline models whose `fit` is a no-op pay nothing.
     model.fit(weekly_stats=weekly_stats, draft_picks=draft_picks, id_map=id_map)
     projections = model.predict_season_distribution(features, ruleset=ruleset)
 
     projections = PreseasonProjectionSchema.validate(projections)
-    if write_partition:
+    if persist:
         table = f"preseason/ruleset={ruleset.name}"
-        target = _store_write_partition(
+        target = write_partition(
             projections_root,
             table,
             projections,
@@ -129,8 +116,7 @@ def project_preseason(
         logger.info("project_preseason: wrote %d rows -> %s", len(projections), target)
     else:
         logger.info(
-            "project_preseason: produced %d rows for season=%d (in-memory only; "
-            "write_partition=False)",
+            "project_preseason: produced %d rows for season=%d (in-memory only)",
             len(projections),
             target_season,
         )
