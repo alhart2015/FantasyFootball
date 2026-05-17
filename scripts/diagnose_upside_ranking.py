@@ -8,6 +8,8 @@ See docs/superpowers/specs/2026-05-16-upside-sensitive-ranking-diagnostic-design
 
 from __future__ import annotations
 
+import argparse
+from io import StringIO
 from pathlib import Path
 
 import numpy as np
@@ -266,3 +268,195 @@ def assemble_season_diagnostic(
             )
     summary = pd.DataFrame(summary_rows)
     return df, summary
+
+
+def _render_position_section(
+    *,
+    season: int,
+    position: str,
+    per_player: pd.DataFrame,
+    summary: pd.DataFrame,
+) -> str:
+    out = StringIO()
+    out.write(f"\n### {position}\n\n")
+
+    # Per-player top-12 by actual.
+    pos_pp = per_player[per_player["position"] == position].sort_values("actual_rank").head(12)
+    cols = [
+        "actual_rank",
+        "full_name",
+        "actual_total",
+        "mean",
+        "p90",
+        "blend_70_30",
+        "p_elite",
+        "rank_mean",
+        "rank_p90",
+        "rank_blend_70_30",
+        "rank_p_elite",
+    ]
+    out.write(pos_pp[cols].to_markdown(index=False, floatfmt=".2f") + "\n\n")
+
+    # Per-metric summary.
+    pos_sum = summary[summary["position"] == position]
+    out.write(pos_sum.to_markdown(index=False, floatfmt=".3f") + "\n")
+    return out.getvalue()
+
+
+def _render_report(
+    *,
+    seasons: tuple[int, ...],
+    thresholds: dict[Position, float],
+    n_samples: int,
+    per_season_per_player: dict[int, pd.DataFrame],
+    per_season_summary: dict[int, pd.DataFrame],
+    decision: str,
+) -> str:
+    out = StringIO()
+    out.write(f"# Upside-Sensitive Ranking Diagnostic - {', '.join(str(s) for s in seasons)}\n\n")
+    out.write("## Setup\n\n")
+    out.write("- Ruleset: ESPN PPR\n")
+    out.write(f"- MC samples: {n_samples} per player per season\n")
+    out.write("- Elite thresholds (computed from 2019-2023 actuals, >=8 games):\n")
+    for pos, v in thresholds.items():
+        out.write(f"  - {pos.value} = {v:.1f}\n")
+    out.write("\n")
+
+    for season in seasons:
+        out.write(f"\n## {season}: per-position diagnostic\n")
+        for pos_str in ("QB", "RB", "WR", "TE"):
+            out.write(
+                _render_position_section(
+                    season=season,
+                    position=pos_str,
+                    per_player=per_season_per_player[season],
+                    summary=per_season_summary[season],
+                )
+            )
+
+    # Cross-season summary.
+    out.write("\n## Cross-season summary\n\n")
+    cross_rows = []
+    for season in seasons:
+        for _, row in per_season_summary[season].iterrows():
+            cross_rows.append(
+                {
+                    "season": season,
+                    "position": row["position"],
+                    "metric": row["metric"],
+                    "cell_verdict": row["cell_verdict"],
+                }
+            )
+    cross = pd.DataFrame(cross_rows)
+    pivoted = cross.pivot_table(
+        index=["position", "metric"],
+        columns="season",
+        values="cell_verdict",
+        aggfunc="first",
+    )
+    out.write(pivoted.to_markdown() + "\n\n")
+
+    out.write(f"\n## Phase 2 decision\n\n**{decision}**\n")
+    return out.getvalue()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="TODO #33d Phase 1 diagnostic.")
+    parser.add_argument("--seasons", type=int, nargs="+", required=True)
+    parser.add_argument("--raw-root", type=Path, default=Path("data/raw"))
+    parser.add_argument(
+        "--weekly-parquet-template",
+        type=str,
+        default="reports/season_projection_weekly_{season}.parquet",
+    )
+    parser.add_argument(
+        "--distributions-csv-template",
+        type=str,
+        default="reports/season_projection_distributions_{season}.csv",
+    )
+    parser.add_argument("--out", type=Path, default=Path("reports/upside_ranking_diagnostic.md"))
+    parser.add_argument("--n-samples", type=int, default=10_000)
+    parser.add_argument(
+        "--threshold-seasons",
+        type=int,
+        nargs="+",
+        default=(2019, 2020, 2021, 2022, 2023),
+    )
+    args = parser.parse_args()
+
+    ruleset = Ruleset.espn_ppr()
+    print(
+        f"Computing elite thresholds from {args.threshold_seasons[0]}-"
+        f"{args.threshold_seasons[-1]} actuals...",
+        flush=True,
+    )
+    thresholds = _compute_elite_thresholds(
+        raw_root=args.raw_root,
+        seasons=tuple(args.threshold_seasons),
+        ruleset=ruleset,
+        min_games=8,
+    )
+    for pos, v in thresholds.items():
+        print(f"  {pos.value} elite_threshold = {v:.1f}", flush=True)
+
+    per_season_per_player: dict[int, pd.DataFrame] = {}
+    per_season_summary: dict[int, pd.DataFrame] = {}
+    for season in args.seasons:
+        weekly_path = Path(args.weekly_parquet_template.format(season=season))
+        dist_path = Path(args.distributions_csv_template.format(season=season))
+        print(f"\n[{season}] loading {weekly_path}", flush=True)
+        weekly = pd.read_parquet(weekly_path)
+        dist = pd.read_csv(dist_path)
+        ws = read_partition(args.raw_root, "weekly_stats", season=season)
+        actuals = actual_season_total(ws, ruleset)
+        per_player, summary = assemble_season_diagnostic(
+            weekly=weekly,
+            distributions=dist,
+            actuals=actuals,
+            elite_thresholds=thresholds,
+            ruleset=ruleset,
+            n_samples=args.n_samples,
+        )
+        per_player["season"] = season
+        per_season_per_player[season] = per_player
+        per_season_summary[season] = summary
+
+    # Cross-season decision-gate.
+    cross_rows = []
+    for season in args.seasons:
+        for _, row in per_season_summary[season].iterrows():
+            cross_rows.append(
+                {
+                    "season": season,
+                    "position": row["position"],
+                    "metric": row["metric"],
+                    "cell_verdict": row["cell_verdict"],
+                }
+            )
+    decision = decision_gate(pd.DataFrame(cross_rows))
+
+    report = _render_report(
+        seasons=tuple(args.seasons),
+        thresholds=thresholds,
+        n_samples=args.n_samples,
+        per_season_per_player=per_season_per_player,
+        per_season_summary=per_season_summary,
+        decision=decision,
+    )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(report)
+    print(f"\nWrote diagnostic report: {args.out}", flush=True)
+
+    table = pd.concat(
+        [df.assign(season=season) for season, df in per_season_per_player.items()],
+        ignore_index=True,
+    )
+    table_path = args.out.parent / "upside_ranking_diagnostic_table.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote per-player CSV: {table_path}", flush=True)
+
+    print(f"\n=== Phase 2 decision ===\n{decision}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
