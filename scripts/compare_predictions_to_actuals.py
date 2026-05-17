@@ -16,33 +16,8 @@ from pathlib import Path
 import pandas as pd
 
 from projections.schemas import Ruleset
-from projections.scoring import score
-from projections.scoring.score import StatLine
+from projections.scoring import actual_season_total
 from projections.store import read_partition
-
-
-def _actual_ppr_total(ws: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
-    """Per-row PPR points, summed per (gsis_id, position) -> actual season total."""
-    points: list[float] = []
-    for _, row in ws.iterrows():
-        line = StatLine(
-            passing_yards=float(row["passing_yards"]),
-            passing_tds=int(row["passing_tds"]),
-            interceptions=int(row["interceptions"]),
-            rushing_yards=float(row["rushing_yards"]),
-            rushing_tds=int(row["rushing_tds"]),
-            receptions=int(row["receptions"]),
-            receiving_yards=float(row["receiving_yards"]),
-            receiving_tds=int(row["receiving_tds"]),
-            fumbles_lost=int(row["fumbles_lost"]),
-        )
-        points.append(score(line, ruleset))
-    ws = ws.copy()
-    ws["actual_ppr"] = points
-    season_actuals = ws.groupby(["gsis_id", "position"], as_index=False).agg(
-        actual_total=("actual_ppr", "sum"), actual_n_weeks=("week", "nunique")
-    )
-    return season_actuals
 
 
 def main() -> None:
@@ -61,7 +36,7 @@ def main() -> None:
 
     print(f"Loading {args.season} weekly_stats actuals", flush=True)
     ws = read_partition(args.raw_root, "weekly_stats", season=args.season)
-    actuals = _actual_ppr_total(ws, Ruleset.espn_ppr())
+    actuals = actual_season_total(ws, Ruleset.espn_ppr())
 
     # Within-position actual rank (for context: "Nabers was predicted #1 WR; he was actually #N").
     actuals["actual_pos_rank"] = (
