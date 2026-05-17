@@ -4,6 +4,52 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Upside-Sensitive Ranking Diagnostic — Phase 1 verdict NO GREENLIGHT (2026-05-17, on branch `feat/upside-ranking-diagnostic`)
+
+**Status:** Spec + plan + diagnostic CLI on `feat/upside-ranking-diagnostic`. Phase 1 of TODO #33d. New module `scripts/diagnose_upside_ranking.py` consumes the new `season_projection_weekly_<season>.parquet` + `season_projection_distributions_<season>.csv` artifacts (now emitted by extended `scripts/project_season.py` alongside the unchanged naive CSV) and produces a markdown verdict report comparing per-player ranks under `mean / p90 / blend_70_30 / p_elite`. Spec at `docs/superpowers/specs/2026-05-16-upside-sensitive-ranking-diagnostic-design.md`; plan at `docs/superpowers/plans/2026-05-16-upside-sensitive-ranking-diagnostic.md`.
+
+**Verdict: NO GREENLIGHT (durable).** Zero SIGNAL cells across all 24 (position × season × non-mean-metric) cells; 2 MARGINAL cells (WR p_elite 2024, QB p_elite 2024) but neither survives to 2025. Decision gate returns `No greenlight`. **The hypothesis behind TODO #33d is falsified:** the elite-season under-projection problem does NOT live in the upper tail of the existing distribution — it lives in feature signal coverage. Chase 2024 mean=250.74, **p90=283.80**, actual=403. Gibbs 2024 mean=258.75, p90=295.29, actual=390.40. The whole distribution is shifted-down for elites.
+
+**Mechanism finding (load-bearing):** `p90` and `blend_70_30` reshuffle the middle/bottom of each positional cohort (only ~54% / ~77% of all player ranks match `mean` byte-for-byte), but produce **identical top-K sets** at K=5 across all 8 cells and at K=12 across 5 of 8 cells. None of the actual elite finishers move into the predicted top tier under any of these candidates. The mechanism: `blend = 0.7·μ + 0.3·(μ + k·σ) = μ + 0.3·k·σ` is monotonic in μ whenever σ is monotonic in μ, which is empirically what lgb-nb / ensemble-decomposed / baseline produce here. `p_elite` (the only metric that's NOT a monotonic transform of mean) does change rank order and shows MARGINAL on WR/QB 2024 — but its Kendall tau is LOWER than mean across all 8 cells (RB drops 0.77→0.61, WR drops 0.70→0.42), so the top-of-cohort gains come at the cost of overall ordering quality. Not a free win.
+
+**Shipped surface:**
+- `src/projections/aggregation/season.py` — `aggregate_to_season(return_samples=True)` overload returning `(summary_df, dict[(gsis_id, season), np.ndarray])`. Backward-compatible default. (T1, commit `2b909f5`.)
+- `src/projections/aggregation/season.py` — guard widened to accept `{SAMPLED_SUMMARY, QUANTILE, MIXED}` row-level families (was SAMPLED_SUMMARY-only). Required because QB lgb-nb + WR ensemble-decomposed both emit MIXED rows. **Closes TODO #28.** (commit `ffdd334`.)
+- `src/projections/scoring/actuals.py` — new `actual_season_total(weekly_stats, ruleset)` helper extracted from `scripts/compare_predictions_to_actuals.py`. Re-exported from `projections.scoring`. (T2, commits `2e2e31d` + `1b7f9cd`.)
+- `scripts/project_season.py` — `_write_season_artifacts(weekly, ruleset, out_dir, season, id_map)` helper; emits 3 artifacts per run (unchanged naïve CSV + new weekly parquet + new distributions CSV). (T3-T4, commits `0fc92c6` + `10460e9`.)
+- `scripts/diagnose_upside_ranking.py` — new CLI. Helpers: `_compute_elite_thresholds`, `top_k_overlap`, `top5_rank_err`, `kendall_tau_filtered`, `cell_verdict`, `decision_gate`, `assemble_season_diagnostic`. Markdown report + per-player CSV output. (T5-T10, commits `aedd6f1` → `e13eea5`.)
+- 25 new tests across `tests/test_aggregation/test_season_return_samples.py`, `tests/test_aggregation/test_aggregate_mixed_family.py`, `tests/test_scoring/test_actuals.py`, `tests/test_scripts/test_project_season_artifacts.py`, `tests/test_scripts/test_upside_ranking_metrics.py`, `tests/test_scripts/test_diagnose_upside_ranking_cli.py`.
+- `pyproject.toml` — added `tabulate>=0.9` (required by `DataFrame.to_markdown` in the diagnostic; was a missing transitive dep).
+- 2 report artifacts: `reports/upside_ranking_diagnostic.md`, `reports/upside_ranking_diagnostic_table.csv`. Committed at `34a1685`.
+
+**Decision log:**
+- **Diagnostic-first scope** (per spec §1.1). Phase 2 production ranking surface was conditional on this verdict — NO GREENLIGHT means no Phase 2 work.
+- **4 metrics committed before run** to avoid data-snooping: `mean` (baseline), `season_p90`, `blend_70_30 = 0.7·mean + 0.3·p90`, `p_elite = P(season ≥ elite_threshold)`. Blend coefficient (0.7/0.3) fixed pre-run.
+- **Elite threshold:** 5-year (2019-2023) mean of the 5th-highest season fpts at position, ≥8 games. Computed at run time. Observed: QB=354.3, RB=290.0, WR=316.6, TE=203.5.
+- **Decision gate (spec §1.3 #3):** Greenlight requires a single metric SIGNAL at ≥3/4 positions in BOTH 2024 AND 2025. Strict-on-greenlight, lenient-on-marginal — the bar for committing weeks of Phase 2 work was the strong signal.
+- **Production routing used:** QB lightgbm-nb, RB baseline, WR ensemble-decomposed, TE baseline (per Plan 8 + PR #41).
+
+**Risks logged (spec §6) — observed outcomes:**
+- **Risk #1 (independent weekly draws understate true season variance):** Real. The composite [p10, p90] under-coverage on RB/TE/WR (Plan 5c/6) propagates into season_p90 being biased toward the center. This is plausibly part of why p90 ≈ mean for these positions — the distribution-tail compression compounds the mean-regression compression.
+- **Risk #2 (elite threshold sensitivity):** Per-position thresholds are reasonable (top-5 = elite tier). Multiple top-K's reported (5/12/24) bracket the choice. Not a blocker on the negative result.
+- **Risk #3 (multiple-comparison effect):** Decision gate's "≥3/4 in BOTH years" requirement protected against false positives. With zero SIGNAL cells observed, this is moot.
+
+**Recommended next direction (highest-leverage):**
+1. **33c — forward-looking Vegas team-context features family probe.** Genuinely unexplored feature class. Candidates: as-of-time season win total, season O/U, projected pace, projected pass rate, OC/HC tenure, FA-acquisition flag. Mechanism prediction: most lift on RB + WR (the exact positions where the elite-season miss is worst). Also load-bearing for TODO #31 (Draft Hub preseason projections). Cheapest probe entry: bundle 3-4 Vegas signals → override parquet → `scripts/probe_feature_signal.py`.
+2. **33b — `td_rate_per_target` factor-appropriate sub-model probe** (TODO #23 continuation). Named follow-up after PR #38/#41 shipped WR ensemble-decomposed-child for receptions. Lower prior given PR #39 (logit catch_rate) and PR #44 (Tweedie yards_per_target) were both NULL.
+3. **Pivot toward Draft Hub surfaces** (TODO #31, K/DST per TODO #10, live snake recommender per draft_ready_checklist §2b.2). The projection model is already good enough for draft-day decisions; what's missing is the surfaces that consume it.
+
+**Plan-vs-execution deviations:**
+- **TODO #28 surfaced as a real blocker in T11.** Plan assumed `aggregate_to_season` already accepted all per-row family tags; in fact the function had a hard guard that rejected anything but `SAMPLED_SUMMARY`. Fixed in commit `ffdd334` with single-line guard widening + 3 new tests. Adds a small scope expansion to this PR (closes a separate TODO incidentally).
+- **T2 helper location.** Plan had the actuals helper at `scripts/_actuals_helper.py` (per the original spec). Code review correctly flagged that pattern was inferior to relocating into `src/projections/scoring/`. Moved to `src/projections/scoring/actuals.py` (commit `1b7f9cd`) with rename to `actual_season_total` (was `actual_ppr_total` — misleading since it accepts any Ruleset). Plan's Task 10 imports were updated inline by the controller.
+- **T6 `top_k_overlap` semantics.** Plan specified strict `/k` denominator (matching spec §3.2). Code review during T9 surfaced that the plan's T9 test fixture (3 QBs, asserts `top5_overlap == 1.0`) would have been unsatisfiable under strict `/k`. Implementer changed to `min(k, n)` denominator — standard Hit@k convention; identical to `/k` in production (cohorts always exceed K=24). Accepted with note that the spec text would benefit from a one-line clarification.
+- **T9 `_p_elite_for` O(n²) fix.** Plan had a `for ... if gid == row[...]` scan per row. Caught in code review; fixed to precompute `samples_by_gsis: dict[str, np.ndarray]` once before `df.apply` (commit `72c6fcc`).
+- **T10 `tabulate` dep + gsis_id format.** Plan's test fixture used `f"00-{pos}-{player_idx:04d}"` for synthetic gsis_ids — fails `GSIS_ID_PATTERN = ^\d{2}-\d{7}$`. Fixed to a `_gsis_id(pos, player_idx)` helper producing canonical format. `tabulate>=0.9` added to deps (was missing).
+
+See `reports/upside_ranking_diagnostic.md` for the full verdict report and `reports/upside_ranking_diagnostic_table.csv` for the per-player drill-down.
+
+---
+
 ## Snake-Draft Cheat Sheet — feature shipped (2026-05-16, on branch `feat/snake-cheat-sheet`)
 
 **Status:** Spec + plan + impl on `feat/snake-cheat-sheet`. Third surface of the Draft Hub sub-project (auction $ generator → VORP → snake cheat sheet). Reads a `VorpTableSchema` parquet + `id_map.parquet` + `LeagueConfig`, emits a per-player table sorted by `(position canonical order, positional_rank)` with gap-based tier breaks (1..N for in-pool, NA otherwise). v1 scope: VORP + tier breaks only. ADP delta and p10/p90 confidence band deferred to follow-up specs. Spec at `docs/superpowers/specs/2026-05-16-snake-cheat-sheet-design.md`; plan at `docs/superpowers/plans/2026-05-16-snake-cheat-sheet.md`.

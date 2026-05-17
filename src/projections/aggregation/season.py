@@ -13,6 +13,7 @@ I/O). For each (gsis_id, season) group the function:
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -28,34 +29,71 @@ from projections.schemas import (
 from projections.scoring import derive_row_seed, score_distribution
 
 
+@overload
+def aggregate_to_season(
+    weekly: pd.DataFrame,
+    *,
+    ruleset: Ruleset,
+    n_samples: int = ...,
+    return_samples: Literal[False] = ...,
+) -> pd.DataFrame: ...
+
+
+@overload
+def aggregate_to_season(
+    weekly: pd.DataFrame,
+    *,
+    ruleset: Ruleset,
+    n_samples: int = ...,
+    return_samples: Literal[True],
+) -> tuple[pd.DataFrame, dict[tuple[str, int], np.ndarray]]: ...
+
+
 def aggregate_to_season(
     weekly: pd.DataFrame,
     *,
     ruleset: Ruleset,
     n_samples: int = 10_000,
-) -> pd.DataFrame:
+    return_samples: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, dict[tuple[str, int], np.ndarray]]:
     """Aggregate weekly per-player projections into season-total distributions.
 
     The input is validated against ProjectionWeeklySchema. Every row must have
-    family == DistributionFamily.SAMPLED_SUMMARY and ruleset == ruleset.name --
-    a mixed-ruleset frame or a row written before Plan 3d's codec swap raises
-    ValueError immediately.
+    family in {SAMPLED_SUMMARY, QUANTILE, MIXED} and ruleset == ruleset.name --
+    a mixed-ruleset frame or a row with an unsupported family raises ValueError
+    immediately. The codec in projections.distributions handles each family's
+    params blob; this function composes per-week samples and sums to season
+    totals regardless of the row-level family tag.
 
     Returns a ProjectionSeasonSchema-validated DataFrame with one row per
     (gsis_id, season). position is the modal value across the input rows for
     that gsis_id (handles in-season position changes deterministically).
 
     Empty input returns an empty validated frame.
+
+    When ``return_samples=True`` returns a 2-tuple ``(summary, samples)`` where
+    ``samples`` is a dict keyed by ``(gsis_id, season)`` mapping to the
+    per-player season-total MC sample array (length ``n_samples``). Useful for
+    downstream consumers that need tail-probability estimates from the same
+    draws used to compute the summary quantiles.
     """
     weekly = ProjectionWeeklySchema.validate(weekly)
     if weekly.empty:
         empty_cols = list(ProjectionSeasonSchema.to_schema().columns.keys())
-        return ProjectionSeasonSchema.validate(pd.DataFrame(columns=empty_cols))
+        empty_validated = ProjectionSeasonSchema.validate(pd.DataFrame(columns=empty_cols))
+        if return_samples:
+            return empty_validated, {}
+        return empty_validated
 
-    bad_family = weekly[weekly["family"] != DistributionFamily.SAMPLED_SUMMARY.value]
+    _allowed_families = {
+        DistributionFamily.SAMPLED_SUMMARY.value,
+        DistributionFamily.QUANTILE.value,
+        DistributionFamily.MIXED.value,
+    }
+    bad_family = weekly[~weekly["family"].isin(_allowed_families)]
     if not bad_family.empty:
         raise ValueError(
-            f"aggregate_to_season requires family={DistributionFamily.SAMPLED_SUMMARY.value}, "
+            f"aggregate_to_season requires family in {sorted(_allowed_families)}, "
             f"found {bad_family['family'].unique().tolist()}"
         )
 
@@ -67,6 +105,7 @@ def aggregate_to_season(
         )
 
     rows: list[dict[str, object]] = []
+    samples_out: dict[tuple[str, int], np.ndarray] = {}
     generated_at = datetime.now(UTC)
     for (gsis_id, season), group in weekly.groupby(["gsis_id", "season"], sort=False):
         season_samples = np.zeros(n_samples, dtype=np.float64)
@@ -108,8 +147,13 @@ def aggregate_to_season(
                 "generated_at": pd.Timestamp(generated_at).as_unit("us"),
             }
         )
+        if return_samples:
+            samples_out[(str(gsis_id), int(season))] = season_samples
 
     out = pd.DataFrame(rows)
     for col in ("gsis_id", "position", "ruleset", "model_id"):
         out[col] = out[col].astype(_PYARROW_STR)
-    return ProjectionSeasonSchema.validate(out)
+    validated = ProjectionSeasonSchema.validate(out)
+    if return_samples:
+        return validated, samples_out
+    return validated

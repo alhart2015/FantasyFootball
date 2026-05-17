@@ -378,33 +378,25 @@ Revisit when Plan 6 (EnsembleModel) lands — that's the natural moment to redes
 the Protocol surface as more model classes need to share the contract. Until then,
 the `cast()` pattern in CLI scripts is the trade-off accepted.
 
-### 28. Widen aggregate_to_season to accept QUANTILE / MIXED family
+### 28. Widen aggregate_to_season to accept QUANTILE / MIXED family — closed 2026-05-17
 
-Surfaced in Plan 5 Task 12. The harness gates season-aggregation on
-`(predictions["family"] == SAMPLED_SUMMARY).all()`, so LightGBM cells skip
-`season_calibration_p10p90` and `season_calibration_le_p90` rows.
-`aggregate_to_season` could accept `QuantileDistribution` instances —
-inverse-CDF sampling already works (Monte Carlo via `score_distribution`
-uses the Distribution Protocol's `.sample()`). Only the explicit
-family-restriction guard at the top of `aggregate_to_season` blocks reuse.
+**Closed during upside-ranking-diagnostic T11.** Surfaced as a real blocker
+(not just a metric-coverage gap): `scripts/project_season.py --season 2024`
+raised `ValueError: aggregate_to_season requires family=SAMPLED_SUMMARY,
+found ['MIXED']` because the production QB / WR models (`lightgbm-nb`,
+`ensemble-decomposed`) emit per-row `family=MIXED`.
 
-Plan 5c (Model C-NB) extends the asymmetry to the `MIXED` family — every
-NB row's per-stat distributions are NB-2 / QuantileDistribution mixtures
-encoded inside the params blob; `unpack_per_stat_params` would already
-return mixture-aware Distribution instances ready for sampling. Same
-single-line guard widening covers both QUANTILE and MIXED.
-
-Land alongside Plan 6 to give Model C / Model C-tuned / Model C-NB
-complete metric coverage (would add ~96 rows to model_metrics.json:
-32 each for QUANTILE, QUANTILE-tuned, MIXED).
-
-**Update 2026-04-29 (Plan 6):** Plan 6 ships Model D (ensemble) as a fifth
-peer with row-level family `MIXED` — same `SAMPLED_SUMMARY`-only family
-gate skips its 32 season_calibration rows. Widening `aggregate_to_season`
-would now add ~128 rows total (32 each for QUANTILE, QUANTILE-tuned,
-MIXED, MIXED-via-MIXTURE). Single-line guard widening covers all four
-families. Still deferred; not load-bearing for any planned downstream
-consumer.
+The single-line guard in `src/projections/aggregation/season.py:86` was
+widened to accept `{SAMPLED_SUMMARY, QUANTILE, MIXED}`. The codec's
+`_unpack_single` already handles every per-stat family (NORMAL, GAMMA,
+NEGATIVE_BINOMIAL, STUDENT_T, QUANTILE, MIXTURE) regardless of the
+row-level tag, and `score_distribution` consumes Distribution Protocol
+instances — so composition of weekly samples to season totals works
+unchanged for all three allowed row-level families. Coverage added in
+`tests/test_aggregation/test_aggregate_mixed_family.py` (MIXED with
+NORMAL+GAMMA+NEGATIVE_BINOMIAL per-stat mix; pure QUANTILE row;
+determinism check) plus regression for unsupported families
+(`test_disallowed_family_raises`, `test_schema_valid_but_disallowed_family_lists_allowed_set`).
 
 ### 29. Prune Model C-tuned from POSITION_DISPATCH (deferred until Model C-NB soaks)
 
@@ -622,3 +614,21 @@ Two open design questions before the spike: (a) what timezone is `dt` published 
 **Conclusion: 33a closes two bug classes but doesn't move the elite-magnitude needle.** The mean-regression compression on elite players lives in *feature signal coverage*, not in model class. lgb-nb's NB-2 dispersion handles the backup-QB defect cleanly (correctly down-weights "depth-chart presence without snaps"); the ensemble's calibration-aware weighting handles the rookie-volume-extrapolation defect cleanly (Nabers's trailing-4 target spike no longer linearly extrapolates). Neither addresses the lack of features that *can* predict a 23 ppg WR season or a 24 ppg RB season. Ship 33a permanently (one-line change in any consumer that previously used `factories["baseline"]`); then move to 33d (upside-sensitive ranking) to test whether the existing distributions already carry the elite signal, before committing to the larger 33b / 33c builds.
 
 **Status.** Diagnosis captured 2026-05-11. 33a executed inline — *necessary but not sufficient*; ship the routing change as the durable fix. 33d/33b/33c queued.
+
+**33d — Phase 1 diagnostic verdict, 2026-05-17: NO GREENLIGHT (durable).** Diagnostic shipped on branch `feat/upside-ranking-diagnostic`. New script `scripts/diagnose_upside_ranking.py` consumes the new `season_projection_weekly_<season>.parquet` + `season_projection_distributions_<season>.csv` artifacts (now emitted by extended `scripts/project_season.py` alongside the unchanged naive CSV) and computes per-(position, season) ranks under four metrics: `mean` (baseline), `season_p90`, `blend_70_30 = 0.7·mean + 0.3·p90`, `p_elite = P(season ≥ elite_threshold)`. Elite thresholds (computed from 2019-2023 actuals, ≥8 games): QB=354.3, RB=290.0, WR=316.6, TE=203.5. Decision gate (spec §1.3 #3) requires the same metric SIGNAL at ≥3/4 positions in BOTH 2024 AND 2025. **Result:** zero SIGNAL cells across all 24 (position, season, non-mean-metric) cells; only 2 MARGINAL cells (WR p_elite 2024, QB p_elite 2024), neither survives to 2025. Decision gate returns `No greenlight`.
+
+**Mechanism finding (the load-bearing insight):** `p90` and `blend_70_30` reshuffle the middle/bottom of each positional cohort (only ~54% / ~77% of all player ranks match `mean` byte-for-byte) but produce **identical top-K sets** at K=5 (across all 8 cells) and K=12 (across 5 of 8 cells) — i.e., none of the actual elite finishers move into the predicted top tier under any of these candidates. The mechanism: `blend = 0.7·μ + 0.3·(μ + k·σ) = μ + 0.3·k·σ` is monotonic in μ whenever σ is monotonic in μ, which is empirically what lgb-nb / ensemble-decomposed / baseline output here. The hypothesis that "the upper tail captures elite signal mean ranking discards" is FALSIFIED in the concrete cases that motivated TODO #33: Chase 2024 mean=250.74, **p90=283.80**, actual=403; Gibbs 2024 mean=258.75, p90=295.29, actual=390.40; Henry 2024 mean=275.64, p90=311.38, actual=381.40. The whole distribution is shifted-down for elites, not just its mean.
+
+**`p_elite` (the only metric that's NOT a monotonic transform of mean)** does change rank order — and where it shows MARGINAL (WR/QB 2024), it tends to correctly promote longer-tail prospects. But its Kendall tau is LOWER than mean across all 8 cells (QB 0.74→0.72, RB 0.77→0.61, WR 0.70→0.42, TE 0.70→0.56), so it's noisier than mean for the broader player pool. The MARGINAL gains on the top of the cohort come at the cost of overall ordering quality. Not a free win.
+
+**This closes 33d.** The elite-magnitude problem lives in *feature signal coverage*, not in distribution-tail mining of the existing model output. **Next direction (one of):**
+
+1. **33b — decomposed factor-appropriate sub-models on WR yards/TDs** (TODO #23 continuation). PR #32 already returned marginal SIGNAL on WR receptions (Ridge-vs-Ridge). PRs #39 (logit catch_rate) and #44 (Tweedie yards_per_target) were both NULL. The remaining factor-class slot is `td_rate_per_target` (Poisson or logistic). PR #38 / PR #41 already shipped WR ensemble-decomposed-child for receptions; extending to yards/TDs would lift the marginal magnitude — if the factor-class swap on td_rate_per_target shows SIGNAL.
+
+2. **33c — forward-looking Vegas team-context features family probe.** Genuinely unexplored feature class (not measured by anything in TODOs #3 / #24 / #25). Candidates: as-of-time season win total, season O/U, projected pace, projected pass rate, OC/HC tenure, FA-acquisition flag. Different mechanism axis from anything probed so far. Also load-bearing for TODO #31 (Draft Hub preseason projections). Cheapest probe entry: bundle 3-4 Vegas signals, generate override parquet, run `scripts/probe_feature_signal.py`. Mechanism prediction: most lift on RB and WR — the exact positions where the elite-season miss is worst.
+
+**Recommendation: 33c next.** Genuinely unexplored axis; TODO #31 prerequisite. 33b is the named follow-up but the factor-class line has produced 2 NULLs in a row on WR receiving; the prior is weaker.
+
+**Side-effect closure: TODO #28 also closed.** `aggregate_to_season` was widened to accept MIXED + QUANTILE family rows in commit `ffdd334` (required by the diagnostic because QB lgb-nb + WR ensemble-decomposed both emit MIXED family rows). Single-line guard widening + 3 new tests + docstring update; no behavior change for SAMPLED_SUMMARY callers.
+
+See `reports/upside_ranking_diagnostic.md` for the full per-(position, season) verdict tables and `reports/upside_ranking_diagnostic_table.csv` for the per-player drill-down.
