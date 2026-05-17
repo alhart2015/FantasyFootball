@@ -13,9 +13,12 @@ from pathlib import Path
 import pandas as pd
 from scipy.stats import kendalltau
 
+from projections.aggregation import aggregate_to_season
 from projections.schemas import Position, Ruleset
 from projections.scoring import actual_season_total
 from projections.store import read_partition
+
+_METRIC_NAMES = ("mean", "p90", "blend_70_30", "p_elite")
 
 
 def _compute_elite_thresholds(
@@ -53,10 +56,18 @@ def _compute_elite_thresholds(
 
 
 def top_k_overlap(pred_rank: pd.Series, actual_rank: pd.Series, *, k: int) -> float:
-    """|predicted_top_k ∩ actual_top_k| / k. Ranks are 1-based, smallest = best."""
+    """|predicted_top_k ∩ actual_top_k| / min(k, n). Ranks are 1-based, smallest = best.
+
+    The denominator is bounded by the number of available rows so that small
+    populations (e.g. only 3 players at a position in a synthetic test) don't
+    cap the metric below 1.0 even under perfect rank agreement.
+    """
+    effective_k = min(k, len(actual_rank))
+    if effective_k == 0:
+        return 0.0
     pred_top = set(pred_rank.nsmallest(k).index)
     actual_top = set(actual_rank.nsmallest(k).index)
-    return len(pred_top & actual_top) / k
+    return len(pred_top & actual_top) / effective_k
 
 
 def top5_rank_err(pred_rank: pd.Series, actual_rank: pd.Series) -> float:
@@ -151,3 +162,105 @@ def decision_gate(verdicts: pd.DataFrame) -> str:
             return "Marginal"
 
     return "No greenlight"
+
+
+def assemble_season_diagnostic(
+    *,
+    weekly: pd.DataFrame,
+    distributions: pd.DataFrame,
+    actuals: pd.DataFrame,
+    elite_thresholds: dict[Position, float],
+    ruleset: Ruleset,
+    n_samples: int = 10_000,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return (per_player_df, summary_df) for one season.
+
+    per_player_df: one row per gsis_id, with metric scores + per-metric ranks
+        (descending within position) + actual_total + actual_rank.
+    summary_df: one row per (position, metric), with rank-recovery measurements +
+        cell_verdict per spec §3.5.
+    """
+    # 1. Compute per-player p_elite via aggregate_to_season(return_samples=True).
+    _, samples = aggregate_to_season(
+        weekly, ruleset=ruleset, n_samples=n_samples, return_samples=True
+    )
+
+    # 2. Build per-player frame from distributions CSV.
+    df = distributions[
+        ["gsis_id", "position", "full_name", "season_mean", "season_p90", "n_weeks"]
+    ].copy()
+    df = df.rename(columns={"season_mean": "mean", "season_p90": "p90"})
+    df["blend_70_30"] = 0.7 * df["mean"] + 0.3 * df["p90"]
+
+    # 3. p_elite per row: P(season_samples >= elite_threshold[position]).
+    def _p_elite_for(row: pd.Series) -> float:
+        pos = Position(row["position"])
+        threshold = elite_thresholds[pos]
+        # samples keyed by (gsis_id, season); look up by gsis_id only since
+        # this function is called per-single-season weekly input.
+        matching = [arr for (gid, _ssn), arr in samples.items() if gid == row["gsis_id"]]
+        if not matching:
+            return float("nan")
+        return float((matching[0] >= threshold).mean())
+
+    df["p_elite"] = df.apply(_p_elite_for, axis=1)
+
+    # 4. Join actuals.
+    df = df.merge(
+        actuals[["gsis_id", "actual_total", "actual_n_weeks"]],
+        on="gsis_id",
+        how="left",
+    )
+    df["actual_total"] = df["actual_total"].fillna(0.0)
+    df["actual_n_weeks"] = df["actual_n_weeks"].fillna(0).astype(int)
+
+    # 5. Per-position ranks under each metric (1 = best).
+    for metric in _METRIC_NAMES:
+        df[f"rank_{metric}"] = df.groupby("position")[metric].rank(ascending=False, method="min")
+    df["actual_rank"] = df.groupby("position")["actual_total"].rank(ascending=False, method="min")
+
+    # 6. Per-(position, metric) summary.
+    summary_rows: list[dict[str, object]] = []
+    for pos in (Position.QB, Position.RB, Position.WR, Position.TE):
+        pos_df = df[df["position"] == pos.value].set_index("gsis_id")
+        if pos_df.empty:
+            continue
+        # Mean baseline (used to compare every other metric against).
+        mean_top12 = top_k_overlap(pos_df["rank_mean"], pos_df["actual_rank"], k=12)
+        mean_rank_err = top5_rank_err(pos_df["rank_mean"], pos_df["actual_rank"])
+
+        for metric in _METRIC_NAMES:
+            m_top5 = top_k_overlap(pos_df[f"rank_{metric}"], pos_df["actual_rank"], k=5)
+            m_top12 = top_k_overlap(pos_df[f"rank_{metric}"], pos_df["actual_rank"], k=12)
+            m_top24 = top_k_overlap(pos_df[f"rank_{metric}"], pos_df["actual_rank"], k=24)
+            m_rank_err = top5_rank_err(pos_df[f"rank_{metric}"], pos_df["actual_rank"])
+            tau, n_tau = kendall_tau_filtered(
+                pos_df[metric],
+                pos_df["actual_total"],
+                pos_df["actual_n_weeks"],
+                min_n_weeks=6,
+            )
+            if metric == "mean":
+                verdict = "BASELINE"
+            else:
+                verdict = cell_verdict(
+                    metric_top12=m_top12,
+                    mean_top12=mean_top12,
+                    metric_rank_err=m_rank_err,
+                    mean_rank_err=mean_rank_err,
+                )
+            summary_rows.append(
+                {
+                    "position": pos.value,
+                    "metric": metric,
+                    "top5_overlap": m_top5,
+                    "top12_overlap": m_top12,
+                    "top24_overlap": m_top24,
+                    "top5_rank_err": m_rank_err,
+                    "kendall_tau": tau,
+                    "kendall_n": n_tau,
+                    "cell_verdict": verdict,
+                }
+            )
+    summary = pd.DataFrame(summary_rows)
+    return df, summary

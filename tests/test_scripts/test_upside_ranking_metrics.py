@@ -225,3 +225,92 @@ def test_decision_no_greenlight_when_all_null() -> None:
         ]
     )
     assert decision_gate(verdicts) == "No greenlight"
+
+
+def _synthetic_weekly_with_three_players(season: int) -> pd.DataFrame:
+    """Three QBs x 17 weeks, real ProjectionWeeklySchema-valid frame."""
+    from tests.test_aggregation.test_season import _build_weekly_row, _to_weekly_frame
+
+    rows = []
+    for gsis_id, base_yards in [
+        ("00-0033873", 280.0),
+        ("00-0033874", 250.0),
+        ("00-0033875", 220.0),
+    ]:
+        for week in range(1, 18):
+            rows.append(
+                _build_weekly_row(
+                    gsis_id=gsis_id,
+                    season=season,
+                    week=week,
+                    position="QB",
+                    rec_yards_mean=base_yards,
+                    rec_yards_std=60.0,
+                )
+            )
+    return _to_weekly_frame(rows)
+
+
+def _synthetic_distributions_csv(weekly: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
+    from projections.aggregation import aggregate_to_season
+
+    summary = aggregate_to_season(weekly, ruleset=ruleset, n_samples=1000)
+    summary["full_name"] = summary["gsis_id"].map(
+        {"00-0033873": "Alpha", "00-0033874": "Beta", "00-0033875": "Gamma"}
+    )
+    summary["team"] = "TST"
+    return summary
+
+
+def test_assemble_season_diagnostic_returns_per_player_and_summary(tmp_path: Path) -> None:
+    from diagnose_upside_ranking import assemble_season_diagnostic
+
+    weekly = _synthetic_weekly_with_three_players(season=2024)
+    dist = _synthetic_distributions_csv(weekly, _RULESET)
+
+    actuals = pd.DataFrame(
+        {
+            "gsis_id": ["00-0033873", "00-0033874", "00-0033875"],
+            "position": ["QB", "QB", "QB"],
+            "actual_total": [300.0, 250.0, 200.0],  # matches predicted order
+            "actual_n_weeks": [17, 17, 17],
+        }
+    )
+    thresholds = {Position.QB: 290.0, Position.RB: 290.0, Position.WR: 290.0, Position.TE: 290.0}
+
+    per_player, summary = assemble_season_diagnostic(
+        weekly=weekly,
+        distributions=dist,
+        actuals=actuals,
+        elite_thresholds=thresholds,
+        ruleset=_RULESET,
+        n_samples=1000,
+    )
+    assert set(per_player.columns) >= {
+        "gsis_id",
+        "position",
+        "full_name",
+        "actual_total",
+        "actual_rank",
+        "mean",
+        "p90",
+        "blend_70_30",
+        "p_elite",
+        "rank_mean",
+        "rank_p90",
+        "rank_blend_70_30",
+        "rank_p_elite",
+    }
+    assert set(summary.columns) >= {
+        "position",
+        "metric",
+        "top5_overlap",
+        "top12_overlap",
+        "top24_overlap",
+        "top5_rank_err",
+        "kendall_tau",
+        "cell_verdict",
+    }
+    # The mean metric should perfectly recover the order in this synthetic setup.
+    qb_mean = summary[(summary["position"] == "QB") & (summary["metric"] == "mean")].iloc[0]
+    assert qb_mean["top5_overlap"] == pytest.approx(1.0)
