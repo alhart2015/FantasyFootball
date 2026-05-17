@@ -13,7 +13,9 @@ import logging
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+import numpy as np
 import pandas as pd
+from sklearn.linear_model import GammaRegressor
 
 from projections.schemas import PreseasonFeaturesSchema, PreseasonProjectionSchema, Ruleset
 
@@ -86,8 +88,83 @@ class NaivePreseasonModel:
         draft_picks: pd.DataFrame,
         id_map: pd.DataFrame,
     ) -> None:
-        """Fit per-(position, stat) rookie-year GLMs. Implemented in Task 13."""
-        raise NotImplementedError("fit not yet implemented (Task 13)")
+        """Fit per-(position, stat) Gamma GLMs on rookie-year season totals.
+
+        For each rookie (player with a draft_picks row in season S and a
+        weekly_stats row in season S), aggregate to season total and fit
+        `log(stat + epsilon) ~ β₀ + β₁ * log(pick + 1)` per (position, stat).
+
+        `id_map` is currently unused — kept in the signature for v1.5+
+        models that may consume it (e.g., for cross-platform IDs).
+        """
+        del id_map  # reserved for future model variants
+
+        from projections.preseason.features import _STATS_BY_POSITION, _schema_stat_name
+
+        # Identify rookies: (gsis_id, rookie_season, pick) from draft_picks.
+        rookies = draft_picks.dropna(subset=["pick"]).copy()
+        rookie_season = rookies[["gsis_id", "season", "pick"]].rename(
+            columns={"season": "rookie_season"}
+        )
+
+        # Aggregate weekly_stats to per-player-per-season totals.
+        season_totals = weekly_stats.groupby(["gsis_id", "season", "position"], as_index=False).agg(
+            games_played=("week", "count"),
+            passing_yards=("passing_yards", "sum"),
+            passing_tds=("passing_tds", "sum"),
+            interceptions=("interceptions", "sum"),
+            rushing_yards=("rushing_yards", "sum"),
+            rushing_tds=("rushing_tds", "sum"),
+            receptions=("receptions", "sum"),
+            receiving_yards=("receiving_yards", "sum"),
+            receiving_tds=("receiving_tds", "sum"),
+        )
+
+        # Join — keep only rookie-year rows.
+        rookie_year_totals = season_totals.merge(
+            rookie_season,
+            left_on=["gsis_id", "season"],
+            right_on=["gsis_id", "rookie_season"],
+            how="inner",
+        )
+
+        self._rookie_glm.clear()
+        for position, stats in _STATS_BY_POSITION.items():
+            pos_rows = rookie_year_totals.loc[
+                rookie_year_totals["position"] == position.value
+            ].copy()
+            if pos_rows.empty:
+                logger.warning(
+                    "NaivePreseasonModel.fit: no rookie training data for position=%s; "
+                    "skipping. Rookies at this position will fall back to zero.",
+                    position.value,
+                )
+                continue
+            # sklearn convention: capital X for the design matrix.
+            X = np.log(pos_rows["pick"].astype(float).to_numpy() + 1).reshape(-1, 1)  # noqa: N806
+            for stat in stats:
+                schema_stat = _schema_stat_name(stat)
+                # Gamma family requires strictly positive y. Add epsilon for zeros.
+                y_raw = pos_rows[stat.value].astype(float).to_numpy()
+                y = np.maximum(y_raw, 0.01)
+                try:
+                    reg = GammaRegressor(alpha=0.0, fit_intercept=True, max_iter=200)
+                    reg.fit(X, y)
+                    intercept = float(reg.intercept_)
+                    slope = float(reg.coef_[0])
+                except Exception as e:
+                    # sklearn raises diverse error types from GLM fits
+                    # (ValueError, ConvergenceWarning-as-error, etc.). Fallback
+                    # path is well-defined: degenerate intercept-only model.
+                    logger.warning(
+                        "GammaRegressor failed for (%s, %s): %s. Falling back to log-mean-only.",
+                        position.value,
+                        schema_stat,
+                        e,
+                    )
+                    intercept = float(np.log(y.mean()))
+                    slope = 0.0
+                self._rookie_glm[(position.value, schema_stat)] = (intercept, slope)
 
     def predict_season_distribution(
         self,

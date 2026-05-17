@@ -125,3 +125,167 @@ def test_naive_predict_drops_player_with_all_priors_missing(
         out = model.predict_season_distribution(features, ruleset=Ruleset.espn_ppr())
     assert len(out) == 0
     assert "no_prior_3_seasons" in caplog.text
+
+
+def test_naive_fit_populates_rookie_glms() -> None:
+    """fit() should train one GLM per (position, stat) cell."""
+    # Synthetic 2-year training data — 4 QB rookies + 4 WR rookies.
+    weekly = pd.DataFrame(
+        [
+            # 2021 QBs (rookie year):
+            {
+                "gsis_id": "00-3000001",
+                "season": 2021,
+                "week": 1,
+                "position": "QB",
+                "team": "KC",
+                "passing_yards": 250.0,
+                "passing_tds": 1,
+                "interceptions": 1,
+                "rushing_yards": 5.0,
+                "rushing_tds": 0,
+                "receptions": 0,
+                "receiving_yards": 0.0,
+                "receiving_tds": 0,
+            },
+            {
+                "gsis_id": "00-3000002",
+                "season": 2021,
+                "week": 1,
+                "position": "QB",
+                "team": "BUF",
+                "passing_yards": 180.0,
+                "passing_tds": 0,
+                "interceptions": 2,
+                "rushing_yards": 15.0,
+                "rushing_tds": 0,
+                "receptions": 0,
+                "receiving_yards": 0.0,
+                "receiving_tds": 0,
+            },
+            {
+                "gsis_id": "00-3000003",
+                "season": 2022,
+                "week": 1,
+                "position": "QB",
+                "team": "DEN",
+                "passing_yards": 300.0,
+                "passing_tds": 2,
+                "interceptions": 1,
+                "rushing_yards": 0.0,
+                "rushing_tds": 0,
+                "receptions": 0,
+                "receiving_yards": 0.0,
+                "receiving_tds": 0,
+            },
+            {
+                "gsis_id": "00-3000004",
+                "season": 2022,
+                "week": 1,
+                "position": "QB",
+                "team": "NYJ",
+                "passing_yards": 200.0,
+                "passing_tds": 1,
+                "interceptions": 1,
+                "rushing_yards": 20.0,
+                "rushing_tds": 0,
+                "receptions": 0,
+                "receiving_yards": 0.0,
+                "receiving_tds": 0,
+            },
+            # WRs:
+            {
+                "gsis_id": "00-3000005",
+                "season": 2021,
+                "week": 1,
+                "position": "WR",
+                "team": "DET",
+                "passing_yards": 0.0,
+                "passing_tds": 0,
+                "interceptions": 0,
+                "rushing_yards": 0.0,
+                "rushing_tds": 0,
+                "receptions": 5,
+                "receiving_yards": 60.0,
+                "receiving_tds": 1,
+            },
+            {
+                "gsis_id": "00-3000006",
+                "season": 2021,
+                "week": 1,
+                "position": "WR",
+                "team": "PHI",
+                "passing_yards": 0.0,
+                "passing_tds": 0,
+                "interceptions": 0,
+                "rushing_yards": 0.0,
+                "rushing_tds": 0,
+                "receptions": 3,
+                "receiving_yards": 40.0,
+                "receiving_tds": 0,
+            },
+            {
+                "gsis_id": "00-3000007",
+                "season": 2022,
+                "week": 1,
+                "position": "WR",
+                "team": "ATL",
+                "passing_yards": 0.0,
+                "passing_tds": 0,
+                "interceptions": 0,
+                "rushing_yards": 0.0,
+                "rushing_tds": 0,
+                "receptions": 6,
+                "receiving_yards": 85.0,
+                "receiving_tds": 1,
+            },
+            {
+                "gsis_id": "00-3000008",
+                "season": 2022,
+                "week": 1,
+                "position": "WR",
+                "team": "JAC",
+                "passing_yards": 0.0,
+                "passing_tds": 0,
+                "interceptions": 0,
+                "rushing_yards": 0.0,
+                "rushing_tds": 0,
+                "receptions": 4,
+                "receiving_yards": 55.0,
+                "receiving_tds": 0,
+            },
+        ]
+    )
+    weekly["season"] = weekly["season"].astype("int32")
+    weekly["week"] = weekly["week"].astype("int32")
+
+    # Each rookie has a draft_picks row for their rookie year.
+    draft = pd.DataFrame(
+        [
+            ("00-3000001", 2021, 1, 5),
+            ("00-3000002", 2021, 2, 45),
+            ("00-3000003", 2022, 1, 10),
+            ("00-3000004", 2022, 3, 80),
+            ("00-3000005", 2021, 1, 15),
+            ("00-3000006", 2021, 4, 110),
+            ("00-3000007", 2022, 1, 8),
+            ("00-3000008", 2022, 2, 50),
+        ],
+        columns=["gsis_id", "season", "round", "pick"],
+    ).astype({"season": "int32", "round": "Int64", "pick": "Int64"})
+    id_map = pd.DataFrame({"gsis_id": draft["gsis_id"], "full_name": "Test", "birth_date": pd.NaT})
+
+    model = NaivePreseasonModel()
+    model.fit(weekly_stats=weekly, draft_picks=draft, id_map=id_map)
+
+    # Expect entries per (position, stat) in _STATS_BY_POSITION:
+    # QB stats: 5 (passing_yards, passing_tds, passing_interceptions, rushing_yards, rushing_tds)
+    # WR stats: 5 (receptions, receiving_yards, receiving_tds, rushing_yards, rushing_tds)
+    qb_keys = [k for k in model._rookie_glm if k[0] == "QB"]
+    wr_keys = [k for k in model._rookie_glm if k[0] == "WR"]
+    assert len(qb_keys) == 5
+    assert len(wr_keys) == 5
+    # Each GLM coefficient is an (intercept, slope) pair.
+    intercept, slope = model._rookie_glm[("QB", "passing_yards")]
+    assert isinstance(intercept, float)
+    assert isinstance(slope, float)
