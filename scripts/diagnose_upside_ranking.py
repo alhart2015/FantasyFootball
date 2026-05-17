@@ -100,3 +100,54 @@ def cell_verdict(
     if top12_better or rankerr_better:
         return "MARGINAL"
     return "NULL"
+
+
+def decision_gate(verdicts: pd.DataFrame) -> str:
+    """Roll up per-(season, position, metric) cell verdicts to a Phase 2 decision.
+
+    Per spec §1.3 #3:
+      - Greenlight iff some single non-mean metric M is SIGNAL at >= 3 of 4 positions
+        in both years.
+      - Marginal iff (a) some M is SIGNAL at >= 3 of 4 positions in exactly one year,
+        OR (b) some M is SIGNAL-or-MARGINAL at >= 3 of 4 positions in both years.
+      - No greenlight otherwise.
+
+    Input: long DataFrame with columns [season, position, metric, cell_verdict].
+    Expects exactly 2 distinct seasons; raises ValueError if not.
+    """
+    metrics = [m for m in verdicts["metric"].unique() if m != "mean"]
+    years = sorted(verdicts["season"].unique())
+    if len(years) != 2:
+        raise ValueError(f"decision_gate expects exactly 2 seasons; got {years}")
+    y1, y2 = int(years[0]), int(years[1])
+
+    def signal_positions(metric: str, year: int) -> int:
+        sub = verdicts[
+            (verdicts["metric"] == metric)
+            & (verdicts["season"] == year)
+            & (verdicts["cell_verdict"] == "SIGNAL")
+        ]
+        return len(sub)
+
+    def signal_or_marginal_positions(metric: str, year: int) -> int:
+        sub = verdicts[
+            (verdicts["metric"] == metric)
+            & (verdicts["season"] == year)
+            & (verdicts["cell_verdict"].isin(["SIGNAL", "MARGINAL"]))
+        ]
+        return len(sub)
+
+    for metric in metrics:
+        if signal_positions(metric, y1) >= 3 and signal_positions(metric, y2) >= 3:
+            return "Greenlight"
+
+    for metric in metrics:
+        if signal_positions(metric, y1) >= 3 or signal_positions(metric, y2) >= 3:
+            return "Marginal"
+        if (
+            signal_or_marginal_positions(metric, y1) >= 3
+            and signal_or_marginal_positions(metric, y2) >= 3
+        ):
+            return "Marginal"
+
+    return "No greenlight"

@@ -152,3 +152,76 @@ def test_cell_verdict_regression() -> None:
         mean_rank_err=1.5,
     )
     assert verdict == "REGRESSION"
+
+
+def _verdict_frame(rows: list[tuple[int, str, str, str]]) -> pd.DataFrame:
+    """Helper: rows are (season, position, metric, cell_verdict)."""
+    return pd.DataFrame(rows, columns=["season", "position", "metric", "cell_verdict"])
+
+
+def test_decision_greenlight_when_metric_signal_3plus_positions_both_years() -> None:
+    from diagnose_upside_ranking import decision_gate
+
+    verdicts = _verdict_frame(
+        [
+            (2024, "QB", "p90", "SIGNAL"),
+            (2024, "RB", "p90", "SIGNAL"),
+            (2024, "WR", "p90", "SIGNAL"),
+            (2024, "TE", "p90", "NULL"),
+            (2025, "QB", "p90", "SIGNAL"),
+            (2025, "RB", "p90", "SIGNAL"),
+            (2025, "WR", "p90", "SIGNAL"),
+            (2025, "TE", "p90", "NULL"),
+        ]
+    )
+    assert decision_gate(verdicts) == "Greenlight"
+
+
+def test_decision_marginal_when_signal_only_one_year() -> None:
+    from diagnose_upside_ranking import decision_gate
+
+    verdicts = _verdict_frame(
+        [
+            (2024, "QB", "p90", "SIGNAL"),
+            (2024, "RB", "p90", "SIGNAL"),
+            (2024, "WR", "p90", "SIGNAL"),
+            (2024, "TE", "p90", "NULL"),
+            (2025, "QB", "p90", "MARGINAL"),
+            (2025, "RB", "p90", "NULL"),
+            (2025, "WR", "p90", "MARGINAL"),
+            (2025, "TE", "p90", "NULL"),
+        ]
+    )
+    assert decision_gate(verdicts) == "Marginal"
+
+
+def test_decision_marginal_when_signal_or_marginal_3plus_both_years() -> None:
+    from diagnose_upside_ranking import decision_gate
+
+    verdicts = _verdict_frame(
+        [
+            (2024, "QB", "blend_70_30", "SIGNAL"),
+            (2024, "RB", "blend_70_30", "MARGINAL"),
+            (2024, "WR", "blend_70_30", "MARGINAL"),
+            (2024, "TE", "blend_70_30", "NULL"),
+            (2025, "QB", "blend_70_30", "MARGINAL"),
+            (2025, "RB", "blend_70_30", "MARGINAL"),
+            (2025, "WR", "blend_70_30", "SIGNAL"),
+            (2025, "TE", "blend_70_30", "NULL"),
+        ]
+    )
+    assert decision_gate(verdicts) == "Marginal"
+
+
+def test_decision_no_greenlight_when_all_null() -> None:
+    from diagnose_upside_ranking import decision_gate
+
+    verdicts = _verdict_frame(
+        [
+            (yr, pos, metric, "NULL")
+            for yr in (2024, 2025)
+            for pos in ("QB", "RB", "WR", "TE")
+            for metric in ("p90", "blend_70_30", "p_elite")
+        ]
+    )
+    assert decision_gate(verdicts) == "No greenlight"
