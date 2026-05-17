@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 
 def _make_schedule_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
@@ -30,6 +31,11 @@ def _make_schedule_rows(rows: list[dict[str, object]]) -> pd.DataFrame:
     out = []
     for r in rows:
         out.append({**defaults, **r})
+    if not out:
+        # Empty schedules — return a frame with the expected column layout but
+        # no rows. Validation-error tests pass an empty schedules frame
+        # because the function raises before reading it.
+        return pd.DataFrame({k: pd.Series(dtype=object) for k in defaults})
     df = pd.DataFrame(out)
     df["temp"] = df["temp"].astype(pd.Int64Dtype())
     df["wind"] = df["wind"].astype(pd.Int64Dtype())
@@ -458,3 +464,134 @@ def test_attach_index_row_without_matching_schedule_gets_nan() -> None:
     assert pd.isna(wk3["preseason_implied_team_total"])
     assert pd.isna(wk3["season_avg_spread"])
     assert pd.isna(wk3["season_avg_implied_team_total"])
+
+
+def test_build_overrides_returns_canonical_columns() -> None:
+    """build_vegas_team_context_overrides returns the exact override-parquet
+    shape: (gsis_id, season, week, position, 4 feature cols), one row per
+    input index row."""
+    from projections.features.vegas_team_context_features import (
+        build_vegas_team_context_overrides,
+    )
+
+    idx = _make_index_rows(
+        [
+            {"gsis_id": "00-0033873", "season": 2024, "week": 1, "team": "KC", "position": "QB"},
+            {"gsis_id": "00-0033873", "season": 2024, "week": 2, "team": "KC", "position": "QB"},
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "spread_line": 3.0,
+                "total_line": 48.0,
+            },
+            {
+                "season": 2024,
+                "week": 2,
+                "home_team": "PHI",
+                "away_team": "KC",
+                "spread_line": -1.0,
+                "total_line": 46.0,
+            },
+        ]
+    )
+    out = build_vegas_team_context_overrides(sch, idx)
+    assert list(out.columns) == [
+        "gsis_id",
+        "season",
+        "week",
+        "position",
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    ]
+    assert len(out) == 2
+
+
+def test_build_overrides_rejects_missing_required_column() -> None:
+    """Missing any of (gsis_id, season, week, team, opp, position) in the
+    index raises ValueError."""
+    from projections.features.vegas_team_context_features import (
+        build_vegas_team_context_overrides,
+    )
+
+    idx = _make_index_rows(
+        [{"gsis_id": "00-0033873", "season": 2024, "week": 1, "team": "KC"}]
+    ).drop(columns=["opp"])
+    sch = _make_schedule_rows([])
+    with pytest.raises(ValueError, match="missing required column"):
+        build_vegas_team_context_overrides(sch, idx)
+
+
+def test_build_overrides_rejects_malformed_gsis_id() -> None:
+    """An index row with a gsis_id that doesn't match GSIS_ID_PATTERN raises."""
+    from projections.features.vegas_team_context_features import (
+        build_vegas_team_context_overrides,
+    )
+
+    idx = _make_index_rows(
+        [{"gsis_id": "not-a-real-gsis-id", "season": 2024, "week": 1, "team": "KC"}]
+    )
+    sch = _make_schedule_rows([])
+    with pytest.raises(ValueError, match="invalid gsis_id format"):
+        build_vegas_team_context_overrides(sch, idx)
+
+
+def test_build_overrides_rejects_duplicate_keys() -> None:
+    """Duplicate (gsis_id, season, week) keys in the index raise."""
+    from projections.features.vegas_team_context_features import (
+        build_vegas_team_context_overrides,
+    )
+
+    idx = _make_index_rows(
+        [
+            {"gsis_id": "00-0033873", "season": 2024, "week": 1, "team": "KC"},
+            {"gsis_id": "00-0033873", "season": 2024, "week": 1, "team": "KC"},
+        ]
+    )
+    sch = _make_schedule_rows([])
+    with pytest.raises(ValueError, match="duplicate"):
+        build_vegas_team_context_overrides(sch, idx)
+
+
+def test_build_overrides_row_count_invariant() -> None:
+    """Output row count equals input index row count (left-merge property)."""
+    from projections.features.vegas_team_context_features import (
+        build_vegas_team_context_overrides,
+    )
+
+    idx = _make_index_rows(
+        [
+            {"gsis_id": "00-0033873", "season": 2024, "week": 1, "team": "KC"},
+            {"gsis_id": "00-0036971", "season": 2024, "week": 1, "team": "BAL"},
+            {"gsis_id": "00-0033873", "season": 2024, "week": 2, "team": "KC"},
+        ]
+    )
+    sch = _make_schedule_rows(
+        [
+            {
+                "season": 2024,
+                "week": 1,
+                "home_team": "KC",
+                "away_team": "BAL",
+                "spread_line": 3.0,
+                "total_line": 48.0,
+            },
+            {
+                "season": 2024,
+                "week": 2,
+                "home_team": "PHI",
+                "away_team": "KC",
+                "spread_line": -1.0,
+                "total_line": 46.0,
+            },
+        ]
+    )
+    out = build_vegas_team_context_overrides(sch, idx)
+    assert len(out) == len(idx)

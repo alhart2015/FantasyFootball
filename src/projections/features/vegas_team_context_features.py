@@ -26,15 +26,26 @@ import pandas as pd
 from projections.features._shared import build_game_environment
 from projections.schemas import GSIS_ID_PATTERN
 
-# Used by build_vegas_team_context_overrides (Task 4) for gsis_id validation.
+# Used by build_vegas_team_context_overrides for gsis_id validation.
 _GSIS_RE: Final[re.Pattern[str]] = re.compile(rf"^{GSIS_ID_PATTERN}$")
 
-# Used by build_vegas_team_context_overrides (Task 4) for output column ordering.
+# Used by build_vegas_team_context_overrides for output column ordering.
 _FEATURE_COLS: Final[tuple[str, ...]] = (
     "preseason_implied_team_total",
     "preseason_spread",
     "season_avg_implied_team_total",
     "season_avg_spread",
+)
+
+# Required columns on the player-team-week index passed to
+# build_vegas_team_context_overrides.
+_REQUIRED_INDEX_COLS: Final[tuple[str, ...]] = (
+    "gsis_id",
+    "season",
+    "week",
+    "team",
+    "opp",
+    "position",
 )
 
 
@@ -137,3 +148,56 @@ def attach_vegas_team_context_features(
     """
     feats = compute_vegas_team_context_features(schedules)
     return index.merge(feats, on=["season", "week", "team"], how="left")
+
+
+def build_vegas_team_context_overrides(
+    schedules: pd.DataFrame,
+    player_team_week_index: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build the Vegas team-context override frame.
+
+    Args:
+        schedules: validated against `SchedulesSchema`.
+        player_team_week_index: frame with columns (gsis_id, season, week,
+            team, opp, position). Must have unique (gsis_id, season, week)
+            keys.
+
+    Returns:
+        Frame with columns (gsis_id, season, week, position,
+        preseason_implied_team_total, preseason_spread,
+        season_avg_implied_team_total, season_avg_spread) — one row per
+        index input row. Feeds `scripts.probe_feature_signal --override`.
+
+    Raises:
+        ValueError: index missing a required column, carrying a malformed
+            gsis_id, or carrying duplicate (gsis_id, season, week) keys.
+        AssertionError: row-count mismatch after the feature merge
+            (internal-invariant violation; signals a regression introducing
+            duplicate (season, week, team) keys in compute).
+    """
+    missing = [c for c in _REQUIRED_INDEX_COLS if c not in player_team_week_index.columns]
+    if missing:
+        raise ValueError(f"player_team_week_index missing required column(s): {missing}")
+
+    bad_ids = [g for g in player_team_week_index["gsis_id"].dropna() if not _GSIS_RE.match(str(g))]
+    if bad_ids:
+        raise ValueError(
+            f"invalid gsis_id format(s): {bad_ids[:3]} (and {max(0, len(bad_ids) - 3)} more)"
+        )
+
+    key_cols = ["gsis_id", "season", "week"]
+    dups = player_team_week_index.duplicated(subset=key_cols)
+    if dups.any():
+        n = int(dups.sum())
+        raise ValueError(f"player_team_week_index has {n} duplicate (gsis_id, season, week) keys")
+
+    attached = attach_vegas_team_context_features(player_team_week_index, schedules)
+    if len(attached) != len(player_team_week_index):
+        raise AssertionError(
+            f"row count mismatch: input had {len(player_team_week_index)} rows, "
+            f"output has {len(attached)}; suggests a many-to-many merge regression"
+        )
+
+    return attached[["gsis_id", "season", "week", "position", *_FEATURE_COLS]].reset_index(
+        drop=True
+    )
