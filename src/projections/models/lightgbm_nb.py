@@ -79,6 +79,35 @@ from projections.scoring.score_distribution import (
 
 _PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 
+# TODO #33c schema-swap: drop per-game implied_team_total + spread from the
+# lgb-nb feature list for QB + WR; add the four Vegas team-context cols
+# (preseason_* + season_avg_*). The schemas keep all cols so other model
+# classes (BaselineModel via hardcoded list; lgb / lgb-tuned via schema
+# derivation) are unaffected -- this override is lgb-nb-specific by design.
+_VEGAS_SWAP_REPLACE: Final[frozenset[str]] = frozenset({"implied_team_total", "spread"})
+_VEGAS_SWAP_ADD: Final[tuple[str, ...]] = (
+    "preseason_implied_team_total",
+    "preseason_spread",
+    "season_avg_implied_team_total",
+    "season_avg_spread",
+)
+
+
+def _swap_for(cols: tuple[str, ...]) -> tuple[str, ...]:
+    """Drop the Vegas-swap per-game cols and append the 4 Vegas team-context cols.
+
+    Idempotent on the 'add' side: filters out any cols already in
+    ``_VEGAS_SWAP_ADD`` before appending (so a future schema bump that adds
+    the new cols a second time doesn't duplicate them in the lgb-nb list).
+    """
+    swap_add_set = set(_VEGAS_SWAP_ADD)
+    kept = tuple(c for c in cols if c not in _VEGAS_SWAP_REPLACE and c not in swap_add_set)
+    return kept + _VEGAS_SWAP_ADD
+
+
+_QB_FEATURE_COLUMNS_NB: Final[tuple[str, ...]] = _swap_for(_filter_features(_QB_FEATURE_COLUMNS))
+_WR_FEATURE_COLUMNS_NB: Final[tuple[str, ...]] = _swap_for(_filter_features(_WR_FEATURE_COLUMNS))
+
 # Stats Plan 3e routes through NB-2 in Ridge's _<POS>_DIST_FAMILIES.
 # Per-position intersection with target_stats yields 13 cells: QB 4
 # (passing_tds, interceptions, rushing_tds, fumbles_lost); RB / TE / WR

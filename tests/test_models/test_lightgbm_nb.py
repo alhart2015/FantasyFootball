@@ -297,3 +297,40 @@ def test_nb_count_stat_mu_not_double_exponentiated() -> None:
         f"predicted_mean={predicted_mean:.3f} suspiciously inflated vs "
         f"actual_mean={actual_mean_rec_tds:.3f} -- check for a double-exp regression"
     )
+
+
+def test_qb_lightgbm_nb_feature_columns_drop_per_game_vegas_cols() -> None:
+    """qb_lightgbm_nb()'s feature_columns must NOT include implied_team_total
+    or spread (schema-swap drops the per-game cols)."""
+    model = qb_lightgbm_nb()
+    cols = set(model._config.feature_columns)
+    assert "implied_team_total" not in cols
+    assert "spread" not in cols
+
+
+def test_qb_lightgbm_nb_feature_columns_include_4_vegas_cols() -> None:
+    """qb_lightgbm_nb()'s feature_columns must include the four preseason / season_avg cols."""
+    model = qb_lightgbm_nb()
+    cols = set(model._config.feature_columns)
+    for c in (
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    ):
+        assert c in cols, f"missing {c}"
+
+
+def test_wr_lightgbm_nb_feature_columns_swap_treatment() -> None:
+    """Same swap-treatment for WR."""
+    model = wr_lightgbm_nb()
+    cols = set(model._config.feature_columns)
+    assert "implied_team_total" not in cols
+    assert "spread" not in cols
+    for c in (
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    ):
+        assert c in cols, f"missing {c}"
