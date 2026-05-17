@@ -81,9 +81,6 @@ def build_preseason_features(
     Task 7 adds prior-season per-game aggregates.
     Task 8 adds dropped-player side-channel CSV.
     """
-    # Suppress unused-arg warnings for inputs Tasks 6-8 will consume.
-    del weekly_stats, draft_picks, id_map
-
     # 1. Take the week-1 preseason snapshot of the depth chart.
     dc = depth_charts_target.loc[depth_charts_target["week"] == 1].copy()
     if dc.empty:
@@ -124,13 +121,55 @@ def build_preseason_features(
         }
     ).reset_index(drop=True)
 
-    # 5. Stub remaining required columns to satisfy the schema's required-column
-    # check. Tasks 6-7 replace these with real computations.
-    out["age"] = pd.array([pd.NA] * len(out), dtype="Float32")
-    out["years_exp"] = pd.array([0] * len(out), dtype="Int64")
-    out["is_rookie"] = pd.array([False] * len(out), dtype="bool")
-    out["draft_round"] = pd.array([pd.NA] * len(out), dtype="Int64")
-    out["draft_pick_overall"] = pd.array([pd.NA] * len(out), dtype="Int64")
+    # ---- Age (from id_map.birth_date) ----
+    id_map_lookup = id_map.set_index("gsis_id")
+    birth_dates = pd.to_datetime(
+        out["gsis_id"].map(id_map_lookup["birth_date"]),
+        errors="coerce",
+    )
+    out["age"] = pd.array(
+        [float(target_season - bd.year) if pd.notna(bd) else None for bd in birth_dates],
+        dtype="Float32",
+    )
+
+    # ---- Rookie detection ----
+    # A player is a rookie if they have NO prior-season NFL history. "Prior
+    # history" = at least one weekly_stats row in a prior season OR a
+    # draft_picks row in a prior season. Players drafted in the target season
+    # (with no prior history) ARE rookies. UDFA rookies (no draft_picks row,
+    # no prior weekly_stats) also fall through to is_rookie=True.
+    prior_weekly_ids = weekly_stats.loc[weekly_stats["season"] < target_season, "gsis_id"].unique()
+    prior_draft_ids = draft_picks.loc[draft_picks["season"] < target_season, "gsis_id"].unique()
+    has_prior_history = out["gsis_id"].isin(prior_weekly_ids) | out["gsis_id"].isin(prior_draft_ids)
+
+    is_rookie = ~has_prior_history
+    out["is_rookie"] = is_rookie.astype(bool)
+
+    # ---- years_exp ----
+    # Prefer weekly_stats.first_season; fall back to draft_picks.season when a
+    # player has no weekly_stats rows (e.g. a player drafted in a prior season
+    # whose stats history wasn't provided to the builder). Rookies forced to 0.
+    if not weekly_stats.empty:
+        first_season_by_player = weekly_stats.groupby("gsis_id")["season"].min()
+        first_season_from_weekly = out["gsis_id"].map(first_season_by_player)
+    else:
+        first_season_from_weekly = pd.Series([pd.NA] * len(out), index=out.index, dtype="Int64")
+    first_draft_by_player = draft_picks.groupby("gsis_id")["season"].min()
+    first_season_from_draft = out["gsis_id"].map(first_draft_by_player)
+    first_season_lookup = first_season_from_weekly.combine_first(first_season_from_draft)
+    years_exp_raw = (target_season - first_season_lookup).fillna(0)
+    # Rookies have years_exp = 0 regardless of any data lag.
+    years_exp_arr = years_exp_raw.mask(out["is_rookie"], 0).astype("Int64")
+    out["years_exp"] = years_exp_arr
+
+    # ---- Draft pick (round + pick_overall) from earliest draft_picks row per player ----
+    most_recent_pick = (
+        draft_picks.sort_values("season")
+        .drop_duplicates(subset=["gsis_id"], keep="first")
+        .set_index("gsis_id")
+    )
+    out["draft_round"] = out["gsis_id"].map(most_recent_pick["round"]).astype("Int64")
+    out["draft_pick_overall"] = out["gsis_id"].map(most_recent_pick["pick"]).astype("Int64")
 
     out = PreseasonFeaturesSchema.validate(out)
     return out
