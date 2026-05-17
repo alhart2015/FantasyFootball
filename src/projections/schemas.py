@@ -253,6 +253,12 @@ class Ruleset(BaseModel):
 # ---------------------------------------------------------------------------
 
 _POSITION_VALUES = [p.value for p in Position]
+_SKILL_POSITION_VALUES = [
+    Position.QB.value,
+    Position.RB.value,
+    Position.WR.value,
+    Position.TE.value,
+]
 _TEAM_VALUES = [t.value for t in Team]
 _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
 
@@ -913,7 +919,7 @@ class PreseasonFeaturesSchema(pa.DataFrameModel):
     # Identity
     gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
     season: Series[int] = pa.Field(ge=2018, le=2100)
-    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    position: Series[str] = pa.Field(isin=_SKILL_POSITION_VALUES)
     team: Series[str] = pa.Field(isin=_TEAM_VALUES)
     depth_chart_rank: Series[int] = pa.Field(ge=1, le=10)
 

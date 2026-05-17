@@ -940,9 +940,14 @@ def test_preseason_features_schema_rejects_bad_position() -> None:
             "position": ["XX"],  # not in Position enum
             "team": ["KC"],
             "depth_chart_rank": pd.array([1], dtype="Int64"),
+            "age": pd.array([29.0], dtype="float32"),
             "years_exp": pd.array([7], dtype="Int64"),
             "is_rookie": [False],
+            "draft_round": pd.array([1], dtype="Int64"),
+            "draft_pick_overall": pd.array([10], dtype="Int64"),
+            "prior_1_season_per_game_passing_yards": pd.array([275.5], dtype="float32"),
+            "prior_1_season_games_played": pd.array([17], dtype="Int64"),
         }
     )
-    with pytest.raises(SchemaError):
+    with pytest.raises(SchemaError, match="position"):
         PreseasonFeaturesSchema.validate(df)
