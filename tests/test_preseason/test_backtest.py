@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
 from projections.preseason.backtest import (
     compute_rmse_and_spearman,
     determine_verdict,
+    walk_forward_backtest,
 )
+from projections.schemas import PreseasonBacktestSchema, Ruleset
+from projections.store import write_partition
+from tests.test_scripts.test_preseason_project_season_cli import _seed_minimal_data
 
 
 def test_compute_rmse_zero_when_predicted_equals_actual() -> None:
@@ -46,3 +52,53 @@ def test_determine_verdict_do_not_adopt_bad_spearman() -> None:
 
 def test_determine_verdict_null_band() -> None:
     assert determine_verdict(rmse_delta_pct=-1.0, spearman_top50=0.60) == "NULL"
+
+
+def test_walk_forward_backtest_returns_one_row_per_position_per_year(
+    tmp_path: Path,
+) -> None:
+    """End-to-end smoke: walk_forward_backtest produces a backtest frame per cell."""
+    raw_root = tmp_path / "raw"
+    proj_root = tmp_path / "projections"
+    _seed_minimal_data(raw_root, target_season=2024)
+
+    # Also seed 2024 weekly_stats as actuals.
+    actual_2024 = pd.DataFrame(
+        [
+            {
+                "gsis_id": "00-1111111",
+                "season": 2024,
+                "week": 1,
+                "position": "QB",
+                "team": "KC",
+                "opponent": "BUF",
+                "passing_yards": 260.0,
+                "passing_tds": 2,
+                "interceptions": 1,
+                "attempts": 30,
+                "completions": 22,
+                "sacks": 2,
+                "rushing_yards": 30.0,
+                "rushing_tds": 0,
+                "carries": 5,
+                "receptions": 0,
+                "receiving_yards": 0.0,
+                "receiving_tds": 0,
+                "receiving_air_yards": 0.0,
+                "targets": 0,
+                "fumbles_lost": 0,
+            }
+        ]
+    )
+    write_partition(raw_root, "weekly_stats", actual_2024, season=2024, week=None)
+
+    out = walk_forward_backtest(
+        raw_root=raw_root,
+        projections_root=proj_root,
+        target_seasons=[2024],
+        train_start=2018,
+        ruleset=Ruleset.espn_ppr(),
+    )
+    assert len(out) >= 1
+    assert "verdict" in out.columns
+    out = PreseasonBacktestSchema.validate(out)
