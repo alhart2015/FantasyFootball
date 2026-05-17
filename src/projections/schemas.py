@@ -892,3 +892,109 @@ class AuctionValuesSchema(pa.DataFrameModel):
     class Config:
         strict = "filter"
         coerce = True
+
+
+class PreseasonFeaturesSchema(pa.DataFrameModel):
+    """One row per (gsis_id, season) for every player on depth_charts_{season}
+    with position in {QB, RB, WR, TE}. Inputs to PreseasonModel.predict_season_distribution.
+
+    `prior_{N}_season_per_game_<stat>` columns exist per modeled stat for the
+    player's position. They are nullable — a player missing a prior season
+    (rookies, injuries) has NaN there. Position-specific stat sets:
+        QB: passing_yards, passing_tds, passing_interceptions,
+            rushing_yards, rushing_tds.
+        RB: rushing_yards, rushing_tds, receptions, receiving_yards,
+            receiving_tds.
+        WR: receptions, receiving_yards, receiving_tds, rushing_yards,
+            rushing_tds.
+        TE: receptions, receiving_yards, receiving_tds.
+    """
+
+    # Identity
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=2018, le=2100)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    depth_chart_rank: Series[int] = pa.Field(ge=1, le=10)
+
+    # Player profile
+    age: Series[float] = pa.Field(ge=18.0, le=50.0, nullable=True)
+    years_exp: Series[int] = pa.Field(ge=0, le=30)
+    is_rookie: Series[bool]
+    draft_round: Series[int] = pa.Field(ge=1, le=7, nullable=True)
+    draft_pick_overall: Series[int] = pa.Field(ge=1, le=400, nullable=True)
+
+    # Prior 1/2/3 season per-game aggregates — all nullable + Optional.
+    # Pandera schemas can't declare per-position columns cleanly, so we declare
+    # the UNION of stats here and rely on `strict="filter"` to drop columns not
+    # populated for a given position. `Optional[Series[...]]` marks each prior_*
+    # column as not-required at validate time so a QB frame (which has no
+    # `prior_*_receiving_*` columns) and a WR frame (which has no
+    # `prior_*_passing_*` columns) both validate against the same schema.
+    # Population is the builder's job.
+    prior_1_season_games_played: Series[int] | None = pa.Field(ge=0, le=17, nullable=True)
+    prior_2_season_games_played: Series[int] | None = pa.Field(ge=0, le=17, nullable=True)
+    prior_3_season_games_played: Series[int] | None = pa.Field(ge=0, le=17, nullable=True)
+
+    prior_1_season_per_game_passing_yards: Series[float] | None = pa.Field(
+        ge=-10, le=500, nullable=True
+    )
+    prior_2_season_per_game_passing_yards: Series[float] | None = pa.Field(
+        ge=-10, le=500, nullable=True
+    )
+    prior_3_season_per_game_passing_yards: Series[float] | None = pa.Field(
+        ge=-10, le=500, nullable=True
+    )
+    prior_1_season_per_game_passing_tds: Series[float] | None = pa.Field(ge=0, le=10, nullable=True)
+    prior_2_season_per_game_passing_tds: Series[float] | None = pa.Field(ge=0, le=10, nullable=True)
+    prior_3_season_per_game_passing_tds: Series[float] | None = pa.Field(ge=0, le=10, nullable=True)
+    prior_1_season_per_game_passing_interceptions: Series[float] | None = pa.Field(
+        ge=0, le=10, nullable=True
+    )
+    prior_2_season_per_game_passing_interceptions: Series[float] | None = pa.Field(
+        ge=0, le=10, nullable=True
+    )
+    prior_3_season_per_game_passing_interceptions: Series[float] | None = pa.Field(
+        ge=0, le=10, nullable=True
+    )
+    prior_1_season_per_game_rushing_yards: Series[float] | None = pa.Field(
+        ge=-5, le=250, nullable=True
+    )
+    prior_2_season_per_game_rushing_yards: Series[float] | None = pa.Field(
+        ge=-5, le=250, nullable=True
+    )
+    prior_3_season_per_game_rushing_yards: Series[float] | None = pa.Field(
+        ge=-5, le=250, nullable=True
+    )
+    prior_1_season_per_game_rushing_tds: Series[float] | None = pa.Field(ge=0, le=5, nullable=True)
+    prior_2_season_per_game_rushing_tds: Series[float] | None = pa.Field(ge=0, le=5, nullable=True)
+    prior_3_season_per_game_rushing_tds: Series[float] | None = pa.Field(ge=0, le=5, nullable=True)
+    prior_1_season_per_game_receptions: Series[float] | None = pa.Field(ge=0, le=20, nullable=True)
+    prior_2_season_per_game_receptions: Series[float] | None = pa.Field(ge=0, le=20, nullable=True)
+    prior_3_season_per_game_receptions: Series[float] | None = pa.Field(ge=0, le=20, nullable=True)
+    prior_1_season_per_game_receiving_yards: Series[float] | None = pa.Field(
+        ge=-5, le=300, nullable=True
+    )
+    prior_2_season_per_game_receiving_yards: Series[float] | None = pa.Field(
+        ge=-5, le=300, nullable=True
+    )
+    prior_3_season_per_game_receiving_yards: Series[float] | None = pa.Field(
+        ge=-5, le=300, nullable=True
+    )
+    prior_1_season_per_game_receiving_tds: Series[float] | None = pa.Field(
+        ge=0, le=5, nullable=True
+    )
+    prior_2_season_per_game_receiving_tds: Series[float] | None = pa.Field(
+        ge=0, le=5, nullable=True
+    )
+    prior_3_season_per_game_receiving_tds: Series[float] | None = pa.Field(
+        ge=0, le=5, nullable=True
+    )
+
+    class Config:
+        strict = "filter"
+        # Coerce so int32/float32 inputs (the builder emits compact dtypes for
+        # season + age + per-game floats) are upcast to int64/float64 to match
+        # `Series[int]` / `Series[float]` rather than rejected with a dtype
+        # error. See WrFeaturesSchema.Config for the same pattern.
+        coerce = True

@@ -17,6 +17,7 @@ from projections.schemas import (
     NgsRushingSchema,
     PbpSchema,
     Position,
+    PreseasonFeaturesSchema,
     ProjectionWeeklySchema,
     QbFeaturesSchema,
     RbFeaturesSchema,
@@ -907,3 +908,41 @@ def test_snake_cheat_sheet_schema_round_trip() -> None:
     validated = SnakeCheatSheetSchema.validate(df)
     revalidated = SnakeCheatSheetSchema.validate(validated)
     pd.testing.assert_frame_equal(validated, revalidated)
+
+
+def test_preseason_features_schema_validates_golden_row() -> None:
+    """Smoke test: a minimal golden row passes PreseasonFeaturesSchema."""
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["QB"],
+            "team": ["KC"],
+            "depth_chart_rank": pd.array([1], dtype="Int64"),
+            "age": pd.array([29.0], dtype="float32"),
+            "years_exp": pd.array([7], dtype="Int64"),
+            "is_rookie": [False],
+            "draft_round": pd.array([1], dtype="Int64"),
+            "draft_pick_overall": pd.array([10], dtype="Int64"),
+            "prior_1_season_per_game_passing_yards": pd.array([275.5], dtype="float32"),
+            "prior_1_season_games_played": pd.array([17], dtype="Int64"),
+        }
+    )
+    out = PreseasonFeaturesSchema.validate(df)
+    assert len(out) == 1
+
+
+def test_preseason_features_schema_rejects_bad_position() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["XX"],  # not in Position enum
+            "team": ["KC"],
+            "depth_chart_rank": pd.array([1], dtype="Int64"),
+            "years_exp": pd.array([7], dtype="Int64"),
+            "is_rookie": [False],
+        }
+    )
+    with pytest.raises(SchemaError):
+        PreseasonFeaturesSchema.validate(df)
