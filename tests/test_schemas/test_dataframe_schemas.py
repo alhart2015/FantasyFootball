@@ -511,6 +511,10 @@ def test_qb_features_schema_accepts_valid_row() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
+            "preseason_implied_team_total": [26.5],
+            "preseason_spread": [-2.5],
+            "season_avg_implied_team_total": [27.0],
+            "season_avg_spread": [-3.0],
             "opp_allowed_qb_fppg_l4": [18.5],
         }
     )
@@ -544,6 +548,10 @@ def test_qb_features_schema_rejects_negative_pass_attempts() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
+            "preseason_implied_team_total": [26.5],
+            "preseason_spread": [-2.5],
+            "season_avg_implied_team_total": [27.0],
+            "season_avg_spread": [-3.0],
             "opp_allowed_qb_fppg_l4": [18.5],
         }
     )
