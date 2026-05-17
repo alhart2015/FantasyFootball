@@ -610,16 +610,6 @@ def test_dispatch_registers_decomposed_baseline_for_wr() -> None:
     assert isinstance(model, DecomposedBaselineModel)
 
 
-def test_dispatch_default_model_class_for_wr_is_unchanged() -> None:
-    """Pre-gate state: WR routes to ensemble. The flip (if ADOPT) is
-    explicitly a Phase 6 action, not landed in this PR's initial commits.
-    """
-    from projections.models import POSITION_DISPATCH
-    from projections.schemas import Position
-
-    assert POSITION_DISPATCH[Position.WR].default_model_class == "ensemble"
-
-
 def test_decomposed_baseline_satisfies_model_protocol() -> None:
     """DecomposedBaselineModel must implement Model: position, model_id, fit,
     predict_distribution, save, load. fit + predict_distribution end-to-end
