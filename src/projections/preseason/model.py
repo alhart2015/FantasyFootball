@@ -15,7 +15,7 @@ from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
-from projections.schemas import Ruleset
+from projections.schemas import PreseasonFeaturesSchema, PreseasonProjectionSchema, Ruleset
 
 logger = logging.getLogger(__name__)
 
@@ -95,12 +95,82 @@ class NaivePreseasonModel:
         *,
         ruleset: Ruleset,
     ) -> pd.DataFrame:
-        """Predict per-stat season-total degenerate distributions per player.
+        features = PreseasonFeaturesSchema.validate(features)
+        per_stat_predictions = self._predict_per_stat(features)
+        fpts_mean = self._stub_fpts_from_stats(per_stat_predictions, ruleset)
 
-        Implemented across Tasks 11 (veteran branch), 12 (fallback), 14 (rookies),
-        15 (canonical scoring layer integration).
+        out = features[["gsis_id", "season", "position", "team"]].copy()
+        out["ruleset"] = ruleset.name
+        out["model_id"] = self.model_id
+
+        # Degenerate distribution: mean == p10 == p50 == p90.
+        for col, vals in per_stat_predictions.items():
+            for q in ("mean", "p10", "p50", "p90"):
+                out[f"{col}_{q}"] = vals
+        for q in ("mean", "p10", "p50", "p90"):
+            out[f"season_total_fpts_{q}"] = fpts_mean
+
+        out = PreseasonProjectionSchema.validate(out)
+        return out
+
+    def _predict_per_stat(self, features: pd.DataFrame) -> dict[str, pd.Series]:
+        """Veteran branch (Task 11): prior_1_per_game * 16 per stat.
+
+        Tasks 12 (prior-2/3 fallback) + 14 (rookie GLM) add layered branches.
+        Returns a dict mapping `<stat>_season_total` -> Series indexed like features.
         """
-        raise NotImplementedError("predict not yet implemented (Task 11)")
+        stats = (
+            "passing_yards",
+            "passing_tds",
+            "passing_interceptions",
+            "rushing_yards",
+            "rushing_tds",
+            "receptions",
+            "receiving_yards",
+            "receiving_tds",
+        )
+        result: dict[str, pd.Series] = {}
+        for stat in stats:
+            col_in = f"prior_1_season_per_game_{stat}"
+            col_out = f"{stat}_season_total"
+            if col_in not in features.columns:
+                continue
+            result[col_out] = (features[col_in] * _PROJECTED_GAMES_PLAYED).astype("float32")
+        return result
+
+    def _stub_fpts_from_stats(self, per_stat: dict[str, pd.Series], ruleset: Ruleset) -> pd.Series:
+        """Placeholder fpts computation -- replaced by `_compute_fpts_from_stats`
+        in Task 15 once `projections.scoring.scoring_coefficients` is wired up.
+
+        Currently applies the ruleset's coefficients directly to each per-stat
+        season total. Returns a float32 Series clipped at 0.
+        """
+        # Pick any non-empty series to set the index -- degenerate fpts is
+        # zero-indexed if per_stat is empty (no veteran branch fired).
+        if not per_stat:
+            return pd.Series([], dtype="float32")
+        sample = next(iter(per_stat.values()))
+        fpts = pd.Series(0.0, index=sample.index, dtype="float64")
+        for col, vals in per_stat.items():
+            stat = col.replace("_season_total", "")
+            v = vals.fillna(0).astype("float64")
+            if stat == "passing_yards":
+                fpts = fpts + v / ruleset.passing_yds_per_pt
+            elif stat == "passing_tds":
+                fpts = fpts + v * ruleset.passing_td_pts
+            elif stat == "passing_interceptions":
+                fpts = fpts + v * ruleset.interception_pts
+            elif stat == "rushing_yards":
+                fpts = fpts + v / ruleset.rushing_yds_per_pt
+            elif stat == "rushing_tds":
+                fpts = fpts + v * ruleset.rushing_td_pts
+            elif stat == "receptions":
+                fpts = fpts + v * ruleset.reception_pts
+            elif stat == "receiving_yards":
+                fpts = fpts + v / ruleset.receiving_yds_per_pt
+            elif stat == "receiving_tds":
+                fpts = fpts + v * ruleset.receiving_td_pts
+        return fpts.clip(lower=0).astype("float32")
 
     def save(self, path: Path) -> None:
         """Persist rookie GLM coefficients via joblib. Implemented in Task 16."""
