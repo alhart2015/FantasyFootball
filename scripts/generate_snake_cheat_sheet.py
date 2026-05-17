@@ -23,15 +23,6 @@ from projections.draft.league_config import LeagueConfig
 from projections.draft.snake_cheat_sheet import generate_snake_cheat_sheet
 from projections.schemas import _PYARROW_STR, IdMapSchema, Position
 
-_POSITION_ORDER: tuple[Position, ...] = (
-    Position.QB,
-    Position.RB,
-    Position.WR,
-    Position.TE,
-    Position.K,
-    Position.DST,
-)
-
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Generate a snake-draft cheat sheet.")
@@ -56,13 +47,14 @@ def _parse_args() -> argparse.Namespace:
 
 def _load_display_names(path: Path) -> pd.DataFrame | None:
     """Read id_map.parquet → (gsis_id, display_name). Returns None on missing."""
-    if not path.exists():
+    try:
+        df = pd.read_parquet(path)
+    except FileNotFoundError:
         print(
             f"WARNING: id_map parquet not found at {path}; display names will be '—'",
             file=sys.stderr,
         )
         return None
-    df = pd.read_parquet(path)
     df = IdMapSchema.validate(df)
     return pd.DataFrame(
         {
@@ -92,7 +84,7 @@ def _log_per_position_summary(df: pd.DataFrame, n_tiers: int, ruleset: str, seas
     )
     print()
     print("Position summary (n_in_pool | tier-1 size | top-3):")
-    for pos in _POSITION_ORDER:
+    for pos in Position:
         sub = df[df["position"] == pos.value]
         if sub.empty:
             continue

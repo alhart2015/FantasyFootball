@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from projections.draft.snake_cheat_sheet import DISPLAY_NAME_FALLBACK
 from projections.schemas import _PYARROW_STR, IdMapSchema, Position, VorpTableSchema
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -141,7 +142,7 @@ def test_cli_end_to_end_happy_path(tmp_path: Path) -> None:
     }
     assert set(df.columns) >= expected_cols
     assert len(df) == len(vorp)
-    assert (df["display_name"] != "—").any()
+    assert (df["display_name"] != DISPLAY_NAME_FALLBACK).any()
 
 
 def test_cli_missing_id_map_logs_warning_and_falls_back(tmp_path: Path) -> None:
@@ -170,7 +171,7 @@ def test_cli_missing_id_map_logs_warning_and_falls_back(tmp_path: Path) -> None:
     assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
     assert "id_map parquet not found" in result.stderr
     df = pd.read_csv(out_path)
-    assert (df["display_name"] == "—").all()
+    assert (df["display_name"] == DISPLAY_NAME_FALLBACK).all()
 
 
 def test_cli_tiers_per_position_flag_propagates(tmp_path: Path) -> None:

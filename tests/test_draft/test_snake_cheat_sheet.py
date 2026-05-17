@@ -8,7 +8,11 @@ import pytest
 
 from projections.draft._pool import _select_pool
 from projections.draft.league_config import LeagueConfig
-from projections.draft.snake_cheat_sheet import _assign_tiers, generate_snake_cheat_sheet
+from projections.draft.snake_cheat_sheet import (
+    DISPLAY_NAME_FALLBACK,
+    _assign_tiers,
+    generate_snake_cheat_sheet,
+)
 from projections.schemas import (
     _PYARROW_STR,
     Position,
@@ -256,9 +260,9 @@ def test_display_name_missing_rows_fall_back_to_em_dash() -> None:
     covered_ids = set(display["gsis_id"])
     for _, row in out.iterrows():
         if row["gsis_id"] in covered_ids:
-            assert row["display_name"] != "—"
+            assert row["display_name"] != DISPLAY_NAME_FALLBACK
         else:
-            assert row["display_name"] == "—"
+            assert row["display_name"] == DISPLAY_NAME_FALLBACK
 
 
 def test_display_name_none_yields_all_em_dash() -> None:
@@ -266,7 +270,7 @@ def test_display_name_none_yields_all_em_dash() -> None:
     cfg = _make_config()
     vorp = _make_vorp_table({Position.QB: 8, Position.RB: 12, Position.WR: 12, Position.TE: 8})
     out = generate_snake_cheat_sheet(vorp, cfg, display_names=None)
-    assert (out["display_name"] == "—").all()
+    assert (out["display_name"] == DISPLAY_NAME_FALLBACK).all()
 
 
 def test_position_with_no_in_pool_rows_emits_rank_but_no_tier() -> None:
