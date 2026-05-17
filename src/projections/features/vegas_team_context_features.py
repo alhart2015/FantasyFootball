@@ -26,8 +26,10 @@ import pandas as pd
 from projections.features._shared import build_game_environment
 from projections.schemas import GSIS_ID_PATTERN
 
+# Used by build_vegas_team_context_overrides (Task 4) for gsis_id validation.
 _GSIS_RE: Final[re.Pattern[str]] = re.compile(rf"^{GSIS_ID_PATTERN}$")
 
+# Used by build_vegas_team_context_overrides (Task 4) for output column ordering.
 _FEATURE_COLS: Final[tuple[str, ...]] = (
     "preseason_implied_team_total",
     "preseason_spread",
@@ -59,8 +61,10 @@ def compute_vegas_team_context_features(schedules: pd.DataFrame) -> pd.DataFrame
             season, week, team,
             preseason_implied_team_total, preseason_spread,
             season_avg_implied_team_total, season_avg_spread.
-        All four feature columns are Float64. season / week are Int64;
-        team is StringDtype("pyarrow") (inherited from build_game_environment).
+        All four feature columns are nullable Float64. ``season`` / ``week`` /
+        ``team`` are not re-cast here; they pass through as whatever
+        ``_shared.build_game_environment`` returned (numpy int64 / object).
+        Downstream attach / override builders re-cast to canonical dtypes.
     """
     game_env = build_game_environment(schedules)
     # Keep only the columns we need; cast spread / implied_team_total to Float64
@@ -85,9 +89,13 @@ def compute_vegas_team_context_features(schedules: pd.DataFrame) -> pd.DataFrame
     # weeks 1..N-1). NaN at week 1.
     out = out.sort_values(["season", "team", "week"]).reset_index(drop=True)
     grouped = out.groupby(["season", "team"], group_keys=False)
-    out["season_avg_spread"] = grouped["spread"].apply(lambda s: s.expanding().mean().shift(1))
-    out["season_avg_implied_team_total"] = grouped["implied_team_total"].apply(
-        lambda s: s.expanding().mean().shift(1)
+    out["season_avg_spread"] = (
+        grouped["spread"].apply(lambda s: s.expanding().mean().shift(1)).astype("Float64")
+    )
+    out["season_avg_implied_team_total"] = (
+        grouped["implied_team_total"]
+        .apply(lambda s: s.expanding().mean().shift(1))
+        .astype("Float64")
     )
 
     return (
