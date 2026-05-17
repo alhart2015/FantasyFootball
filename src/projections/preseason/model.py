@@ -193,16 +193,11 @@ class NaivePreseasonModel:
     def _predict_per_stat(
         self, features: pd.DataFrame
     ) -> tuple[dict[str, pd.Series], pd.DataFrame]:
-        """Per-stat predictions with prior_1 -> prior_2 -> prior_3 fallback.
+        """Per-stat predictions:
+        - Veterans: prior_1 -> prior_2 -> prior_3 fallback (Task 12).
+        - Rookies: GLM overlay on log(draft_pick_overall + 1). UDFAs imputed to pick=300.
 
-        Veterans whose effective prior is empty across all 3 seasons are
-        dropped with a WARNING (returned `retained` excludes them).
-
-        Rookies are kept in `retained` (Task 14 overlays the GLM branch on
-        top of the NaN per-stat values produced here for them).
-
-        Returns:
-            (per_stat_series, retained_features)
+        Veterans with no_prior_3_seasons are dropped with a WARNING.
         """
         stats = (
             "passing_yards",
@@ -215,9 +210,7 @@ class NaivePreseasonModel:
             "receiving_tds",
         )
 
-        # For each row, determine the "effective prior" tier:
-        # 3 if only prior_3 has games, 2 if prior_2 (or 2+3) has games,
-        # 1 if prior_1 (any combo) has games, 0 if all NA.
+        # Effective-prior tier per row (veterans).
         gp1 = features["prior_1_season_games_played"].fillna(0)
         gp2 = features["prior_2_season_games_played"].fillna(0)
         gp3 = features["prior_3_season_games_played"].fillna(0)
@@ -226,8 +219,8 @@ class NaivePreseasonModel:
         effective_prior = effective_prior.mask(gp2 > 0, 2)
         effective_prior = effective_prior.mask(gp1 > 0, 1)
 
-        # Drop veterans with no_prior_3_seasons.
-        is_vet = ~features["is_rookie"].astype(bool)
+        is_rookie = features["is_rookie"].astype(bool)
+        is_vet = ~is_rookie
         drop_mask = (effective_prior == 0) & is_vet
         if drop_mask.any():
             dropped_ids = features.loc[drop_mask, "gsis_id"].tolist()
@@ -238,19 +231,44 @@ class NaivePreseasonModel:
             )
         retained = features.loc[~drop_mask].copy()
         effective_prior = effective_prior.loc[retained.index]
+        is_rookie = is_rookie.loc[retained.index]
+
+        # UDFA imputation: draft_pick_overall = 300 if missing.
+        pick = retained["draft_pick_overall"].fillna(_UDFA_IMPUTED_PICK).astype(float)
+        log_pick = np.log(pick + 1)
 
         result: dict[str, pd.Series] = {}
         for stat in stats:
             chosen = pd.Series(float("nan"), index=retained.index, dtype="float64")
+
+            # Veteran branch — multi-tier fallback.
             for tier in (1, 2, 3):
-                tier_mask = effective_prior == tier
+                tier_mask = (effective_prior == tier) & ~is_rookie
                 if not tier_mask.any():
                     continue
                 col = f"prior_{tier}_season_per_game_{stat}"
                 if col not in retained.columns:
                     continue
-                chosen.loc[tier_mask] = retained.loc[tier_mask, col].astype("float64")
-            result[f"{stat}_season_total"] = (chosen * _PROJECTED_GAMES_PLAYED).astype("float32")
+                chosen.loc[tier_mask] = (
+                    retained.loc[tier_mask, col].astype("float64") * _PROJECTED_GAMES_PLAYED
+                )
+
+            # Rookie branch — GLM overlay.
+            if is_rookie.any():
+                for position in retained.loc[is_rookie, "position"].unique():
+                    pos_mask = is_rookie & (retained["position"] == position)
+                    if not pos_mask.any():
+                        continue
+                    key = (position, stat)
+                    if key not in self._rookie_glm:
+                        # No GLM fitted for this (position, stat) cell — fall to zero.
+                        chosen.loc[pos_mask] = 0.0
+                        continue
+                    intercept, slope = self._rookie_glm[key]
+                    chosen.loc[pos_mask] = np.exp(intercept + slope * log_pick.loc[pos_mask])
+
+            result[f"{stat}_season_total"] = chosen.fillna(0.0).clip(lower=0.0).astype("float32")
+
         return result, retained
 
     def _stub_fpts_from_stats(self, per_stat: dict[str, pd.Series], ruleset: Ruleset) -> pd.Series:

@@ -289,3 +289,95 @@ def test_naive_fit_populates_rookie_glms() -> None:
     intercept, slope = model._rookie_glm[("QB", "passing_yards")]
     assert isinstance(intercept, float)
     assert isinstance(slope, float)
+
+
+def test_naive_predict_rookie_drafted_player() -> None:
+    """Rookie with draft pick: predicted = exp(intercept + slope * log(pick + 1))."""
+    weekly = pd.DataFrame(
+        [
+            {
+                "gsis_id": "00-3000001",
+                "season": 2021,
+                "week": w,
+                "position": "WR",
+                "team": "KC",
+                "passing_yards": 0.0,
+                "passing_tds": 0,
+                "interceptions": 0,
+                "rushing_yards": 0.0,
+                "rushing_tds": 0,
+                "receptions": 5.0,
+                "receiving_yards": 70.0,
+                "receiving_tds": 0.4,
+            }
+            for w in range(1, 18)
+        ]
+    )
+    weekly["season"] = weekly["season"].astype("int32")
+    weekly["week"] = weekly["week"].astype("int32")
+
+    draft = pd.DataFrame(
+        [("00-3000001", 2021, 1, 10)],
+        columns=["gsis_id", "season", "round", "pick"],
+    ).astype({"season": "int32", "round": "Int64", "pick": "Int64"})
+    id_map = pd.DataFrame({"gsis_id": ["00-3000001"], "full_name": ["x"], "birth_date": [pd.NaT]})
+    model = NaivePreseasonModel()
+    model.fit(weekly_stats=weekly, draft_picks=draft, id_map=id_map)
+
+    features = _make_features_row(
+        gsis_id="00-4000001",
+        position="WR",
+        is_rookie=True,
+        years_exp=pd.array([0], dtype="Int64"),
+        draft_round=pd.array([1], dtype="Int64"),
+        draft_pick_overall=pd.array([10], dtype="Int64"),
+    )
+    out = model.predict_season_distribution(features, ruleset=Ruleset.espn_ppr())
+    assert len(out) == 1
+    # Should produce a non-zero receiving_yards prediction.
+    assert float(out["receiving_yards_season_total_mean"].iloc[0]) > 0
+
+
+def test_naive_predict_rookie_udfa_imputed_to_pick_300() -> None:
+    """UDFA rookie (no draft_pick_overall): imputed to pick=300."""
+    weekly = pd.DataFrame(
+        [
+            {
+                "gsis_id": "00-3000001",
+                "season": 2021,
+                "week": 1,
+                "position": "WR",
+                "team": "KC",
+                "passing_yards": 0.0,
+                "passing_tds": 0,
+                "interceptions": 0,
+                "rushing_yards": 0.0,
+                "rushing_tds": 0,
+                "receptions": 4,
+                "receiving_yards": 50.0,
+                "receiving_tds": 0,
+            },
+        ]
+    )
+    weekly["season"] = weekly["season"].astype("int32")
+    weekly["week"] = weekly["week"].astype("int32")
+    draft = pd.DataFrame(
+        [("00-3000001", 2021, 1, 10)],
+        columns=["gsis_id", "season", "round", "pick"],
+    ).astype({"season": "int32", "round": "Int64", "pick": "Int64"})
+    id_map = pd.DataFrame({"gsis_id": ["00-3000001"], "full_name": ["x"], "birth_date": [pd.NaT]})
+
+    model = NaivePreseasonModel()
+    model.fit(weekly_stats=weekly, draft_picks=draft, id_map=id_map)
+
+    features = _make_features_row(
+        gsis_id="00-5000001",
+        position="WR",
+        is_rookie=True,
+        draft_round=pd.array([pd.NA], dtype="Int64"),
+        draft_pick_overall=pd.array([pd.NA], dtype="Int64"),
+    )
+    out = model.predict_season_distribution(features, ruleset=Ruleset.espn_ppr())
+    assert len(out) == 1
+    # Should still produce a value (imputed pick=300).
+    assert float(out["receiving_yards_season_total_mean"].iloc[0]) >= 0
