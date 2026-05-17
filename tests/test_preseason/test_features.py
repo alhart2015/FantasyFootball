@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -192,3 +194,26 @@ def test_build_preseason_features_prior_season_per_game_aggregates() -> None:
     # prior_2 and prior_3 should be NA (no 2022/2021 data).
     assert pd.isna(out["prior_2_season_per_game_passing_yards"].iloc[0])
     assert pd.isna(out["prior_3_season_per_game_passing_yards"].iloc[0])
+
+
+def test_build_preseason_features_drops_players_missing_id_map(tmp_path: Path) -> None:
+    depth = _make_depth_charts(
+        [
+            ("00-1000001", 1, "QB", "KC", 1),
+            ("00-9999999", 1, "WR", "DEN", 3),  # not in id_map
+        ]
+    )
+    id_map = _make_id_map([("00-1000001", "Patrick Mahomes", "1995-09-17")])
+    out = build_preseason_features(
+        weekly_stats=_empty_weekly_stats(),
+        depth_charts_target=depth,
+        draft_picks=_make_draft_picks([("00-1000001", 2017, 1, 10)]),
+        id_map=id_map,
+        target_season=2026,
+        dropped_csv_path=tmp_path / "dropped.csv",
+    )
+    assert "00-9999999" not in out["gsis_id"].tolist()
+    assert "00-1000001" in out["gsis_id"].tolist()
+    dropped = pd.read_csv(tmp_path / "dropped.csv")
+    assert dropped["gsis_id"].tolist() == ["00-9999999"]
+    assert dropped["drop_reason"].tolist() == ["missing_id_map"]

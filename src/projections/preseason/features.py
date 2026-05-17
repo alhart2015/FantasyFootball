@@ -9,6 +9,7 @@ See `docs/superpowers/specs/2026-05-17-preseason-projections-design.md` §3.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Final
 
 import pandas as pd
@@ -70,6 +71,7 @@ def build_preseason_features(
     draft_picks: pd.DataFrame,
     id_map: pd.DataFrame,
     target_season: int,
+    dropped_csv_path: Path | None = None,
 ) -> pd.DataFrame:
     """Build the preseason feature frame for `target_season`.
 
@@ -120,6 +122,29 @@ def build_preseason_features(
             "depth_chart_rank": dc["depth_rank"].astype("Int64"),
         }
     ).reset_index(drop=True)
+
+    # ---- Drop players missing from id_map ----
+    known_ids = set(id_map["gsis_id"].unique())
+    missing_mask = ~out["gsis_id"].isin(known_ids)
+    if missing_mask.any():
+        dropped = pd.DataFrame(
+            {
+                "gsis_id": out.loc[missing_mask, "gsis_id"].tolist(),
+                "drop_reason": "missing_id_map",
+                "season": target_season,
+            }
+        )
+        logger.warning(
+            "build_preseason_features: dropped %d player(s) missing from id_map "
+            "(season=%d). dropped_csv_path=%s",
+            len(dropped),
+            target_season,
+            dropped_csv_path,
+        )
+        if dropped_csv_path is not None:
+            dropped_csv_path.parent.mkdir(parents=True, exist_ok=True)
+            dropped.to_csv(dropped_csv_path, index=False)
+        out = out.loc[~missing_mask].reset_index(drop=True)
 
     # ---- Age (from id_map.birth_date) ----
     id_map_lookup = id_map.set_index("gsis_id")
