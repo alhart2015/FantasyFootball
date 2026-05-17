@@ -148,6 +148,7 @@ def _code_hash_files_nb(position: Position) -> tuple[Path, ...]:
         src / "distributions" / "codec.py",
         src / "distributions" / "parametric.py",
         src / "features" / feat_module,
+        src / "features" / "vegas_team_context_features.py",
         src / "features" / "_shared.py",
         src / "features" / "_rolling.py",
         src / "features" / "_opponent.py",

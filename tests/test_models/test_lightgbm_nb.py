@@ -347,3 +347,18 @@ def test_wr_lightgbm_nb_feature_columns_swap_treatment() -> None:
         "season_avg_spread",
     ):
         assert c in cols, f"missing {c}"
+
+
+def test_code_hash_files_nb_includes_vegas_team_context_features() -> None:
+    """vegas_team_context_features.py is a transitive dep of QB + WR builders
+    post-#33c integration. Without it in the hash set, a fix-only edit to
+    that module would fail to invalidate cached model_ids."""
+    from projections.models.lightgbm_nb import _code_hash_files_nb
+    from projections.schemas import Position
+
+    for pos in (Position.QB, Position.WR, Position.TE, Position.RB):
+        files = _code_hash_files_nb(pos)
+        vegas_in_set = any(p.name == "vegas_team_context_features.py" for p in files)
+        assert vegas_in_set, (
+            f"vegas_team_context_features.py missing from _code_hash_files_nb({pos})"
+        )
