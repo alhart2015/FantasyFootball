@@ -171,5 +171,57 @@ def build_preseason_features(
     out["draft_round"] = out["gsis_id"].map(most_recent_pick["round"]).astype("Int64")
     out["draft_pick_overall"] = out["gsis_id"].map(most_recent_pick["pick"]).astype("Int64")
 
+    # ---- Prior 1/2/3 season per-game aggregates ----
+    stats_to_aggregate: list[Stat] = [
+        Stat.PASSING_YARDS,
+        Stat.PASSING_TDS,
+        Stat.INTERCEPTIONS,
+        Stat.RUSHING_YARDS,
+        Stat.RUSHING_TDS,
+        Stat.RECEPTIONS,
+        Stat.RECEIVING_YARDS,
+        Stat.RECEIVING_TDS,
+    ]
+
+    for n in (1, 2, 3):
+        prior_season = target_season - n
+        per_game = _aggregate_to_per_game(
+            weekly_stats.loc[weekly_stats["season"] == prior_season],
+            stats=stats_to_aggregate,
+        )
+        if per_game.empty:
+            out[f"prior_{n}_season_games_played"] = pd.array([pd.NA] * len(out), dtype="Int64")
+            for stat in stats_to_aggregate:
+                col_out = f"prior_{n}_season_per_game_{_schema_stat_name(stat)}"
+                out[col_out] = pd.array([pd.NA] * len(out), dtype="Float32")
+            continue
+        per_game_lookup = per_game.set_index("gsis_id")
+        out[f"prior_{n}_season_games_played"] = (
+            out["gsis_id"].map(per_game_lookup["games_played"]).astype("Int64")
+        )
+        for stat in stats_to_aggregate:
+            col_in = f"per_game_{stat.value}"
+            col_out = f"prior_{n}_season_per_game_{_schema_stat_name(stat)}"
+            out[col_out] = out["gsis_id"].map(per_game_lookup[col_in]).astype("Float32")
+
     out = PreseasonFeaturesSchema.validate(out)
     return out
+
+
+def _aggregate_to_per_game(weekly: pd.DataFrame, *, stats: list[Stat]) -> pd.DataFrame:
+    """Aggregate weekly_stats to one row per gsis_id with games_played + per_game_<stat>
+    for each stat. Empty input returns an empty frame with the right columns."""
+    if weekly.empty:
+        cols: dict[str, pd.Series] = {
+            "gsis_id": pd.Series([], dtype="string[pyarrow]"),
+            "games_played": pd.Series([], dtype="Int64"),
+        }
+        for stat in stats:
+            cols[f"per_game_{stat.value}"] = pd.Series([], dtype="float64")
+        return pd.DataFrame(cols)
+
+    games = weekly.groupby("gsis_id").size().rename("games_played")
+    totals = weekly.groupby("gsis_id")[[s.value for s in stats]].sum()
+    per_game = totals.div(games, axis=0)
+    per_game.columns = [f"per_game_{c}" for c in per_game.columns]
+    return per_game.join(games).reset_index()

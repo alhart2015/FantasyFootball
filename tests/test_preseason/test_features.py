@@ -50,6 +50,14 @@ def _make_draft_picks(rows: list[tuple[str, int, int, int]]) -> pd.DataFrame:
     )
 
 
+def _make_weekly_stats(rows: list[dict[str, object]]) -> pd.DataFrame:
+    """Each row: keys gsis_id, season, week, position, team, <stat columns>."""
+    df = pd.DataFrame(rows)
+    df["season"] = df["season"].astype("int32")
+    df["week"] = df["week"].astype("int32")
+    return df
+
+
 def test_build_preseason_features_filters_to_skill_positions() -> None:
     depth = _make_depth_charts(
         [
@@ -130,3 +138,57 @@ def test_build_preseason_features_udfa_rookie() -> None:
     assert pd.isna(out["draft_pick_overall"].iloc[0])
     # No prior NFL history => is_rookie=True.
     assert bool(out["is_rookie"].iloc[0]) is True
+
+
+def test_build_preseason_features_prior_season_per_game_aggregates() -> None:
+    # Player: 2 games in 2023; 530 passing_yards total -> 265 per game.
+    weekly = _make_weekly_stats(
+        [
+            {
+                "gsis_id": "00-1000001",
+                "season": 2023,
+                "week": 1,
+                "position": "QB",
+                "team": "KC",
+                "passing_yards": 250.0,
+                "passing_tds": 2,
+                "interceptions": 1,
+                "rushing_yards": 30.0,
+                "rushing_tds": 0,
+                "receptions": 0,
+                "receiving_yards": 0.0,
+                "receiving_tds": 0,
+            },
+            {
+                "gsis_id": "00-1000001",
+                "season": 2023,
+                "week": 2,
+                "position": "QB",
+                "team": "KC",
+                "passing_yards": 280.0,
+                "passing_tds": 1,
+                "interceptions": 0,
+                "rushing_yards": 20.0,
+                "rushing_tds": 0,
+                "receptions": 0,
+                "receiving_yards": 0.0,
+                "receiving_tds": 0,
+            },
+        ]
+    )
+    depth = _make_depth_charts([("00-1000001", 1, "QB", "KC", 1)])
+    id_map = _make_id_map([("00-1000001", "Patrick Mahomes", "1995-09-17")])
+    out = build_preseason_features(
+        weekly_stats=weekly,
+        depth_charts_target=depth,
+        draft_picks=_make_draft_picks([("00-1000001", 2017, 1, 10)]),
+        id_map=id_map,
+        target_season=2024,  # 2023 is prior_1
+    )
+    # prior_1 = 2023: 2 games, 530 passing_yards -> 265 per game.
+    assert int(out["prior_1_season_games_played"].iloc[0]) == 2
+    assert float(out["prior_1_season_per_game_passing_yards"].iloc[0]) == pytest.approx(265.0)
+    assert float(out["prior_1_season_per_game_passing_tds"].iloc[0]) == pytest.approx(1.5)
+    # prior_2 and prior_3 should be NA (no 2022/2021 data).
+    assert pd.isna(out["prior_2_season_per_game_passing_yards"].iloc[0])
+    assert pd.isna(out["prior_3_season_per_game_passing_yards"].iloc[0])
