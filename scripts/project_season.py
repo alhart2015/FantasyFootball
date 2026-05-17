@@ -17,6 +17,7 @@ from typing import Any
 
 import pandas as pd
 
+from projections.aggregation import aggregate_to_season
 from projections.models import POSITION_DISPATCH, production_model_for
 from projections.models.base import Model
 from projections.schemas import Position, ProjectionWeeklySchema, Ruleset
@@ -174,6 +175,50 @@ def _project_season(
         rows.append(preds)
         print(f"    [{position.value}] week {week}: {len(preds)} rows", flush=True)
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
+def _write_season_artifacts(
+    *,
+    weekly: pd.DataFrame,
+    ruleset: Ruleset,
+    out_dir: Path,
+    season: int,
+    id_map: pd.DataFrame,
+) -> None:
+    """Write three artifacts:
+      1. <out_dir>/season_projection.csv         (naive sum-of-means, back-compat)
+      2. <out_dir>/season_projection_weekly_<season>.parquet  (ProjectionWeeklySchema)
+      3. <out_dir>/season_projection_distributions_<season>.csv  (MC quantile summary)
+
+    weekly: ProjectionWeeklySchema-validated weekly predictions for one season.
+    id_map: must have at least [gsis_id, full_name, team] columns.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Artifact 2: weekly parquet (write first; useful as a raw-data drop even if
+    # later steps fail).
+    weekly.to_parquet(out_dir / f"season_projection_weekly_{season}.parquet", index=False)
+
+    # Artifact 1: naive sum-of-weekly-means CSV (unchanged contract).
+    season_totals = weekly.groupby(["gsis_id", "position"], as_index=False).agg(
+        season_total_mean=("mean", "sum"), n_weeks=("week", "nunique")
+    )
+    season_totals = season_totals.merge(
+        id_map[["gsis_id", "full_name", "team"]], on="gsis_id", how="left"
+    )
+    season_totals = season_totals.sort_values("season_total_mean", ascending=False).reset_index(
+        drop=True
+    )
+    season_totals.insert(0, "rank", range(1, len(season_totals) + 1))
+    season_totals.to_csv(out_dir / "season_projection.csv", index=False)
+
+    # Artifact 3: MC-aggregated distributions CSV (new in this spec).
+    season_dist = aggregate_to_season(weekly, ruleset=ruleset, n_samples=10_000)
+    season_dist = season_dist.merge(
+        id_map[["gsis_id", "full_name", "team"]], on="gsis_id", how="left"
+    )
+    season_dist = season_dist.sort_values("season_mean", ascending=False).reset_index(drop=True)
+    season_dist.to_csv(out_dir / f"season_projection_distributions_{season}.csv", index=False)
 
 
 def main() -> None:
