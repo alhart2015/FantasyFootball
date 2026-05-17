@@ -154,5 +154,5 @@ def test_normalize_warns_on_placeholder_gsis_ids(
     assert len(df) == 1
     assert df.iloc[0]["gsis_id"] == "00-0033000"
     assert any(
-        "filtered 2 row(s) with non-GSIS placeholder ids" in r.message for r in caplog.records
+        "filtered 2 row(s) with non-GSIS placeholder ids" in r.getMessage() for r in caplog.records
     )

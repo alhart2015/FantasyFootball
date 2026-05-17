@@ -136,5 +136,5 @@ def test_build_id_map_warns_on_placeholder_gsis_ids(
     assert "TYS405541" not in df["gsis_id"].tolist()
     assert len(df) == 4
     assert any(
-        "filtered 2 row(s) with non-GSIS placeholder ids" in r.message for r in caplog.records
+        "filtered 2 row(s) with non-GSIS placeholder ids" in r.getMessage() for r in caplog.records
     )
