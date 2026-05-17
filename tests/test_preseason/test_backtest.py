@@ -102,3 +102,31 @@ def test_walk_forward_backtest_returns_one_row_per_position_per_year(
     assert len(out) >= 1
     assert "verdict" in out.columns
     out = PreseasonBacktestSchema.validate(out)
+
+
+def test_write_backtest_report_produces_markdown(tmp_path: Path) -> None:
+    from projections.preseason.backtest import write_backtest_report
+
+    backtest_df = pd.DataFrame(
+        {
+            "target_season": pd.array([2024], dtype="int32"),
+            "position": ["QB"],
+            "model_class": pd.array(["naive-preseason-v1"], dtype="string[pyarrow]"),
+            "ruleset": ["ESPN_PPR"],
+            "rmse": pd.array([35.0], dtype="float32"),
+            "rmse_naive_baseline": pd.array([35.0], dtype="float32"),
+            "rmse_delta_pct": pd.array([0.0], dtype="float32"),
+            "spearman_top50": pd.array([0.72], dtype="float32"),
+            "n_players": pd.array([28], dtype="Int64"),
+            "coverage_diff_projected_not_played": pd.array([3], dtype="Int64"),
+            "coverage_diff_played_not_projected": pd.array([1], dtype="Int64"),
+            "verdict": ["NULL"],
+        }
+    )
+    out_path = tmp_path / "backtest_report.md"
+    write_backtest_report(backtest_df, out_path)
+    text = out_path.read_text()
+    assert "Backtest Report" in text
+    assert "naive-preseason-v1" in text
+    assert "QB" in text
+    assert "NULL" in text

@@ -230,3 +230,56 @@ def walk_forward_backtest(
     out["model_class"] = out["model_class"].astype("string[pyarrow]")
     out = PreseasonBacktestSchema.validate(out)
     return out
+
+
+def write_backtest_report(backtest_df: pd.DataFrame, path: Path) -> None:
+    """Render a PreseasonBacktestSchema frame as a markdown report.
+
+    Spec §7.6 calls for additional per-position top-20 spot-check tables and
+    player-name coverage sidebars; those are deferred to v1.1. v1.0 ships the
+    verdict tables + per-cell metrics + coverage-diff counts, which is the
+    gate-relevant minimum.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = [
+        "# Preseason Backtest Report",
+        "",
+        f"**Model class:** {backtest_df['model_class'].iloc[0]}  ",
+        f"**Ruleset:** {backtest_df['ruleset'].iloc[0]}  ",
+        f"**Target seasons:** {sorted(set(backtest_df['target_season'].tolist()))}  ",
+        "",
+        "## Per-cell verdicts",
+        "",
+        "| target_season | position | rmse | rmse_naive | rmse_delta_pct | spearman_top50 | n_players | verdict |",  # noqa: E501
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for _, row in backtest_df.iterrows():
+        lines.append(
+            f"| {row['target_season']} | {row['position']} | {row['rmse']:.2f} | "
+            f"{row['rmse_naive_baseline']:.2f} | {row['rmse_delta_pct']:+.2f}% | "
+            f"{row['spearman_top50']:.3f} | {row['n_players']} | "
+            f"**{row['verdict']}** |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Aggregate",
+            "",
+            f"- ADOPT cells:        {(backtest_df['verdict'] == 'ADOPT').sum()}",
+            f"- NULL cells:         {(backtest_df['verdict'] == 'NULL').sum()}",
+            f"- DO_NOT_ADOPT cells: {(backtest_df['verdict'] == 'DO_NOT_ADOPT').sum()}",
+            "",
+            "## Coverage diff",
+            "",
+            "| target_season | position | projected_not_played | played_not_projected |",
+            "|---|---|---|---|",
+        ]
+    )
+    for _, row in backtest_df.iterrows():
+        lines.append(
+            f"| {row['target_season']} | {row['position']} | "
+            f"{row['coverage_diff_projected_not_played']} | "
+            f"{row['coverage_diff_played_not_projected']} |"
+        )
+    path.write_text("\n".join(lines) + "\n")
