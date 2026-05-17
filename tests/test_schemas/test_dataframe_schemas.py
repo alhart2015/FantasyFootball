@@ -17,6 +17,9 @@ from projections.schemas import (
     NgsRushingSchema,
     PbpSchema,
     Position,
+    PreseasonBacktestSchema,
+    PreseasonFeaturesSchema,
+    PreseasonProjectionSchema,
     ProjectionWeeklySchema,
     QbFeaturesSchema,
     RbFeaturesSchema,
@@ -907,3 +910,131 @@ def test_snake_cheat_sheet_schema_round_trip() -> None:
     validated = SnakeCheatSheetSchema.validate(df)
     revalidated = SnakeCheatSheetSchema.validate(validated)
     pd.testing.assert_frame_equal(validated, revalidated)
+
+
+def test_preseason_features_schema_validates_golden_row() -> None:
+    """Smoke test: a minimal golden row passes PreseasonFeaturesSchema."""
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["QB"],
+            "team": ["KC"],
+            "depth_chart_rank": pd.array([1], dtype="Int64"),
+            "age": pd.array([29.0], dtype="float32"),
+            "years_exp": pd.array([7], dtype="Int64"),
+            "is_rookie": [False],
+            "draft_round": pd.array([1], dtype="Int64"),
+            "draft_pick_overall": pd.array([10], dtype="Int64"),
+            "prior_1_season_per_game_passing_yards": pd.array([275.5], dtype="float32"),
+            "prior_1_season_games_played": pd.array([17], dtype="Int64"),
+        }
+    )
+    out = PreseasonFeaturesSchema.validate(df)
+    assert len(out) == 1
+
+
+def test_preseason_features_schema_rejects_bad_position() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["XX"],  # not in Position enum
+            "team": ["KC"],
+            "depth_chart_rank": pd.array([1], dtype="Int64"),
+            "age": pd.array([29.0], dtype="float32"),
+            "years_exp": pd.array([7], dtype="Int64"),
+            "is_rookie": [False],
+            "draft_round": pd.array([1], dtype="Int64"),
+            "draft_pick_overall": pd.array([10], dtype="Int64"),
+            "prior_1_season_per_game_passing_yards": pd.array([275.5], dtype="float32"),
+            "prior_1_season_games_played": pd.array([17], dtype="Int64"),
+        }
+    )
+    with pytest.raises(SchemaError, match="position"):
+        PreseasonFeaturesSchema.validate(df)
+
+
+def test_preseason_projection_schema_validates_golden_row() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["QB"],
+            "team": ["KC"],
+            "ruleset": ["ESPN_PPR"],
+            "model_id": ["naive-preseason-v1"],
+            "season_total_fpts_mean": pd.array([380.0], dtype="float32"),
+            "season_total_fpts_p10": pd.array([380.0], dtype="float32"),
+            "season_total_fpts_p50": pd.array([380.0], dtype="float32"),
+            "season_total_fpts_p90": pd.array([380.0], dtype="float32"),
+            "passing_yards_season_total_mean": pd.array([4400.0], dtype="float32"),
+            "passing_yards_season_total_p10": pd.array([4400.0], dtype="float32"),
+            "passing_yards_season_total_p50": pd.array([4400.0], dtype="float32"),
+            "passing_yards_season_total_p90": pd.array([4400.0], dtype="float32"),
+        }
+    )
+    out = PreseasonProjectionSchema.validate(df)
+    assert len(out) == 1
+    assert out["ruleset"].iloc[0] in {"ESPN_PPR", "ESPN_HALF", "STANDARD"}
+
+
+def test_preseason_projection_schema_rejects_negative_fpts() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["QB"],
+            "team": ["KC"],
+            "ruleset": ["ESPN_PPR"],
+            "model_id": ["naive-preseason-v1"],
+            "season_total_fpts_mean": pd.array([-10.0], dtype="float32"),  # negative
+            "season_total_fpts_p10": pd.array([0.0], dtype="float32"),
+            "season_total_fpts_p50": pd.array([0.0], dtype="float32"),
+            "season_total_fpts_p90": pd.array([0.0], dtype="float32"),
+        }
+    )
+    with pytest.raises(SchemaError, match="season_total_fpts_mean"):
+        PreseasonProjectionSchema.validate(df)
+
+
+def test_preseason_backtest_schema_validates_golden_row() -> None:
+    df = pd.DataFrame(
+        {
+            "target_season": pd.array([2024], dtype="int32"),
+            "position": ["QB"],
+            "model_class": ["naive-preseason-v1"],
+            "ruleset": ["ESPN_PPR"],
+            "rmse": pd.array([35.0], dtype="float32"),
+            "rmse_naive_baseline": pd.array([35.0], dtype="float32"),
+            "rmse_delta_pct": pd.array([0.0], dtype="float32"),
+            "spearman_top50": pd.array([0.72], dtype="float32"),
+            "n_players": pd.array([28], dtype="Int64"),
+            "coverage_diff_projected_not_played": pd.array([3], dtype="Int64"),
+            "coverage_diff_played_not_projected": pd.array([1], dtype="Int64"),
+            "verdict": ["NULL"],
+        }
+    )
+    out = PreseasonBacktestSchema.validate(df)
+    assert len(out) == 1
+
+
+def test_preseason_backtest_schema_rejects_invalid_verdict() -> None:
+    df = pd.DataFrame(
+        {
+            "target_season": pd.array([2024], dtype="int32"),
+            "position": ["QB"],
+            "model_class": ["naive-preseason-v1"],
+            "ruleset": ["ESPN_PPR"],
+            "rmse": pd.array([35.0], dtype="float32"),
+            "rmse_naive_baseline": pd.array([35.0], dtype="float32"),
+            "rmse_delta_pct": pd.array([0.0], dtype="float32"),
+            "spearman_top50": pd.array([0.72], dtype="float32"),
+            "n_players": pd.array([28], dtype="Int64"),
+            "coverage_diff_projected_not_played": pd.array([0], dtype="Int64"),
+            "coverage_diff_played_not_projected": pd.array([0], dtype="Int64"),
+            "verdict": ["ADOPTED"],  # not in {ADOPT, NULL, DO_NOT_ADOPT}
+        }
+    )
+    with pytest.raises(SchemaError, match="verdict"):
+        PreseasonBacktestSchema.validate(df)

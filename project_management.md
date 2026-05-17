@@ -98,6 +98,25 @@ See `docs/superpowers/specs/2026-05-16-snake-cheat-sheet-design.md` and `docs/su
 
 ---
 
+## Preseason Projections — v1 framework + naive baseline shipped (2026-05-17, on branch `worktree-feat+preseason-projections`)
+
+**Status:** New sub-package `src/projections/preseason/` ships v1 framework + `NaivePreseasonModel`. 4 modules (`features.py`, `model.py`, `project.py`, `backtest.py`), 3 new pandera schemas in `src/projections/schemas.py` (`PreseasonFeaturesSchema`, `PreseasonProjectionSchema`, `PreseasonBacktestSchema`), 2 new CLI scripts (`scripts/preseason_project_season.py`, `scripts/backtest_preseason.py`), 29 tests across the suite + 2 CLI integration tests. Spec at `docs/superpowers/specs/2026-05-17-preseason-projections-design.md`; plan at `docs/superpowers/plans/2026-05-17-preseason-projections.md`.
+
+The baseline implements three branches: veterans via `prior_1_per_game × 16` (with prior_2 / prior_3 fallback); rookies via per-(position, stat) Gamma GLMs on `log(draft_pick_overall + 1)` trained on rookie-year season totals from `draft_picks ⋈ weekly_stats`; UDFAs imputed to pick=300. Distribution shape is degenerate (point-mass) for v1.0 — `mean = p10 = p50 = p90` — and the v1.5 trained-model spec is the next slot for adding real per-stat distribution width. fpts come from the canonical `projections.scoring.scoring_coefficients` map (no duplicated scoring math).
+
+Backtest harness (`backtest.py`) is walk-forward: for each `target_season ∈ {2024, 2025}`, train on `[train_start, target_season-1]`, predict, aggregate `weekly_stats[season=target_season]` to per-player actual fpts, inner-join, compute per-position RMSE + Spearman top-50 + coverage diff, apply per-cell verdict (ADOPT / NULL / DO_NOT_ADOPT). v1.5+ ship gate: ≥6/8 cells ADOPT AND zero DO_NOT_ADOPT.
+
+**Known v1.0 → v1.1 gap (flagged in spec §7.6, deferred):** the markdown report's per-position top-20 spot-check tables and player-name coverage-diff sidebars. The verdict tables + per-cell metric tables + coverage-diff counts ship in `write_backtest_report` (sufficient for the gate); the enhanced report variants require threading prediction+actual frames through `walk_forward_backtest`'s return type and is bounded follow-up.
+
+**Next:**
+1. **Produce the 2026 partition.** One-liner: `python scripts/preseason_project_season.py --season 2026 --ruleset espn_ppr`. Requires `data/raw/depth_charts/season=2026/` to be materialized first via `from projections.ingest.depth_charts import refresh_depth_charts; refresh_depth_charts(seasons=[2026])` — `depth_charts_2026.parquet` was confirmed available upstream via the nflverse HEAD probe (TODO #32 footer).
+2. **Generate v1.0 characterization backtest.** `python scripts/backtest_preseason.py --model naive-preseason --target-seasons 2024,2025` — surfaces the floor RMSE / Spearman that v1.5 trained models will be benchmarked against.
+3. **v1.5 spec: first trained model class.** Likely a GammaGLM on `(prior_1, prior_2, prior_3, age, depth_chart_rank, team)`. Backstop: LightGBM-quantile if Gamma underperforms.
+
+Closes TODO #31 (preseason-projections "first plan should be brainstorm + roadmap"). Flips `draft_ready_checklist.md` §1a row 1 (2025 ingest) and §1b row 2 (`predict_season.py SEASON`) to `[x]`.
+
+---
+
 ## RB Rushing + Receiving Decomposition Probe — verdicts 5x NULL (2026-05-16, on branch `feat/probe-rb-decomposition`)
 
 **Status:** New probe `src/projections/backtest/rb_decomposition_probe.py` tests whether decomposing RB stats into two shared volume axes (carries, targets) x per-stat efficiency factors beats per-stat direct RidgeCV. 5 composed stats: rushing_yards, rushing_tds (carries axis) + receptions, receiving_yards, receiving_tds (targets axis). Sub-model = RidgeCV everywhere (decomposition-only test; factor-appropriate sub-models are separate cycles). Spec at `docs/superpowers/specs/2026-05-16-rb-decomposition-probe-design.md`.
