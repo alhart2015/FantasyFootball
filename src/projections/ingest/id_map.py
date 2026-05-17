@@ -6,6 +6,7 @@ hitting the network.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import nflreadpy
@@ -20,6 +21,8 @@ from projections.schemas import (
     normalize_team_code,
 )
 from projections.store import write_partition
+
+logger = logging.getLogger(__name__)
 
 
 def _fetch_raw_id_map() -> pd.DataFrame:
@@ -49,12 +52,23 @@ def build_id_map(data_root: Path) -> Path:
     # Drop rows without canonical id; downstream joins are unusable without it.
     df = df[df["gsis_id"].notna()].copy()
 
-    # Drop rows whose gsis_id does not match the canonical pattern (some
-    # load_ff_playerids() rows carry legacy PFR-style IDs in the gsis_id
-    # column for very old players — those are not joinable).
+    # Drop rows whose gsis_id does not match the canonical pattern. Two
+    # populations hit this: legacy PFR-style IDs for very old players, and
+    # PFR-style placeholders that nflverse holds for the current draft class
+    # until NFL.com assigns real gsis_ids around training camp (~July).
     from projections.schemas import GSIS_ID_PATTERN
 
+    n_pre_regex = len(df)
     df = df[df["gsis_id"].astype(str).str.match(rf"^{GSIS_ID_PATTERN}$")].copy()
+    n_filtered = n_pre_regex - len(df)
+    if n_filtered > 0:
+        logger.warning(
+            "build_id_map: filtered %d row(s) with non-GSIS placeholder ids "
+            "(typical of pre-camp rookies for the current draft class — nflverse holds "
+            "PFR-style placeholders until NFL assigns real gsis_ids ~July). Re-ingest "
+            "after training camps to capture these players.",
+            n_filtered,
+        )
 
     # Drop players at positions outside our covered set (offensive line, punters, etc.)
     # load_ff_playerids() returns roster-wide rows; we only model the positions

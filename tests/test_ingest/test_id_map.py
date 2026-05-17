@@ -91,3 +91,50 @@ def test_build_id_map_filters_unsupported_positions(
     df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
     assert "00-0099999" not in df["gsis_id"].tolist()
     assert len(df) == 4
+
+
+def test_build_id_map_warns_on_placeholder_gsis_ids(
+    tmp_path: Path,
+    fake_id_map_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Mirrors pre-camp-rookie shape: nflverse holds PFR-style placeholder ids
+    # for the current draft class until NFL assigns real gsis_ids ~July.
+    rookie_rows = pd.DataFrame(
+        [
+            {
+                "gsis_id": "MEN516487",
+                "espn_id": "4837248",
+                "sleeper_id": "13269",
+                "pfr_id": "MendFe00",
+                "name": "Fernando Mendoza",
+                "position": "QB",
+                "team": "LVR",
+            },
+            {
+                "gsis_id": "TYS405541",
+                "espn_id": "5000000",
+                "sleeper_id": "14000",
+                "pfr_id": "TysoJo00",
+                "name": "Jordyn Tyson",
+                "position": "WR",
+                "team": "NOR",
+            },
+        ]
+    )
+    mixed = pd.concat([fake_id_map_df, rookie_rows], ignore_index=True)
+    monkeypatch.setattr("projections.ingest.id_map._fetch_raw_id_map", lambda: mixed)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="projections.ingest.id_map"):
+        build_id_map(tmp_path)
+
+    df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
+    assert "MEN516487" not in df["gsis_id"].tolist()
+    assert "TYS405541" not in df["gsis_id"].tolist()
+    assert len(df) == 4
+    assert any(
+        "filtered 2 row(s) with non-GSIS placeholder ids" in r.message for r in caplog.records
+    )

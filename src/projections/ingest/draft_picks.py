@@ -7,6 +7,7 @@ so re-running a season overwrites that partition only.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterable
 from pathlib import Path
@@ -21,6 +22,8 @@ from projections.schemas import (
     DraftPicksSchema,
 )
 from projections.store import write_partition
+
+logger = logging.getLogger(__name__)
 
 _GSIS_RE = re.compile(rf"^{GSIS_ID_PATTERN}$")
 
@@ -57,7 +60,21 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
 
     # Filter rows without a valid gsis_id (older drafts may have nulls).
     df = df[df["gsis_id"].notna()].copy()
+    n_pre_regex = len(df)
     df = df[df["gsis_id"].astype(str).str.match(_GSIS_RE)].copy()
+    n_filtered = n_pre_regex - len(df)
+    if n_filtered > 0:
+        # nflverse carries PFR-style placeholder ids (e.g. "MEN516487") for
+        # the current draft class until NFL.com assigns real gsis_ids around
+        # training camp (~July). Surface the filter so a 0-row partition for
+        # a freshly-drafted class isn't a silent diagnostic chase.
+        logger.warning(
+            "refresh_draft_picks: filtered %d row(s) with non-GSIS placeholder ids "
+            "(typical of pre-camp rookies for the current draft class — nflverse holds "
+            "PFR-style placeholders until NFL assigns real gsis_ids ~July). Re-ingest "
+            "after training camps to capture these players.",
+            n_filtered,
+        )
 
     # Coerce dtypes: source returns int32 for season/round/pick and
     # float64 for age; pandera schema expects Int64/Float64 nullable types.

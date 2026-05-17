@@ -622,3 +622,62 @@ Two open design questions before the spike: (a) what timezone is `dt` published 
 **Conclusion: 33a closes two bug classes but doesn't move the elite-magnitude needle.** The mean-regression compression on elite players lives in *feature signal coverage*, not in model class. lgb-nb's NB-2 dispersion handles the backup-QB defect cleanly (correctly down-weights "depth-chart presence without snaps"); the ensemble's calibration-aware weighting handles the rookie-volume-extrapolation defect cleanly (Nabers's trailing-4 target spike no longer linearly extrapolates). Neither addresses the lack of features that *can* predict a 23 ppg WR season or a 24 ppg RB season. Ship 33a permanently (one-line change in any consumer that previously used `factories["baseline"]`); then move to 33d (upside-sensitive ranking) to test whether the existing distributions already carry the elite signal, before committing to the larger 33b / 33c builds.
 
 **Status.** Diagnosis captured 2026-05-11. 33a executed inline — *necessary but not sufficient*; ship the routing change as the durable fix. 33d/33b/33c queued.
+
+### 35. v1.5 preseason trained model — required spec elements
+
+**Surfaced 2026-05-17 during PR #48 backtest diagnosis.** Three capability requirements that the v1.5 preseason model spec must address — without them, v1.5 still ships with v1.0's elite-player failure modes (Lamar Jackson at QB14, Burrow not on top-of-board, etc.).
+
+**35a. Multi-prior feature usage.** v1.0 `NaivePreseasonModel` uses `prior_1_per_game × 16` exclusively whenever prior_1 exists, and only falls back to prior_2/prior_3 when prior_1 is fully absent. This discards elite prior-2/prior-3 seasons the moment a depressed prior_1 row exists — Lamar's 2024 MVP-tier season was ignored because 2025's injury-shortened per-game existed. The trained model must consume per-stat prior_1/prior_2/prior_3 columns from `PreseasonFeaturesSchema` (already populated by `build_preseason_features`). Linear feature classes get this for free; non-linear feature classes need to be aware they have access to all three.
+
+**35b. Interaction with `prior_N_season_games_played`.** The features schema carries `games_played` per prior season. A trained model must use these as confidence signals — when `prior_1_games_played` is small AND `prior_1` per-game diverges meaningfully from `prior_2`/`prior_3` per-game, the bias-optimal prediction is closer to a weighted historical mean than to prior_1 alone. Tree models (LightGBM) learn the interaction for free; linear GLMs (Gamma) will not without explicit interaction features (e.g., `prior_1_per_game × prior_1_games_played / 17`) or a regularization scheme that produces the same effect. Spec must either engineer the interaction or pick a model class that learns it.
+
+**35c. Real (non-degenerate) distributions.** v1.0 `PreseasonProjectionSchema` populates `mean / p10 / p50 / p90` to the same value for every player — the distribution carries no uncertainty. The "Lamar coming back from injury" case has fundamentally wider uncertainty than the "Mahomes coming off a normal year" case, and the distribution itself is how an honest model expresses that; the v1.5 trained model should produce real per-stat distributions (likely Gamma for counts, log-Normal for yards) composed via Monte Carlo to a season-total distribution with a proper p10/p90 spread. PR #48 already flagged this as the v1.0→v1.5 gap (spec §4 "v1.0 ships degenerate point-mass").
+
+**Status.** Captured 2026-05-17. These are spec inputs for the v1.5 preseason model, not standalone work items — file them at v1.5 spec-writing time. Cross-reference [[TODO #36]] for the orthogonal injury-feature workstream that would let v1.5 distinguish "depressed because hurt" from "depressed because declining" rather than only widening the band.
+
+### 36. NFL injury report ingest
+
+**Surfaced 2026-05-17 during PR #48 backtest diagnosis; promoted to its own TODO at user request.** The "Lamar / Burrow look low" class of error has two distinct underlying causes that look *identical* in our current feature set: (a) genuine performance decline, (b) injury suppressing per-game numbers and missing weeks. Without an injury data source, no model — naive or trained — can distinguish them at the player level; the best a trained model can do is widen the prediction interval to cover both cases (TODO #35c). This caps v1.5+'s upside even with perfect prior-weighting.
+
+**Why it matters beyond preseason.** Per-week injury status is also load-bearing for:
+- In-season start/sit (an "active but questionable" tag should shift the start probability).
+- Waiver-wire valuation (out-for-season designations for the player above on the depth chart create immediate value plays).
+- Trade evaluation (acquiring a player coming off a recent injury report week-1 is meaningfully different from acquiring a clean-bill-of-health player at the same projected points).
+- DFS lineup construction (game-time-decision tags drive late swaps).
+
+**Candidate feature classes the ingest would unlock.**
+- Per-week injury designation (questionable / doubtful / out / IR-eligible / activated).
+- Career snap-count missed-due-to-injury rate (a stickiness signal).
+- Returning-from-surgery flags for the upcoming season (ACL / Achilles / shoulder) — biggest preseason use case.
+- Days since most recent injury designation.
+
+**Candidate sources.**
+- `nflverse` `injuries` table — should be exposed via `nflreadpy.load_injuries()` if it follows the same pattern as the other 8 sources we migrated. **Check first** before designing alternatives; if present, this is the cheapest path (per-week official NFL designations, same schema shape as our existing ingest seams).
+- ESPN injury status API — per-day, requires polling; useful for in-season real-time updates but not preseason.
+- Manual curation of offseason surgery news — would need a workflow + a maintained YAML file; only worth doing if `nflreadpy` doesn't cover offseason status.
+
+**Scope.** New ingest source + new pandera schema + new feature class consumed by the preseason builder AND the in-season per-position builders. Substantial — don't bundle with the v1.5 preseason model spec. Sequence: (1) probe `nflreadpy.load_injuries()` availability + column shape; (2) design spec for the ingest module + schema; (3) implement; (4) separate spec to add the feature class to per-position builders (gate via probe-first workflow per [[TODO #3c]]); (5) v1.5+ preseason model spec can then list injury features as a candidate input.
+
+**Status.** Captured 2026-05-17. Not yet scoped. Worth landing before the 2026 in-season period (Sept 2026) when per-week injury data becomes fresh and load-bearing for start/sit and waiver tools.
+
+### 37. Pre-camp rookie ingest — placeholder gsis_ids block 2026 rookies until late July
+
+**Surfaced 2026-05-17.** nflverse upstream sources (`load_draft_picks`, `load_ff_playerids`, `load_depth_charts`) populate `gsis_id` for the current-draft-class rookies with **PFR-style placeholders** (e.g., `MEN516487`, `WIS488223`) rather than real NFL gsis_ids (`00-0040XXX`). NFL.com doesn't issue real gsis_ids to draftees until rosters/depth charts solidify around training camp (typically late July). nflverse uses PFR IDs as a hold-over until then.
+
+**Confirmed scope (probed 2026-05-17 against `nflreadpy.load_draft_picks(seasons=[2026])`):** 0 of 230 2026 rookies have NFL-style gsis_ids; 80 of those are fantasy-position picks (QB/RB/WR/TE) — all blocked. For comparison, 100% of 2024 rookies have proper `00-0039XXX` IDs in the same upstream source.
+
+**Why our ingest filters them.** Every ingest module enforces `GSIS_ID_PATTERN = r'\d{2}-\d{7}'` via `_GSIS_RE.match(...)` before writing a partition. This is load-bearing per CLAUDE.md ("`GsisId` is canonical. All internal storage and joins use it.") — loosening the regex would propagate PFR-style placeholders into every parquet partition and create reconciliation churn when nflverse later replaces them with real IDs.
+
+**Effect.** `data/raw/draft_picks/season=2026/part.parquet` writes as a 0-row partition. The refreshed `id_map.parquet` omits 2026 rookies entirely. `depth_charts/season=2026` likely omits rookies for the same reason (worth confirming separately). Downstream consequence: 2026 preseason projections cannot project any 2026 rookie (Mendoza at pick #1, every other Day 1-3 pick) — they get dropped at the "missing from id_map" gate in `build_preseason_features`.
+
+**Three resolution paths.**
+
+1. **Wait until late July.** Re-run ingest when nflverse propagates real gsis_ids. Zero engineering cost; 2026 rookies are invisible in projections for ~2 months. ETA matches when ESPN / Yahoo / FantasyPros start publishing real preseason ADP and depth charts anyway, so this doesn't actually delay any draft prep step that depends on rookie projections. **Default recommendation.**
+
+2. **Placeholder gsis_id abstraction.** Generate synthetic gsis_ids for pre-camp rookies (e.g., `99-XXXXXXX` derived from a hash of the PFR ID), with a reconciliation step in the ingest that maps placeholder → real gsis_id when nflverse propagates the real ones. Substantial — touches every ingest seam (8 modules), every join path that references gsis_id, the [[validate_gsis_id]] entry point, and ID-hygiene tests. Probably 2-3 days of focused work. Worth doing only if a tool consumer (draft cheat sheet, auction values, snake recommender) needs to show 2026 rookies BEFORE late July.
+
+3. **Loosen the GSIS regex.** Accept PFR-style placeholders as valid gsis_ids directly. **Don't** — breaks the canonical-ID invariant; downstream reconciliation when real IDs arrive becomes ugly (every existing parquet partition's rookie rows need to be rewritten).
+
+**Quick adjacent fix (regardless of choice).** Both `_normalize_one_season` in `src/projections/ingest/draft_picks.py` and the analogous filter in `src/projections/ingest/id_map.py` silently filter PFR-placeholder rows. Add a single WARNING line ("`refresh_draft_picks`: filtered N row(s) with non-GSIS placeholder ids — likely pre-camp rookies; re-ingest after training camps for real ids") so the next user who runs this for a draft-class season immediately sees the situation instead of chasing the 0-row partition. ~5 minutes; do this before close.
+
+**Status.** Captured 2026-05-17. Path 1 (wait) is the default. Path 2 (placeholder abstraction) is a candidate sub-project if early-rookie visibility becomes load-bearing. Path 3 is rejected. The quick warning-line fix should ship soon regardless.
