@@ -641,6 +641,28 @@ Caveats: ΔRMSE −0.06 fpts at QB is ~1–2% per-week — the Chase 250→403 g
 
 See `reports/feature_probe_vegas_team_context_summary.md`.
 
+**33c — integration shipped & gate verdict, 2026-05-18: DO_NOT_ADOPT across all 3 gates.** Integration shipped on branch `feat/qb-wr-vegas-team-context-integration` (10 commits: 1 spec, 1 plan, 4 schema+builder, 4 lgb-nb override). Probe's predicted improvements did not generalize. Gate verdicts:
+
+- (lgb-nb, QB) ΔRMSE **+0.1112** fpts (CI [+0.0735, +0.1482]) → **REGRESSION** (probe predicted −0.0587 — sign-flipped, 290% miss).
+- (lgb-nb, WR) ΔRMSE +0.0068 fpts (CI [−0.0031, +0.0170]) → null/inconclusive (probe predicted −0.0130).
+- (ensemble-decomposed, WR) ΔRMSE +0.0004 fpts (CI [−0.0060, +0.0073]) → null.
+
+**Builder correctness verified before reporting the regression as real:** the integration's QB feature parquet matched the probe's override parquet byte-identically on all 4 Vegas cols across 9,379 QB rows (max abs delta = 0.0). Not a builder bug.
+
+**Mechanism hypothesis:** probe ran at `e8e2c6d` (pre-PR-#50 ingest), integration gate ran at `f961ab6` (post-PR-#50 — id_map / draft_picks tightening). n_paired evidence consistent: QB probe n=2692 vs gate n=2676 (16 fewer rows post-#50, same direction across positions). The training-set composition shift inverted the probe's verdict. This is the dual-run gate working as designed.
+
+**This is the first observed case** of a `--force-composite` probe Phase-2 ADOPT failing to replicate in the production gate (prior cases — PR #21 RB PBP, Plan 9 negatives — all replicated cleanly). Future probe specs should consider documenting the data state (commit hash of `data/features/` source) so probe → gate disagreement can be attributed cleanly.
+
+**Next direction:**
+
+1. **External preseason Vegas data spec** — genuine May win totals, OC/HC tenure, FA-acquisition flag, projected pace, projected pass rate. Different mechanism axis from re-deriving `spread_line` / `total_line`; not affected by the probe → gate generalization gap encountered here.
+2. **RB `preseason_*`-only follow-up probe** still queued, but its prior is now weaker — the probe → gate gap here suggests the RB probe verdict may also fail to generalize. Run with the dual-run gate as the load-bearing decision criterion, not the probe.
+3. **TODO #33b (factor-class on WR td_rate_per_target)** continues to be the named alternative, but factor-class line has produced 2 NULLs in a row.
+
+**Branch disposition (pending user decision):** the integration's Phase 0 (schemas + builders) is harmless and may help future re-investigation. Phase 1 (lgb-nb factory swap) is what the gate rejects. Cleanest: merge Phase 0 only, revert Phase 1 factory swap before merge.
+
+See `reports/qb_wr_vegas_team_context_integration_summary.md`.
+
 ### 35. v1.5 preseason trained model — required spec elements
 
 **Surfaced 2026-05-17 during PR #48 backtest diagnosis.** Three capability requirements that the v1.5 preseason model spec must address — without them, v1.5 still ships with v1.0's elite-player failure modes (Lamar Jackson at QB14, Burrow not on top-of-board, etc.).
