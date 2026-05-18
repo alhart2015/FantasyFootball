@@ -42,15 +42,25 @@ Before accepting the regression as real, I verified the integrated feature build
 
 The feature builder is correct. The regression is not a builder bug.
 
-## Mechanism hypothesis
+## Mechanism (root cause traced)
 
-The probe ran on `data/features` parquets generated at commit `e8e2c6d` (PR #49 merge) — i.e., the **pre-PR-#50** ingest state. The integration's gate ran on parquets refreshed against the **post-PR-#50** ingest (current `main` HEAD `f961ab6`). PR #50 (`fix/ingest-placeholder-gsis-warning`) tightened how `id_map` and `draft_picks` ingest filter placeholder gsis-ids — this changes which player-weeks land in the training and eval sets, especially for pre-camp rookies.
+Initial hypothesis: PR #50's `id_map` / `draft_picks` placeholder filter drifted the data between probe time and integration time. **This hypothesis was wrong.** PR #50's full diff is purely additive logging (`import logging` + `logger.warning(...)` calls) — the filter logic is identical to pre-#50. Verified by reading the actual diff and by observing pre and post backtest runs have byte-identical row coverage (2676 QB rows each, perfectly aligned).
 
-n_paired evidence consistent with this hypothesis: probe Phase 2 reported QB n=2692; gate reports n_paired=2676 (Δ=16 rows). The same delta direction (16 fewer paired rows post-#50) appears across positions. A small fraction of rows changed, but the model's response to the feature swap is apparently sensitive to it.
+**Actual mechanism: harness-pairing divergence between `probe_composite` and `run_backtest`. The probe is structurally optimistic relative to the production gate when a feature swap differentially helps or hurts player-week rows that the gate's position filter excludes.**
 
-The mechanism this most likely reflects: lgb-nb's per-stat tree training is sensitive to training-set composition near zero (rookies / depth players). The probe's signal — `preseason_*` + `season_avg_*` outperforming per-game `implied_team_total` + `spread` — held against the pre-#50 training set but inverts against the post-#50 set. This is the "feature-set wins are not invariant to training-set drift" failure mode that the dual-run gate is specifically designed to catch.
+Diagnostic evidence:
 
-Alternatively: the probe ran via `probe_composite` which is a separate harness from `run_backtest`; though both call `lgb-nb.fit/.predict_distribution` on the same model class, their orchestration (walk-forward year sequencing, train_mask boundary semantics, calibration-year slicing in lgb-tuned's parent class) could differ in some way I didn't trace deeply. The gate is the production-truth signal regardless.
+- Re-ran the probe on current data with `--force-composite --drop implied_team_total spread --model lightgbm-nb --position QB`. Probe **reproduced** its original verdict: ΔRMSE = −0.0587, CI [−0.092, −0.028], n_paired = 2692, ADOPT.
+- Gate on the same data state returns ΔRMSE = +0.1112, CI [+0.0735, +0.1482], n_paired = 2676 — sign-flipped.
+- The probe's candidate feature columns match the integration's `_QB_FEATURE_COLUMNS_NB` byte-for-byte (same 22 cols, same order). The probe's candidate Vegas col values match the integration's feature parquet Vegas col values byte-for-byte (0 mismatches across 9,379 QB rows). Same model class, same data, different pairing.
+
+**Where the 16-row delta lives:** `probe_composite` (`src/projections/backtest/feature_probe.py:505`) merges predictions with `weekly_stats` on `(gsis_id, season, week)` **without a position filter**. `run_backtest` (`src/projections/backtest/harness.py:253`) filters `holdout_pos = holdout_actuals[holdout_actuals["position"] == "QB"]` **before** the merge. The 16 extra rows in the probe are **all Taysom Hill** (`gsis_id 00-0033357`) in 2023 — he's on the QB depth chart (so the QB feature builder includes him) but his 2023 weekly_stats rows are labeled `position == "TE"`. Production gate filters him out; probe keeps him.
+
+**Math sanity check:** gate ΔSSE = 2676 × (7.433² − 7.322²) ≈ +4,282 across 2676 rows. Probe ΔSSE ≈ 2692 × (7.26² − 7.32²) ≈ −2,342 across 2692 rows. Combined swing of ~6,624 SSE units across the 16 Taysom Hill rows ≈ **20-fpts residual difference per row** — entirely plausible for his 2023 utility-back-as-QB pattern, one of the most asymmetric player profiles in the dataset. For the Vegas-context swap specifically, the candidate model apparently predicted Taysom Hill closer to actuals than the incumbent did, and those 16 rows alone reversed the QB verdict.
+
+**The gate's +0.1112 ΔRMSE is the production-truth signal.** Production never pairs Taysom Hill's QB-depth-chart predictions with his TE weekly_stats rows; production filters on `position` first. So shipping the lgb-nb swap to QB would yield +0.111 fpts of regression on the production path, not −0.0587 of improvement.
+
+**Implication for the probe framework:** the probe's `--force-composite` Phase-2 verdict can be artifactually optimistic when (a) the feature swap differentially affects depth-chart-mislabeled players and (b) those players have high residual variance. Future probe specs should run a parallel `run_backtest` + `adoption_gate.py` dual-run BEFORE shipping the integration, treating any probe Phase-2 ADOPT as preliminary until the gate confirms it.
 
 ## Ship decision: **do not ship as-is**
 
@@ -77,11 +87,16 @@ Three options for closing this branch:
 
 ## What was learned about the probe → gate generalization gap
 
-This is the **first observed case** where a `--force-composite` probe Phase-2 ADOPT did not replicate in the dual-run adoption gate. Prior cases (RB PBP integration — PR #21 — and Plan 9's various negative probes) replicated cleanly. The probe → gate gap matters for the framework's reliability:
+This is the **first observed case** where a `--force-composite` probe Phase-2 ADOPT did not replicate in the dual-run adoption gate. Prior cases (RB PBP integration — PR #21 — and Plan 9's various negative probes) replicated cleanly.
 
-- The probe is structurally a walk-forward composite-fpts ΔRMSE bootstrap (`probe_composite`), exactly matching the gate's bootstrap shape. The disagreement is therefore in *data*, not in *measurement procedure*.
-- The most likely causal factor here is PR #50's ingest tightening shifting the training set composition. This is the failure mode the integration gate is specifically supposed to catch — and it did, correctly.
-- Future probe specs should consider documenting the data state (commit hash of `data/features/` source) so probe → gate disagreement can be attributed cleanly.
+The actual disagreement is in **measurement procedure**, not in data state:
+
+- `probe_composite` pairs predictions with `weekly_stats` on `(gsis_id, season, week)` only — no position filter.
+- `run_backtest` filters `weekly_stats` to `position == <target>` before pairing.
+- When the candidate model's predictions differ from incumbent's on rows where a player is on one position's depth chart but recorded under another position's stats (e.g., Taysom Hill 2023: QB depth chart, TE stats), the probe's bootstrap sees those rows; the gate doesn't.
+- For QB 2021–2024 lgb-nb specifically, 16 Taysom Hill rows alone account for the full ~0.17-fpts ΔRMSE swing between probe and gate verdicts.
+
+**Concrete framework fix to consider (out of scope for this PR):** align `probe_composite`'s pairing semantics with `run_backtest`'s by adding a position filter to `probe_composite`'s truth merge. This would make the probe's Phase-2 verdict a more faithful predictor of the production gate. Without that fix, any candidate that improves predictions for cross-position-mislabeled rows will be artifactually advantaged by the probe.
 
 ## Files
 
