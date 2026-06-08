@@ -145,6 +145,11 @@ _WR_COLUMN_DEFAULTS: dict[str, object] = {
     "is_high_wind": 0.0,
     "temperature_f": 65.0,
     "is_grass_surface": 0.0,
+    # Vegas team-context features (PR #51 WR+QB Vegas integration).
+    "preseason_implied_team_total": 24.0,
+    "preseason_spread": -3.0,
+    "season_avg_implied_team_total": 23.5,
+    "season_avg_spread": -2.0,
 }
 
 

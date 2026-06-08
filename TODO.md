@@ -4,6 +4,12 @@ Running project management list. Add items as they come up; remove or check off 
 
 ## Open
 
+### 40. Regenerate the backtest snapshot for the baseline Vegas feature change (`--run-backtest`)
+
+**The 15 tests that were red on `main` are fixed in this PR (`chore/test-suite-speedup`).** Root cause was PR #51 half-completing its Vegas team-context integration: it added the 4 cols (`preseason_implied_team_total`, `preseason_spread`, `season_avg_implied_team_total`, `season_avg_spread`) to `Qb/WrFeaturesSchema` but left `_WR/_QB_FEATURE_COLUMNS` (baseline.py) and two hardcoded WR fixtures (`test_decomposed_baseline`, `test_tune_lightgbm`) inconsistent. Fixed by bringing the feature lists to schema parity + emitting the cols in those fixtures. (`pyproject.toml` also now requires `tabulate>=0.9` — `pip install -e .` to pick it up.)
+
+**Remaining follow-up:** bringing `_WR/_QB_FEATURE_COLUMNS` to parity means `BaselineModel` now consumes the 4 Vegas features, so its WR/QB predictions change and the checked-in walk-forward snapshot `tests/backtest/model_metrics.json` is stale for the baseline WR/QB cells. The snapshot gate is `--run-backtest`-only (skipped by default, so the default suite is green) — regenerate (`scripts/backtest.py --update-snapshot`) before the next gate run.
+
 ### 38. External consensus projection layer for draft (sub-project #2) — **PRIORITY**
 
 **Why now.** The external projection benchmark spike (2026-06-08, branch `feat/external-projection-benchmark`; see `project_management.md` top entry + `reports/external_projection_benchmark_2024.md`) established that our home-grown model is a weekly in-season model and **cannot produce a preseason/draft projection at all** (proven: it projected the injured CMC for only 4 weeks at 63 pts vs ESPN preseason 335). For the draft use case (priority #1), there is nothing on our side to benchmark — pivot to external sources.

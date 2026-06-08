@@ -4,6 +4,20 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Test suite 10× speedup — 28 min → 2m48s (2026-06-08, on branch `chore/test-suite-speedup`)
+
+**Status:** Shipped. The default `pytest` run went from **28 min → 2m48s** on this 32-core box, same pass set (1220 passed; the 15 pre-existing `main` failures unchanged — see TODO #40). Three levers:
+
+1. **Parallelism (the big one):** added `pytest-xdist` + `-n auto` to `addopts`. The suite is fully xdist-safe (verified: parallel run produces the same failures, no new ones). 28 min → ~9 min alone. `-n0` disables it for single-test debugging / live output.
+2. **Test-only lightgbm `n_estimators` cap:** the production default `LGBM_DEFAULTS["n_estimators"]=2000` made each unit model-fit take 30–90s. A session-autouse fixture in `tests/conftest.py` caps it to 30 for the test run (single funnel — base/tuned/nb/ensemble all start from `LGBM_DEFAULTS`; tuned JSON doesn't set it; the only hyperparam assertion is `_best_iters` membership, unaffected). `PYTEST_FULL_LIGHTGBM=1` restores the real config. Cut the lightgbm-family tests from ~70–90s to a few seconds each.
+3. **Ensemble smoke fixtures shrunk:** the remaining floor was the ensemble tests' `scipy.minimize_scalar` weight-fit evaluating the slow `MixtureDistribution.quantile()` over a 1360-row fixture. Shrank `test_ensemble_model_smoke` + `test_ensemble_decomposed` fixtures to 4 seasons × 6 weeks × 12 players (288 rows); each ensemble test dropped 91s → ~17s, still passing.
+
+**Not done (diminishing returns):** `test_ensemble_weight_fit`'s n=500/200 optimum-recovery fixtures are correctness-sensitive; left as-is. Further fixture surgery risks degenerate fits for little wall-clock gain at 2m48s.
+
+**Also fixed here:** 15 tests were broken on `main` itself (confirmed on a clean `origin/main` checkout) — PR #51 half-completed its Vegas integration: it added the 4 Vegas cols to `Qb/WrFeaturesSchema` but left `_WR/_QB_FEATURE_COLUMNS` and two hardcoded WR fixtures inconsistent. Brought the baseline feature lists to schema parity + emitted the cols in the `test_decomposed_baseline` / `test_tune_lightgbm` fixtures → **full suite now green** (1235 passed). The one residual (the `--run-backtest` snapshot is now stale for the changed baseline WR/QB features) is TODO #40.
+
+---
+
 ## External Projection Benchmark Spike — verdict **our model cannot do preseason; pivot to external for draft** (2026-06-08, on branch `feat/external-projection-benchmark`)
 
 **Status:** Spike concluded. The planned preseason ESPN-vs-ours RMSE benchmark was **not run** — it is invalid on our side and would falsely flatter our model. The verdict stands on architecture, not a metric. Spec `docs/superpowers/specs/2026-06-08-external-projection-benchmark-design.md`, plan `docs/superpowers/plans/2026-06-08-external-projection-benchmark.md`, verdict `reports/external_projection_benchmark_2024.md`.

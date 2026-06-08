@@ -96,9 +96,9 @@ def _synthetic_wr_inputs() -> tuple[pd.DataFrame, pd.DataFrame]:
     feature_schema = POSITION_DISPATCH[Position.WR].feature_schema
 
     rows: list[dict[str, object]] = []
-    for season in range(2018, 2022):  # 4 seasons
-        for week in range(1, 18):
-            for p in range(20):
+    for season in range(2018, 2022):  # 4 seasons (ensemble needs >= 3 train + 1 cal)
+        for week in range(1, 7):  # 6 weeks: enough rows to fit; keeps the slow
+            for p in range(12):  # ensemble weight-fit (mixture-quantile) tractable
                 rows.append(
                     {
                         "gsis_id": f"00-{1_000_000 + p:07d}",
