@@ -1,6 +1,23 @@
 # scripts/benchmark_projections.py
-"""Spike: benchmark our BaselineModel preseason projection vs ESPN's preseason
-projection at predicting actual 2024 fantasy outcomes. Emits a verdict report.
+"""Spike: join external + our-model + actual fantasy projections, score through one
+PPR ruleset, and emit per-source / per-position / per-cohort error metrics.
+
+!!! DO NOT USE FOR A PRESEASON / DRAFT VERDICT !!!
+-------------------------------------------------
+This was built to compare ESPN's PRESEASON projection against our model's
+"projection" from `project_season.py`. That comparison is INVALID: `project_season.py`
+is NOT a preseason projection. Our model is a weekly, in-season model whose trailing
+features read the current season, and it only projects players who are active each
+week — so its season totals secretly use the 2024 outcomes we are trying to predict
+(e.g. it projected the injured Christian McCaffrey for only 4 weeks). Scoring that
+against ESPN's honest preseason forecast flatters our model and is meaningless.
+See `reports/external_projection_benchmark_2024.md` (§1) for the full finding.
+
+The machinery here (join + scoring + RMSE/MAE/Spearman/cohorts) is correct and is
+reusable for a FAIR comparison at matched information cutoff — specifically the
+follow-up weekly start/sit benchmark (our WEEKLY projection vs ESPN's WEEKLY
+projection vs weekly actuals). It must not be pointed at `project_season.py` output
+and reported as a preseason result.
 
 Inputs:
   - data/external_projections/{season}/espn.parquet   (from pull_external_projections.py)
@@ -11,9 +28,8 @@ Inputs:
 Output:
   - reports/external_projection_benchmark_{season}.md
 
-Preseason-vs-preseason only. Every stat line is scored through OUR PPR ruleset so
-the comparison is under one scoring rule. Pure transforms are unit-tested; the
-end-to-end run is a manual phase.
+Every stat line is scored through OUR PPR ruleset so the comparison is under one
+scoring rule. Pure transforms are unit-tested.
 
 Usage:
     python scripts/benchmark_projections.py --season 2024
