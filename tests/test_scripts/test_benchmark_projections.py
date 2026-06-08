@@ -175,6 +175,13 @@ def test_build_benchmark_frame_matches_float_stringified_idmap_ids() -> None:
     assert row["sleeper_adp"] == 3.5  # sleeper matched too
 
 
+def test_normalize_join_id_strips_float_artifacts_and_whitespace() -> None:
+    s = pd.Series(["4374302.0", " 4374302 ", "4374302.00", "4374302", pd.NA], dtype="string")
+    out = bench._normalize_join_id(s)
+    assert list(out[:4]) == ["4374302", "4374302", "4374302", "4374302"]
+    assert pd.isna(out.iloc[4])  # NA preserved, not turned into a string
+
+
 def test_build_benchmark_frame_dedupes_duplicate_idmap_espn_id() -> None:
     # Regression: id_map can contain two rows with the same espn_id; the join must
     # not multiply the player's row (which would inflate n and every metric).

@@ -17,6 +17,7 @@ Running project management list. Add items as they come up; remove or check off 
 - Add 1–2 scraped preseason sources (FantasyPros/CBS/NumberFire) for a real multi-source consensus (user OK'd scraping).
 - Consensus blend (simple average first; accuracy-weighting later) → published preseason projection per player.
 - Decide distribution-wrapping: external sources give point estimates (+ floor/ceiling where available); wrap into the existing `Distribution` types so the scoring/store layers are reused.
+- Fix the id_map ingest float-stringified-id defect: espn_id/sleeper_id are persisted as '4374302.0' (float→str), which forced a consumer-side normalize in the spike's benchmark join. Cast to nullable Int64 / plain string before persisting.
 
 ### 36. Fair weekly start/sit benchmark — does our weekly model beat ESPN weekly? (open)
 

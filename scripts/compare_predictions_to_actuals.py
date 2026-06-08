@@ -1,4 +1,4 @@
-"""Compare the season_projection.csv (from scripts/project_season.py) against
+"""Compare the season_projection_{season}.csv (from scripts/project_season.py) against
 the actual ESPN-PPR season totals derived from data/raw/weekly_stats/season=2024.
 
 Prints one table per position: top-10 predicted players, with predicted points,
@@ -52,12 +52,15 @@ def main() -> None:
     parser.add_argument(
         "--predictions-csv",
         type=Path,
-        default=Path("reports") / "season_projection.csv",
+        default=None,
     )
     args = parser.parse_args()
+    predictions_csv = args.predictions_csv or (
+        Path("reports") / f"season_projection_{args.season}.csv"
+    )
 
-    print(f"Loading predictions from {args.predictions_csv}", flush=True)
-    preds = pd.read_csv(args.predictions_csv)
+    print(f"Loading predictions from {predictions_csv}", flush=True)
+    preds = pd.read_csv(predictions_csv)
 
     print(f"Loading {args.season} weekly_stats actuals", flush=True)
     ws = read_partition(args.raw_root, "weekly_stats", season=args.season)

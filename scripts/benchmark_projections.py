@@ -93,10 +93,17 @@ def espn_season_points(espn: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
 def _normalize_join_id(s: pd.Series) -> pd.Series:
     """id_map stores espn_id/sleeper_id as float-stringified values ('4374302.0')
     with a string dtype; external pulls write clean int-strings ('4374302') as
-    object dtype. Canonicalize both sides to a plain string with any trailing '.0'
-    stripped so the merge actually matches (and the dtypes line up). Without this,
-    the join silently produces ZERO matches."""
-    return s.astype("string").str.replace(r"\.0$", "", regex=True)
+    object dtype. Canonicalize both sides to a plain string with surrounding
+    whitespace and any trailing '.0' (or '.00', etc.) stripped so the merge actually
+    matches and the dtypes line up. Without this, the join silently produces ZERO
+    matches.
+
+    NOTE: this is a consumer-side patch for an upstream defect — id_map's ingest
+    (src/projections/ingest/id_map.py) stringifies float64 ids, yielding the '.0'
+    suffix. The deeper fix is to cast those id columns to nullable Int64 (or plain
+    string) before persisting id_map; that belongs in sub-project #2 (TODO #35) when
+    this graduates from the spike."""
+    return s.astype("string").str.strip().str.replace(r"\.0+$", "", regex=True)
 
 
 def _attach_gsis_id(

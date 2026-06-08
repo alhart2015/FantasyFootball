@@ -178,10 +178,9 @@ def main() -> None:
     try:
         espn_payload = fetch_espn(args.season)
         sleeper_payload = fetch_sleeper_season(args.season)
-    except urllib.error.HTTPError as exc:  # clean message instead of a raw traceback
-        raise SystemExit(
-            f"External API HTTP error ({exc.code}) for season {args.season}: {exc.reason}"
-        ) from exc
+    except urllib.error.URLError as exc:  # HTTPError + connection/DNS/timeout failures
+        detail = f"HTTP {exc.code}" if isinstance(exc, urllib.error.HTTPError) else str(exc.reason)
+        raise SystemExit(f"External API error for season {args.season}: {detail}") from exc
 
     espn = parse_espn_players(espn_payload, args.season)
     if espn.empty:
