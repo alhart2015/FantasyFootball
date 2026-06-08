@@ -136,3 +136,46 @@ def build_benchmark_frame(
     # full_name for readability (from id_map).
     frame = frame.merge(id_map[["gsis_id", "full_name"]], on="gsis_id", how="left")
     return frame
+
+
+def source_metrics(
+    frame: pd.DataFrame, pred_col: str, actual_col: str = "actual_pts"
+) -> dict[str, float]:
+    """RMSE / MAE / Spearman of pred vs actual over rows where both are present."""
+    sub = frame[[pred_col, actual_col]].dropna()
+    n = len(sub)
+    if n == 0:
+        return {"n": 0, "rmse": float("nan"), "mae": float("nan"), "spearman": float("nan")}
+    resid = sub[pred_col] - sub[actual_col]
+    rmse = float((resid**2).mean() ** 0.5)
+    mae = float(resid.abs().mean())
+    spearman = (
+        float(sub[pred_col].corr(sub[actual_col], method="spearman")) if n > 1 else float("nan")
+    )
+    return {"n": n, "rmse": rmse, "mae": mae, "spearman": spearman}
+
+
+def top_n_by_rank(frame: pd.DataFrame, rank_col: str, n: int = 20) -> pd.DataFrame:
+    """Top-n rows per position by smallest rank (best). Rows with NaN rank dropped."""
+    ranked = frame.dropna(subset=[rank_col])
+    return (
+        ranked.sort_values(rank_col)
+        .groupby("position", group_keys=False)
+        .head(n)
+        .reset_index(drop=True)
+    )
+
+
+def top_n_hit_rate(frame: pd.DataFrame, rank_col: str, n: int = 20) -> float:
+    """Of each position's top-n by preseason rank, the share that finished top-n in actuals."""
+    pre = top_n_by_rank(frame, rank_col, n)
+    if pre.empty:
+        return float("nan")
+    actual_top = top_n_by_rank(
+        frame.assign(_actual_rank=frame.groupby("position")["actual_pts"].rank(ascending=False)),
+        "_actual_rank",
+        n,
+    )
+    hit_keys = set(zip(actual_top["position"], actual_top["gsis_id"], strict=False))
+    pre_keys = list(zip(pre["position"], pre["gsis_id"], strict=False))
+    return sum(k in hit_keys for k in pre_keys) / len(pre_keys)
