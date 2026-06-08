@@ -184,6 +184,13 @@ class Stat(StrEnum):
     OFFENSE_PCT = "offense_pct"
 
 
+class ProjectionSource(StrEnum):
+    """External preseason projection sources. Use ProjectionSource.ESPN, never "ESPN"."""
+
+    ESPN = "ESPN"
+    SLEEPER = "SLEEPER"
+
+
 # Each ID flavor is a distinct mypy type so passing one where another is expected
 # is a type error. At runtime they are bare strings.
 GsisId = NewType("GsisId", str)
@@ -263,6 +270,7 @@ _TEAM_VALUES = [t.value for t in Team]
 _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
 _RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD"]
 _BACKTEST_VERDICT_VALUES = ["ADOPT", "NULL", "DO_NOT_ADOPT"]
+_SOURCE_VALUES = [s.value for s in ProjectionSource]
 
 
 class WeeklyStatsSchema(pa.DataFrameModel):
@@ -776,6 +784,40 @@ class IdMapSchema(pa.DataFrameModel):
 
     class Config:
         strict = "filter"
+
+
+class ExternalProjectionSchema(pa.DataFrameModel):
+    """One row per (source, player, season, asof) of external preseason projection data.
+
+    Stat line is nullable: ESPN provides it; Sleeper provides ADP only (null stat line).
+    gsis_id is the real id for crosswalked veterans, else a synthetic 99-XXXXXXX placeholder
+    (flagged is_placeholder_gsis) for pre-camp rookies; source_player_id is the stable
+    cross-snapshot join key.
+    """
+
+    source: Series[str] = pa.Field(isin=_SOURCE_VALUES)
+    source_player_id: Series[str]
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    is_placeholder_gsis: Series[bool]
+    full_name: Series[str]
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    asof: Series[str]  # ISO YYYY-MM-DD; also encoded in the partition path
+    adp: Series[float] = pa.Field(nullable=True)
+    espn_draft_rank: Series[float] = pa.Field(nullable=True)
+    passing_yards: Series[float] = pa.Field(nullable=True)
+    passing_tds: Series[float] = pa.Field(nullable=True)
+    interceptions: Series[float] = pa.Field(nullable=True)
+    rushing_yards: Series[float] = pa.Field(nullable=True)
+    rushing_tds: Series[float] = pa.Field(nullable=True)
+    receptions: Series[float] = pa.Field(nullable=True)
+    receiving_yards: Series[float] = pa.Field(nullable=True)
+    receiving_tds: Series[float] = pa.Field(nullable=True)
+    fumbles_lost: Series[float] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
 
 
 class ProjectionWeeklySchema(pa.DataFrameModel):
