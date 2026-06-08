@@ -1,10 +1,16 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
 import pandas as pd
+import pytest
 
 from projections.ingest import external_projections as ext
 
 
-def test_parse_espn_players_extracts_statline_adp_rank():
-    payload = {
+def test_parse_espn_players_extracts_statline_adp_rank() -> None:
+    payload: dict[str, Any] = {
         "players": [
             {
                 "player": {
@@ -34,8 +40,8 @@ def test_parse_espn_players_extracts_statline_adp_rank():
     assert r["receptions"] == 105 and r["receiving_yards"] == 1335.0 and r["receiving_tds"] == 8
 
 
-def test_parse_sleeper_projections_keeps_name_position_adp_filters_to_skill():
-    payload = [
+def test_parse_sleeper_projections_keeps_name_position_adp_filters_to_skill() -> None:
+    payload: list[dict[str, Any]] = [
         {
             "player_id": "6794",
             "stats": {"adp_ppr": 14.5},
@@ -58,7 +64,7 @@ def test_parse_sleeper_projections_keeps_name_position_adp_filters_to_skill():
     assert r["full_name"] == "A B" and r["position"] == "WR" and r["sleeper_adp"] == 14.5
 
 
-def test_make_placeholder_gsis_is_deterministic_and_pattern_valid():
+def test_make_placeholder_gsis_is_deterministic_and_pattern_valid() -> None:
     import re
 
     a = ext._make_placeholder_gsis("ESPN", "5555")
@@ -68,7 +74,7 @@ def test_make_placeholder_gsis_is_deterministic_and_pattern_valid():
     assert ext._make_placeholder_gsis("SLEEPER", "5555") != a  # source-scoped
 
 
-def test_attach_gsis_id_real_for_matched_placeholder_for_rookie():
+def test_attach_gsis_id_real_for_matched_placeholder_for_rookie() -> None:
     df = pd.DataFrame({"espn_id": ["4374302", "9999999"], "x": [1, 2]})
     id_map = pd.DataFrame(
         {
@@ -86,7 +92,7 @@ def test_attach_gsis_id_real_for_matched_placeholder_for_rookie():
     assert len(out) == 2  # no row multiplication
 
 
-def _tiny_id_map():
+def _tiny_id_map() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "gsis_id": pd.array(["00-0036900"], dtype="string[pyarrow]"),
@@ -96,35 +102,33 @@ def _tiny_id_map():
     )
 
 
-def test_espn_to_canonical_is_schema_valid_with_stat_line():
+def test_espn_to_canonical_is_schema_valid_with_stat_line() -> None:
     from datetime import date
 
     from projections.schemas import ExternalProjectionSchema
 
-    espn = ext.parse_espn_players(
-        {
-            "players": [
-                {
-                    "player": {
-                        "id": 4374302,
-                        "fullName": "Ja'Marr Chase",
-                        "defaultPositionId": 3,
-                        "ownership": {"averageDraftPosition": 4.8},
-                        "draftRanksByRankType": {"PPR": {"rank": 20}},
-                        "stats": [
-                            {
-                                "seasonId": 2026,
-                                "statSourceId": 1,
-                                "statSplitTypeId": 0,
-                                "stats": {"53": 105.0, "42": 1335.0, "43": 8.0},
-                            }
-                        ],
-                    }
+    espn_payload: dict[str, Any] = {
+        "players": [
+            {
+                "player": {
+                    "id": 4374302,
+                    "fullName": "Ja'Marr Chase",
+                    "defaultPositionId": 3,
+                    "ownership": {"averageDraftPosition": 4.8},
+                    "draftRanksByRankType": {"PPR": {"rank": 20}},
+                    "stats": [
+                        {
+                            "seasonId": 2026,
+                            "statSourceId": 1,
+                            "statSplitTypeId": 0,
+                            "stats": {"53": 105.0, "42": 1335.0, "43": 8.0},
+                        }
+                    ],
                 }
-            ]
-        },
-        season=2026,
-    )
+            }
+        ]
+    }
+    espn = ext.parse_espn_players(espn_payload, season=2026)
     out = ext._espn_to_canonical(espn, season=2026, asof=date(2026, 7, 15), id_map=_tiny_id_map())
     ExternalProjectionSchema.validate(out)
     r = out.iloc[0]
@@ -133,7 +137,7 @@ def test_espn_to_canonical_is_schema_valid_with_stat_line():
     assert r["adp"] == 4.8 and r["receptions"] == 105.0
 
 
-def test_sleeper_to_canonical_has_null_stat_line():
+def test_sleeper_to_canonical_has_null_stat_line() -> None:
     from datetime import date
 
     from projections.schemas import ExternalProjectionSchema
@@ -152,3 +156,73 @@ def test_sleeper_to_canonical_has_null_stat_line():
     r = out.iloc[0]
     assert r["source"] == "SLEEPER" and r["adp"] == 14.5
     assert pd.isna(r["receptions"]) and pd.isna(r["espn_draft_rank"])
+
+
+def test_refresh_writes_validated_asof_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import date
+
+    from projections.schemas import ExternalProjectionSchema
+    from projections.store import read_latest_partition
+
+    espn_payload: dict[str, Any] = {
+        "players": [
+            {
+                "player": {
+                    "id": 4374302,
+                    "fullName": "Ja'Marr Chase",
+                    "defaultPositionId": 3,
+                    "ownership": {"averageDraftPosition": 4.8},
+                    "draftRanksByRankType": {"PPR": {"rank": 20}},
+                    "stats": [
+                        {
+                            "seasonId": 2026,
+                            "statSourceId": 1,
+                            "statSplitTypeId": 0,
+                            "stats": {"53": 105.0, "42": 1335.0, "43": 8.0},
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+    sleeper_payload: list[dict[str, Any]] = [
+        {
+            "player_id": "6794",
+            "stats": {"adp_ppr": 14.5},
+            "player": {"first_name": "A", "last_name": "B", "position": "WR"},
+        }
+    ]
+    monkeypatch.setattr(ext, "fetch_espn", lambda season: espn_payload)
+    monkeypatch.setattr(ext, "fetch_sleeper_season", lambda season: sleeper_payload)
+    # id_map lives at <data_root>/raw/id_map.parquet
+    (tmp_path / "raw").mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036900"], dtype="string[pyarrow]"),
+            "espn_id": pd.array(["4374302"], dtype="string[pyarrow]"),
+            "sleeper_id": pd.array(["6794"], dtype="string[pyarrow]"),
+        }
+    ).to_parquet(tmp_path / "raw" / "id_map.parquet", index=False)
+
+    ext.refresh_external_projections(tmp_path, season=2026, asof=date(2026, 7, 15))
+    latest = read_latest_partition(tmp_path / "raw", "external_projections", season=2026)
+    ExternalProjectionSchema.validate(latest)
+    assert set(latest["source"]) == {"ESPN", "SLEEPER"}
+    assert (latest["gsis_id"] == "00-0036900").sum() == 2  # both sources crosswalked the veteran
+
+
+def test_refresh_refuses_empty_pull(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ext, "fetch_espn", lambda season: {"players": []})
+    monkeypatch.setattr(ext, "fetch_sleeper_season", lambda season: [])
+    (tmp_path / "raw").mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036900"], dtype="string[pyarrow]"),
+            "espn_id": pd.array(["x"], dtype="string[pyarrow]"),
+            "sleeper_id": pd.array(["y"], dtype="string[pyarrow]"),
+        }
+    ).to_parquet(tmp_path / "raw" / "id_map.parquet", index=False)
+    with pytest.raises(SystemExit):
+        ext.refresh_external_projections(tmp_path, season=2026)
