@@ -537,6 +537,14 @@ class WrFeaturesSchema(pa.DataFrameModel):
     is_home: Series[bool]
     roof_dome: Series[bool]
 
+    # Vegas team-context (TODO #33c integration). Same shape as QbFeaturesSchema —
+    # preseason_* broadcast from week 1; season_avg_* is expanding mean over
+    # weeks 1..N-1 (NaN at week 1).
+    preseason_implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
+    preseason_spread: Series[float] = pa.Field(nullable=True)
+    season_avg_implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
+    season_avg_spread: Series[float] = pa.Field(nullable=True)
+
     # Opponent strength (proxy: opp's allowed WR fantasy points/game over trailing 4)
     opp_allowed_wr_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)
 
@@ -611,6 +619,15 @@ class QbFeaturesSchema(pa.DataFrameModel):
     spread: Series[float] = pa.Field(nullable=True)
     is_home: Series[bool]
     roof_dome: Series[bool]
+
+    # Vegas team-context (TODO #33c integration). Sourced from
+    # SchedulesSchema.spread_line / total_line. preseason_* broadcast from
+    # the team's week-1 game; season_avg_* is the expanding mean over
+    # weeks 1..N-1 (NaN at week 1 by design).
+    preseason_implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
+    preseason_spread: Series[float] = pa.Field(nullable=True)
+    season_avg_implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
+    season_avg_spread: Series[float] = pa.Field(nullable=True)
 
     # Opponent strength proxy
     opp_allowed_qb_fppg_l4: Series[float] = pa.Field(ge=0, nullable=True)

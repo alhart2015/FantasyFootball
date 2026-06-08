@@ -431,6 +431,12 @@ def test_wr_features_schema_accepts_valid_row() -> None:
             "is_high_wind": [0.0],
             "temperature_f": [65.0],
             "is_grass_surface": [1.0],
+            # Vegas team-context cols (TODO #33c integration). All
+            # nullable=True; happy-path test covers the populated case.
+            "preseason_implied_team_total": [28.0],
+            "preseason_spread": [-6.5],
+            "season_avg_implied_team_total": [27.5],
+            "season_avg_spread": [-5.0],
         }
     )
     WrFeaturesSchema.validate(df)
@@ -478,6 +484,12 @@ def test_wr_features_schema_rejects_target_share_over_one() -> None:
             "is_high_wind": [0.0],
             "temperature_f": [65.0],
             "is_grass_surface": [1.0],
+            # Vegas team-context cols — provided so the failure is on
+            # target_share_l4, not on a missing Vegas column.
+            "preseason_implied_team_total": [28.0],
+            "preseason_spread": [-6.5],
+            "season_avg_implied_team_total": [27.5],
+            "season_avg_spread": [-5.0],
         }
     )
     with pytest.raises(SchemaError):
@@ -511,6 +523,10 @@ def test_qb_features_schema_accepts_valid_row() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
+            "preseason_implied_team_total": [26.5],
+            "preseason_spread": [-2.5],
+            "season_avg_implied_team_total": [27.0],
+            "season_avg_spread": [-3.0],
             "opp_allowed_qb_fppg_l4": [18.5],
         }
     )
@@ -544,6 +560,10 @@ def test_qb_features_schema_rejects_negative_pass_attempts() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
+            "preseason_implied_team_total": [26.5],
+            "preseason_spread": [-2.5],
+            "season_avg_implied_team_total": [27.0],
+            "season_avg_spread": [-3.0],
             "opp_allowed_qb_fppg_l4": [18.5],
         }
     )

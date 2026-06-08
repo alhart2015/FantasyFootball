@@ -12,6 +12,7 @@ import pandas as pd
 from projections.features._opponent import opp_allowed_fppg
 from projections.features._rolling import latest_ngs_snapshot, trailing_4_per_player
 from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
+from projections.features.vegas_team_context_features import attach_vegas_team_context_features
 from projections.schemas import (
     _PYARROW_STR,
     Position,
@@ -207,5 +208,10 @@ def build_qb_features(
 
     for col in ("team", "opponent"):
         out[col] = out[col].astype(_PYARROW_STR)
+
+    # Vegas team-context (TODO #33c). Pass the FULL `schedules` arg, not the
+    # exact-week-masked `sch`, so compute_vegas_team_context_features sees
+    # weeks 1..N for preseason broadcast and the expanding-mean season_avg.
+    out = attach_vegas_team_context_features(out, schedules)
 
     return QbFeaturesSchema.validate(out)

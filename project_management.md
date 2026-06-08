@@ -4,6 +4,50 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Vegas Team-Context Integration — DO_NOT_ADOPT across 3 gates (2026-05-18, on branch `feat/qb-wr-vegas-team-context-integration`)
+
+**Status:** Spec + plan + 8 implementation commits + 4 backtest runs + 3 gate runs + verdict report on `feat/qb-wr-vegas-team-context-integration`. Phase 2 of TODO #33c (production integration of the lgb-nb × swap winners from the predecessor probe). Spec at `docs/superpowers/specs/2026-05-17-qb-wr-vegas-team-context-integration-design.md`; plan at `docs/superpowers/plans/2026-05-17-qb-wr-vegas-team-context-integration.md`; summary at `reports/qb_wr_vegas_team_context_integration_summary.md`.
+
+**Verdict: DO_NOT_ADOPT across all 3 gates.**
+
+| Gate | Probe ΔRMSE | Observed ΔRMSE | CI | Verdict |
+|---|---|---|---|---|
+| (lgb-nb, QB) | −0.0587 | **+0.1112** | [+0.0735, +0.1482] | REGRESSION (sign-flipped, 290% miss) |
+| (lgb-nb, WR) | −0.0130 | +0.0068 | [−0.0031, +0.0170] | null/inconclusive |
+| (ensemble-decomposed, WR) | n/a | +0.0004 | [−0.0060, +0.0073] | null |
+
+**Builder correctness verified before reporting the regression:** integration's QB feature parquet matched the probe's override parquet byte-identically on all 4 Vegas cols across 9,379 QB rows (max abs delta = 0.0). Not a builder bug.
+
+**Root cause traced:** harness-pairing divergence between `probe_composite` and `run_backtest`. Initial PR #50 data-drift hypothesis was wrong — PR #50's full diff is purely additive logging (`import logging` + `logger.warning(...)`); the placeholder-gsis filter logic is identical to pre-#50. Pre and post backtest runs have **byte-identical row coverage** (2676 QB rows each, perfectly aligned on (gsis_id, season, week)). Re-ran the probe on current data state with `--force-composite --drop implied_team_total spread --model lightgbm-nb --position QB`: **probe reproduces −0.0587 ADOPT exactly** on n=2692. The 16-row delta between probe and gate is all **Taysom Hill** (`gsis_id 00-0033357`) in 2023 — listed as QB on the depth chart (so the QB feature builder includes him) but recorded as `position == "TE"` in weekly_stats. `probe_composite` merges predictions with weekly_stats on `(gsis_id, season, week)` only — pairs Taysom Hill. `run_backtest` filters `holdout_pos[position == "QB"]` first — drops him. Math: those 16 rows alone account for ~6,624 SSE swing (~20 fpts residual diff per row, consistent with Taysom Hill's high-variance utility profile) — enough to flip the QB verdict from gate's +0.111 REGRESSION to probe's −0.0587 ADOPT. **The gate's +0.111 is the production-truth signal** because production never pairs Taysom Hill's QB-depth-chart predictions with his TE weekly_stats row. **First observed case** of a `--force-composite` probe Phase-2 ADOPT failing to replicate in the production gate (prior cases — PR #21 RB PBP, Plan 9 negatives — all replicated cleanly). **Framework follow-up to consider:** align `probe_composite`'s truth-merge to use a position filter matching `run_backtest`'s, so future probes' Phase-2 verdicts are more faithful predictors of the production gate.
+
+**Shipped surface (10 commits on branch):**
+- Spec + plan + summary report (3 docs).
+- `src/projections/schemas.py` — 4 nullable Float cols on each of `QbFeaturesSchema` + `WrFeaturesSchema`.
+- `src/projections/features/qb.py` + `wr.py` — `attach_vegas_team_context_features(out, schedules)` wired into builders.
+- `src/projections/models/lightgbm_nb.py` — `_VEGAS_SWAP_REPLACE`, `_VEGAS_SWAP_ADD`, `_swap_for` helper, `_QB_FEATURE_COLUMNS_NB`, `_WR_FEATURE_COLUMNS_NB` constants; `qb_lightgbm_nb` + `wr_lightgbm_nb` factories rewired; `_code_hash_files_nb` tracks `vegas_team_context_features.py`.
+- ~20 new tests across schemas, features, models (4 schema files + 1 builder test per position + 6 model tests + 1 rewritten broken-premise test for `test_yards_stat_predictions_match_tuned_baseline`).
+
+**Branch disposition (pending user decision):** Phase 0 (schemas + builder wire-up) is harmless and may help future re-investigation. Phase 1 (lgb-nb factory swap) is what the gate rejects. Three options documented in summary: (1) close PR without merging, (2) merge Phase 0 only + revert Phase 1 factory swap before merge — **recommended**, (3) merge as-is + flip production routing back to baseline — not recommended.
+
+**Decision log:**
+- Subagent-driven execution went smoothly for Phase 0+1 (8 implementer subagents + 6 review passes; one subagent suspended mid-test-run on Task 6 and was completed directly in main session).
+- Rebased integration branch onto current main HEAD (`f961ab6`) after first gate-1 run flagged the PR #50 asymmetry concern; re-ran post-integration backtests; result was unchanged (same +0.1112 ΔRMSE on QB) confirming PR #50 alone is not the cause but the data-state drift is.
+- All 363 schema + feature + lgb-nb tests pass on the integration branch.
+
+**Plan-vs-execution deviations:**
+- Task 1+2 implementers needed to also update 2 pre-existing fixture tests in `test_dataframe_schemas.py` to populate the new required cols. Necessary scope-creep; same shape Task 4 had with `test_cache.py::_minimal_wr_features_row`.
+- Task 6 subagent suspended waiting for a long-running pytest (~12 min); main session completed it directly. All Task 6 changes match plan template byte-for-byte.
+- Phase 2 (backtests + gates) executed directly in main session rather than subagents — appropriate for operational work with branch-switching + long-running shell commands.
+
+**Next direction (concrete):**
+1. **External preseason Vegas data spec** — genuine May win totals, OC/HC tenure, FA-acquisition flag, projected pace, projected pass rate. Different mechanism axis from re-deriving `spread_line` / `total_line`; not affected by the probe → gate generalization gap encountered here. Load-bearing for TODO #31 Draft Hub preseason projections.
+2. **RB `preseason_*`-only follow-up probe** still queued, but with a weakened prior — this branch's gate reversal suggests the RB probe's verdict may also fail to generalize. Run with the dual-run gate as the load-bearing decision criterion, not the probe.
+3. **Probe framework follow-up:** add a position filter to `probe_composite`'s truth merge in `src/projections/backtest/feature_probe.py:574-577` so the probe's Phase-2 pairing matches `run_backtest`'s. Without it, candidates that differentially help/hurt cross-position-mislabeled rows (Taysom Hill, multi-position utility players) will be artifactually advantaged by the probe.
+
+See `reports/qb_wr_vegas_team_context_integration_summary.md` for the full gate-by-gate verdict tables, mechanism analysis, and three branch-disposition options.
+
+---
+
 ## Vegas Team-Context Feature Family Probe — SIGNAL at lgb-nb swap QB+WR (2026-05-17, on branch `feat/probe-vegas-team-context`)
 
 **Status:** Spec + plan + impl + 4 probe runs + audit + summary on `feat/probe-vegas-team-context`. Phase 1 of TODO #33c. New compute module `src/projections/features/vegas_team_context_features.py` produces 4 candidate cols (`preseason_implied_team_total`, `preseason_spread`, `season_avg_implied_team_total`, `season_avg_spread`) from `SchedulesSchema`'s already-ingested `spread_line` / `total_line`. Override generator CLI `scripts/build_vegas_team_context_override.py`. Probe runs via existing `scripts/probe_feature_signal.py` (no changes). Spec at `docs/superpowers/specs/2026-05-17-vegas-team-context-probe-design.md`; plan at `docs/superpowers/plans/2026-05-17-vegas-team-context-probe.md`.
