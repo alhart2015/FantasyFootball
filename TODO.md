@@ -4,6 +4,15 @@ Running project management list. Add items as they come up; remove or check off 
 
 ## Open
 
+### 40. Fix 15 tests broken on `main` (PR #51 Vegas team-context fixtures) — **PRIORITY**
+
+Surfaced 2026-06-08 during the test-suite-speedup work (branch `chore/test-suite-speedup`; confirmed by running on a clean `origin/main` checkout). These fail on `main` itself, independent of any in-flight branch:
+- `tests/test_models/test_baseline_feature_columns_match_schema.py` (QB, WR) — `_<POS>_FEATURE_COLUMNS` vs schema mismatch on the 4 new Vegas cols.
+- `tests/test_models/test_decomposed_baseline.py` (10 tests) — `KeyError: ['preseason_implied_team_total', 'preseason_spread', 'season_avg_implied_team_total', 'season_avg_spread'] not in index`.
+- `tests/test_scripts/test_tune_lightgbm.py` (3 tests) — same Vegas-col `KeyError` in the synthetic WR fixtures.
+
+Root cause: PR #51 added the 4 Vegas team-context cols to `QbFeaturesSchema`/`WrFeaturesSchema` + `_<POS>_FEATURE_COLUMNS` but did not update these tests' synthetic fixtures to emit them (the exact recurring class `test_baseline_feature_columns_match_schema` was added to catch). Also: `pyproject.toml` added `tabulate>=0.9` — devs must `pip install -e .` to pick it up (already done locally). Fix = add the 4 cols to the affected synthetic fixtures.
+
 ### 38. External consensus projection layer for draft (sub-project #2) — **PRIORITY**
 
 **Why now.** The external projection benchmark spike (2026-06-08, branch `feat/external-projection-benchmark`; see `project_management.md` top entry + `reports/external_projection_benchmark_2024.md`) established that our home-grown model is a weekly in-season model and **cannot produce a preseason/draft projection at all** (proven: it projected the injured CMC for only 4 weeks at 63 pts vs ESPN preseason 335). For the draft use case (priority #1), there is nothing on our side to benchmark — pivot to external sources.

@@ -30,6 +30,7 @@ dependencies = [
 dev = [
     "pytest>=8",
     "pytest-cov>=4",
+    "pytest-xdist>=3",
     "mypy>=1.9",
     "ruff>=0.5",
     "types-setuptools",
@@ -42,7 +43,10 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+# -n auto: run across all CPU cores via pytest-xdist (the suite is fully
+# independent / xdist-safe). For single-test debugging or live output, override
+# with `-n0` (e.g. `pytest -n0 -s tests/path::test`).
+addopts = "-ra --strict-markers -n auto"
 markers = [
     "network: tests that hit the live nflreadpy / nflverse releases; skipped by default",
     "backtest: tests that run the full walk-forward backtest gate; skipped without --run-backtest",
