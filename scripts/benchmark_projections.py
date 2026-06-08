@@ -70,15 +70,14 @@ def actual_season_points(weekly_stats: pd.DataFrame, ruleset: Ruleset) -> pd.Dat
 
 def our_season_points(csv_df: pd.DataFrame) -> pd.DataFrame:
     """Our model's CSV: season_total_mean is already PPR fantasy points."""
-    out = csv_df[["gsis_id", "position", "season_total_mean"]].copy()
-    out = out.rename(columns={"season_total_mean": "our_pts"})
-    return out
+    return csv_df[["gsis_id", "position", "season_total_mean"]].rename(
+        columns={"season_total_mean": "our_pts"}
+    )
 
 
 def espn_season_points(espn: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
     """Score ESPN's preseason stat line under `ruleset`, keyed by espn_id."""
-    out = espn.copy()
-    out["espn_pts"] = out.apply(lambda r: _score_row(r, ruleset), axis=1)
+    out = espn.assign(espn_pts=espn.apply(lambda r: _score_row(r, ruleset), axis=1))
     return out[
         [
             "espn_id",
@@ -100,6 +99,20 @@ def _normalize_join_id(s: pd.Series) -> pd.Series:
     return s.astype("string").str.replace(r"\.0$", "", regex=True)
 
 
+def _attach_gsis_id(
+    external: pd.DataFrame, id_map: pd.DataFrame, platform_id_col: str
+) -> pd.DataFrame:
+    """Attach `gsis_id` to `external` by joining on a platform id (espn_id / sleeper_id).
+    Normalizes both sides (id_map stores float-stringified ids) and dedupes the id_map
+    crosswalk on the platform id so a duplicate mapping cannot multiply rows. Returns
+    `external` (platform id normalized) with `gsis_id` attached, NaN where unmatched."""
+    ext = external.assign(**{platform_id_col: _normalize_join_id(external[platform_id_col])})
+    crosswalk = id_map[["gsis_id", platform_id_col]].dropna(subset=[platform_id_col]).copy()
+    crosswalk[platform_id_col] = _normalize_join_id(crosswalk[platform_id_col])
+    crosswalk = crosswalk.drop_duplicates(subset=[platform_id_col])
+    return ext.merge(crosswalk, on=platform_id_col, how="left")
+
+
 def build_benchmark_frame(
     espn: pd.DataFrame,
     ours: pd.DataFrame,
@@ -112,13 +125,7 @@ def build_benchmark_frame(
     Sleeper ADP via id_map.sleeper_id). Base universe = actuals (ground truth).
     Position is taken from actuals."""
     espn_scored = espn_season_points(espn, ruleset)
-    espn_scored["espn_id"] = _normalize_join_id(espn_scored["espn_id"])
-    # dropna + drop_duplicates: id_map has duplicate espn_id rows; without the dedup
-    # a duplicate would multiply a player's rows and inflate every metric.
-    id_espn = id_map[["gsis_id", "espn_id"]].dropna(subset=["espn_id"]).copy()
-    id_espn["espn_id"] = _normalize_join_id(id_espn["espn_id"])
-    id_espn = id_espn.drop_duplicates(subset=["espn_id"])
-    espn_keyed = espn_scored.merge(id_espn, on="espn_id", how="left")
+    espn_keyed = _attach_gsis_id(espn_scored, id_map, "espn_id")
 
     frame = actuals.copy()
     frame = frame.merge(ours[["gsis_id", "our_pts"]], on="gsis_id", how="left")
@@ -131,20 +138,16 @@ def build_benchmark_frame(
         how="left",
     )
 
-    sleeper = sleeper.copy()
-    sleeper["sleeper_id"] = _normalize_join_id(sleeper["sleeper_id"])
-    id_sleeper = id_map[["gsis_id", "sleeper_id"]].dropna(subset=["sleeper_id"]).copy()
-    id_sleeper["sleeper_id"] = _normalize_join_id(id_sleeper["sleeper_id"])
-    id_sleeper = id_sleeper.drop_duplicates(subset=["sleeper_id"])
-    sleeper_keyed = sleeper.merge(id_sleeper, on="sleeper_id", how="left").dropna(
-        subset=["gsis_id"]
-    )
+    sleeper_keyed = _attach_gsis_id(sleeper, id_map, "sleeper_id").dropna(subset=["gsis_id"])
     frame = frame.merge(sleeper_keyed[["gsis_id", "sleeper_adp"]], on="gsis_id", how="left")
 
-    # full_name for readability (from id_map); dedup to avoid row multiplication
-    # when id_map has duplicate gsis_id rows.
-    id_name = id_map[["gsis_id", "full_name"]].drop_duplicates(subset=["gsis_id"])
-    frame = frame.merge(id_name, on="gsis_id", how="left")
+    # full_name for readability (from id_map); dedup so a duplicate gsis_id row
+    # cannot multiply the frame.
+    frame = frame.merge(
+        id_map[["gsis_id", "full_name"]].drop_duplicates(subset=["gsis_id"]),
+        on="gsis_id",
+        how="left",
+    )
     return frame
 
 
@@ -250,7 +253,7 @@ def render_report(frame: pd.DataFrame, season: int) -> str:
             if len(sub) > 1
             else float("nan")
         )
-        hit = top_n_hit_rate(frame.assign(_adp_rank=frame[col]), "_adp_rank", 20)
+        hit = top_n_hit_rate(frame, col, 20)
         out.append(f"| {label} | {sp:.3f} | {hit:.2f} |")
     out += [""]
 

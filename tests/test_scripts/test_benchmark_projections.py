@@ -6,6 +6,28 @@ import pandas as pd
 from projections.schemas import Ruleset
 
 
+def _espn_row(**overrides: object) -> dict[str, object]:
+    """One ESPN frame row with all stat fields zeroed; override ids/stats per test."""
+    base: dict[str, object] = {
+        "espn_id": "E1",
+        "full_name": "A B",
+        "position": "WR",
+        "espn_adp": 4.0,
+        "espn_pos_rank": 2,
+        "passing_yards": 0.0,
+        "passing_tds": 0,
+        "interceptions": 0,
+        "rushing_yards": 0.0,
+        "rushing_tds": 0,
+        "receptions": 0,
+        "receiving_yards": 0.0,
+        "receiving_tds": 0,
+        "fumbles_lost": 0,
+    }
+    base.update(overrides)
+    return base
+
+
 def test_actual_season_points_sums_weeks_and_scores_ppr() -> None:
     # One WR, two weeks. Wk1: 5 rec, 70 yds, 1 TD. Wk2: 3 rec, 30 yds, 0 TD.
     # PPR points = receptions*1 + yards*0.1 + tds*6 = (8) + (100*0.1=10) + (1*6=6) = 24.0
@@ -47,25 +69,7 @@ def test_our_season_points_reads_csv_mean_as_points() -> None:
 def test_build_benchmark_frame_joins_on_gsis_and_scores_espn() -> None:
     # ESPN row keyed by espn_id; our + actual keyed by gsis_id; id_map crosswalks.
     espn = pd.DataFrame(
-        [
-            {
-                "espn_id": "E1",
-                "full_name": "A B",
-                "position": "WR",
-                "espn_adp": 4.0,
-                "espn_pos_rank": 2,
-                "espn_actual_applied_total": 200.0,
-                "passing_yards": 0.0,
-                "passing_tds": 0,
-                "interceptions": 0,
-                "rushing_yards": 0.0,
-                "rushing_tds": 0,
-                "receptions": 80,
-                "receiving_yards": 1000.0,
-                "receiving_tds": 5,
-                "fumbles_lost": 0,
-            }
-        ]
+        [_espn_row(receptions=80, receiving_yards=1000.0, receiving_tds=5)]
     )  # ESPN proj PPR = 80 + 100 + 30 = 210.0
     ours = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["WR"], "our_pts": [195.0]})
     actuals = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["WR"], "actual_pts": [188.0]})
@@ -150,24 +154,7 @@ def test_build_benchmark_frame_matches_float_stringified_idmap_ids() -> None:
     # ('4374302.0', string dtype); the pull writes clean int-strings ('4374302',
     # object). The join must normalize both and MATCH (previously matched 0 rows).
     espn = pd.DataFrame(
-        [
-            {
-                "espn_id": "4374302",
-                "full_name": "A B",
-                "position": "WR",
-                "espn_adp": 4.0,
-                "espn_pos_rank": 2,
-                "passing_yards": 0.0,
-                "passing_tds": 0,
-                "interceptions": 0,
-                "rushing_yards": 0.0,
-                "rushing_tds": 0,
-                "receptions": 80,
-                "receiving_yards": 1000.0,
-                "receiving_tds": 5,
-                "fumbles_lost": 0,
-            }
-        ]
+        [_espn_row(espn_id="4374302", receptions=80, receiving_yards=1000.0, receiving_tds=5)]
     )
     ours = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["WR"], "our_pts": [195.0]})
     actuals = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["WR"], "actual_pts": [188.0]})
@@ -193,22 +180,15 @@ def test_build_benchmark_frame_dedupes_duplicate_idmap_espn_id() -> None:
     # not multiply the player's row (which would inflate n and every metric).
     espn = pd.DataFrame(
         [
-            {
-                "espn_id": "500",
-                "full_name": "Dup Guy",
-                "position": "RB",
-                "espn_adp": 1.0,
-                "espn_pos_rank": 1,
-                "passing_yards": 0.0,
-                "passing_tds": 0,
-                "interceptions": 0,
-                "rushing_yards": 500.0,
-                "rushing_tds": 4,
-                "receptions": 0,
-                "receiving_yards": 0.0,
-                "receiving_tds": 0,
-                "fumbles_lost": 0,
-            }
+            _espn_row(
+                espn_id="500",
+                full_name="Dup Guy",
+                position="RB",
+                espn_adp=1.0,
+                espn_pos_rank=1,
+                rushing_yards=500.0,
+                rushing_tds=4,
+            )
         ]
     )
     ours = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["RB"], "our_pts": [100.0]})

@@ -110,9 +110,6 @@ def test_parse_espn_players_drops_players_with_missing_id() -> None:
     }
     df = pull.parse_espn_players(payload, season=2024)
     assert len(df) == 0, "player with no id must be dropped, not included"
-    if len(df) > 0:
-        # Belt-and-suspenders: also confirm the literal string "None" was not stored
-        assert "None" not in list(df["espn_id"])
 
 
 def test_round_count_is_half_up_not_bankers() -> None:
