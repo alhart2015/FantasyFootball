@@ -69,14 +69,14 @@ STAT_FIELDS: tuple[str, ...] = (
     "receiving_tds",
     "fumbles_lost",
 )
-_COUNT_FIELDS = frozenset(
+COUNT_FIELDS = frozenset(
     {"passing_tds", "interceptions", "rushing_tds", "receptions", "receiving_tds", "fumbles_lost"}
 )
 _ESPN_POSITIONS: dict[int, str] = {1: "QB", 2: "RB", 3: "WR", 4: "TE"}
 _SKILL_POSITIONS = frozenset({"QB", "RB", "WR", "TE"})
 
 
-def _round_count(value: float) -> int:
+def round_count(value: float) -> int:
     """Half-up rounding for non-negative projected count stats (Python's round() is banker's).
     Clamps at 0 — count stats (TDs, receptions, INTs, fumbles) are never negative."""
     return max(0, int(value + 0.5))
@@ -87,7 +87,7 @@ def _espn_stats_to_statline(stats: dict[str, float]) -> dict[str, float]:
     for sid, field in ESPN_STAT_IDS.items():
         if sid in stats:
             val = float(stats[sid])
-            out[field] = float(_round_count(val)) if field in _COUNT_FIELDS else val
+            out[field] = float(round_count(val)) if field in COUNT_FIELDS else val
     return out
 
 

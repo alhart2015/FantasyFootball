@@ -26,47 +26,16 @@ from typing import Any
 
 import pandas as pd
 
-# ESPN numeric stat-id -> StatLine field (common scoring set only). Decoded
-# empirically against known 2024 players; reconstructing through ESPN PPR
-# matches appliedTotal within ~1 pt.
-ESPN_STAT_IDS: dict[str, str] = {
-    "3": "passing_yards",
-    "4": "passing_tds",
-    "20": "interceptions",
-    "24": "rushing_yards",
-    "25": "rushing_tds",
-    "53": "receptions",
-    "42": "receiving_yards",
-    "43": "receiving_tds",
-    "72": "fumbles_lost",
-}
-# The common scoring field set, single-sourced here and imported by
-# benchmark_projections.py so the two spike scripts cannot drift on which fields
-# count or how counts round. 2pt conversions and return TDs are rare and absent
-# from ESPN projections; omitted so all sides score on the same fields.
-STAT_FIELDS = (
-    "passing_yards",
-    "passing_tds",
-    "interceptions",
-    "rushing_yards",
-    "rushing_tds",
-    "receptions",
-    "receiving_yards",
-    "receiving_tds",
-    "fumbles_lost",
-)
-COUNT_FIELDS = frozenset(
-    {"passing_tds", "interceptions", "rushing_tds", "receptions", "receiving_tds", "fumbles_lost"}
+from projections.ingest.external_projections import (
+    COUNT_FIELDS,
+    ESPN_STAT_IDS,
+    STAT_FIELDS,
+    round_count,
 )
 
-
-def round_count(value: float) -> int:
-    """Half-up rounding for projected count stats. Python's built-in round() uses
-    banker's rounding (round(0.5) == 0), which would silently drop a half-unit
-    projection. CALLER CONTRACT: value must be >= 0 (true for every count stat —
-    TDs, receptions, interceptions, fumbles); a negative input returns a wrong
-    integer without raising, so never call this on yardage or signed deltas."""
-    return int(value + 0.5)
+# Explicit re-exports so downstream importers (benchmark_projections.py) and
+# mypy see these as public names of this module.
+__all__ = ["COUNT_FIELDS", "ESPN_STAT_IDS", "STAT_FIELDS", "round_count"]
 
 
 def espn_stats_to_statline_dict(stats: dict[str, float]) -> dict[str, float]:
