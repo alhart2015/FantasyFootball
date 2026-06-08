@@ -41,3 +41,49 @@ def test_our_season_points_reads_csv_mean_as_points() -> None:
     out = bench.our_season_points(df)
     assert out.iloc[0]["our_pts"] == 180.5
     assert out.iloc[0]["gsis_id"] == "00-0000001"
+
+
+def test_build_benchmark_frame_joins_on_gsis_and_scores_espn() -> None:
+    # ESPN row keyed by espn_id; our + actual keyed by gsis_id; id_map crosswalks.
+    espn = pd.DataFrame(
+        [
+            {
+                "espn_id": "E1",
+                "full_name": "A B",
+                "position": "WR",
+                "espn_adp": 4.0,
+                "espn_pos_rank": 2,
+                "espn_actual_applied_total": 200.0,
+                "passing_yards": 0.0,
+                "passing_tds": 0,
+                "interceptions": 0,
+                "rushing_yards": 0.0,
+                "rushing_tds": 0,
+                "receptions": 80,
+                "receiving_yards": 1000.0,
+                "receiving_tds": 5,
+                "fumbles_lost": 0,
+            }
+        ]
+    )  # ESPN proj PPR = 80 + 100 + 30 = 210.0
+    ours = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["WR"], "our_pts": [195.0]})
+    actuals = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["WR"], "actual_pts": [188.0]})
+    id_map = pd.DataFrame(
+        {
+            "gsis_id": ["00-0000001"],
+            "espn_id": ["E1"],
+            "sleeper_id": ["S1"],
+            "full_name": ["A B"],
+            "position": ["WR"],
+            "team": ["KC"],
+        }
+    )
+    sleeper = pd.DataFrame({"sleeper_id": ["S1"], "sleeper_adp": [3.5]})
+    frame = bench.build_benchmark_frame(espn, ours, actuals, id_map, sleeper, Ruleset.espn_ppr())
+    row = frame.iloc[0]
+    assert row["gsis_id"] == "00-0000001"
+    assert row["espn_pts"] == 210.0
+    assert row["our_pts"] == 195.0
+    assert row["actual_pts"] == 188.0
+    assert row["espn_adp"] == 4.0 and row["sleeper_adp"] == 3.5
+    assert row["espn_pos_rank"] == 2

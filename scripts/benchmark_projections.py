@@ -80,3 +80,59 @@ def our_season_points(csv_df: pd.DataFrame) -> pd.DataFrame:
     out = csv_df[["gsis_id", "position", "season_total_mean"]].copy()
     out = out.rename(columns={"season_total_mean": "our_pts"})
     return out
+
+
+def espn_season_points(espn: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
+    """Score ESPN's preseason stat line under `ruleset`, keyed by espn_id."""
+    out = espn.copy()
+    out["espn_pts"] = out.apply(lambda r: _score_row(r, ruleset), axis=1)
+    return out[
+        [
+            "espn_id",
+            "full_name",
+            "position",
+            "espn_pts",
+            "espn_adp",
+            "espn_pos_rank",
+            "espn_actual_applied_total",
+        ]
+    ]
+
+
+def build_benchmark_frame(
+    espn: pd.DataFrame,
+    ours: pd.DataFrame,
+    actuals: pd.DataFrame,
+    id_map: pd.DataFrame,
+    sleeper: pd.DataFrame,
+    ruleset: Ruleset,
+) -> pd.DataFrame:
+    """Join ESPN + our model + actuals on gsis_id (ESPN via id_map.espn_id,
+    Sleeper ADP via id_map.sleeper_id). Base universe = actuals (ground truth).
+    Position is taken from actuals."""
+    espn_scored = espn_season_points(espn, ruleset)
+    espn_keyed = espn_scored.merge(
+        id_map[["gsis_id", "espn_id"]].dropna(subset=["espn_id"]), on="espn_id", how="left"
+    )
+
+    frame = actuals.copy()
+    frame = frame.merge(ours[["gsis_id", "our_pts"]], on="gsis_id", how="left")
+    # Drop ESPN's own position/full_name/espn_id before the merge: position comes
+    # from actuals, full_name is re-attached from id_map below, and keeping any of
+    # them here would create _x/_y collisions that break render_report.
+    frame = frame.merge(
+        espn_keyed.drop(columns=["position", "full_name", "espn_id"]).dropna(subset=["gsis_id"]),
+        on="gsis_id",
+        how="left",
+    )
+
+    sleeper_keyed = sleeper.merge(
+        id_map[["gsis_id", "sleeper_id"]].dropna(subset=["sleeper_id"]),
+        on="sleeper_id",
+        how="left",
+    ).dropna(subset=["gsis_id"])
+    frame = frame.merge(sleeper_keyed[["gsis_id", "sleeper_adp"]], on="gsis_id", how="left")
+
+    # full_name for readability (from id_map).
+    frame = frame.merge(id_map[["gsis_id", "full_name"]], on="gsis_id", how="left")
+    return frame
