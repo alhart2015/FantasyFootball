@@ -55,6 +55,12 @@ def _minimal_wr_features_row(week: int) -> dict[str, object]:
         "is_high_wind": 0.0,
         "temperature_f": 60.0,
         "is_grass_surface": 0.0,
+        # Vegas team-context cols (TODO #33c). Sane finite defaults — typical
+        # team implied total ~24 pts and a mild favorite spread.
+        "preseason_implied_team_total": 24.0,
+        "preseason_spread": -2.5,
+        "season_avg_implied_team_total": 24.0,
+        "season_avg_spread": -2.5,
     }
 
 

@@ -127,3 +127,32 @@ def test_refresh_draft_picks_empty_seasons_no_error(
     monkeypatch.setattr("projections.ingest.draft_picks._fetch_raw_draft_picks", fake_fetch)
     written = refresh_draft_picks(tmp_path, seasons=[])
     assert written == []
+
+
+def test_normalize_warns_on_placeholder_gsis_ids(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Mirrors the pre-camp-rookie shape: PFR-style placeholders that nflverse
+    # carries for the current draft class until NFL assigns real gsis_ids.
+    raw = pd.DataFrame(
+        {
+            "season": [2026, 2026, 2026],
+            "round": [1, 1, 2],
+            "pick": [1, 2, 33],
+            "team": ["LVR", "NYJ", "CHI"],
+            "gsis_id": ["MEN516487", "BailDa02", "00-0033000"],
+            "pfr_player_id": ["MendFe00", "BailDa02", "RealOk00"],
+            "pfr_player_name": ["Fernando Mendoza", "David Bailey", "Real Veteran"],
+            "position": ["QB", "OLB", "QB"],
+            "age": [22.0, 23.0, 27.0],
+        }
+    )
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="projections.ingest.draft_picks"):
+        df = _normalize_one_season(raw)
+    assert len(df) == 1
+    assert df.iloc[0]["gsis_id"] == "00-0033000"
+    assert any(
+        "filtered 2 row(s) with non-GSIS placeholder ids" in r.getMessage() for r in caplog.records
+    )

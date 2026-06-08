@@ -20,11 +20,414 @@ Running log of project status, decisions, and next steps. Append new entries at 
 - Verified: ESPN's `statSourceId=1, statSplitTypeId=0` season projection is genuine preseason (rookie/breakout/injury misses, not contaminated); historical projections retrievable from ESPN + Sleeper.
 
 **Recommended next direction:**
-1. **Sub-project #2 — external consensus projection layer for draft** (TODO #35): build on `pull_external_projections.py`; add 1–2 scraped sources (FantasyPros/CBS preseason) for a real consensus average; this becomes the projection basis downstream tools consume.
+1. **Sub-project #2 — external consensus projection layer for draft** (TODO #38): build on `pull_external_projections.py`; add 1–2 scraped sources (FantasyPros/CBS preseason) for a real consensus average; this becomes the projection basis downstream tools consume.
 2. **Draft Hub** on top of the consensus (the actual goal — spend effort on *how we use* projections, not on the projections themselves).
 3. **Optional, separate:** the fair weekly start/sit benchmark (our weekly model vs ESPN weekly vs weekly actuals) to decide whether to keep our model for in-season start/sit or retire it. Capability ≠ accuracy — this spike only proved our model can't do preseason, not that it's bad weekly.
 
 **What this does NOT close:** whether our weekly model adds value for start/sit (use-case #2) — unanswered; needs the weekly benchmark. The Track 2 feature-probe treadmill should stop until a downstream consumer exists that the projection quality actually moves.
+
+---
+
+## Vegas Team-Context Integration — DO_NOT_ADOPT across 3 gates (2026-05-18, on branch `feat/qb-wr-vegas-team-context-integration`)
+
+**Status:** Spec + plan + 8 implementation commits + 4 backtest runs + 3 gate runs + verdict report on `feat/qb-wr-vegas-team-context-integration`. Phase 2 of TODO #33c (production integration of the lgb-nb × swap winners from the predecessor probe). Spec at `docs/superpowers/specs/2026-05-17-qb-wr-vegas-team-context-integration-design.md`; plan at `docs/superpowers/plans/2026-05-17-qb-wr-vegas-team-context-integration.md`; summary at `reports/qb_wr_vegas_team_context_integration_summary.md`.
+
+**Verdict: DO_NOT_ADOPT across all 3 gates.**
+
+| Gate | Probe ΔRMSE | Observed ΔRMSE | CI | Verdict |
+|---|---|---|---|---|
+| (lgb-nb, QB) | −0.0587 | **+0.1112** | [+0.0735, +0.1482] | REGRESSION (sign-flipped, 290% miss) |
+| (lgb-nb, WR) | −0.0130 | +0.0068 | [−0.0031, +0.0170] | null/inconclusive |
+| (ensemble-decomposed, WR) | n/a | +0.0004 | [−0.0060, +0.0073] | null |
+
+**Builder correctness verified before reporting the regression:** integration's QB feature parquet matched the probe's override parquet byte-identically on all 4 Vegas cols across 9,379 QB rows (max abs delta = 0.0). Not a builder bug.
+
+**Root cause traced:** harness-pairing divergence between `probe_composite` and `run_backtest`. Initial PR #50 data-drift hypothesis was wrong — PR #50's full diff is purely additive logging (`import logging` + `logger.warning(...)`); the placeholder-gsis filter logic is identical to pre-#50. Pre and post backtest runs have **byte-identical row coverage** (2676 QB rows each, perfectly aligned on (gsis_id, season, week)). Re-ran the probe on current data state with `--force-composite --drop implied_team_total spread --model lightgbm-nb --position QB`: **probe reproduces −0.0587 ADOPT exactly** on n=2692. The 16-row delta between probe and gate is all **Taysom Hill** (`gsis_id 00-0033357`) in 2023 — listed as QB on the depth chart (so the QB feature builder includes him) but recorded as `position == "TE"` in weekly_stats. `probe_composite` merges predictions with weekly_stats on `(gsis_id, season, week)` only — pairs Taysom Hill. `run_backtest` filters `holdout_pos[position == "QB"]` first — drops him. Math: those 16 rows alone account for ~6,624 SSE swing (~20 fpts residual diff per row, consistent with Taysom Hill's high-variance utility profile) — enough to flip the QB verdict from gate's +0.111 REGRESSION to probe's −0.0587 ADOPT. **The gate's +0.111 is the production-truth signal** because production never pairs Taysom Hill's QB-depth-chart predictions with his TE weekly_stats row. **First observed case** of a `--force-composite` probe Phase-2 ADOPT failing to replicate in the production gate (prior cases — PR #21 RB PBP, Plan 9 negatives — all replicated cleanly). **Framework follow-up to consider:** align `probe_composite`'s truth-merge to use a position filter matching `run_backtest`'s, so future probes' Phase-2 verdicts are more faithful predictors of the production gate.
+
+**Shipped surface (10 commits on branch):**
+- Spec + plan + summary report (3 docs).
+- `src/projections/schemas.py` — 4 nullable Float cols on each of `QbFeaturesSchema` + `WrFeaturesSchema`.
+- `src/projections/features/qb.py` + `wr.py` — `attach_vegas_team_context_features(out, schedules)` wired into builders.
+- `src/projections/models/lightgbm_nb.py` — `_VEGAS_SWAP_REPLACE`, `_VEGAS_SWAP_ADD`, `_swap_for` helper, `_QB_FEATURE_COLUMNS_NB`, `_WR_FEATURE_COLUMNS_NB` constants; `qb_lightgbm_nb` + `wr_lightgbm_nb` factories rewired; `_code_hash_files_nb` tracks `vegas_team_context_features.py`.
+- ~20 new tests across schemas, features, models (4 schema files + 1 builder test per position + 6 model tests + 1 rewritten broken-premise test for `test_yards_stat_predictions_match_tuned_baseline`).
+
+**Branch disposition (pending user decision):** Phase 0 (schemas + builder wire-up) is harmless and may help future re-investigation. Phase 1 (lgb-nb factory swap) is what the gate rejects. Three options documented in summary: (1) close PR without merging, (2) merge Phase 0 only + revert Phase 1 factory swap before merge — **recommended**, (3) merge as-is + flip production routing back to baseline — not recommended.
+
+**Decision log:**
+- Subagent-driven execution went smoothly for Phase 0+1 (8 implementer subagents + 6 review passes; one subagent suspended mid-test-run on Task 6 and was completed directly in main session).
+- Rebased integration branch onto current main HEAD (`f961ab6`) after first gate-1 run flagged the PR #50 asymmetry concern; re-ran post-integration backtests; result was unchanged (same +0.1112 ΔRMSE on QB) confirming PR #50 alone is not the cause but the data-state drift is.
+- All 363 schema + feature + lgb-nb tests pass on the integration branch.
+
+**Plan-vs-execution deviations:**
+- Task 1+2 implementers needed to also update 2 pre-existing fixture tests in `test_dataframe_schemas.py` to populate the new required cols. Necessary scope-creep; same shape Task 4 had with `test_cache.py::_minimal_wr_features_row`.
+- Task 6 subagent suspended waiting for a long-running pytest (~12 min); main session completed it directly. All Task 6 changes match plan template byte-for-byte.
+- Phase 2 (backtests + gates) executed directly in main session rather than subagents — appropriate for operational work with branch-switching + long-running shell commands.
+
+**Next direction (concrete):**
+1. **External preseason Vegas data spec** — genuine May win totals, OC/HC tenure, FA-acquisition flag, projected pace, projected pass rate. Different mechanism axis from re-deriving `spread_line` / `total_line`; not affected by the probe → gate generalization gap encountered here. Load-bearing for TODO #31 Draft Hub preseason projections.
+2. **RB `preseason_*`-only follow-up probe** still queued, but with a weakened prior — this branch's gate reversal suggests the RB probe's verdict may also fail to generalize. Run with the dual-run gate as the load-bearing decision criterion, not the probe.
+3. **Probe framework follow-up:** add a position filter to `probe_composite`'s truth merge in `src/projections/backtest/feature_probe.py:574-577` so the probe's Phase-2 pairing matches `run_backtest`'s. Without it, candidates that differentially help/hurt cross-position-mislabeled rows (Taysom Hill, multi-position utility players) will be artifactually advantaged by the probe.
+
+See `reports/qb_wr_vegas_team_context_integration_summary.md` for the full gate-by-gate verdict tables, mechanism analysis, and three branch-disposition options.
+
+---
+
+## Vegas Team-Context Feature Family Probe — SIGNAL at lgb-nb swap QB+WR (2026-05-17, on branch `feat/probe-vegas-team-context`)
+
+**Status:** Spec + plan + impl + 4 probe runs + audit + summary on `feat/probe-vegas-team-context`. Phase 1 of TODO #33c. New compute module `src/projections/features/vegas_team_context_features.py` produces 4 candidate cols (`preseason_implied_team_total`, `preseason_spread`, `season_avg_implied_team_total`, `season_avg_spread`) from `SchedulesSchema`'s already-ingested `spread_line` / `total_line`. Override generator CLI `scripts/build_vegas_team_context_override.py`. Probe runs via existing `scripts/probe_feature_signal.py` (no changes). Spec at `docs/superpowers/specs/2026-05-17-vegas-team-context-probe-design.md`; plan at `docs/superpowers/plans/2026-05-17-vegas-team-context-probe.md`.
+
+**Verdict: SIGNAL.** lgb-nb × swap composite returns 2/4 ADOPT — **QB −0.0587 fpts (CI [−0.092, −0.028]) + WR −0.0130 fpts (CI [−0.022, −0.003])**. RB just misses ADOPT (−0.0113, CI [−0.023, +0.001]); TE NULL. Phase 2 fires via `--force-composite` on lgb-nb because Phase 1 is RidgeCV (which actually *REGRESSES* on QB pooled `passing_yards` at +0.34 fpts augment / +0.22 fpts swap — the recurring "QB augment regression" pattern from PRs #23/#24/#25/#28). The lgb-nb augment is 0/4 ADOPT — the SIGNAL only emerges when the 4 new cols *replace* per-game `implied_team_total` + `spread`, not when they augment them. **Mechanism: trees overfit per-game line noise; smoother preseason + season-to-date signals generalize better at the lgb-nb swap level.**
+
+**Pre-registered prediction (spec §1.2) vs observed:**
+- Predicted RB swap as most likely SIGNAL → WRONG; RB just misses, QB + WR carry the signal instead.
+- Predicted Phase 1 SIGNAL at QB/WR `passing_yards` / `receiving_yards` → WRONG; Phase 1 REGRESSES on those cells.
+- Predicted TE NULL → CORRECT.
+- Predicted lgb-nb augment tautological → CORRECT (0/4 ADOPT, all CIs bracket zero).
+
+**Shipped surface:**
+- `src/projections/features/vegas_team_context_features.py` — `compute_vegas_team_context_features` (wraps `_shared.build_game_environment` + preseason broadcast + expanding-mean-shift-1) + `attach_vegas_team_context_features` + `build_vegas_team_context_overrides` (with input validation: required cols, gsis_id format, dup-key rejection, row-count invariant).
+- `scripts/build_vegas_team_context_override.py` — override generator CLI mirroring `scripts/build_weather_override.py`.
+- 20 new tests (15 feature + 5 CLI); all gates clean (mypy + ruff + ruff format).
+- 7 report artifacts: override audit + 4 probe outputs (.md + .csv each) + summary.
+- `data/features_probe/vegas_team_context.parquet` generated (56,652 rows, 100% preseason coverage / 94.13% season_avg coverage); NOT committed (regenerable).
+
+**Decision log:**
+- Hybrid 4-col bundle (preseason × 2 + season-to-date × 2) per spec §3.
+- Coverage threshold relaxed to 0.90 for week-1 cold-start NaN on `season_avg_*`; actual coverage 100% / 94.13% so the relaxation was unused in practice.
+- Eval window 2021–2024 holdout; 2025 deferred (would require `refresh_features --seasons 2025`).
+- Schema integration deferred — probe-only.
+- `--force-composite` on lgb-nb runs was load-bearing: without it Phase 2 wouldn't have fired (Phase 1 returned no pooled SIGNAL), and the lgb-nb swap SIGNAL would have been missed.
+- Task 1 implementation got a dtype-contract fix in code review (`season_avg_*` cols were dropping from Float64 to float64 through `expanding().mean()`; cast back at commit `715509b`).
+- Plan estimated 1–2 hr per lgb-nb run; actual was ~8 min each. Plan estimate was conservative.
+
+**Recommended next direction (concrete):**
+
+Greenlight a **per-position integration plan for QB + WR only** (lgb-nb / ensemble-decomposed routes). Specs / decisions for the integration plan:
+1. **Schema-swap on lgb-nb only:** Keep `implied_team_total` / `spread` in `{Qb,Wr}FeaturesSchema` (BaselineModel + ensemble Ridge children still need them); rewire lgb-nb's `_X_FEATURE_COLUMNS` to read the 4 new cols instead of the per-game cols. More surgical than schema-augment; preserves Ridge children's signal.
+2. **Extend `_shared.build_game_environment` (or sibling)** to emit the 4 new cols per team-game row.
+3. **Refresh feature caches** under `data/features/{qb,wr}/`.
+4. **Run dual-run adoption gate** on QB + WR with production routing (QB → lgb-nb directly; WR → ensemble-decomposed). Confirms probe Phase 2 matches gate verdict.
+5. **TE: do NOT integrate** (no SIGNAL).
+6. **RB: defer.** Phase 2 just misses; a follow-up probe with `preseason_*`-only (drop `season_avg_*`) may cross the threshold.
+
+**Caveats on impact magnitude:**
+- The SIGNAL is at *composite ΔRMSE*, not at elite-season magnitude. A QB Phase 2 ΔRMSE of −0.06 fpts is a ~1–2% per-week RMSE reduction; the 33d Chase 250 → 403 gap (a +150 fpts season miss) won't be closed by this integration alone.
+- The integration is **necessary but not sufficient** for the elite-season problem. The right framing: this is one step along the 33c axis, not the closing step.
+- If integration confirms ADOPT but elite-magnitude persists, the next step is **external preseason Vegas data** (genuine May win totals, OC/HC tenure, FA flags) — a richer encoding of the same mechanism the pbp-derivable proxy partially captures.
+
+**Plan-vs-execution deviations:**
+- Task 1 dtype contract fix (caught in code review, fixed at `715509b`).
+- Task 4 fixture extension: `_make_schedule_rows([])` early-return branch added for empty-input rejection tests.
+- Task 8 audit "unique preseason_spread values per season": shows 30–32 per season rather than always 32 due to coincidental ties (e.g., two teams favored by identical margins in week 1). Not missing data — `preseason_*` coverage is 100%.
+- Task 10 stderr handling: first lgb-nb run polluted .md output with sklearn `UserWarning`s; killed and re-ran with `-W ignore::UserWarning` + stderr to separate log. No data loss.
+- Verdict interpretation flipped during execution: pre-registered prediction was NULL-leaning with RB as most-likely SIGNAL; lgb-nb swap result flipped it to SIGNAL on QB + WR. Summary captures this honestly.
+
+See `reports/feature_probe_vegas_team_context_summary.md` for the full per-(model, mode) verdict + mechanism annotation, and `reports/feature_probe_vegas_team_context_override_audit.md` for the override audit.
+
+---
+
+## Upside-Sensitive Ranking Diagnostic — Phase 1 verdict NO GREENLIGHT (2026-05-17, on branch `feat/upside-ranking-diagnostic`)
+
+**Status:** Spec + plan + diagnostic CLI on `feat/upside-ranking-diagnostic`. Phase 1 of TODO #33d. New module `scripts/diagnose_upside_ranking.py` consumes the new `season_projection_weekly_<season>.parquet` + `season_projection_distributions_<season>.csv` artifacts (now emitted by extended `scripts/project_season.py` alongside the unchanged naive CSV) and produces a markdown verdict report comparing per-player ranks under `mean / p90 / blend_70_30 / p_elite`. Spec at `docs/superpowers/specs/2026-05-16-upside-sensitive-ranking-diagnostic-design.md`; plan at `docs/superpowers/plans/2026-05-16-upside-sensitive-ranking-diagnostic.md`.
+
+**Verdict: NO GREENLIGHT (durable).** Zero SIGNAL cells across all 24 (position × season × non-mean-metric) cells; 2 MARGINAL cells (WR p_elite 2024, QB p_elite 2024) but neither survives to 2025. Decision gate returns `No greenlight`. **The hypothesis behind TODO #33d is falsified:** the elite-season under-projection problem does NOT live in the upper tail of the existing distribution — it lives in feature signal coverage. Chase 2024 mean=250.74, **p90=283.80**, actual=403. Gibbs 2024 mean=258.75, p90=295.29, actual=390.40. The whole distribution is shifted-down for elites.
+
+**Mechanism finding (load-bearing):** `p90` and `blend_70_30` reshuffle the middle/bottom of each positional cohort (only ~54% / ~77% of all player ranks match `mean` byte-for-byte), but produce **identical top-K sets** at K=5 across all 8 cells and at K=12 across 5 of 8 cells. None of the actual elite finishers move into the predicted top tier under any of these candidates. The mechanism: `blend = 0.7·μ + 0.3·(μ + k·σ) = μ + 0.3·k·σ` is monotonic in μ whenever σ is monotonic in μ, which is empirically what lgb-nb / ensemble-decomposed / baseline produce here. `p_elite` (the only metric that's NOT a monotonic transform of mean) does change rank order and shows MARGINAL on WR/QB 2024 — but its Kendall tau is LOWER than mean across all 8 cells (RB drops 0.77→0.61, WR drops 0.70→0.42), so the top-of-cohort gains come at the cost of overall ordering quality. Not a free win.
+
+**Shipped surface:**
+- `src/projections/aggregation/season.py` — `aggregate_to_season(return_samples=True)` overload returning `(summary_df, dict[(gsis_id, season), np.ndarray])`. Backward-compatible default. (T1, commit `2b909f5`.)
+- `src/projections/aggregation/season.py` — guard widened to accept `{SAMPLED_SUMMARY, QUANTILE, MIXED}` row-level families (was SAMPLED_SUMMARY-only). Required because QB lgb-nb + WR ensemble-decomposed both emit MIXED rows. **Closes TODO #28.** (commit `ffdd334`.)
+- `src/projections/scoring/actuals.py` — new `actual_season_total(weekly_stats, ruleset)` helper extracted from `scripts/compare_predictions_to_actuals.py`. Re-exported from `projections.scoring`. (T2, commits `2e2e31d` + `1b7f9cd`.)
+- `scripts/project_season.py` — `_write_season_artifacts(weekly, ruleset, out_dir, season, id_map)` helper; emits 3 artifacts per run (unchanged naïve CSV + new weekly parquet + new distributions CSV). (T3-T4, commits `0fc92c6` + `10460e9`.)
+- `scripts/diagnose_upside_ranking.py` — new CLI. Helpers: `_compute_elite_thresholds`, `top_k_overlap`, `top5_rank_err`, `kendall_tau_filtered`, `cell_verdict`, `decision_gate`, `assemble_season_diagnostic`. Markdown report + per-player CSV output. (T5-T10, commits `aedd6f1` → `e13eea5`.)
+- 25 new tests across `tests/test_aggregation/test_season_return_samples.py`, `tests/test_aggregation/test_aggregate_mixed_family.py`, `tests/test_scoring/test_actuals.py`, `tests/test_scripts/test_project_season_artifacts.py`, `tests/test_scripts/test_upside_ranking_metrics.py`, `tests/test_scripts/test_diagnose_upside_ranking_cli.py`.
+- `pyproject.toml` — added `tabulate>=0.9` (required by `DataFrame.to_markdown` in the diagnostic; was a missing transitive dep).
+- 2 report artifacts: `reports/upside_ranking_diagnostic.md`, `reports/upside_ranking_diagnostic_table.csv`. Committed at `34a1685`.
+
+**Decision log:**
+- **Diagnostic-first scope** (per spec §1.1). Phase 2 production ranking surface was conditional on this verdict — NO GREENLIGHT means no Phase 2 work.
+- **4 metrics committed before run** to avoid data-snooping: `mean` (baseline), `season_p90`, `blend_70_30 = 0.7·mean + 0.3·p90`, `p_elite = P(season ≥ elite_threshold)`. Blend coefficient (0.7/0.3) fixed pre-run.
+- **Elite threshold:** 5-year (2019-2023) mean of the 5th-highest season fpts at position, ≥8 games. Computed at run time. Observed: QB=354.3, RB=290.0, WR=316.6, TE=203.5.
+- **Decision gate (spec §1.3 #3):** Greenlight requires a single metric SIGNAL at ≥3/4 positions in BOTH 2024 AND 2025. Strict-on-greenlight, lenient-on-marginal — the bar for committing weeks of Phase 2 work was the strong signal.
+- **Production routing used:** QB lightgbm-nb, RB baseline, WR ensemble-decomposed, TE baseline (per Plan 8 + PR #41).
+
+**Risks logged (spec §6) — observed outcomes:**
+- **Risk #1 (independent weekly draws understate true season variance):** Real. The composite [p10, p90] under-coverage on RB/TE/WR (Plan 5c/6) propagates into season_p90 being biased toward the center. This is plausibly part of why p90 ≈ mean for these positions — the distribution-tail compression compounds the mean-regression compression.
+- **Risk #2 (elite threshold sensitivity):** Per-position thresholds are reasonable (top-5 = elite tier). Multiple top-K's reported (5/12/24) bracket the choice. Not a blocker on the negative result.
+- **Risk #3 (multiple-comparison effect):** Decision gate's "≥3/4 in BOTH years" requirement protected against false positives. With zero SIGNAL cells observed, this is moot.
+
+**Recommended next direction (highest-leverage):**
+1. **33c — forward-looking Vegas team-context features family probe.** Genuinely unexplored feature class. Candidates: as-of-time season win total, season O/U, projected pace, projected pass rate, OC/HC tenure, FA-acquisition flag. Mechanism prediction: most lift on RB + WR (the exact positions where the elite-season miss is worst). Also load-bearing for TODO #31 (Draft Hub preseason projections). Cheapest probe entry: bundle 3-4 Vegas signals → override parquet → `scripts/probe_feature_signal.py`.
+2. **33b — `td_rate_per_target` factor-appropriate sub-model probe** (TODO #23 continuation). Named follow-up after PR #38/#41 shipped WR ensemble-decomposed-child for receptions. Lower prior given PR #39 (logit catch_rate) and PR #44 (Tweedie yards_per_target) were both NULL.
+3. **Pivot toward Draft Hub surfaces** (TODO #31, K/DST per TODO #10, live snake recommender per draft_ready_checklist §2b.2). The projection model is already good enough for draft-day decisions; what's missing is the surfaces that consume it.
+
+**Plan-vs-execution deviations:**
+- **TODO #28 surfaced as a real blocker in T11.** Plan assumed `aggregate_to_season` already accepted all per-row family tags; in fact the function had a hard guard that rejected anything but `SAMPLED_SUMMARY`. Fixed in commit `ffdd334` with single-line guard widening + 3 new tests. Adds a small scope expansion to this PR (closes a separate TODO incidentally).
+- **T2 helper location.** Plan had the actuals helper at `scripts/_actuals_helper.py` (per the original spec). Code review correctly flagged that pattern was inferior to relocating into `src/projections/scoring/`. Moved to `src/projections/scoring/actuals.py` (commit `1b7f9cd`) with rename to `actual_season_total` (was `actual_ppr_total` — misleading since it accepts any Ruleset). Plan's Task 10 imports were updated inline by the controller.
+- **T6 `top_k_overlap` semantics.** Plan specified strict `/k` denominator (matching spec §3.2). Code review during T9 surfaced that the plan's T9 test fixture (3 QBs, asserts `top5_overlap == 1.0`) would have been unsatisfiable under strict `/k`. Implementer changed to `min(k, n)` denominator — standard Hit@k convention; identical to `/k` in production (cohorts always exceed K=24). Accepted with note that the spec text would benefit from a one-line clarification.
+- **T9 `_p_elite_for` O(n²) fix.** Plan had a `for ... if gid == row[...]` scan per row. Caught in code review; fixed to precompute `samples_by_gsis: dict[str, np.ndarray]` once before `df.apply` (commit `72c6fcc`).
+- **T10 `tabulate` dep + gsis_id format.** Plan's test fixture used `f"00-{pos}-{player_idx:04d}"` for synthetic gsis_ids — fails `GSIS_ID_PATTERN = ^\d{2}-\d{7}$`. Fixed to a `_gsis_id(pos, player_idx)` helper producing canonical format. `tabulate>=0.9` added to deps (was missing).
+
+See `reports/upside_ranking_diagnostic.md` for the full verdict report and `reports/upside_ranking_diagnostic_table.csv` for the per-player drill-down.
+
+---
+
+## Snake-Draft Cheat Sheet — feature shipped (2026-05-16, on branch `feat/snake-cheat-sheet`)
+
+**Status:** Spec + plan + impl on `feat/snake-cheat-sheet`. Third surface of the Draft Hub sub-project (auction $ generator → VORP → snake cheat sheet). Reads a `VorpTableSchema` parquet + `id_map.parquet` + `LeagueConfig`, emits a per-player table sorted by `(position canonical order, positional_rank)` with gap-based tier breaks (1..N for in-pool, NA otherwise). v1 scope: VORP + tier breaks only. ADP delta and p10/p90 confidence band deferred to follow-up specs. Spec at `docs/superpowers/specs/2026-05-16-snake-cheat-sheet-design.md`; plan at `docs/superpowers/plans/2026-05-16-snake-cheat-sheet.md`.
+
+**Shipped surface:**
+- `src/projections/draft/snake_cheat_sheet.py` — `generate_snake_cheat_sheet` public function + `_assign_tiers` private numpy helper (gap-based with fixed-N tiers; n≤N falls back to 1-per-tier).
+- `src/projections/schemas.py` — appended `SnakeCheatSheetSchema` (9 cols including nullable Int64 `tier`).
+- `src/projections/draft/__init__.py` — re-exports `generate_snake_cheat_sheet`.
+- `scripts/generate_snake_cheat_sheet.py` — CLI with `--season --league-config --vorp-input --id-map --tiers-per-position --out` flags; CSV and parquet output supported; per-position stdout summary (top-3 with tier-1 cliff size) as eyeball mitigation.
+- 22 tests in `tests/test_draft/test_snake_cheat_sheet.py`, 3 integration tests in `tests/test_scripts/test_generate_snake_cheat_sheet_cli.py`, 1 schema round-trip test appended to `tests/test_schemas/test_dataframe_schemas.py`. All passing.
+
+**Decision log:**
+- **Tier algorithm: gap-based, fixed N (default 8).** Captures "talent cliffs" rather than smoothing distributions into arbitrary buckets. N is configurable via `--tiers-per-position`. Alternatives (variable-N gap threshold, k-means, fixed buckets) documented in spec §3.2 and rejected with reason. `np.lexsort` tie-break prefers earlier (higher-rank) gap when tied magnitudes compete for the N-1th-largest slot.
+- **Show all players, tier only in-pool.** Output includes out-of-pool players (positional_rank computed across both) so the sheet doubles as a waiver-wire lookup. Out-of-pool rows get `tier = NA`.
+- **Display names from `id_map.parquet`, not `depth_charts`.** First draft of the spec named depth_charts as the name source — fact-check during spec-writing revealed `DepthChartsSchema` carries no name column. `IdMapSchema.full_name` is the canonical name source in this codebase (built by `build_id_map` from `nflreadpy.load_ff_playerids()`). Roster-wide, so 2026 pre-season name coverage is good.
+- **ADP delta and confidence band deferred.** Spec §1.2 — each blocks on infrastructure that doesn't exist (no ADP ingest; no p10/p90 plumbed through `VorpTableSchema`). Follow-up specs.
+- **Empty-input contract stricter than original spec §3.6 said.** Spec originally said "empty input → empty output." Actual impl calls `_select_pool` first, which raises "cannot fill N {slot} slots" because no players can fill any required position. Spec §3.6 + §5.1 #18 updated mid-implementation to match the as-implemented "raise on empty input + non-empty config" contract — failing loudly is correct when the caller asks for rankings at positions with no input.
+
+**Risks logged (spec §6):**
+- **No ADP signal means cheat sheet reflects model view, not room view.** Manual ADP cross-reference required during draft for v1.
+- **Tier instability across runs.** Gap-based tiers can flip if a small VORP shift moves which gap is "Nth largest." Stdout `tier-1 size` per position surfaces cliff stability for eyeball-check.
+- **`_select_pool` now has three callers** (`auction.py`, `vorp.py`, `snake_cheat_sheet.py`). Pool refactors must consider all three; auction test suite remains the regression gate.
+
+**Plan-vs-execution deviations:**
+- `LeagueConfig` requires `n_teams > 1`; plan's Task 4 + Task 5 corner-case tests originally specified `n_teams=1` configs which raise validation. Adapted to `n_teams=2, roster_slots={QB: 1}` — same invariants exercised.
+- Plan's `_make_vorp_table` sizing of `{QB:4, RB:6, WR:6, TE:4}` for the display-name tests + sort-order test was too small for default 4-team config's RB requirements (2 RB × 4 teams = 8 RB starter slots, + FLEX). Grew to `{QB:8, RB:12, WR:12, TE:8}` (same sizing as the §5.1 #1-2 schema tests). Display-name semantics are pool-size-independent.
+- **Spec §3.6 + §5.1 #18 updated mid-implementation** to match the stricter "empty input raises" behavior (commit `3a867f7`). Test originally named `test_empty_input_returns_empty` was renamed to `test_empty_input_raises` in the same commit.
+- **Vectorized tier assignment** (code-review polish, commit `9c59924`): plan's `for idx, t in zip(...): tier_col[idx] = int(t)` was replaced with `tier_col[in_pool_idx] = tiers` — `pd.array(dtype=pd.Int64Dtype())` supports numpy fancy-indexed assignment.
+- **`--season` parsed-but-unused in initial CLI (Task 8)**; threaded into stdout banner in Task 9 to close the spec §4 inconsistency.
+- **Synthetic id_map position derivation fixed in Task 8** — plan-quoted `"QB" if gid.startswith("00-1") else "RB"` would have mismarked WR/TE rows as RB. Implementer derived position from the gsis_id prefix character properly.
+- **F401 noqa carry-over:** `pytest` import was noqa-suppressed in Tasks 2-5 (unused); removed in Task 6 when `pytest.raises` was first used.
+- **Pre-commit + venv interaction learning:** the inline `PATH=... git commit` syntax doesn't propagate to pre-commit hook subprocesses; must use `export PATH=...; git commit`. Discovered mid-implementation. Worth recording for future sessions.
+- **`/simplify` follow-up cleanup commit** (`79b739c`): replaced stringly-typed `for pos_value in df["position"].unique()` with explicit `for pos in Position` enum iteration; deleted duplicated `_POSITION_ORDER` constant; replaced TOCTOU `path.exists()` with `try/except FileNotFoundError`; removed narrating "Stage N:" comments; promoted `_DISPLAY_NAME_FALLBACK` → `DISPLAY_NAME_FALLBACK` so tests import the constant instead of hardcoding "—".
+
+**Recommended next direction:**
+1. **ADP ingest + ADP-delta column** (`draft_ready_checklist.md` §2b.3). The biggest decision-relevance lift to the cheat sheet. FantasyPros has a free CSV export; Sleeper API exposes it. Either lands as an ingest spec + a small schema extension on `SnakeCheatSheetSchema`.
+2. **Confidence band — p10/p90 floor/ceiling rank.** Plumb `season_p10` and `season_p90` through to the cheat sheet. Either extend `VorpTableSchema` to carry them (forces upstream/downstream changes) OR have this CLI re-aggregate from `weekly_projections` directly. Decide in the follow-up spec.
+3. **Live snake-draft recommender** (`draft_ready_checklist.md` §2b.2). The other §2b consumer. Two viable approaches sketched: greedy (highest-VORP available at position of need) and lookahead (ADP-simulated opponents). The latter is ADP-blocked.
+4. **Tier-stability variants.** If users find the default gap-based tiers too wobbly across runs, add `--tier-algorithm` flag accepting `gap` (default), `kmeans`, `fixed-buckets`. Trigger: user feedback after first real draft.
+5. **Cross-Draft-Hub-CLI refactor follow-up** (surfaced by /simplify but out-of-scope for this PR): consolidate the duplicated `_make_config` / `_POSITION_ID_PREFIX` / `_make_vorp_table` test fixtures across `tests/test_draft/test_auction.py`, `test_vorp.py`, `test_snake_cheat_sheet.py` into a `tests/test_draft/conftest.py`; extract a shared `_write_output(df, path)` helper (the auction CLI version has a `.suffix` case-sensitivity bug — fix it in the same pass).
+
+**Known pre-existing test failure (NOT introduced by this feature):**
+`tests/test_models/test_decomposed_baseline.py::test_dispatch_default_model_class_for_wr_is_unchanged` — same stale pin flagged in PR #40 and PR #41 reviews. WR routing was flipped to `ensemble-decomposed` in the 2026-05-15 WR ensemble PR; this pre-gate test asserts the old `ensemble` value. Fails on `main` too. Worth a small follow-up to clean up.
+
+See `docs/superpowers/specs/2026-05-16-snake-cheat-sheet-design.md` and `docs/superpowers/plans/2026-05-16-snake-cheat-sheet.md`. Draft-readiness status: `draft_ready_checklist.md` §2b.1 flipped to `[x]`.
+
+---
+
+## Preseason Projections — v1 framework + naive baseline shipped (2026-05-17, on branch `worktree-feat+preseason-projections`)
+
+**Status:** New sub-package `src/projections/preseason/` ships v1 framework + `NaivePreseasonModel`. 4 modules (`features.py`, `model.py`, `project.py`, `backtest.py`), 3 new pandera schemas in `src/projections/schemas.py` (`PreseasonFeaturesSchema`, `PreseasonProjectionSchema`, `PreseasonBacktestSchema`), 2 new CLI scripts (`scripts/preseason_project_season.py`, `scripts/backtest_preseason.py`), 29 tests across the suite + 2 CLI integration tests. Spec at `docs/superpowers/specs/2026-05-17-preseason-projections-design.md`; plan at `docs/superpowers/plans/2026-05-17-preseason-projections.md`.
+
+The baseline implements three branches: veterans via `prior_1_per_game × 16` (with prior_2 / prior_3 fallback); rookies via per-(position, stat) Gamma GLMs on `log(draft_pick_overall + 1)` trained on rookie-year season totals from `draft_picks ⋈ weekly_stats`; UDFAs imputed to pick=300. Distribution shape is degenerate (point-mass) for v1.0 — `mean = p10 = p50 = p90` — and the v1.5 trained-model spec is the next slot for adding real per-stat distribution width. fpts come from the canonical `projections.scoring.scoring_coefficients` map (no duplicated scoring math).
+
+Backtest harness (`backtest.py`) is walk-forward: for each `target_season ∈ {2024, 2025}`, train on `[train_start, target_season-1]`, predict, aggregate `weekly_stats[season=target_season]` to per-player actual fpts, inner-join, compute per-position RMSE + Spearman top-50 + coverage diff, apply per-cell verdict (ADOPT / NULL / DO_NOT_ADOPT). v1.5+ ship gate: ≥6/8 cells ADOPT AND zero DO_NOT_ADOPT.
+
+**Known v1.0 → v1.1 gap (flagged in spec §7.6, deferred):** the markdown report's per-position top-20 spot-check tables and player-name coverage-diff sidebars. The verdict tables + per-cell metric tables + coverage-diff counts ship in `write_backtest_report` (sufficient for the gate); the enhanced report variants require threading prediction+actual frames through `walk_forward_backtest`'s return type and is bounded follow-up.
+
+**Next:**
+1. **Produce the 2026 partition.** One-liner: `python scripts/preseason_project_season.py --season 2026 --ruleset espn_ppr`. Requires `data/raw/depth_charts/season=2026/` to be materialized first via `from projections.ingest.depth_charts import refresh_depth_charts; refresh_depth_charts(seasons=[2026])` — `depth_charts_2026.parquet` was confirmed available upstream via the nflverse HEAD probe (TODO #32 footer).
+2. **Generate v1.0 characterization backtest.** `python scripts/backtest_preseason.py --model naive-preseason --target-seasons 2024,2025` — surfaces the floor RMSE / Spearman that v1.5 trained models will be benchmarked against.
+3. **v1.5 spec: first trained model class.** Likely a GammaGLM on `(prior_1, prior_2, prior_3, age, depth_chart_rank, team)`. Backstop: LightGBM-quantile if Gamma underperforms.
+
+Closes TODO #31 (preseason-projections "first plan should be brainstorm + roadmap"). Flips `draft_ready_checklist.md` §1a row 1 (2025 ingest) and §1b row 2 (`predict_season.py SEASON`) to `[x]`.
+
+---
+
+## RB Rushing + Receiving Decomposition Probe — verdicts 5x NULL (2026-05-16, on branch `feat/probe-rb-decomposition`)
+
+**Status:** New probe `src/projections/backtest/rb_decomposition_probe.py` tests whether decomposing RB stats into two shared volume axes (carries, targets) x per-stat efficiency factors beats per-stat direct RidgeCV. 5 composed stats: rushing_yards, rushing_tds (carries axis) + receptions, receiving_yards, receiving_tds (targets axis). Sub-model = RidgeCV everywhere (decomposition-only test; factor-appropriate sub-models are separate cycles). Spec at `docs/superpowers/specs/2026-05-16-rb-decomposition-probe-design.md`.
+
+**Per-stat verdicts:**
+
+| Stat | n_paired | RMSE delta | 95% CI | Composite-fpts equiv | Verdict |
+|---|---:|---:|---|---:|:---:|
+| rushing_yards | 3291 | -0.0931 | [-0.1915, +0.0058] | -0.0093 fpts | NULL |
+| rushing_tds | 3291 | +0.0010 | [-0.0014, +0.0033] | +0.0062 fpts | NULL |
+| receptions | 3291 | -0.0004 | [-0.0022, +0.0016] | -0.0004 fpts | NULL |
+| receiving_yards | 3291 | -0.0344 | [-0.0850, +0.0150] | -0.0034 fpts | NULL |
+| receiving_tds | 3291 | -0.0003 | [-0.0012, +0.0006] | -0.0017 fpts | NULL |
+
+**Coverage:** carries > 0 rate 0.9638-0.9761 across 2021-2024 (above 0.95 threshold every year); targets > 0 rate 0.7799-0.8518 across 2021-2024 (**BELOW THRESHOLD for all four eval years**). The receiving-axis coverage flag is structural for RBs — a meaningful fraction of RB-weeks have zero targets, which is a legitimate observation of low-volume / out-of-rotation usage rather than a data-quality issue. Receiving-stat verdicts therefore rest on the targets > 0 subset (rough effective n on the order of 0.80 × 3291 ≈ 2600); rushing-stat verdicts are at full eval coverage. The MARGINAL magnitude flag fires on 3 stats (receptions, receiving_yards, receiving_tds) whose |fpts delta| sits below the 0.005-fpts threshold per PR #31's retrospective rule.
+
+**Plan-vs-execution deviations:**
+- RB feature cache (`data/features/rb/...`) for seasons 2018-2020 predated the weather-column additions in commit `09e0d76` and didn't carry `wind_speed_mph` / `is_high_wind` / `temperature_f` / `is_grass_surface`, so `read_features` failed pandera validation on the first probe invocation. Resolved by running `scripts/refresh_features.py rb --seasons 2018-2024` once before the probe (85 s wall-clock); no code change. Probe itself ran in 5.4 s.
+- Per-stat reports (spec §6 line listing 5 per-stat .md files): not produced. With all 5 stats NULL, per-stat reports would duplicate the summary table's verdict + CI + composite-fpts equivalent without adding decision-influencing content. If any future re-run produces a SIGNAL, generate per-stat reports for the SIGNAL stat(s) only.
+
+**Mechanism interpretation:** Decomposition with RidgeCV on every sub-model is statistically indistinguishable from direct RidgeCV on RB rushing AND receiving stats. The four CIs that lean negative (everything except rushing_tds) cluster their upper bounds within 0.015 of zero — there's no hidden SIGNAL being masked by noise. This is the cleanest possible NULL outcome: same model class, same residual variance, every stat. Compare against the WR target-decomposition probe (PR #32), where the same Ridge-vs-Ridge recipe found a marginal SIGNAL on WR receptions; the same recipe finds nothing on RB receptions. Two distinct mechanistic stories rule out: (1) the volume / efficiency separation does not, by itself, expose RB-specific signal that direct RidgeCV misses; (2) PR #32 / PR #33's marginal WR-receptions SIGNAL does NOT generalize to RB even on the same stat — RB receiving-volume targets are too sparse (≤85% coverage) and too correlated with the rushing-volume features for the decomposition to find independent leverage.
+
+**Recommended next direction:** Close the RB decomposition direction at this Ridge-only unit. Per spec §4 "all 5 NULL" branch, no integration plan is greenlit. Factor-appropriate RB sub-model probes (Poisson on carries / targets, Gamma on yards-per-X, logit on rate factors) are NOT next — those are conditional on at least one RB Ridge-vs-Ridge SIGNAL per spec §1.4 #3 — none here. With this PR landed, three consecutive factor-class / decomposition probes have now returned NULL (logit catch_rate PR #39, Tweedie yards_per_target PR #44, RB decomposition this PR); the decomposition-and-factor-class axis on receiving stats is empirically exhausted on Ridge-vs-class without independent mechanism evidence. Higher-leverage next directions remain: (1) refined-unit feature work under TODOs #24 / #25 that proved productive on WR / TE; (2) entirely different mechanism families (deeper-unit player-trajectory, new ingest sources). The RB decomposition recipe should not be re-tested without independent mechanism evidence that something has changed (new features, new sub-model classes proven elsewhere first).
+
+See `reports/feature_probe_rb_decomposition_summary.md` for full per-stat tables + coverage flags + plan-vs-execution-deviations.
+
+---
+
+## Tweedie yards_per_target Probe — verdict `NULL` (2026-05-16, on branch `feat/probe-tweedie-yards-per-target`)
+
+**Status:** New probe `src/projections/backtest/tweedie_yards_per_target_probe.py` tests whether replacing the yards_per_target efficiency sub-model class from `RidgeCV` on the ratio + clip(>=0) to `TweedieRegressor(power=1.5, link="log")` with alpha CV-selected lowers per-stat receiving_yards RMSE on WR rows. Spec at `docs/superpowers/specs/2026-05-16-tweedie-yards-per-target-probe-design.md`.
+
+**Verdict:** `NULL` — RMSE delta -0.0121 yards (95% CI [-0.0564, +0.0353]), n_paired = 5195. Composite-fpts equivalent -0.0012 fpts. Magnitude flag fired: |delta| 0.0121 < 0.050 yards (|delta_fpts| < 0.005) per PR #31's retrospective rule (marginal zone — moot here because the CI brackets zero regardless).
+
+**Mechanism interpretation:** The CI brackets zero with the upper limit well into positive territory (+0.0353 yards), so the Tweedie log-link sub-model is statistically indistinguishable from the Ridge-on-clipped-ratio incumbent on per-stat receiving_yards RMSE over the 2021-2024 pooled WR rows. Per-year breakdown shows directional noise around zero: 2021 +0.034, 2022 -0.036, 2023 +0.025, 2024 -0.075 — no single eval year's CI excludes zero (2024 comes closest at hi +0.007). The mechanistic story this rules out: Tweedie's compound-Poisson-Gamma shape on yards_per_target does NOT materially outperform the Ridge-on-ratio + clip(>=0) approximation on the WR data we have. Coverage is comfortably above 0.95 across all eval years (0.989-0.996), so the verdict is not muddied by the `targets > 0` filter.
+
+**Mechanism caveat:** Incumbent arm (Ridge-decomp) is NOT current production for receiving_yards; production is direct RidgeCV via `ensemble-decomposed` (which decomposes Stat.RECEPTIONS only per PR #36/#38). A SIGNAL verdict at this gate would NOT have implied Tweedie-decomp beats current production; that comparison is the integration adoption-gate's question. The NULL verdict short-circuits that question — no integration cycle is warranted.
+
+**Recommended next direction:** Close the yards_per_target factor-appropriate direction — the strictly-positive right-skewed efficiency factor's distributional shape is not large enough on real WR data to justify the class swap. Next slot per spec §6 is a `td_rate_per_target` factor-appropriate probe (Poisson or logistic, depending on whether td-per-target is treated as a count-per-trial or a Bernoulli rate) on a separate cycle. With both catch_rate (NULL, PR #39) and yards_per_target (NULL, this PR) now closed factor-appropriate, the factor-class-swap line of attack on WR receiving has produced two NULLs in a row — the recipe-change axis (decomposition itself, PR #36/#38) carries more weight than the sub-model-class axis on this data.
+
+**Plan-vs-execution deviations:**
+- **Negative-yardage filter on efficiency training rows.** Tweedie deviance requires y >= 0; ~0.6% of WR `targets > 0` rows have negative `receiving_yards` (real-data laterals / lost yards on receptions). `walk_forward_residuals` was tightened from `targets_train > 0` to `(targets_train > 0) & (yards_train >= 0.0)` on the efficiency-fit row mask, applied to BOTH arms so the comparison stays apples-to-apples. Eval rows are NOT filtered. Impact: minimal — <1% of training rows dropped per fold, applied symmetrically. Note: spec §3.1 forbade filtering `receiving_yards > 0` to preserve Tweedie's native handling of the y == 0 point mass; the y >= 0 mask honors that intent — y == 0 rows (the Tweedie point mass) are kept and only the unanticipated y < 0 NFL-laterals case is removed.
+- **No ConvergenceWarning fired** during the run.
+- **Wall-clock ~7 seconds** (well under the 5-15 min plan estimate; n_rows-per-fold smaller than worst-case).
+
+See `reports/feature_probe_tweedie_yards_per_target_summary.md` for the full decision log + per-year tables + coverage + magnitude flag + deviations section.
+
+---
+
+## VORP Generator — feature shipped (2026-05-16, on branch `feat/vorp`)
+
+**Status:** Spec + plan + impl on `feat/vorp`. Pool-boundary replacement-level method: replacement at position P is the season-mean projection of the worst player at P that makes it into the drafted pool (the `_select_pool` output, lifted from the auction module so both specs share one definition). VORP = `season_mean_fpts − replacement_fpts(P)`. Output parquet is the input contract for the already-shipped auction $ generator and the upcoming snake-draft cheat sheet. Spec at `docs/superpowers/specs/2026-05-16-vorp-design.md`; plan at `docs/superpowers/plans/2026-05-16-vorp.md`.
+
+**Shipped surface:**
+- `src/projections/draft/vorp.py` — `generate_vorp_table(projections, league_config)` public function.
+- `src/projections/draft/_pool.py` — new module-private `_select_pool` (lifted from `auction.py`; generalized to accept inputs without a `vorp` column so VORP itself can call it).
+- `src/projections/draft/auction.py` — re-imports `_select_pool` from `_pool`; no behavioral change.
+- `src/projections/schemas.py` — appended `VorpTableSchema`.
+- `scripts/generate_vorp_table.py` — CLI with `--season --league-config --projections-input --out` flags; CSV and parquet output; per-position stdout summary including `replacement_fpts` for eyeball sanity (mitigates the "pool-boundary is one specific definition" risk).
+- ~28 new tests: 22 in `tests/test_draft/test_vorp.py`, 3 in `tests/test_draft/test_pool.py`, 3 in `tests/test_scripts/test_generate_vorp_table_cli.py`, 1 schema round-trip appended to `tests/test_schemas/test_dataframe_schemas.py`. All passing; mypy + ruff + format clean across 191 source files. The 21-test auction regression gate (`tests/test_draft/test_auction.py`) passes unchanged after the `_select_pool` lift.
+
+**Decision log:**
+- **Pool-boundary replacement-level (§3.1)** chosen over the two alternatives. §3.2 strict-positional (replacement = `N_teams × starters_at_P + 1`) ignores FLEX / SUPER_FLEX / BENCH and produces wrong replacement levels for any non-trivial roster. §3.3 bench-buffer adds a free parameter (`buffer_size`) that has no principled value. Pool-boundary naturally accounts for FLEX/SUPER_FLEX/BENCH composition and is internally consistent with the auction generator (both call the same `_select_pool`).
+- **K/DST out of scope for v1.** TODO #10. VORP raises explicitly if `LeagueConfig.roster_slots` requires a position not present in the projections input — the pool composition is undefined otherwise, and silently producing partial output would propagate a sign error into the downstream auction $ table.
+- **Column rename at the VORP boundary** (`season_mean` → `season_mean_fpts`), with an inline comment explaining the rationale. Cross-spec consistency (renaming the upstream projections column too) deferred per spec §6.
+- **Refactor:** `_select_pool` lifted from `src/projections/draft/auction.py` into module-private `src/projections/draft/_pool.py`, generalized to accept inputs without a `vorp` column. Auction's 21-test regression gate passes unchanged.
+
+**Risks logged (spec §6):**
+- **Pool-boundary is one specific definition.** Magnitudes will differ from public ESPN / Yahoo / FantasyPros cheat sheets, which typically use strict-positional or implicit-bench replacement. **Mitigation shipped:** CLI emits per-position `replacement_fpts` in the stdout summary for user eyeball before trusting numbers downstream.
+
+**Plan-vs-execution deviations:**
+- **Spec contradiction caught mid-implementation.** Original §3.6 said VORP is "silent + downstream auction error" on a required-but-missing position. Code correctly raises, since with no projections for a required position the pool composition is undefined. Spec amended in commits `9504b0e` (§3.6 + §5.1 #17) and `6e4b719` (§5.4 #26 + §4 stdout example) to reflect the raise-on-missing behavior.
+- **Lowercase `"espn_ppr"` bug in plan fixtures.** `Ruleset.espn_ppr().name` is uppercase `"ESPN_PPR"`. Task 4 implementer caught and fixed the fixture; Task 11 fixture was pre-fixed.
+- **Multiple small cleanup commits between major tasks** — spec docstring tightenings, dead-branch removal, enum-vs-string-constant import substitution, test comment trim, defensive assertion additions. All from reviewer feedback, none material to the algorithm.
+
+**Recommended next direction:**
+1. **Snake-draft cheat sheet** (`draft_ready_checklist.md` §2b.1) — the other VORP consumer, same input contract (the parquet this spec produces), different output surface (per-position ordered list with VORP / ADP delta / tier / confidence band).
+2. **`predict_season.py` generalization** (`draft_ready_checklist.md` §1b) — required for any post-2024 VORP run. The current projection generator is pinned to a specific season; generalize before season-start draft prep.
+3. **K/DST projection generation** (TODO #10) — unblocks K/DST VORP and finishes the league-config story for standard ESPN/Yahoo formats.
+
+See `docs/superpowers/specs/2026-05-16-vorp-design.md` and `docs/superpowers/plans/2026-05-16-vorp.md`. Draft-readiness status: `draft_ready_checklist.md` §2a.1 flipped to `[x]`.
+
+---
+
+## Auction Values $ Generator — feature shipped (2026-05-16, on branch `feat/auction-values`)
+
+**Status:** Spec + plan + impl on `feat/auction-values`. First module of the Draft Hub sub-project. Standard SOS allocation: reserve `min_bid` per drafted slot, distribute remaining budget proportionally to positive VORP among the rostered pool. Strategy-agnostic — one $ per player; downstream live-bid recommender owns aggressiveness / roster-shape knobs. Spec at `docs/superpowers/specs/2026-05-16-auction-values-design.md`; plan at `docs/superpowers/plans/2026-05-16-auction-values.md`.
+
+**Shipped surface:**
+- `src/projections/draft/` — new subpackage (Draft Hub seed). `LeagueConfig` (frozen pydantic, shared with VORP/snake specs), `_select_pool` helper, `generate_auction_values` public function.
+- `src/projections/schemas.py` — appended `AuctionValuesSchema`.
+- `scripts/generate_auction_values.py` — CLI with `--season --league-config --vorp-input [--reference-prices] --out` flags; CSV and parquet output supported; per-position stdout summary as VORP-quality eyeball mitigation (spec §6 risk).
+- `configs/league_espn_ppr_12team.json` + `configs/league_espn_half_10team.json` — example league configs.
+- 33 tests in `tests/test_draft/`, 3 integration tests in `tests/test_scripts/test_generate_auction_values_cli.py`, 1 schema round-trip test appended to `tests/test_schemas/test_dataframe_schemas.py`. All passing; mypy + ruff + format clean across 186 source files.
+
+**Decision log:**
+- **Algorithm A only.** Pure VORP-to-$ (no per-position market scaling, no ADP anchor). Self-contained, no new ingest. `--reference-prices` flag allows pasting an external $ sheet for sanity comparison without baking calibration into the algorithm. Algorithms B/C (market scaling / ADP anchor) deferred to separate specs blocked on data-ingest scope that doesn't exist.
+- **VORP is a sibling spec, not bundled.** This spec consumes a `vorp_table` parquet; the VORP spec will be its own (smaller) PR. Script errors clearly if the parquet is missing.
+- **Strategy is downstream.** $ generator is strategy-agnostic; live-bid recommender will accept the strategy knobs in a follow-up spec.
+- **Pool selection is projection-rank, not VORP-rank.** Spec §3 step 1 — actual drafts assign players to roster slots which have positional structure, so a high-VORP QB18 doesn't go on a roster when QB1-QB12 are already drafted. Pool fills position-specific → FLEX → SUPER_FLEX → BENCH.
+
+**Risks logged (spec §6):**
+- **Calibration vs real auction markets.** Algorithm A reflects model's view of value, not market clearing prices. Trigger to spec B/C if draft-day curve feels wrong.
+- **VORP-spec coupling.** Broken VORP produces silently-broken $; schema invariants pass either way. **Mitigation shipped:** CLI emits per-position summary (top-3 $, in-pool count, min/median/max VORP within pool) for user eyeball before trusting output.
+
+**Plan-vs-execution deviations:**
+- Spec / plan worked-example listed `roster_size = 16` for the standard 12-team ESPN PPR config; actual sum is 17 (1 QB + 2 RB + 3 WR + 1 TE + 1 FLEX + 1 K + 1 DST + 7 BENCH). Spec corrected post-hoc. Pool-size invariant tests had the same off-by-one; implementer corrected mid-flight.
+- Plan's `_bulk_position_rows` test helper embedded letters into the GSIS_ID-regex digit slots (`f"00-{position.value}{i:05d}"[:10]` → `00-QB000001`), which fails `AuctionValuesSchema`'s `\d{2}-\d{7}` constraint when the fixture is run through `validate`. Implementer swapped to a per-position digit prefix scheme (e.g. `00-1000001` for QB).
+- Code review caught a real Important bug in the rounding-drift correction: with negative drift and small/skewed pools, the smallest-fractional candidates (the floor players) would be selected for `-1` adjustment, dropping them below `min_bid`. Reviewer reproduced with `n_teams=5, budget=2, min_bid=1, roster=QB:1, vorps=[1,1,1,0,0]` producing `[3,3,3,0,1]`. Fixed by excluding `rounded == min_bid` rows from the negative-drift candidate set. Regression test pinned.
+- `LeagueConfig` initially permitted IR-only roster_slots (passing `min_length=1` but yielding `roster_size = 0`, which would have `ZeroDivisionError`'d the auction algorithm). Code review caught it before Task 5; added `model_validator(mode="after")` asserting `roster_size >= 1`.
+- Task 7 used `env={**os.environ, "PYTHONPATH": str(repo_root / "src")}` in the integration test's subprocess — the project `.venv` editable install currently points at `.worktrees/feat-probe-logit-catch-rate/src`, so the subprocess can't import `projections.draft` otherwise. Defensive workaround; survives any future repointing.
+
+**Recommended next direction:**
+1. **VORP spec** — required dependency. Per-position replacement-level + `season_mean_fpts − replacement_fpts`. Small spec. Until VORP ships, `generate_auction_values` can be called against a hand-built VORP parquet but won't produce real draft-day values.
+2. **Live auction bid recommender** — primary downstream consumer; owns aggressiveness / roster-shape strategy knobs.
+3. **Snake-draft cheat sheet** (`draft_ready_checklist.md` §2b.1) — also consumes VORP; can ship in parallel.
+4. **Algorithms B/C** (market scaling / ADP anchor) — only if draft-day experience with A reveals a market-divergence problem.
+
+See `docs/superpowers/specs/2026-05-16-auction-values-design.md` and `docs/superpowers/plans/2026-05-16-auction-values.md`. Draft-readiness status: `draft_ready_checklist.md` §2c.1 flipped to `[x]`.
+
+---
+
+## Logit catch_rate Probe — verdict `NULL` (2026-05-16, on branch `feat/probe-logit-catch-rate`)
+
+**Status:** New probe `src/projections/backtest/logit_catch_rate_probe.py` tests whether replacing the catch_rate efficiency sub-model class from `RidgeCV` on the ratio (current production via PR #36/#38) with `LogisticRegressionCV` via Bernoulli-trial row expansion (factor-appropriate for the [0, 1]-bounded ratio response) lowers per-stat receptions RMSE on WR rows. Both arms share the same shared-volume RidgeCV on `targets`; only the catch_rate efficiency sub-model class differs. Spec at `docs/superpowers/specs/2026-05-15-logit-catch-rate-probe-design.md`.
+
+**Verdict:** `NULL` — RMSE Δ -0.0018 receptions (95% CI [-0.0047, +0.0009]), n_paired = 5195. Magnitude flag fired: |Δ| 0.0018 < 0.005 receptions threshold per PR #31's retrospective rule (marginal zone — but moot here because the CI brackets zero regardless).
+
+**Mechanism interpretation:** The CI brackets zero (just barely on the upper side at +0.0009), so the logit-link sub-model is statistically indistinguishable from the Ridge-on-clipped-ratio incumbent on per-stat receptions RMSE over the 2021-2024 pooled WR rows. Per-year breakdown is consistent with this: 3 of 4 years lean slightly negative (2021, 2022, 2024) with 2022 the only year whose CI nearly excludes zero on the negative side (point -0.0052, hi +0.0007); 2023 is essentially flat at +0.0011. The mechanistic story this rules out: logit's proper [0, 1] support without a hard-clip does NOT meaningfully outperform the RidgeCV approximation on the WR data we have. Coverage is comfortably above 0.95 across all eval years (0.989-0.996), so the verdict is not muddied by the `targets > 0` filter.
+
+**Recommended next direction:** Close the catch_rate factor-appropriate direction — the [0, 1]-bounded ratio's tail-calibration weakness is not large enough on real WR data to justify the class swap. Next slot per spec §6 is a `yards_per_target` factor-appropriate probe (log-link Gamma or Tweedie family on the strictly-positive, right-skewed efficiency factor) under the same shared-volume / single-factor-swap design pattern. That probe is the highest-leverage remaining factor-class swap because `yards_per_target` carries more receiving-yards variance than `catch_rate` carries receptions variance, and a Gaussian-on-ratio Ridge is a worse approximation to a Gamma response than to a Bernoulli-mean.
+
+See `reports/feature_probe_logit_catch_rate_summary.md` for full decision log.
+
+---
+
+## WR Ensemble — Decomposed-Baseline Child A Swap — verdict `ADOPT` (binding) (2026-05-15, on branch `feat/wr-ensemble-decomposed-child`)
+
+**Status:** New `wr_ensemble_decomposed()` factory swaps `EnsembleModel`'s child A from `wr_baseline` to `wr_decomposed_baseline`; lgb-nb child unchanged. Per-stat ensemble weights re-fit via pinball at q ∈ {0.10, 0.90}. Spec at `docs/superpowers/specs/2026-05-15-wr-ensemble-decomposed-child-design.md`.
+
+**Per-cell verdicts:**
+
+| Cell | Incumbent | Candidate | n_paired | RMSE Δ (fpts) | RMSE 95% CI | Spearman Δ | Verdict |
+|---|---|---|---:|---:|---|---:|:---:|
+| **Binding** (gates routing) | ensemble | ensemble-decomposed | 8460 | **-0.0038** | **[-0.0079, -0.0002]** | +0.0002 | **ADOPT** |
+| Informational | decomposed-baseline | ensemble-decomposed | 8460 | -0.0074 | [-0.0234, +0.0089] | **+0.0041** (strict pos) | DO_NOT_ADOPT (RMSE CI brackets zero) |
+
+**§1.3.5 outcome:** Routing flipped — `_PositionDispatch[Position.WR].default_model_class` changed from `"ensemble"` to `"ensemble-decomposed"` in `src/projections/models/__init__.py`. `tests/test_models/test_position_dispatch.py`'s `expected` dict updated. Backtest snapshot unchanged (pins only `baseline` model_class values; flip from ensemble→ensemble-decomposed is not in scope of the snapshot).
+
+**Probe-vs-gate magnitude flag.** Binding RMSE Δ -0.0038 fpts is below the 0.005 fpts marginal-zone threshold from PR #31's retrospective. CI is strictly negative ([-0.0079, -0.0002]) so the routing flip is mechanically justified, but the absolute magnitude is small. Flagged so future contributors know this routing flip was made on a 4-millifpts improvement that's statistically conclusive at the pooled-CI level but in the marginal zone in absolute terms.
+
+**Mechanism.** Informational-cell Spearman +0.0041 (strictly positive) is the cleanest evidence: ensemble's lgb-nb mixing adds rank-correlation lift even when child A is already decomposed. Two distinct mechanisms compound rather than cancel — decomposition improves the baseline's point predictions; lgb-nb captures residual non-linear structure ridges miss. Binding cell RMSE Δ -0.0038 (vs PR #36's predicted [0, -0.0103] range) lands in the bottom half of the band — substantial but not full compounding, consistent with some of decomposition's lift overlapping with what lgb-nb already captures.
+
+**Side-effect fix (commit `975cd52`):** `QuantileDistribution.cdf` extrapolates past knots (mirrors `quantile()`), clipped to [0, 1]. Pre-fix asymmetry capped the joint Mixture(Q, X) cdf at `1 - weight*0.05`, breaking brentq inversion in `MixtureDistribution.quantile()` for q in tail. Discovered while building Task 2's mixture-tail unit tests. Test `test_quantile_cdf_clamps_at_endpoints` was pinning the defect — renamed to `_extrapolates_past_endpoints` with a more thorough assertion set.
+
+**Recommended next direction:** factor-appropriate sub-model classes for `catch_rate` (logistic-link). Would lift the small adoption magnitude into the comfortable zone, address the [0, 1]-bounded ratio's tail-calibration weakness, and make decomposing additional stats (receiving_yards, receiving_tds) viable.
+
+**Plan-vs-execution deviations.** Backtest wall-clock ~3 hours (vs PR #36's 34 min) — third model class + slow new `MixtureDistribution.quantile()` path against `QuantileDistribution` components + external workload competition. Plan's hypothesis about the bug location (`mixture._bracket_for_components`) was wrong; actual fix was `QuantileDistribution.cdf`. Plan's assertion about RECEPTIONS `component_b == ParametricNegativeBinomial` was wrong (RECEPTIONS isn't in `COUNT_STATS_FOR_NB`); corrected to QuantileDistribution. `scripts/adoption_gate.py` requires `--position WR` explicit on WR-only data. Stdout em-dashes wrote as cp1252 `0x97` instead of UTF-8 — fixed post-hoc.
+
+See `reports/wr_ensemble_decomposed_summary.md` for the full decision log + per-cell + per-year tables.
+
+---
+
+## WR Target Decomposition Integration — verdict `DO_NOT_ADOPT` (binding) + `ADOPT` (informational) (2026-05-13, on branch `feat/wr-target-decomposition`)
+
+**Status:** Production integration of `DecomposedBaselineModel` (peer to `BaselineModel`) with per-stat decomposition opt-in via constructor arg. v1 ships WR receptions-only decomposition (volume `targets` x efficiency `catch_rate` with sample-time clip `[0, 1]`). New `FrozenSampledDistribution` carries within-row coherent sampling through `score_distribution`; persistence uses `QuantileDistribution` summaries via the existing codec branch (no codec edits). Spec at `docs/superpowers/specs/2026-05-13-wr-target-decomposition-integration-design.md`.
+
+**Per-cell verdicts:**
+
+| Cell | Incumbent | Candidate | n_paired | RMSE Delta (fpts) | RMSE 95% CI | Spearman Delta | Verdict |
+|---|---|---|---:|---:|---|---:|:---:|
+| **Binding** (gates routing) | ensemble | decomposed-baseline | 8402 | **+0.0109** | **[-0.0080, +0.0285]** | -0.0052 | **DO_NOT_ADOPT** |
+| Informational (probe-equivalent) | baseline | decomposed-baseline | 8402 | **-0.0103** | **[-0.0145, -0.0060]** | +0.00001 | ADOPT |
+
+**§1.3.5 outcome:** Infrastructure-only ship. WR production routing unchanged (`_PositionDispatch[Position.WR].default_model_class` stays `"ensemble"`). `DecomposedBaselineModel` + `wr_decomposed_baseline` factory + `_WR_FACTORIES["decomposed-baseline"]` shipped as available infrastructure. No backtest snapshot update.
+
+**Probe-vs-gate calibration:** probe predicted `-0.0042 fpts` on receptions (PR #32 Ridge-vs-Ridge); informational gate measured **-0.0103 fpts** at composite-fpts level -- **2.5x larger** in the same direction. **Favorable surprise**: decomposition recipe carries to composite-fpts more strongly than per-stat probe suggested, likely via within-row coherent sampling + better-calibrated factor-level variance. Binding gate sign-flipped to +0.0109 fpts vs ensemble -- mechanistically expected since `EnsembleModel`'s lgb-nb component provides lift that decomposed-baseline alone cannot recoup. **Magnitude is NOT in the PR #31 marginal-zone** (informational |Delta| > 0.005 fpts and CI strictly negative).
+
+**Recommended next direction (per spec §1.3.5 informational-ADOPT branch).** Swap `BaselineModel -> DecomposedBaselineModel` inside `EnsembleModel`'s child A factory and re-fit ensemble weights. Run a new dual-run gate on `(EnsembleModel-with-decomposed-baseline, WR)` vs current `(EnsembleModel, WR)`. This would compound the lgb-nb contribution (proven at ensemble level) with the decomposition recipe (proven at baseline level). Spec the plan once this PR is merged.
+
+**Deferred follow-ups (probe spec §7):** factor-appropriate sub-model classes (logistic for catch_rate, log-link Gamma for yards_per_target, Poisson for targets) -- now eligible since decomposition has proven informational lift; decomposition for receiving_yards / receiving_tds (NULL in probe); other positions (RB / QB / TE -- each its own probe + integration cycle).
+
+**Plan-vs-execution deviations (all minor):**
+- Worktree + venv routing: Windows POSIX-path resolution required `C:/Users/...` Windows paths instead of `/c/Users/...` for absolute `features_root` / `raw_root` kwargs.
+- Test fixture `_synthetic_wr_fit_inputs_low_eff_variance` added in Task 3b to make the cross-stat coherence test's rho > 0.5 threshold achievable (standard fixture's analytical rho ~= 0.26 reflects realistic yards-per-target variance, not a broken mechanism).
+- Backtest wall-clock ~34 min for 3-model 4-year WR-only (plan estimated 5-15 min; lgb-nb training dominated).
+- 4 new `data/ensemble_weights/ensemble_wr_*.json` artifacts generated by the backtest's ensemble fits and committed alongside reports (pre-existing convention).
+
+See `reports/wr_target_decomposition_summary.md` for the full decision log + per-cell tables + probe-vs-gate calibration + §1.3.5 outcome narrative.
 
 ---
 

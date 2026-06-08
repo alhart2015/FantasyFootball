@@ -49,6 +49,7 @@ from projections.models.baseline import (
     te_baseline,
     wr_baseline,
 )
+from projections.models.decomposed_baseline import wr_decomposed_baseline
 from projections.models.lightgbm import (
     _QB_TARGET_STATS,
     _RB_TARGET_STATS,
@@ -596,6 +597,26 @@ def wr_ensemble() -> EnsembleModel:
             position=Position.WR,
             target_stats=_WR_TARGET_STATS,
             child_a_factory=wr_baseline,
+            child_b_factory=wr_lightgbm_nb,
+        )
+    )
+
+
+def wr_ensemble_decomposed() -> EnsembleModel:
+    """Construct an unfitted WR ensemble whose child A is decomposed-baseline.
+
+    Differs from `wr_ensemble` only in `child_a_factory`. The pinball-weight-fit
+    calibration step (Stage 3 of EnsembleModel.fit) re-runs against the
+    decomposed-baseline-vs-lgb-nb children, producing per-stat weights tuned
+    to the new child A.
+
+    Spec: docs/superpowers/specs/2026-05-15-wr-ensemble-decomposed-child-design.md.
+    """
+    return EnsembleModel(
+        config=_EnsembleConfig(
+            position=Position.WR,
+            target_stats=_WR_TARGET_STATS,
+            child_a_factory=wr_decomposed_baseline,
             child_b_factory=wr_lightgbm_nb,
         )
     )

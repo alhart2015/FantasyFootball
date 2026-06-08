@@ -22,7 +22,7 @@ and reported as a preseason result.
 Inputs:
   - data/external_projections/{season}/espn.parquet   (from pull_external_projections.py)
   - data/external_projections/{season}/sleeper_adp.parquet
-  - reports/season_projection_{season}.csv            (from project_season.py --out)
+  - reports/season_projection.csv            (naive sum-of-means, from project_season.py)
   - data/raw weekly_stats + id_map                    (in-house)
 
 Output:
@@ -101,7 +101,7 @@ def _normalize_join_id(s: pd.Series) -> pd.Series:
     NOTE: this is a consumer-side patch for an upstream defect — id_map's ingest
     (src/projections/ingest/id_map.py) stringifies float64 ids, yielding the '.0'
     suffix. The deeper fix is to cast those id columns to nullable Int64 (or plain
-    string) before persisting id_map; that belongs in sub-project #2 (TODO #35) when
+    string) before persisting id_map; that belongs in sub-project #2 (TODO #38) when
     this graduates from the spike."""
     return s.astype("string").str.strip().str.replace(r"\.0+$", "", regex=True)
 
@@ -301,7 +301,9 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
-    our_csv = args.our_csv or Path("reports") / f"season_projection_{args.season}.csv"
+    # project_season.py writes the naive totals to a fixed reports/season_projection.csv
+    # (PR #51 contract). Pass --our-csv explicitly to benchmark a specific archived season.
+    our_csv = args.our_csv or Path("reports") / "season_projection.csv"
     out_path = args.out or Path("reports") / f"external_projection_benchmark_{args.season}.md"
     ext_dir = args.ext_root / str(args.season)
     ruleset = Ruleset.espn_ppr()

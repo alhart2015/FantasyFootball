@@ -361,3 +361,31 @@ def test_load_returns_lightgbm_model_instance(tmp_path: pathlib.Path) -> None:
     loaded = LightGBMModel.load(artifact_path)
     assert isinstance(loaded, LightGBMModel)
     assert loaded.position == Position.WR
+
+
+def test_qb_lightgbm_feature_columns_keep_per_game_vegas_cols() -> None:
+    """lgb (untuned) is a non-production class with schema-derived feature
+    list -- augment treatment by default for the four new Vegas cols. Probe
+    verdict for lgb augment composite was NULL; not a regression. Pinned
+    here to surface a deliberate decision if anyone tries to swap it later."""
+    model = qb_lightgbm()
+    cols = set(model._config.feature_columns)
+    assert "implied_team_total" in cols
+    assert "spread" in cols
+    # And the four new cols are picked up via schema-derivation.
+    for c in (
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    ):
+        assert c in cols
+
+
+def test_qb_lightgbm_tuned_feature_columns_keep_per_game_vegas_cols() -> None:
+    from projections.models.lightgbm_tuned import qb_lightgbm_tuned
+
+    model = qb_lightgbm_tuned()
+    cols = set(model._config.feature_columns)
+    assert "implied_team_total" in cols
+    assert "spread" in cols

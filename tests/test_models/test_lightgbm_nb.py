@@ -184,30 +184,43 @@ def test_codec_round_trip_yields_correct_per_stat_distribution_types() -> None:
 
 
 def test_yards_stat_predictions_match_tuned_baseline() -> None:
-    """Yards-stat predictions from LightGBMNbModel should be bit-exact identical
-    to LightGBMTunedModel's on the same fixture, since LightGBMNbModel inherits
-    yards-stat training and only overrides count-stat training. Checks the
-    `p10`, `p50`, `p90` columns are NOT bit-exact at the composite level (count
-    stats differ between the two), but per-stat yards quantile predictions are.
+    """Yards-stat training inheritance from LightGBMTunedModel was originally
+    observable as identical `best_iters` between wr_lightgbm_nb and
+    wr_lightgbm_tuned on the same fixture. After TODO #33c integration,
+    wr_lightgbm_nb uses the Vegas-swap feature list (drops implied_team_total
+    + spread, adds 4 preseason_* / season_avg_* cols) while wr_lightgbm_tuned
+    keeps the schema-derived (augment) list. The two now have DIFFERENT feature
+    columns, so sub-models necessarily diverge -- best_iters equality no longer
+    holds for WR.
 
-    The simplest way to verify this without exposing internals: compare
-    yards-stat sub-models' best_iters between the two models. They should match
-    when fitted on identical data with identical hyperparameters."""
-    features = _build_synthetic_wr_features()
-    weekly = _build_synthetic_wr_weekly_stats(features)
-
+    The inheritance mechanism is preserved: LightGBMNbModel still extends
+    LightGBMTunedModel and overrides only count-stat fit logic. Verified here
+    by class hierarchy + by confirming the two models' yards-stat config
+    blocks are identical *modulo* feature_columns."""
     nb = wr_lightgbm_nb()
     tuned = wr_lightgbm_tuned()
-    nb.fit(features, weekly)
-    tuned.fit(features, weekly)
-
-    yards_stats = (Stat.RECEPTIONS, Stat.RECEIVING_YARDS, Stat.RUSHING_YARDS)
-    for stat in yards_stats:
-        for q in (0.05, 0.10, 0.50, 0.90, 0.95):
-            assert nb._best_iters[(stat, q)] == tuned._best_iters[(stat, q)], (
-                f"{stat} q={q}: NB best_iter {nb._best_iters[(stat, q)]} "
-                f"differs from tuned {tuned._best_iters[(stat, q)]}"
-            )
+    # Class hierarchy: NB subclasses Tuned, so quantile-yards training path
+    # is inherited unchanged.
+    assert isinstance(nb, type(tuned))
+    # Per-stat target_stats + non_negative_stats configurations are identical
+    # (both share _WR_TARGET_STATS and _WR_NON_NEGATIVE).
+    assert nb._config.target_stats == tuned._config.target_stats
+    assert nb._config.non_negative_stats == tuned._config.non_negative_stats
+    # Feature columns INTENTIONALLY differ post-#33c.
+    assert set(nb._config.feature_columns) != set(tuned._config.feature_columns)
+    swap_added = {
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    }
+    swap_removed = {"implied_team_total", "spread"}
+    nb_cols = set(nb._config.feature_columns)
+    tuned_cols = set(tuned._config.feature_columns)
+    assert swap_added.issubset(nb_cols)
+    assert swap_added.issubset(tuned_cols)  # tuned auto-picks them up via schema
+    assert swap_removed.isdisjoint(nb_cols)  # nb drops them
+    assert swap_removed.issubset(tuned_cols)  # tuned keeps them
 
 
 def test_model_id_uses_nb_prefix() -> None:
@@ -297,3 +310,76 @@ def test_nb_count_stat_mu_not_double_exponentiated() -> None:
         f"predicted_mean={predicted_mean:.3f} suspiciously inflated vs "
         f"actual_mean={actual_mean_rec_tds:.3f} -- check for a double-exp regression"
     )
+
+
+def test_qb_lightgbm_nb_feature_columns_drop_per_game_vegas_cols() -> None:
+    """qb_lightgbm_nb()'s feature_columns must NOT include implied_team_total
+    or spread (schema-swap drops the per-game cols)."""
+    model = qb_lightgbm_nb()
+    cols = set(model._config.feature_columns)
+    assert "implied_team_total" not in cols
+    assert "spread" not in cols
+
+
+def test_qb_lightgbm_nb_feature_columns_include_4_vegas_cols() -> None:
+    """qb_lightgbm_nb()'s feature_columns must include the four preseason / season_avg cols."""
+    model = qb_lightgbm_nb()
+    cols = set(model._config.feature_columns)
+    for c in (
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    ):
+        assert c in cols, f"missing {c}"
+
+
+def test_wr_lightgbm_nb_feature_columns_swap_treatment() -> None:
+    """Same swap-treatment for WR."""
+    model = wr_lightgbm_nb()
+    cols = set(model._config.feature_columns)
+    assert "implied_team_total" not in cols
+    assert "spread" not in cols
+    for c in (
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    ):
+        assert c in cols, f"missing {c}"
+
+
+def test_code_hash_files_nb_includes_vegas_team_context_features() -> None:
+    """vegas_team_context_features.py is a transitive dep of QB + WR builders
+    post-#33c integration. Without it in the hash set, a fix-only edit to
+    that module would fail to invalidate cached model_ids."""
+    from projections.models.lightgbm_nb import _code_hash_files_nb
+    from projections.schemas import Position
+
+    for pos in (Position.QB, Position.WR, Position.TE, Position.RB):
+        files = _code_hash_files_nb(pos)
+        vegas_in_set = any(p.name == "vegas_team_context_features.py" for p in files)
+        assert vegas_in_set, (
+            f"vegas_team_context_features.py missing from _code_hash_files_nb({pos})"
+        )
+
+
+def test_te_lightgbm_nb_feature_columns_unchanged_by_vegas_integration() -> None:
+    """TE was NULL in the probe -- not adopted; feature list must not carry
+    the four Vegas cols and must still include per-game implied_team_total +
+    spread (whatever the TE schema produces)."""
+    from projections.models.lightgbm import _TE_FEATURE_COLUMNS, _filter_features
+
+    model = te_lightgbm_nb()
+    expected = _filter_features(_TE_FEATURE_COLUMNS)
+    assert model._config.feature_columns == expected
+
+
+def test_rb_lightgbm_nb_feature_columns_unchanged_by_vegas_integration() -> None:
+    """RB just-missed-ADOPT in the probe and is deferred to a separate
+    preseason_*-only follow-up. Feature list must be the same as pre-#33c."""
+    from projections.models.lightgbm import _RB_FEATURE_COLUMNS, _filter_features
+
+    model = rb_lightgbm_nb()
+    expected = _filter_features(_RB_FEATURE_COLUMNS)
+    assert model._config.feature_columns == expected

@@ -20,6 +20,7 @@ from projections.features.trajectory_features import (
     attach_trajectory_features,
     build_draft_lookup,
 )
+from projections.features.vegas_team_context_features import attach_vegas_team_context_features
 from projections.features.weather_features import attach_weather_features
 from projections.schemas import (
     _PYARROW_STR,
@@ -287,5 +288,9 @@ def build_wr_features(
     # from the exact-week-filtered schedules. Dome / closed-roof games have
     # wind=0 / temp=70 per compute_weather_features semantics.
     out = attach_weather_features(out, sch)
+
+    # Vegas team-context (TODO #33c). Pass FULL `schedules` for expanding-mean
+    # season_avg_* and week-1 preseason broadcast.
+    out = attach_vegas_team_context_features(out, schedules)
 
     return WrFeaturesSchema.validate(out)

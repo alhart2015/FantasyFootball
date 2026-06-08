@@ -1,0 +1,11 @@
+position,incumbent,candidate,year,metric,point,lo_95,hi_95,n_paired,verdict,reason
+QB,_baseline_run,_candidate_run,pooled,rmse_delta,0.11115563409226059,0.07348311884290222,0.14824220947931122,2676,DO_NOT_ADOPT,RMSE worse (+0.111) and Spearman regresses (lo_95 -0.0307 < floor -0.020)
+QB,_baseline_run,_candidate_run,pooled,spearman_delta,-0.022226153444302343,-0.03065760253534322,-0.013060527349627843,2676,DO_NOT_ADOPT,RMSE worse (+0.111) and Spearman regresses (lo_95 -0.0307 < floor -0.020)
+QB,_baseline_run,_candidate_run,2021,rmse_delta,0.08271483761415244,0.009618135620172042,0.15595052368344056,665,,
+QB,_baseline_run,_candidate_run,2021,spearman_delta,-0.018506970534816647,-0.035271315200559025,-0.0015308060162973387,665,,
+QB,_baseline_run,_candidate_run,2022,rmse_delta,0.16009752060754856,0.08818745828315828,0.24353552615161397,657,,
+QB,_baseline_run,_candidate_run,2022,spearman_delta,-0.028060619838418677,-0.045944179025962324,-0.011946708133725906,657,,
+QB,_baseline_run,_candidate_run,2023,rmse_delta,0.10659299745917039,0.03138135958532378,0.1763099740461092,670,,
+QB,_baseline_run,_candidate_run,2023,spearman_delta,-0.02368278731970863,-0.04140952897749313,-0.006965170951156851,670,,
+QB,_baseline_run,_candidate_run,2024,rmse_delta,0.09899898741440616,0.02440992509677096,0.1783394328370497,684,,
+QB,_baseline_run,_candidate_run,2024,spearman_delta,-0.01865423608426542,-0.0355799526608488,-0.002253639693961468,684,,

@@ -122,21 +122,18 @@ def _quantile_with_bracket(mix: MixtureDistribution, q: float, lo: float, hi: fl
     if not (0.0 < q < 1.0):
         raise ValueError(f"q must lie strictly in (0, 1), got {q}")
     # cdf is non-decreasing, so brentq on cdf(x) - q is well-defined --
-    # provided q lies inside the joint support of the mixture. Children
-    # whose cdf clamps (e.g., QuantileDistribution clamping at qs[0]) can
-    # produce a mixture cdf that does not reach 0 or 1 at the bracket
-    # endpoints. Raise explicitly in that case rather than silently
-    # returning the endpoint.
+    # provided q lies inside the joint support of the mixture. Defensive
+    # check against a future Distribution implementation whose cdf does
+    # not approach 0/1 at infinity: raise explicitly rather than letting
+    # brentq silently pin to a bracket edge.
     f_lo = mix.cdf(lo) - q
     f_hi = mix.cdf(hi) - q
     if f_lo > 0.0:
         raise ValueError(
-            f"q={q} lies below joint support of mixture: cdf(lo={lo:.6g})={f_lo + q:.6g} "
-            "(can happen when both children's cdfs clamp at a common minimum)"
+            f"q={q} lies below joint support of mixture: cdf(lo={lo:.6g})={f_lo + q:.6g}"
         )
     if f_hi < 0.0:
         raise ValueError(
-            f"q={q} lies above joint support of mixture: cdf(hi={hi:.6g})={f_hi + q:.6g} "
-            "(can happen when both children's cdfs clamp at a common maximum)"
+            f"q={q} lies above joint support of mixture: cdf(hi={hi:.6g})={f_hi + q:.6g}"
         )
     return float(brentq(lambda x: mix.cdf(x) - q, lo, hi, xtol=1e-9, rtol=1e-9))

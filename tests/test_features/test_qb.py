@@ -173,3 +173,43 @@ def test_build_qb_features_ngs_aggressiveness_propagates(
     mahomes = out[out["gsis_id"] == "00-0034857"].iloc[0]
     # Fixture sets aggressiveness=12.5 for Mahomes through week 4.
     assert mahomes["aggressiveness_std"] == pytest.approx(12.5, abs=1e-6)
+
+
+def test_build_qb_features_emits_vegas_team_context_cols(
+    qb_weekly_stats: pd.DataFrame,
+    qb_snap_counts: pd.DataFrame,
+    qb_depth_charts: pd.DataFrame,
+    qb_ngs_passing: pd.DataFrame,
+    qb_schedules: pd.DataFrame,
+    fake_pbp_df: pd.DataFrame,
+) -> None:
+    """build_qb_features attaches the four Vegas team-context cols and the
+    output validates against the extended QbFeaturesSchema. With a 1-week
+    fixture, preseason_* values equal the only-week values; season_avg_*
+    is NaN (expanding mean of a single game .shift(1) is NaN)."""
+    out = build_qb_features(
+        weekly_stats=qb_weekly_stats,
+        snap_counts=qb_snap_counts,
+        depth_charts=qb_depth_charts,
+        ngs_passing=qb_ngs_passing,
+        schedules=qb_schedules,
+        pbp=fake_pbp_df,
+        season=2024,
+        as_of_week=5,
+    )
+    for col in (
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    ):
+        assert col in out.columns
+
+    mahomes = out[out["gsis_id"] == "00-0034857"].iloc[0]
+    # KC implied_team_total = (51 - (-7.5))/2 = 29.25; spread = -7.5.
+    # preseason_* equals current week (week 5 is the only week in the fixture).
+    assert mahomes["preseason_implied_team_total"] == pytest.approx(29.25, abs=1e-6)
+    assert mahomes["preseason_spread"] == pytest.approx(-7.5, abs=1e-6)
+    # season_avg_* is NaN with a single-game schedule (expanding mean .shift(1)).
+    assert pd.isna(mahomes["season_avg_implied_team_total"])
+    assert pd.isna(mahomes["season_avg_spread"])

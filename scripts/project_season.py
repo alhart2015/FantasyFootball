@@ -17,6 +17,7 @@ from typing import Any
 
 import pandas as pd
 
+from projections.aggregation import aggregate_to_season
 from projections.models import POSITION_DISPATCH, production_model_for
 from projections.models.base import Model
 from projections.schemas import Position, ProjectionWeeklySchema, Ruleset
@@ -176,17 +177,60 @@ def _project_season(
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
 
+def _write_season_artifacts(
+    *,
+    weekly: pd.DataFrame,
+    ruleset: Ruleset,
+    out_dir: Path,
+    season: int,
+    id_map: pd.DataFrame,
+) -> None:
+    """Write three artifacts:
+      1. <out_dir>/season_projection.csv         (naive sum-of-means, back-compat)
+      2. <out_dir>/season_projection_weekly_<season>.parquet  (ProjectionWeeklySchema)
+      3. <out_dir>/season_projection_distributions_<season>.csv  (MC quantile summary)
+
+    weekly: ProjectionWeeklySchema-validated weekly predictions for one season.
+    id_map: must have at least [gsis_id, full_name, team] columns.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Artifact 2: weekly parquet (write first; useful as a raw-data drop even if
+    # later steps fail).
+    weekly.to_parquet(out_dir / f"season_projection_weekly_{season}.parquet", index=False)
+
+    # Artifact 1: naive sum-of-weekly-means CSV (unchanged contract).
+    season_totals = weekly.groupby(["gsis_id", "position"], as_index=False).agg(
+        season_total_mean=("mean", "sum"), n_weeks=("week", "nunique")
+    )
+    season_totals = season_totals.merge(
+        id_map[["gsis_id", "full_name", "team"]], on="gsis_id", how="left"
+    )
+    season_totals = season_totals.sort_values("season_total_mean", ascending=False).reset_index(
+        drop=True
+    )
+    season_totals.insert(0, "rank", range(1, len(season_totals) + 1))
+    season_totals.to_csv(out_dir / "season_projection.csv", index=False)
+
+    # Artifact 3: MC-aggregated distributions CSV (new in this spec).
+    season_dist = aggregate_to_season(weekly, ruleset=ruleset, n_samples=10_000)
+    season_dist = season_dist.merge(
+        id_map[["gsis_id", "full_name", "team"]], on="gsis_id", how="left"
+    )
+    season_dist = season_dist.sort_values("season_mean", ascending=False).reset_index(drop=True)
+    season_dist.to_csv(out_dir / f"season_projection_distributions_{season}.csv", index=False)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Project a full season retrospectively.")
     parser.add_argument("--season", type=int, default=2025)
     parser.add_argument("--train-start", type=int, default=2018)
     parser.add_argument("--raw-root", type=Path, default=Path("data/raw"))
-    parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--out", type=Path, default=Path("reports") / "season_projection.csv")
     args = parser.parse_args()
 
     target_season = args.season
     train_seasons = range(args.train_start, target_season)  # exclusive of target
-    out_path = args.out or Path("reports") / f"season_projection_{target_season}.csv"
 
     ruleset = Ruleset.espn_ppr()
     draft_picks = _load_draft_picks(args.raw_root, target_season)
@@ -218,26 +262,30 @@ def main() -> None:
     weekly = pd.concat(all_preds, ignore_index=True)
     print(f"\nTotal weekly projection rows across positions: {len(weekly)}", flush=True)
 
-    # Aggregate weekly mean -> season total per gsis_id.
-    season_totals = weekly.groupby(["gsis_id", "position"], as_index=False).agg(
-        season_total_mean=("mean", "sum"), n_weeks=("week", "nunique")
-    )
-
-    # Lookup full_name via id_map (read once, single file, no per-season partition).
+    # Load id_map once for name lookups in the artifact writer.
     id_map = read_partition(args.raw_root, "id_map")
-    season_totals = season_totals.merge(
-        id_map[["gsis_id", "full_name", "team"]], on="gsis_id", how="left"
+
+    _write_season_artifacts(
+        weekly=weekly,
+        ruleset=ruleset,
+        out_dir=args.out.parent,
+        season=target_season,
+        id_map=id_map,
+    )
+    print(f"\nWrote naive season totals CSV: {args.out}", flush=True)
+    print(
+        f"Wrote weekly distributions parquet: "
+        f"{args.out.parent / f'season_projection_weekly_{target_season}.parquet'}",
+        flush=True,
+    )
+    print(
+        f"Wrote MC distributions CSV: "
+        f"{args.out.parent / f'season_projection_distributions_{target_season}.csv'}",
+        flush=True,
     )
 
-    season_totals = season_totals.sort_values("season_total_mean", ascending=False).reset_index(
-        drop=True
-    )
-    season_totals.insert(0, "rank", range(1, len(season_totals) + 1))
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    season_totals.to_csv(out_path, index=False)
-    print(f"\nWrote season totals CSV: {out_path}", flush=True)
-
+    # Preserve the existing top-100 / top-10-per-position console summary.
+    season_totals = pd.read_csv(args.out)
     print(f"\n=== TOP 100 overall ({target_season} ESPN PPR projection) ===")
     pd.set_option("display.max_rows", 200)
     pd.set_option("display.width", 160)

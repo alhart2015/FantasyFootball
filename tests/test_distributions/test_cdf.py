@@ -113,14 +113,33 @@ def test_quantile_cdf_piecewise_linear_between_knots() -> None:
     assert dist.cdf(35.0) == pytest.approx(0.625, abs=1e-12)
 
 
-def test_quantile_cdf_clamps_at_endpoints() -> None:
-    """Below the lowest stored value, cdf clamps at the lowest stored quantile.
-    Above the highest stored value, cdf clamps at the highest stored quantile.
+def test_quantile_cdf_extrapolates_past_endpoints() -> None:
+    """Below the lowest stored value, cdf linearly extrapolates from the two
+    nearest knots (clipped to [0, 1]); above the highest stored value, same.
+    Mirrors the extrapolation behavior of ``quantile()`` so the two are
+    mutually consistent — required for MixtureDistribution with a
+    QuantileDistribution component to invert via brentq across the full
+    (0, 1) quantile range.
+
+    Fixture knots: (0.05, 10), (0.25, 20), (0.5, 30), (0.75, 40), (0.95, 50).
+    Lower-tail slope = (0.25 - 0.05) / (20 - 10) = 0.02 per value-unit.
+    Upper-tail slope = (0.95 - 0.75) / (50 - 40) = 0.02 per value-unit.
     """
     dist = _make_quantile_dist()
-    assert dist.cdf(-100.0) == pytest.approx(0.05, abs=1e-12)
-    assert dist.cdf(0.0) == pytest.approx(0.05, abs=1e-12)
-    assert dist.cdf(1000.0) == pytest.approx(0.95, abs=1e-12)
+    # x=0 is 10 below vs[0]=10. cdf = 0.05 - 10*0.02 = -0.15 -> clipped to 0.0.
+    assert dist.cdf(0.0) == pytest.approx(0.0, abs=1e-12)
+    # x=5 is 5 below vs[0]. cdf = 0.05 - 5*0.02 = -0.05 -> clipped to 0.0.
+    assert dist.cdf(5.0) == pytest.approx(0.0, abs=1e-12)
+    # x=8 is 2 below vs[0]. cdf = 0.05 - 2*0.02 = 0.01 (not clipped).
+    assert dist.cdf(8.0) == pytest.approx(0.01, abs=1e-12)
+    # x=-100 is far below vs[0]. Extrapolated value is well below 0, clipped.
+    assert dist.cdf(-100.0) == pytest.approx(0.0, abs=1e-12)
+    # x=52 is 2 above vs[-1]=50. cdf = 0.95 + 2*0.02 = 0.99 (not clipped).
+    assert dist.cdf(52.0) == pytest.approx(0.99, abs=1e-12)
+    # x=55 is 5 above vs[-1]. cdf = 0.95 + 5*0.02 = 1.05 -> clipped to 1.0.
+    assert dist.cdf(55.0) == pytest.approx(1.0, abs=1e-12)
+    # x=1000 is far above vs[-1]. Extrapolated cdf far exceeds 1, clipped.
+    assert dist.cdf(1000.0) == pytest.approx(1.0, abs=1e-12)
 
 
 def test_quantile_cdf_monotone_on_grid() -> None:

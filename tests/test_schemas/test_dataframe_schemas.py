@@ -8,6 +8,7 @@ from pandera.errors import SchemaError
 
 from projections.schemas import (
     _PYARROW_STR,
+    AuctionValuesSchema,
     DepthChartsSchema,
     DraftPicksSchema,
     IdMapSchema,
@@ -15,12 +16,18 @@ from projections.schemas import (
     NgsReceivingSchema,
     NgsRushingSchema,
     PbpSchema,
+    Position,
+    PreseasonBacktestSchema,
+    PreseasonFeaturesSchema,
+    PreseasonProjectionSchema,
     ProjectionWeeklySchema,
     QbFeaturesSchema,
     RbFeaturesSchema,
     SchedulesSchema,
+    SnakeCheatSheetSchema,
     SnapCountsSchema,
     TeFeaturesSchema,
+    VorpTableSchema,
     WeeklyStatsSchema,
     WrFeaturesSchema,
 )
@@ -424,6 +431,12 @@ def test_wr_features_schema_accepts_valid_row() -> None:
             "is_high_wind": [0.0],
             "temperature_f": [65.0],
             "is_grass_surface": [1.0],
+            # Vegas team-context cols (TODO #33c integration). All
+            # nullable=True; happy-path test covers the populated case.
+            "preseason_implied_team_total": [28.0],
+            "preseason_spread": [-6.5],
+            "season_avg_implied_team_total": [27.5],
+            "season_avg_spread": [-5.0],
         }
     )
     WrFeaturesSchema.validate(df)
@@ -471,6 +484,12 @@ def test_wr_features_schema_rejects_target_share_over_one() -> None:
             "is_high_wind": [0.0],
             "temperature_f": [65.0],
             "is_grass_surface": [1.0],
+            # Vegas team-context cols — provided so the failure is on
+            # target_share_l4, not on a missing Vegas column.
+            "preseason_implied_team_total": [28.0],
+            "preseason_spread": [-6.5],
+            "season_avg_implied_team_total": [27.5],
+            "season_avg_spread": [-5.0],
         }
     )
     with pytest.raises(SchemaError):
@@ -504,6 +523,10 @@ def test_qb_features_schema_accepts_valid_row() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
+            "preseason_implied_team_total": [26.5],
+            "preseason_spread": [-2.5],
+            "season_avg_implied_team_total": [27.0],
+            "season_avg_spread": [-3.0],
             "opp_allowed_qb_fppg_l4": [18.5],
         }
     )
@@ -537,6 +560,10 @@ def test_qb_features_schema_rejects_negative_pass_attempts() -> None:
             "spread": [-3.5],
             "is_home": [True],
             "roof_dome": [False],
+            "preseason_implied_team_total": [26.5],
+            "preseason_spread": [-2.5],
+            "season_avg_implied_team_total": [27.0],
+            "season_avg_spread": [-3.0],
             "opp_allowed_qb_fppg_l4": [18.5],
         }
     )
@@ -836,3 +863,198 @@ def test_draft_picks_schema_allows_nullable_optional_columns() -> None:
         }
     )
     DraftPicksSchema.validate(df)
+
+
+def test_auction_values_schema_round_trip() -> None:
+    """`AuctionValuesSchema.validate` accepts a well-formed frame and rejects bad rows."""
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036912", "00-0034857"], dtype=_PYARROW_STR),
+            "position": pd.array([Position.RB.value, Position.WR.value], dtype=_PYARROW_STR),
+            "season_mean_fpts": pd.array([280.0, 240.0], dtype="float64"),
+            "vorp": pd.array([130.0, 50.0], dtype="float64"),
+            "in_pool": pd.array([True, True], dtype="bool"),
+            "auction_dollars": pd.array([66, 30], dtype=pd.Int64Dtype()),
+            "pool_rank": pd.array([1, 2], dtype=pd.Int64Dtype()),
+            "reference_dollars": pd.array([pd.NA, pd.NA], dtype=pd.Int64Dtype()),
+            "value_delta": pd.array([pd.NA, pd.NA], dtype=pd.Int64Dtype()),
+        }
+    )
+    validated = AuctionValuesSchema.validate(df)
+    assert len(validated) == 2
+
+    bad = df.copy()
+    bad.loc[bad.index[0], "auction_dollars"] = -5
+    with pytest.raises(SchemaError):
+        AuctionValuesSchema.validate(bad)
+
+
+def test_vorp_table_schema_round_trip() -> None:
+    """Build a minimal VORP table, validate, re-validate; accepts the shape and is idempotent."""
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-1000001", "00-2000001"], dtype=_PYARROW_STR),
+            "position": pd.array([Position.QB.value, Position.RB.value], dtype=_PYARROW_STR),
+            "season_mean_fpts": pd.array([320.0, 260.0], dtype="float64"),
+            "vorp": pd.array([80.0, 30.0], dtype="float64"),
+            "replacement_fpts": pd.array([240.0, 230.0], dtype="float64"),
+        }
+    )
+    validated = VorpTableSchema.validate(df)
+    revalidated = VorpTableSchema.validate(validated)
+    pd.testing.assert_frame_equal(validated, revalidated)
+
+    # Regression guard: duplicate gsis_id must be rejected.
+    bad = df.copy()
+    bad.loc[bad.index[1], "gsis_id"] = bad.loc[bad.index[0], "gsis_id"]
+    with pytest.raises(SchemaError):
+        VorpTableSchema.validate(bad)
+
+
+def test_snake_cheat_sheet_schema_round_trip() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.Series(["00-1000001", "00-2000001"], dtype=_PYARROW_STR),
+            "position": pd.Series(["QB", "RB"], dtype=_PYARROW_STR),
+            "display_name": pd.Series(
+                ["Patrick Mahomes", "Christian McCaffrey"], dtype=_PYARROW_STR
+            ),
+            "positional_rank": pd.array([1, 1], dtype=pd.Int64Dtype()),
+            "season_mean_fpts": [333.5, 280.1],
+            "vorp": [91.3, 181.2],
+            "replacement_fpts": [242.2, 98.9],
+            "is_in_pool": [True, True],
+            "tier": pd.array([1, 1], dtype=pd.Int64Dtype()),
+        }
+    )
+    validated = SnakeCheatSheetSchema.validate(df)
+    revalidated = SnakeCheatSheetSchema.validate(validated)
+    pd.testing.assert_frame_equal(validated, revalidated)
+
+
+def test_preseason_features_schema_validates_golden_row() -> None:
+    """Smoke test: a minimal golden row passes PreseasonFeaturesSchema."""
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["QB"],
+            "team": ["KC"],
+            "depth_chart_rank": pd.array([1], dtype="Int64"),
+            "age": pd.array([29.0], dtype="float32"),
+            "years_exp": pd.array([7], dtype="Int64"),
+            "is_rookie": [False],
+            "draft_round": pd.array([1], dtype="Int64"),
+            "draft_pick_overall": pd.array([10], dtype="Int64"),
+            "prior_1_season_per_game_passing_yards": pd.array([275.5], dtype="float32"),
+            "prior_1_season_games_played": pd.array([17], dtype="Int64"),
+        }
+    )
+    out = PreseasonFeaturesSchema.validate(df)
+    assert len(out) == 1
+
+
+def test_preseason_features_schema_rejects_bad_position() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["XX"],  # not in Position enum
+            "team": ["KC"],
+            "depth_chart_rank": pd.array([1], dtype="Int64"),
+            "age": pd.array([29.0], dtype="float32"),
+            "years_exp": pd.array([7], dtype="Int64"),
+            "is_rookie": [False],
+            "draft_round": pd.array([1], dtype="Int64"),
+            "draft_pick_overall": pd.array([10], dtype="Int64"),
+            "prior_1_season_per_game_passing_yards": pd.array([275.5], dtype="float32"),
+            "prior_1_season_games_played": pd.array([17], dtype="Int64"),
+        }
+    )
+    with pytest.raises(SchemaError, match="position"):
+        PreseasonFeaturesSchema.validate(df)
+
+
+def test_preseason_projection_schema_validates_golden_row() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["QB"],
+            "team": ["KC"],
+            "ruleset": ["ESPN_PPR"],
+            "model_id": ["naive-preseason-v1"],
+            "season_total_fpts_mean": pd.array([380.0], dtype="float32"),
+            "season_total_fpts_p10": pd.array([380.0], dtype="float32"),
+            "season_total_fpts_p50": pd.array([380.0], dtype="float32"),
+            "season_total_fpts_p90": pd.array([380.0], dtype="float32"),
+            "passing_yards_season_total_mean": pd.array([4400.0], dtype="float32"),
+            "passing_yards_season_total_p10": pd.array([4400.0], dtype="float32"),
+            "passing_yards_season_total_p50": pd.array([4400.0], dtype="float32"),
+            "passing_yards_season_total_p90": pd.array([4400.0], dtype="float32"),
+        }
+    )
+    out = PreseasonProjectionSchema.validate(df)
+    assert len(out) == 1
+    assert out["ruleset"].iloc[0] in {"ESPN_PPR", "ESPN_HALF", "STANDARD"}
+
+
+def test_preseason_projection_schema_rejects_negative_fpts() -> None:
+    df = pd.DataFrame(
+        {
+            "gsis_id": ["00-1234567"],
+            "season": pd.array([2026], dtype="int32"),
+            "position": ["QB"],
+            "team": ["KC"],
+            "ruleset": ["ESPN_PPR"],
+            "model_id": ["naive-preseason-v1"],
+            "season_total_fpts_mean": pd.array([-10.0], dtype="float32"),  # negative
+            "season_total_fpts_p10": pd.array([0.0], dtype="float32"),
+            "season_total_fpts_p50": pd.array([0.0], dtype="float32"),
+            "season_total_fpts_p90": pd.array([0.0], dtype="float32"),
+        }
+    )
+    with pytest.raises(SchemaError, match="season_total_fpts_mean"):
+        PreseasonProjectionSchema.validate(df)
+
+
+def test_preseason_backtest_schema_validates_golden_row() -> None:
+    df = pd.DataFrame(
+        {
+            "target_season": pd.array([2024], dtype="int32"),
+            "position": ["QB"],
+            "model_class": ["naive-preseason-v1"],
+            "ruleset": ["ESPN_PPR"],
+            "rmse": pd.array([35.0], dtype="float32"),
+            "rmse_naive_baseline": pd.array([35.0], dtype="float32"),
+            "rmse_delta_pct": pd.array([0.0], dtype="float32"),
+            "spearman_top50": pd.array([0.72], dtype="float32"),
+            "n_players": pd.array([28], dtype="Int64"),
+            "coverage_diff_projected_not_played": pd.array([3], dtype="Int64"),
+            "coverage_diff_played_not_projected": pd.array([1], dtype="Int64"),
+            "verdict": ["NULL"],
+        }
+    )
+    out = PreseasonBacktestSchema.validate(df)
+    assert len(out) == 1
+
+
+def test_preseason_backtest_schema_rejects_invalid_verdict() -> None:
+    df = pd.DataFrame(
+        {
+            "target_season": pd.array([2024], dtype="int32"),
+            "position": ["QB"],
+            "model_class": ["naive-preseason-v1"],
+            "ruleset": ["ESPN_PPR"],
+            "rmse": pd.array([35.0], dtype="float32"),
+            "rmse_naive_baseline": pd.array([35.0], dtype="float32"),
+            "rmse_delta_pct": pd.array([0.0], dtype="float32"),
+            "spearman_top50": pd.array([0.72], dtype="float32"),
+            "n_players": pd.array([28], dtype="Int64"),
+            "coverage_diff_projected_not_played": pd.array([0], dtype="Int64"),
+            "coverage_diff_played_not_projected": pd.array([0], dtype="Int64"),
+            "verdict": ["ADOPTED"],  # not in {ADOPT, NULL, DO_NOT_ADOPT}
+        }
+    )
+    with pytest.raises(SchemaError, match="verdict"):
+        PreseasonBacktestSchema.validate(df)
