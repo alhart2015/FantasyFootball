@@ -4,14 +4,11 @@ Running project management list. Add items as they come up; remove or check off 
 
 ## Open
 
-### 40. Fix 15 tests broken on `main` (PR #51 Vegas team-context fixtures) — **PRIORITY**
+### 40. Regenerate the backtest snapshot for the baseline Vegas feature change (`--run-backtest`)
 
-Surfaced 2026-06-08 during the test-suite-speedup work (branch `chore/test-suite-speedup`; confirmed by running on a clean `origin/main` checkout). These fail on `main` itself, independent of any in-flight branch:
-- `tests/test_models/test_baseline_feature_columns_match_schema.py` (QB, WR) — `_<POS>_FEATURE_COLUMNS` vs schema mismatch on the 4 new Vegas cols.
-- `tests/test_models/test_decomposed_baseline.py` (10 tests) — `KeyError: ['preseason_implied_team_total', 'preseason_spread', 'season_avg_implied_team_total', 'season_avg_spread'] not in index`.
-- `tests/test_scripts/test_tune_lightgbm.py` (3 tests) — same Vegas-col `KeyError` in the synthetic WR fixtures.
+**The 15 tests that were red on `main` are fixed in this PR (`chore/test-suite-speedup`).** Root cause was PR #51 half-completing its Vegas team-context integration: it added the 4 cols (`preseason_implied_team_total`, `preseason_spread`, `season_avg_implied_team_total`, `season_avg_spread`) to `Qb/WrFeaturesSchema` but left `_WR/_QB_FEATURE_COLUMNS` (baseline.py) and two hardcoded WR fixtures (`test_decomposed_baseline`, `test_tune_lightgbm`) inconsistent. Fixed by bringing the feature lists to schema parity + emitting the cols in those fixtures. (`pyproject.toml` also now requires `tabulate>=0.9` — `pip install -e .` to pick it up.)
 
-Root cause: PR #51 added the 4 Vegas team-context cols to `QbFeaturesSchema`/`WrFeaturesSchema` + `_<POS>_FEATURE_COLUMNS` but did not update these tests' synthetic fixtures to emit them (the exact recurring class `test_baseline_feature_columns_match_schema` was added to catch). Also: `pyproject.toml` added `tabulate>=0.9` — devs must `pip install -e .` to pick it up (already done locally). Fix = add the 4 cols to the affected synthetic fixtures.
+**Remaining follow-up:** bringing `_WR/_QB_FEATURE_COLUMNS` to parity means `BaselineModel` now consumes the 4 Vegas features, so its WR/QB predictions change and the checked-in walk-forward snapshot `tests/backtest/model_metrics.json` is stale for the baseline WR/QB cells. The snapshot gate is `--run-backtest`-only (skipped by default, so the default suite is green) — regenerate (`scripts/backtest.py --update-snapshot`) before the next gate run.
 
 ### 38. External consensus projection layer for draft (sub-project #2) — **PRIORITY**
 

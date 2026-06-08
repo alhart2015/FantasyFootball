@@ -14,7 +14,7 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 **Not done (diminishing returns):** `test_ensemble_weight_fit`'s n=500/200 optimum-recovery fixtures are correctness-sensitive; left as-is. Further fixture surgery risks degenerate fits for little wall-clock gain at 2m48s.
 
-**Surfaced + recorded:** 15 tests are broken on `main` itself (PR #51 Vegas-col fixtures + a missing `tabulate` dep) — confirmed on a clean `origin/main` checkout, not introduced here. Filed as TODO #40.
+**Also fixed here:** 15 tests were broken on `main` itself (confirmed on a clean `origin/main` checkout) — PR #51 half-completed its Vegas integration: it added the 4 Vegas cols to `Qb/WrFeaturesSchema` but left `_WR/_QB_FEATURE_COLUMNS` and two hardcoded WR fixtures inconsistent. Brought the baseline feature lists to schema parity + emitted the cols in the `test_decomposed_baseline` / `test_tune_lightgbm` fixtures → **full suite now green** (1235 passed). The one residual (the `--run-backtest` snapshot is now stale for the changed baseline WR/QB features) is TODO #40.
 
 ---
 
