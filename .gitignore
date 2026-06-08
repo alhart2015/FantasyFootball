@@ -221,6 +221,7 @@ data/backtests/
 data/diagnostics/
 data/manifests/
 data/sanity_checks/
+data/external_projections/
 *.duckdb
 
 # Trained model artifacts (joblib pickles; reproducible from source + data)

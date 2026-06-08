@@ -4,6 +4,30 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## External Projection Benchmark Spike — verdict **our model cannot do preseason; pivot to external for draft** (2026-06-08, on branch `feat/external-projection-benchmark`)
+
+**Status:** Spike concluded. The planned preseason ESPN-vs-ours RMSE benchmark was **not run** — it is invalid on our side and would falsely flatter our model. The verdict stands on architecture, not a metric. Spec `docs/superpowers/specs/2026-06-08-external-projection-benchmark-design.md`, plan `docs/superpowers/plans/2026-06-08-external-projection-benchmark.md`, verdict `reports/external_projection_benchmark_2024.md`.
+
+**Strategic context.** First time the home-grown projection model was held up against freely available projections. Motivation: ~2 months of recent work (PRs ~20–35) were feature-family probes measuring 0.004–0.04 fpts/week effects (below decision-relevant magnitude) while zero user-facing tools shipped and the model had never been benchmarked against free sources. Question: keep grinding the model, or use free consensus and spend effort on tools (draft, start/sit, DFS)?
+
+**Disqualifying finding (the spike's real result).** `scripts/project_season.py` is **not a preseason projection** and our model **cannot produce one**. It is a weekly, in-season model: per-week features read trailing windows over the current season, and only players active in a given week get a projection. So its aggregated season totals secretly use the 2024 outcomes we wanted to predict. Smoking gun (2024, PPR): **Christian McCaffrey — our model 63.4 pts over n_weeks=4** (it tracked his early-season injury) **vs ESPN preseason 335.5 vs actual 47.8.** A preseason forecast cannot know an injury in advance; ESPN's 335 is the honest healthy-season forecast. Lamar 419-vs-430 actual is the same effect inverted (tracking an MVP season, not forecasting it). Benchmarking an in-season-informed projection against an honest preseason one is meaningless and biased toward us.
+
+**Decision (user-confirmed).** **For draft (priority #1): pivot to external sources — our model is not in the running, not because it loses but because it structurally cannot play.** ESPN (preseason stat lines + ADP + draft ranks, no auth) and Sleeper (ADP) are genuine free preseason sources, verified pullable for historical seasons. There is nothing on our side to benchmark for draft.
+
+**Reusable assets built (kept):**
+- `scripts/pull_external_projections.py` — working ESPN + Sleeper preseason puller (no auth). ESPN stat-id decode verified end-to-end on real 2024 data (Ja'Marr Chase 105 rec / 1335 yds / 8 TD). Pure parsers unit-tested. **This is the seed of sub-project #2's external-ingest layer.** Pulled parquet is gitignored (`data/external_projections/`); regenerable from the script.
+- `scripts/benchmark_projections.py` — correct join + PPR-scoring + RMSE/MAE/Spearman/cohort machinery, with a prominent docstring warning that it must NOT be run against `project_season.py` output as a preseason verdict. Reusable as-is for the fair weekly start/sit benchmark.
+- Verified: ESPN's `statSourceId=1, statSplitTypeId=0` season projection is genuine preseason (rookie/breakout/injury misses, not contaminated); historical projections retrievable from ESPN + Sleeper.
+
+**Recommended next direction:**
+1. **Sub-project #2 — external consensus projection layer for draft** (TODO #38): build on `pull_external_projections.py`; add 1–2 scraped sources (FantasyPros/CBS preseason) for a real consensus average; this becomes the projection basis downstream tools consume.
+2. **Draft Hub** on top of the consensus (the actual goal — spend effort on *how we use* projections, not on the projections themselves).
+3. **Optional, separate:** the fair weekly start/sit benchmark (our weekly model vs ESPN weekly vs weekly actuals) to decide whether to keep our model for in-season start/sit or retire it. Capability ≠ accuracy — this spike only proved our model can't do preseason, not that it's bad weekly.
+
+**What this does NOT close:** whether our weekly model adds value for start/sit (use-case #2) — unanswered; needs the weekly benchmark. The Track 2 feature-probe treadmill should stop until a downstream consumer exists that the projection quality actually moves.
+
+---
+
 ## Vegas Team-Context Integration — DO_NOT_ADOPT across 3 gates (2026-05-18, on branch `feat/qb-wr-vegas-team-context-integration`)
 
 **Status:** Spec + plan + 8 implementation commits + 4 backtest runs + 3 gate runs + verdict report on `feat/qb-wr-vegas-team-context-integration`. Phase 2 of TODO #33c (production integration of the lgb-nb × swap winners from the predecessor probe). Spec at `docs/superpowers/specs/2026-05-17-qb-wr-vegas-team-context-integration-design.md`; plan at `docs/superpowers/plans/2026-05-17-qb-wr-vegas-team-context-integration.md`; summary at `reports/qb_wr_vegas_team_context_integration_summary.md`.

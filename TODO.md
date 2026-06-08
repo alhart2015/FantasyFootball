@@ -4,6 +4,28 @@ Running project management list. Add items as they come up; remove or check off 
 
 ## Open
 
+### 38. External consensus projection layer for draft (sub-project #2) — **PRIORITY**
+
+**Why now.** The external projection benchmark spike (2026-06-08, branch `feat/external-projection-benchmark`; see `project_management.md` top entry + `reports/external_projection_benchmark_2024.md`) established that our home-grown model is a weekly in-season model and **cannot produce a preseason/draft projection at all** (proven: it projected the injured CMC for only 4 weeks at 63 pts vs ESPN preseason 335). For the draft use case (priority #1), there is nothing on our side to benchmark — pivot to external sources.
+
+**Goal.** Build the external-ingest + consensus layer that becomes the projection basis the downstream tools (Draft Hub first) consume. Spend effort on *how we use* projections, not on the projections themselves.
+
+**Foundation already built** (on the spike branch, reusable): `scripts/pull_external_projections.py` pulls ESPN preseason stat lines + ADP + draft ranks and Sleeper ADP (no auth), crosswalk-ready to `GsisId`. `scripts/benchmark_projections.py` has correct join + PPR-scoring + metric machinery (reusable for the fair weekly benchmark, NOT for a preseason verdict — see its docstring).
+
+**Scope to design (own spec → plan → execute):**
+- Promote the spike puller into a proper ingest source under `src/projections/ingest/` (follow the canonical ingest pattern; `ExternalProjectionSchema` in `schemas.py`; sanctioned store I/O; `GsisId`-keyed).
+- Add 1–2 scraped preseason sources (FantasyPros/CBS/NumberFire) for a real multi-source consensus (user OK'd scraping).
+- Consensus blend (simple average first; accuracy-weighting later) → published preseason projection per player.
+- Decide distribution-wrapping: external sources give point estimates (+ floor/ceiling where available); wrap into the existing `Distribution` types so the scoring/store layers are reused.
+- Fix the id_map ingest float-stringified-id defect: espn_id/sleeper_id are persisted as '4374302.0' (float→str), which forced a consumer-side normalize in the spike's benchmark join. Cast to nullable Int64 / plain string before persisting.
+- Spike-graduation cleanup (surfaced by `/simplify` on the benchmark spike — deferred as out-of-scope for the throwaway scripts, do when promoting to `src/`): (1) the naive-totals filename `reports/season_projection.csv` is a bare literal in `project_season.py` (writer), `benchmark_projections.py`, and `compare_predictions_to_actuals.py` — promote to a shared constant before any CI/Makefile depends on the filename. (2) score-weekly-stats-to-season-total exists in several variants (`benchmark.actual_season_points`, `compare_predictions_to_actuals._actual_ppr_total`, `sanity_check_baseline._realized_ppr_points`) — consolidate onto the canonical `projections.scoring.actual_season_total` helper that PR #51 added to the core. (3) `benchmark._attach_gsis_id` should assert the platform-id column exists and warn (not silently drop) on id_map dedup collisions once it serves more than the current 2 sources.
+
+### 39. Fair weekly start/sit benchmark — does our weekly model beat ESPN weekly? (open)
+
+The spike proved our model can't do preseason, NOT that it's a bad weekly model (capability ≠ accuracy). If we want to know whether to keep it for in-season start/sit (use-case #2), run the fair version: pull ESPN's **weekly** projections (stats array `statSplitTypeId=1`, per `scoringPeriodId`), compare our weekly projection vs ESPN weekly vs weekly actuals at the weekly grain. `scripts/benchmark_projections.py`'s machinery is reusable. Until then, our model's in-season value is unmeasured. Lower priority than #38 (draft is the goal); decide after the consensus layer lands.
+
+**Meta-note from the spike:** the Track 2 feature-probe treadmill (0.004–0.04 fpts/week effects) should stop until a downstream consumer exists whose decisions the projection quality actually moves.
+
 ### 1. Explore option D: joint-correlation projections
 
 **Context.** During Projections Core brainstorming we picked option C (full per-player distributions, marginal only). Option D would extend C to model how player outcomes *co-move* — same-game stacks, opponent dependencies, game-script effects. We deferred D because it adds storage and modeling complexity we may not need until DFS tournament work; we want C's schema to make D an additive upgrade rather than a rewrite.
