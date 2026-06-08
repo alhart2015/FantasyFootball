@@ -84,3 +84,71 @@ def test_attach_gsis_id_real_for_matched_placeholder_for_rookie():
     assert bool(rookie["is_placeholder_gsis"])
     assert rookie["gsis_id"] == ext._make_placeholder_gsis("ESPN", "9999999")
     assert len(out) == 2  # no row multiplication
+
+
+def _tiny_id_map():
+    return pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036900"], dtype="string[pyarrow]"),
+            "espn_id": pd.array(["4374302"], dtype="string[pyarrow]"),
+            "sleeper_id": pd.array(["6794"], dtype="string[pyarrow]"),
+        }
+    )
+
+
+def test_espn_to_canonical_is_schema_valid_with_stat_line():
+    from datetime import date
+
+    from projections.schemas import ExternalProjectionSchema
+
+    espn = ext.parse_espn_players(
+        {
+            "players": [
+                {
+                    "player": {
+                        "id": 4374302,
+                        "fullName": "Ja'Marr Chase",
+                        "defaultPositionId": 3,
+                        "ownership": {"averageDraftPosition": 4.8},
+                        "draftRanksByRankType": {"PPR": {"rank": 20}},
+                        "stats": [
+                            {
+                                "seasonId": 2026,
+                                "statSourceId": 1,
+                                "statSplitTypeId": 0,
+                                "stats": {"53": 105.0, "42": 1335.0, "43": 8.0},
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+        season=2026,
+    )
+    out = ext._espn_to_canonical(espn, season=2026, asof=date(2026, 7, 15), id_map=_tiny_id_map())
+    ExternalProjectionSchema.validate(out)
+    r = out.iloc[0]
+    assert r["source"] == "ESPN" and r["source_player_id"] == "4374302"
+    assert r["gsis_id"] == "00-0036900" and r["asof"] == "2026-07-15"
+    assert r["adp"] == 4.8 and r["receptions"] == 105.0
+
+
+def test_sleeper_to_canonical_has_null_stat_line():
+    from datetime import date
+
+    from projections.schemas import ExternalProjectionSchema
+
+    sl = ext.parse_sleeper_projections(
+        [
+            {
+                "player_id": "6794",
+                "stats": {"adp_ppr": 14.5},
+                "player": {"first_name": "A", "last_name": "B", "position": "WR"},
+            }
+        ]
+    )
+    out = ext._sleeper_to_canonical(sl, season=2026, asof=date(2026, 7, 15), id_map=_tiny_id_map())
+    ExternalProjectionSchema.validate(out)
+    r = out.iloc[0]
+    assert r["source"] == "SLEEPER" and r["adp"] == 14.5
+    assert pd.isna(r["receptions"]) and pd.isna(r["espn_draft_rank"])
