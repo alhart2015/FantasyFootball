@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -51,3 +52,66 @@ def test_season_only_partition(tmp_path: Path) -> None:
     pd.testing.assert_frame_equal(
         out.reset_index(drop=True), df.reset_index(drop=True), check_like=True
     )
+
+
+def test_write_read_asof_partition_roundtrip(tmp_path: Path) -> None:
+    from projections.store.parquet import read_partition, write_partition
+
+    df = pd.DataFrame({"gsis_id": ["00-0000001"], "adp": [3.5]})
+    p = write_partition(tmp_path, "external_projections", df, season=2026, asof=date(2026, 7, 15))
+    expected = (
+        tmp_path / "external_projections" / "season=2026" / "asof=2026-07-15" / "part.parquet"
+    )
+    assert p == expected
+    back = read_partition(tmp_path, "external_projections", season=2026, asof=date(2026, 7, 15))
+    assert back["adp"].tolist() == [3.5]
+
+
+def test_read_all_asof_snapshots_concatenates(tmp_path: Path) -> None:
+    from projections.store.parquet import read_partition, write_partition
+
+    write_partition(
+        tmp_path,
+        "external_projections",
+        pd.DataFrame({"gsis_id": ["00-0000001"], "asof": ["2026-07-01"]}),
+        season=2026,
+        asof=date(2026, 7, 1),
+    )
+    write_partition(
+        tmp_path,
+        "external_projections",
+        pd.DataFrame({"gsis_id": ["00-0000001"], "asof": ["2026-07-15"]}),
+        season=2026,
+        asof=date(2026, 7, 15),
+    )
+    allrows = read_partition(tmp_path, "external_projections", season=2026)
+    assert sorted(allrows["asof"].tolist()) == ["2026-07-01", "2026-07-15"]
+
+
+def test_read_latest_partition_returns_newest_asof(tmp_path: Path) -> None:
+    from projections.store.parquet import read_latest_partition, write_partition
+
+    write_partition(
+        tmp_path,
+        "external_projections",
+        pd.DataFrame({"gsis_id": ["00-0000001"], "adp": [9.0]}),
+        season=2026,
+        asof=date(2026, 7, 1),
+    )
+    write_partition(
+        tmp_path,
+        "external_projections",
+        pd.DataFrame({"gsis_id": ["00-0000001"], "adp": [4.0]}),
+        season=2026,
+        asof=date(2026, 7, 15),
+    )
+    latest = read_latest_partition(tmp_path, "external_projections", season=2026)
+    assert latest["adp"].tolist() == [4.0]
+
+
+def test_write_partition_season_week_unchanged(tmp_path: Path) -> None:
+    from projections.store.parquet import read_partition, write_partition
+
+    df = pd.DataFrame({"x": [1]})
+    write_partition(tmp_path, "weekly_stats", df, season=2024, week=3)
+    assert read_partition(tmp_path, "weekly_stats", season=2024, week=3)["x"].tolist() == [1]
