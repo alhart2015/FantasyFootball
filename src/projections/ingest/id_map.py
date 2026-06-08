@@ -25,16 +25,13 @@ from projections.store import write_partition
 logger = logging.getLogger(__name__)
 
 
-def _coerce_external_id(s: pd.Series) -> pd.Series:
-    """Persist an external id column as a clean integer-string. Upstream returns the numeric
-    ids (espn_id/sleeper_id) as float64 (NaNs force float), so a plain .astype(str) yields
-    '4374302.0'. When every non-null value parses as a number, round-trip through nullable
-    Int64 to drop the spurious '.0'. Genuinely-string id columns (pfr_id, e.g. 'ChASEJa00')
-    are left unchanged — they pass through as nullable pyarrow strings."""
-    numeric = pd.to_numeric(s, errors="coerce")
-    every_nonnull_is_numeric = bool((numeric.notna() | s.isna()).all())
-    if every_nonnull_is_numeric:
-        s = numeric.astype("Int64")
+def _coerce_external_id(s: pd.Series, *, numeric: bool) -> pd.Series:
+    """Persist an external id column as a clean nullable pyarrow string. NUMERIC id columns
+    (espn_id/sleeper_id) round-trip through Int64 to drop the spurious '.0' that upstream
+    float64 dtype produces; string id columns (pfr_id, e.g. 'ChASEJa00', or any future
+    numeric-LOOKING string id with leading zeros) pass through unchanged."""
+    if numeric:
+        s = pd.to_numeric(s, errors="coerce").astype("Int64")
     return s.where(s.notna(), other=pd.NA).astype(_PYARROW_STR)
 
 
@@ -90,9 +87,11 @@ def build_id_map(data_root: Path) -> Path:
 
     # Coerce all string columns to string[pyarrow] so pandera is satisfied.
     # Nullable ID columns get pd.NA for missing values (compatible with StringDtype).
-    for col in ("espn_id", "sleeper_id", "pfr_id"):
+    for col in ("espn_id", "sleeper_id"):
         if col in df.columns:
-            df[col] = _coerce_external_id(df[col])
+            df[col] = _coerce_external_id(df[col], numeric=True)
+    if "pfr_id" in df.columns:
+        df["pfr_id"] = _coerce_external_id(df["pfr_id"], numeric=False)
 
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["full_name"] = df["full_name"].astype(_PYARROW_STR)

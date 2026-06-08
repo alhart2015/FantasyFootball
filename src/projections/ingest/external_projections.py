@@ -33,6 +33,12 @@ from projections.schemas import (
 )
 from projections.store import read_partition, write_partition
 
+
+class ExternalProjectionError(RuntimeError):
+    """Raised by refresh_external_projections on an API failure or empty pull. The CLI
+    (main) converts it to SystemExit; programmatic callers can catch it normally."""
+
+
 _ESPN_URL = (
     "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
     "{season}/segments/0/leaguedefaults/3?view=kona_player_info"
@@ -97,6 +103,9 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
         espn_id = pl.get("id")
         if espn_id is None:
             continue
+        full_name = pl.get("fullName")
+        if not full_name:
+            continue
         proj_stats: dict[str, float] | None = None
         for s in pl.get("stats", []):
             if s.get("seasonId") != season or s.get("statSplitTypeId") != 0:
@@ -109,7 +118,7 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
         ppr_rank = ((pl.get("draftRanksByRankType") or {}).get("PPR") or {}).get("rank")
         row: dict[str, object] = {
             "espn_id": str(espn_id),
-            "full_name": pl.get("fullName"),
+            "full_name": full_name,
             "position": position,
             "espn_adp": ownership.get("averageDraftPosition"),
             "espn_pos_rank": ppr_rank,
@@ -137,11 +146,14 @@ def parse_sleeper_projections(payload: list[dict[str, Any]]) -> pd.DataFrame:
             continue
         first = pl.get("first_name") or ""
         last = pl.get("last_name") or ""
+        full_name = f"{first} {last}".strip()
+        if not full_name:
+            continue
         stats = item.get("stats") or {}
         rows.append(
             {
                 "sleeper_id": str(pid),
-                "full_name": f"{first} {last}".strip(),
+                "full_name": full_name,
                 "position": position,
                 "sleeper_adp": stats.get("adp_ppr"),
             }
@@ -165,9 +177,12 @@ def _attach_gsis_id(
     Dedupes the crosswalk on `id_col` so a duplicate id_map mapping can't multiply rows."""
     crosswalk = id_map[["gsis_id", id_col]].dropna(subset=[id_col]).drop_duplicates(subset=[id_col])
     merged = df.merge(crosswalk, on=id_col, how="left")
-    merged["is_placeholder_gsis"] = merged["gsis_id"].isna()
-    placeholder = merged[id_col].map(lambda pid: _make_placeholder_gsis(source, pid))
-    merged["gsis_id"] = merged["gsis_id"].where(merged["gsis_id"].notna(), placeholder)
+    mask = merged["gsis_id"].isna()
+    merged["is_placeholder_gsis"] = mask
+    merged["gsis_id"] = merged["gsis_id"].astype("object")  # allow filling pyarrow-NA with a str
+    merged.loc[mask, "gsis_id"] = merged.loc[mask, id_col].map(
+        lambda pid: _make_placeholder_gsis(source, pid)
+    )
     return merged
 
 
@@ -250,14 +265,19 @@ def refresh_external_projections(data_root: Path, *, season: int, asof: date | N
     try:
         espn_payload = fetch_espn(season)
         sleeper_payload = fetch_sleeper_season(season)
-    except urllib.error.URLError as exc:
-        detail = f"HTTP {exc.code}" if isinstance(exc, urllib.error.HTTPError) else str(exc.reason)
-        raise SystemExit(f"External API error for season {season}: {detail}") from exc
+    except (urllib.error.URLError, json.JSONDecodeError) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            detail = f"HTTP {exc.code}"
+        elif isinstance(exc, urllib.error.URLError):
+            detail = str(exc.reason)
+        else:
+            detail = f"non-JSON response ({exc})"
+        raise ExternalProjectionError(f"External API error for season {season}: {detail}") from exc
 
     espn = parse_espn_players(espn_payload, season)
     sleeper = parse_sleeper_projections(sleeper_payload)
     if espn.empty or sleeper.empty:
-        raise SystemExit(
+        raise ExternalProjectionError(
             f"Empty pull for {season} (espn={len(espn)} rows, sleeper={len(sleeper)} rows) — "
             f"refusing to write an empty asof snapshot."
         )
@@ -289,7 +309,10 @@ def main() -> None:
         help="Pull-date partition (ISO YYYY-MM-DD); defaults to today (UTC).",
     )
     args = ap.parse_args()
-    path = refresh_external_projections(args.data_root, season=args.season, asof=args.asof)
+    try:
+        path = refresh_external_projections(args.data_root, season=args.season, asof=args.asof)
+    except ExternalProjectionError as exc:
+        raise SystemExit(str(exc)) from exc
     print(f"Wrote external-projection snapshot: {path}", flush=True)
 
 

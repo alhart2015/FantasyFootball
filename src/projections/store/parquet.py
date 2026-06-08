@@ -68,7 +68,11 @@ def read_partition(
 ) -> pd.DataFrame:
     """Read parquet partition(s). `season=None` reads the unpartitioned table file. With a
     season set: a specific `asof` (or `week`) reads that one partition; otherwise all
-    `part.parquet` under the season (across week/asof subdirs) are concatenated."""
+    `part.parquet` under the season (across week/asof subdirs) are concatenated.
+
+    For asof-snapshotted tables, a season-only read concatenates EVERY dated snapshot under
+    that season (use the in-row `asof` column to distinguish them, or `read_latest_partition`
+    for just the newest)."""
     if season is None:
         return pd.read_parquet(_partition_file(root, table, None, None, None))
     if asof is not None or week is not None:

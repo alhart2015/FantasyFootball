@@ -256,5 +256,38 @@ def test_refresh_refuses_empty_pull(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             "sleeper_id": pd.array(["y"], dtype="string[pyarrow]"),
         }
     ).to_parquet(tmp_path / "raw" / "id_map.parquet", index=False)
-    with pytest.raises(SystemExit):
+    with pytest.raises(ext.ExternalProjectionError):
         ext.refresh_external_projections(tmp_path, season=2026)
+
+
+def test_parse_espn_drops_player_with_null_full_name() -> None:
+    payload = {
+        "players": [
+            {
+                "player": {
+                    "id": 7,
+                    "defaultPositionId": 3,
+                    "stats": [
+                        {
+                            "seasonId": 2026,
+                            "statSourceId": 1,
+                            "statSplitTypeId": 0,
+                            "stats": {"42": 900.0},
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+    assert ext.parse_espn_players(payload, season=2026).empty  # no fullName -> dropped
+
+
+def test_parse_sleeper_drops_empty_name() -> None:
+    payload = [
+        {
+            "player_id": "1",
+            "stats": {"adp_ppr": 5.0},
+            "player": {"first_name": None, "last_name": None, "position": "WR"},
+        }
+    ]
+    assert ext.parse_sleeper_projections(payload).empty

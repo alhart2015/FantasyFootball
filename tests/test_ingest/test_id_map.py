@@ -146,7 +146,7 @@ def test_coerce_external_id_leaves_string_pfr_ids_unchanged() -> None:
     from projections.ingest.id_map import _coerce_external_id
 
     s = pd.Series(["ChASEJa00", None, "AlleJo02"])
-    out = _coerce_external_id(s)
+    out = _coerce_external_id(s, numeric=False)
     assert out.tolist()[0] == "ChASEJa00"
     assert out.tolist()[2] == "AlleJo02"
     assert pd.isna(out.tolist()[1])
@@ -158,7 +158,7 @@ def test_coerce_external_id_object_dtype_floats_drop_dot_zero() -> None:
     from projections.ingest.id_map import _coerce_external_id
 
     s = pd.Series([4374302.0, None, 6794.0], dtype=object)
-    out = _coerce_external_id(s)
+    out = _coerce_external_id(s, numeric=True)
     assert out.tolist()[0] == "4374302" and out.tolist()[2] == "6794"
 
 
@@ -171,8 +171,17 @@ def test_float_valued_external_id_persists_without_trailing_dot_zero() -> None:
     from projections.ingest.id_map import _coerce_external_id  # added in Step 3
 
     s = pd.Series([4374302.0, float("nan"), 6794.0])
-    out = _coerce_external_id(s)
+    out = _coerce_external_id(s, numeric=True)
     assert out.tolist()[0] == "4374302"
     assert out.tolist()[2] == "6794"
     assert pd.isna(out.tolist()[1])
     assert str(out.dtype) == "string"
+
+
+def test_coerce_external_id_preserves_leading_zero_string_when_not_numeric() -> None:
+    import pandas as pd
+
+    from projections.ingest.id_map import _coerce_external_id
+
+    out = _coerce_external_id(pd.Series(["0012345", None]), numeric=False)
+    assert out.tolist()[0] == "0012345"
