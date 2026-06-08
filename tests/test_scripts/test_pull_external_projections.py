@@ -83,3 +83,16 @@ def test_parse_espn_players_extracts_proj_actual_adp_rank_and_filters_positions(
     assert row["passing_yards"] == 3752.62  # from the 2024 PROJ entry
     assert row["passing_tds"] == 23  # rounded
     assert row["interceptions"] == 12
+
+
+def test_parse_sleeper_adp_keeps_id_and_ppr_adp() -> None:
+    from typing import Any
+
+    payload: list[dict[str, Any]] = [
+        {"player_id": "4046", "stats": {"adp_ppr": 1.2, "gp": 17.0}},
+        {"player_id": "6794", "stats": {"adp_ppr": 14.5}},
+        {"player_id": None, "stats": {"adp_ppr": 9.0}},  # no id -> dropped
+    ]
+    df = pull.parse_sleeper_adp(payload)
+    assert list(df["sleeper_id"]) == ["4046", "6794"]
+    assert list(df["sleeper_adp"]) == [1.2, 14.5]
