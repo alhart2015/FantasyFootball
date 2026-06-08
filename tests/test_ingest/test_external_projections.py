@@ -213,6 +213,38 @@ def test_refresh_writes_validated_asof_snapshot(
     assert (latest["gsis_id"] == "00-0036900").sum() == 2  # both sources crosswalked the veteran
 
 
+def test_parse_espn_last_proj_entry_wins_when_duplicated() -> None:
+    payload = {
+        "players": [
+            {
+                "player": {
+                    "id": 1,
+                    "fullName": "Dup Guy",
+                    "defaultPositionId": 3,
+                    "ownership": {"averageDraftPosition": 5.0},
+                    "draftRanksByRankType": {"PPR": {"rank": 3}},
+                    "stats": [
+                        {
+                            "seasonId": 2026,
+                            "statSourceId": 1,
+                            "statSplitTypeId": 0,
+                            "stats": {"42": 800.0},
+                        },
+                        {
+                            "seasonId": 2026,
+                            "statSourceId": 1,
+                            "statSplitTypeId": 0,
+                            "stats": {"42": 1200.0},
+                        },  # last wins
+                    ],
+                }
+            }
+        ]
+    }
+    df = ext.parse_espn_players(payload, season=2026)
+    assert df.iloc[0]["receiving_yards"] == 1200.0
+
+
 def test_refresh_refuses_empty_pull(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ext, "fetch_espn", lambda season: {"players": []})
     monkeypatch.setattr(ext, "fetch_sleeper_season", lambda season: [])

@@ -71,8 +71,9 @@ _SKILL_POSITIONS = frozenset({"QB", "RB", "WR", "TE"})
 
 
 def _round_count(value: float) -> int:
-    """Half-up rounding for non-negative projected count stats (Python's round() is banker's)."""
-    return int(value + 0.5)
+    """Half-up rounding for non-negative projected count stats (Python's round() is banker's).
+    Clamps at 0 — count stats (TDs, receptions, INTs, fumbles) are never negative."""
+    return max(0, int(value + 0.5))
 
 
 def _espn_stats_to_statline(stats: dict[str, float]) -> dict[str, float]:
@@ -118,6 +119,10 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# NOTE (v1 position choice): rows use `player.position` (the primary position), not
+# `fantasy_positions`. This is deliberate — it's simpler and covers the common case.
+# For flex/hybrid players (e.g., a RB with WR eligibility) `player.position` and
+# `fantasy_positions` can diverge; revisit if multi-eligibility matters for the Draft Hub.
 def parse_sleeper_projections(payload: list[dict[str, Any]]) -> pd.DataFrame:
     """Tidy Sleeper season projections -> one row per QB/RB/WR/TE with sleeper_id + name +
     position + PPR ADP (Sleeper has no stat line at the season level)."""
