@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -39,10 +40,11 @@ ESPN_STAT_IDS: dict[str, str] = {
     "43": "receiving_tds",
     "72": "fumbles_lost",
 }
-_COUNT_FIELDS = frozenset(
-    {"passing_tds", "interceptions", "rushing_tds", "receptions", "receiving_tds", "fumbles_lost"}
-)
-_ALL_FIELDS = (
+# The common scoring field set, single-sourced here and imported by
+# benchmark_projections.py so the two spike scripts cannot drift on which fields
+# count or how counts round. 2pt conversions and return TDs are rare and absent
+# from ESPN projections; omitted so all sides score on the same fields.
+STAT_FIELDS = (
     "passing_yards",
     "passing_tds",
     "interceptions",
@@ -53,16 +55,26 @@ _ALL_FIELDS = (
     "receiving_tds",
     "fumbles_lost",
 )
+COUNT_FIELDS = frozenset(
+    {"passing_tds", "interceptions", "rushing_tds", "receptions", "receiving_tds", "fumbles_lost"}
+)
+
+
+def round_count(value: float) -> int:
+    """Half-up rounding for non-negative projected count stats. Python's built-in
+    round() uses banker's rounding (round(0.5) == 0), which would silently drop a
+    half-unit projection; counts here are always >= 0."""
+    return int(value + 0.5)
 
 
 def espn_stats_to_statline_dict(stats: dict[str, float]) -> dict[str, float]:
     """Map ESPN's numeric stat dict to our StatLine field names. Missing ids -> 0.
-    Count fields are rounded to the nearest integer; yards stay float."""
-    out: dict[str, float] = {f: 0.0 for f in _ALL_FIELDS}
+    Count fields are half-up rounded to int; yards stay float."""
+    out: dict[str, float] = {f: 0.0 for f in STAT_FIELDS}
     for sid, field in ESPN_STAT_IDS.items():
         if sid in stats:
             val = float(stats[sid])
-            out[field] = float(round(val)) if field in _COUNT_FIELDS else val
+            out[field] = float(round_count(val)) if field in COUNT_FIELDS else val
     return out
 
 
@@ -92,7 +104,11 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
                 proj_stats = s.get("stats", {})
             elif s.get("statSourceId") == 0:
                 actual_total = s.get("appliedTotal")
-        if proj_stats is None:
+        if not proj_stats:
+            # None (no season-proj entry) or {} (entry present but no inner stat
+            # dict — seen on injured/placeholder players); both mean "no usable
+            # projection", so drop rather than keep an all-zero line that would
+            # pollute ESPN's error metrics.
             continue
         ownership = pl.get("ownership") or {}
         ppr_rank = ((pl.get("draftRanksByRankType") or {}).get("PPR") or {}).get("rank")
@@ -159,11 +175,28 @@ def main() -> None:
     out_dir = args.out_root / str(args.season)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    espn = parse_espn_players(fetch_espn(args.season), args.season)
+    try:
+        espn_payload = fetch_espn(args.season)
+        sleeper_payload = fetch_sleeper_season(args.season)
+    except urllib.error.HTTPError as exc:  # clean message instead of a raw traceback
+        raise SystemExit(
+            f"External API HTTP error ({exc.code}) for season {args.season}: {exc.reason}"
+        ) from exc
+
+    espn = parse_espn_players(espn_payload, args.season)
+    if espn.empty:
+        raise SystemExit(
+            f"ESPN returned 0 players for {args.season} (possible rate-limit/soft-block or bad "
+            f"season). Refusing to write an empty parquet."
+        )
     espn.to_parquet(out_dir / "espn.parquet", index=False)
     print(f"ESPN: {len(espn)} players -> {out_dir / 'espn.parquet'}", flush=True)
 
-    sleeper = parse_sleeper_adp(fetch_sleeper_season(args.season))
+    sleeper = parse_sleeper_adp(sleeper_payload)
+    if sleeper.empty:
+        raise SystemExit(
+            f"Sleeper returned 0 rows for {args.season}. Refusing to write an empty parquet."
+        )
     sleeper.to_parquet(out_dir / "sleeper_adp.parquet", index=False)
     print(f"Sleeper ADP: {len(sleeper)} players -> {out_dir / 'sleeper_adp.parquet'}", flush=True)
 

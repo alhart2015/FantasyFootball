@@ -115,6 +115,36 @@ def test_parse_espn_players_drops_players_with_missing_id() -> None:
         assert "None" not in list(df["espn_id"])
 
 
+def test_round_count_is_half_up_not_bankers() -> None:
+    assert pull.round_count(0.5) == 1  # Python's round(0.5) == 0; this must be 1
+    assert pull.round_count(8.24) == 8
+    assert pull.round_count(0.4) == 0
+    # exact-half count projection survives into the statline as 1, not 0
+    out = pull.espn_stats_to_statline_dict({"43": 0.5})  # receiving_tds = 0.5
+    assert out["receiving_tds"] == 1
+
+
+def test_parse_espn_players_drops_entry_with_empty_stats_dict() -> None:
+    # A season-proj entry that exists but carries no inner 'stats' dict (injured/
+    # placeholder) must be dropped, not kept as an all-zero projection.
+    payload = {
+        "players": [
+            {
+                "player": {
+                    "id": 111,
+                    "fullName": "Empty Stats Guy",
+                    "defaultPositionId": 2,
+                    "stats": [
+                        {"seasonId": 2024, "statSourceId": 1, "statSplitTypeId": 0},  # no 'stats'
+                    ],
+                }
+            }
+        ]
+    }
+    df = pull.parse_espn_players(payload, season=2024)
+    assert df.empty
+
+
 def test_parse_sleeper_adp_keeps_id_and_ppr_adp() -> None:
     from typing import Any
 

@@ -143,3 +143,86 @@ def test_render_report_contains_verdict_and_per_source_rows() -> None:
     # matched-population comparison must be the primary headline in the Verdict
     assert "veterans" in md.lower()
     assert "Matched (veterans-only)" in md
+
+
+def test_build_benchmark_frame_matches_float_stringified_idmap_ids() -> None:
+    # Regression: id_map stores espn_id/sleeper_id as float-stringified strings
+    # ('4374302.0', string dtype); the pull writes clean int-strings ('4374302',
+    # object). The join must normalize both and MATCH (previously matched 0 rows).
+    espn = pd.DataFrame(
+        [
+            {
+                "espn_id": "4374302",
+                "full_name": "A B",
+                "position": "WR",
+                "espn_adp": 4.0,
+                "espn_pos_rank": 2,
+                "passing_yards": 0.0,
+                "passing_tds": 0,
+                "interceptions": 0,
+                "rushing_yards": 0.0,
+                "rushing_tds": 0,
+                "receptions": 80,
+                "receiving_yards": 1000.0,
+                "receiving_tds": 5,
+                "fumbles_lost": 0,
+            }
+        ]
+    )
+    ours = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["WR"], "our_pts": [195.0]})
+    actuals = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["WR"], "actual_pts": [188.0]})
+    id_map = pd.DataFrame(
+        {
+            "gsis_id": ["00-0000001"],
+            "espn_id": pd.array(["4374302.0"], dtype="string"),
+            "sleeper_id": pd.array(["4046.0"], dtype="string"),
+            "full_name": ["A B"],
+            "position": ["WR"],
+            "team": ["KC"],
+        }
+    )
+    sleeper = pd.DataFrame({"sleeper_id": ["4046"], "sleeper_adp": [3.5]})
+    frame = bench.build_benchmark_frame(espn, ours, actuals, id_map, sleeper, Ruleset.espn_ppr())
+    row = frame.iloc[0]
+    assert row["espn_pts"] == 210.0  # 80 + 100 + 30, matched despite '.0' suffix
+    assert row["sleeper_adp"] == 3.5  # sleeper matched too
+
+
+def test_build_benchmark_frame_dedupes_duplicate_idmap_espn_id() -> None:
+    # Regression: id_map can contain two rows with the same espn_id; the join must
+    # not multiply the player's row (which would inflate n and every metric).
+    espn = pd.DataFrame(
+        [
+            {
+                "espn_id": "500",
+                "full_name": "Dup Guy",
+                "position": "RB",
+                "espn_adp": 1.0,
+                "espn_pos_rank": 1,
+                "passing_yards": 0.0,
+                "passing_tds": 0,
+                "interceptions": 0,
+                "rushing_yards": 500.0,
+                "rushing_tds": 4,
+                "receptions": 0,
+                "receiving_yards": 0.0,
+                "receiving_tds": 0,
+                "fumbles_lost": 0,
+            }
+        ]
+    )
+    ours = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["RB"], "our_pts": [100.0]})
+    actuals = pd.DataFrame({"gsis_id": ["00-0000001"], "position": ["RB"], "actual_pts": [90.0]})
+    id_map = pd.DataFrame(
+        {
+            "gsis_id": ["00-0000001", "00-0000001"],
+            "espn_id": pd.array(["500", "500"], dtype="string"),
+            "sleeper_id": pd.array(["9", "9"], dtype="string"),
+            "full_name": ["Dup Guy", "Dup Guy"],
+            "position": ["RB", "RB"],
+            "team": ["KC", "KC"],
+        }
+    )
+    sleeper = pd.DataFrame({"sleeper_id": ["9"], "sleeper_adp": [1.0]})
+    frame = bench.build_benchmark_frame(espn, ours, actuals, id_map, sleeper, Ruleset.espn_ppr())
+    assert len(frame) == 1  # not duplicated

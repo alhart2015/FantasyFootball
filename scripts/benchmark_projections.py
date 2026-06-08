@@ -41,55 +41,26 @@ import argparse
 from pathlib import Path
 
 import pandas as pd
+from pull_external_projections import COUNT_FIELDS, STAT_FIELDS, round_count
 
 from projections.schemas import Ruleset
 from projections.scoring.score import StatLine, score
 from projections.store import read_partition
 
-# 2pt conversions and return TDs are rare and absent from ESPN projections;
-# omitted so all sides score on the same fields.
-_STAT_FIELDS = (
-    "passing_yards",
-    "passing_tds",
-    "interceptions",
-    "rushing_yards",
-    "rushing_tds",
-    "receptions",
-    "receiving_yards",
-    "receiving_tds",
-    "fumbles_lost",
-)
-_COUNT_FIELDS = frozenset(
-    {
-        "passing_tds",
-        "interceptions",
-        "rushing_tds",
-        "receptions",
-        "receiving_tds",
-        "fumbles_lost",
-    }
-)
-
 
 def _score_row(row: pd.Series[object], ruleset: Ruleset) -> float:
-    sl = StatLine(
-        passing_yards=float(row["passing_yards"]),
-        passing_tds=round(float(row["passing_tds"])),
-        interceptions=round(float(row["interceptions"])),
-        rushing_yards=float(row["rushing_yards"]),
-        rushing_tds=round(float(row["rushing_tds"])),
-        receptions=round(float(row["receptions"])),
-        receiving_yards=float(row["receiving_yards"]),
-        receiving_tds=round(float(row["receiving_tds"])),
-        fumbles_lost=round(float(row["fumbles_lost"])),
-    )
-    return score(sl, ruleset)
+    kwargs = {
+        f: (round_count(float(row[f])) if f in COUNT_FIELDS else float(row[f])) for f in STAT_FIELDS
+    }
+    # dict-unpack into StatLine's typed kwargs (count fields int, yards float); the
+    # inferred dict[str, float] is why the narrow arg-type ignore is needed.
+    return score(StatLine(**kwargs), ruleset)  # type: ignore[arg-type]
 
 
 def actual_season_points(weekly_stats: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
     """Sum each player's weekly stat lines to a season total and score under `ruleset`.
     Position is the modal value across the player's weeks."""
-    agg = {f: "sum" for f in _STAT_FIELDS}
+    agg = {f: "sum" for f in STAT_FIELDS}
     summed = weekly_stats.groupby("gsis_id", as_index=False).agg(agg)
     pos = weekly_stats.groupby("gsis_id")["position"].agg(lambda s: s.mode().iloc[0]).reset_index()
     out = summed.merge(pos, on="gsis_id", how="left")
@@ -116,9 +87,17 @@ def espn_season_points(espn: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
             "espn_pts",
             "espn_adp",
             "espn_pos_rank",
-            "espn_actual_applied_total",
         ]
     ]
+
+
+def _normalize_join_id(s: pd.Series) -> pd.Series:
+    """id_map stores espn_id/sleeper_id as float-stringified values ('4374302.0')
+    with a string dtype; external pulls write clean int-strings ('4374302') as
+    object dtype. Canonicalize both sides to a plain string with any trailing '.0'
+    stripped so the merge actually matches (and the dtypes line up). Without this,
+    the join silently produces ZERO matches."""
+    return s.astype("string").str.replace(r"\.0$", "", regex=True)
 
 
 def build_benchmark_frame(
@@ -133,9 +112,13 @@ def build_benchmark_frame(
     Sleeper ADP via id_map.sleeper_id). Base universe = actuals (ground truth).
     Position is taken from actuals."""
     espn_scored = espn_season_points(espn, ruleset)
-    espn_keyed = espn_scored.merge(
-        id_map[["gsis_id", "espn_id"]].dropna(subset=["espn_id"]), on="espn_id", how="left"
-    )
+    espn_scored["espn_id"] = _normalize_join_id(espn_scored["espn_id"])
+    # dropna + drop_duplicates: id_map has duplicate espn_id rows; without the dedup
+    # a duplicate would multiply a player's rows and inflate every metric.
+    id_espn = id_map[["gsis_id", "espn_id"]].dropna(subset=["espn_id"]).copy()
+    id_espn["espn_id"] = _normalize_join_id(id_espn["espn_id"])
+    id_espn = id_espn.drop_duplicates(subset=["espn_id"])
+    espn_keyed = espn_scored.merge(id_espn, on="espn_id", how="left")
 
     frame = actuals.copy()
     frame = frame.merge(ours[["gsis_id", "our_pts"]], on="gsis_id", how="left")
@@ -148,15 +131,20 @@ def build_benchmark_frame(
         how="left",
     )
 
-    sleeper_keyed = sleeper.merge(
-        id_map[["gsis_id", "sleeper_id"]].dropna(subset=["sleeper_id"]),
-        on="sleeper_id",
-        how="left",
-    ).dropna(subset=["gsis_id"])
+    sleeper = sleeper.copy()
+    sleeper["sleeper_id"] = _normalize_join_id(sleeper["sleeper_id"])
+    id_sleeper = id_map[["gsis_id", "sleeper_id"]].dropna(subset=["sleeper_id"]).copy()
+    id_sleeper["sleeper_id"] = _normalize_join_id(id_sleeper["sleeper_id"])
+    id_sleeper = id_sleeper.drop_duplicates(subset=["sleeper_id"])
+    sleeper_keyed = sleeper.merge(id_sleeper, on="sleeper_id", how="left").dropna(
+        subset=["gsis_id"]
+    )
     frame = frame.merge(sleeper_keyed[["gsis_id", "sleeper_adp"]], on="gsis_id", how="left")
 
-    # full_name for readability (from id_map).
-    frame = frame.merge(id_map[["gsis_id", "full_name"]], on="gsis_id", how="left")
+    # full_name for readability (from id_map); dedup to avoid row multiplication
+    # when id_map has duplicate gsis_id rows.
+    id_name = id_map[["gsis_id", "full_name"]].drop_duplicates(subset=["gsis_id"])
+    frame = frame.merge(id_name, on="gsis_id", how="left")
     return frame
 
 

@@ -181,11 +181,12 @@ def main() -> None:
     parser.add_argument("--season", type=int, default=2025)
     parser.add_argument("--train-start", type=int, default=2018)
     parser.add_argument("--raw-root", type=Path, default=Path("data/raw"))
-    parser.add_argument("--out", type=Path, default=Path("reports") / "season_projection.csv")
+    parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
     target_season = args.season
     train_seasons = range(args.train_start, target_season)  # exclusive of target
+    out_path = args.out or Path("reports") / f"season_projection_{target_season}.csv"
 
     ruleset = Ruleset.espn_ppr()
     draft_picks = _load_draft_picks(args.raw_root, target_season)
@@ -233,9 +234,9 @@ def main() -> None:
     )
     season_totals.insert(0, "rank", range(1, len(season_totals) + 1))
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    season_totals.to_csv(args.out, index=False)
-    print(f"\nWrote season totals CSV: {args.out}", flush=True)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    season_totals.to_csv(out_path, index=False)
+    print(f"\nWrote season totals CSV: {out_path}", flush=True)
 
     print(f"\n=== TOP 100 overall ({target_season} ESPN PPR projection) ===")
     pd.set_option("display.max_rows", 200)
