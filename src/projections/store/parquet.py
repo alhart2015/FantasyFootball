@@ -4,11 +4,14 @@ Tables without season (e.g., id_map) are written to `{table}.parquet`."""
 
 from __future__ import annotations
 
+import re
 import shutil
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
+
+_ASOF_DIR_RE = re.compile(r"^asof=\d{4}-\d{2}-\d{2}$")
 
 
 def _partition_dir(
@@ -18,6 +21,8 @@ def _partition_dir(
         if week is not None or asof is not None:
             raise ValueError("week/asof cannot be set when season is None")
         return root / table
+    if week is not None and asof is not None:
+        raise ValueError("week and asof are mutually exclusive partition dimensions")
     p = root / table / f"season={season}"
     if week is not None:
         p = p / f"week={week:02d}"
@@ -78,7 +83,9 @@ def read_partition(
 def read_latest_partition(root: Path, table: str, *, season: int) -> pd.DataFrame:
     """Read only the newest `asof` snapshot under a season (ISO dates sort chronologically)."""
     season_dir = _partition_dir(root, table, season, None, None)
-    asof_dirs = sorted(d for d in season_dir.glob("asof=*") if d.is_dir())
+    asof_dirs = sorted(
+        d for d in season_dir.glob("asof=*") if d.is_dir() and _ASOF_DIR_RE.match(d.name)
+    )
     if not asof_dirs:
         raise FileNotFoundError(f"No asof snapshots under {season_dir}")
     return pd.read_parquet(asof_dirs[-1] / "part.parquet")

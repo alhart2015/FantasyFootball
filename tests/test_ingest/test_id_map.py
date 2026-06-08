@@ -140,6 +140,28 @@ def test_build_id_map_warns_on_placeholder_gsis_ids(
     )
 
 
+def test_coerce_external_id_leaves_string_pfr_ids_unchanged() -> None:
+    import pandas as pd
+
+    from projections.ingest.id_map import _coerce_external_id
+
+    s = pd.Series(["ChASEJa00", None, "AlleJo02"])
+    out = _coerce_external_id(s)
+    assert out.tolist()[0] == "ChASEJa00"
+    assert out.tolist()[2] == "AlleJo02"
+    assert pd.isna(out.tolist()[1])
+
+
+def test_coerce_external_id_object_dtype_floats_drop_dot_zero() -> None:
+    import pandas as pd
+
+    from projections.ingest.id_map import _coerce_external_id
+
+    s = pd.Series([4374302.0, None, 6794.0], dtype=object)
+    out = _coerce_external_id(s)
+    assert out.tolist()[0] == "4374302" and out.tolist()[2] == "6794"
+
+
 def test_float_valued_external_id_persists_without_trailing_dot_zero() -> None:
     # Upstream load_ff_playerids() returns espn_id/sleeper_id as float64 (NaNs force float),
     # so an integer id arrives as 4374302.0. It must persist as "4374302", not "4374302.0",

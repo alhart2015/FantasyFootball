@@ -802,7 +802,8 @@ class ExternalProjectionSchema(pa.DataFrameModel):
     full_name: Series[str]
     position: Series[str] = pa.Field(isin=_POSITION_VALUES)
     season: Series[int] = pa.Field(ge=1999, le=2100)
-    asof: Series[str]  # ISO YYYY-MM-DD; also encoded in the partition path
+    # ISO YYYY-MM-DD; also encoded in the partition path
+    asof: Series[str] = pa.Field(str_matches=r"^\d{4}-\d{2}-\d{2}$")
     adp: Series[float] = pa.Field(nullable=True)
     espn_draft_rank: Series[float] = pa.Field(nullable=True)
     passing_yards: Series[float] = pa.Field(nullable=True)

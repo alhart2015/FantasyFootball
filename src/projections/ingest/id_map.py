@@ -26,12 +26,15 @@ logger = logging.getLogger(__name__)
 
 
 def _coerce_external_id(s: pd.Series) -> pd.Series:
-    """Persist an external id column (espn_id/sleeper_id) as a clean integer-string.
-    Upstream returns these as float64 (NaNs force float dtype), so a plain .astype(str)
-    yields '4374302.0'. Round-trip through nullable Int64 to drop the spurious '.0',
-    keeping NaN as <NA>."""
-    if pd.api.types.is_float_dtype(s):
-        s = s.astype("Int64")
+    """Persist an external id column as a clean integer-string. Upstream returns the numeric
+    ids (espn_id/sleeper_id) as float64 (NaNs force float), so a plain .astype(str) yields
+    '4374302.0'. When every non-null value parses as a number, round-trip through nullable
+    Int64 to drop the spurious '.0'. Genuinely-string id columns (pfr_id, e.g. 'ChASEJa00')
+    are left unchanged — they pass through as nullable pyarrow strings."""
+    numeric = pd.to_numeric(s, errors="coerce")
+    every_nonnull_is_numeric = bool((numeric.notna() | s.isna()).all())
+    if every_nonnull_is_numeric:
+        s = numeric.astype("Int64")
     return s.where(s.notna(), other=pd.NA).astype(_PYARROW_STR)
 
 

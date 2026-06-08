@@ -115,3 +115,38 @@ def test_write_partition_season_week_unchanged(tmp_path: Path) -> None:
     df = pd.DataFrame({"x": [1]})
     write_partition(tmp_path, "weekly_stats", df, season=2024, week=3)
     assert read_partition(tmp_path, "weekly_stats", season=2024, week=3)["x"].tolist() == [1]
+
+
+def test_read_latest_ignores_stray_non_date_asof_dir(tmp_path: Path) -> None:
+    from datetime import date
+
+    from projections.store.parquet import read_latest_partition, write_partition
+
+    write_partition(
+        tmp_path,
+        "external_projections",
+        pd.DataFrame({"gsis_id": ["00-0000001"], "adp": [4.0]}),
+        season=2026,
+        asof=date(2026, 7, 15),
+    )
+    stray = tmp_path / "external_projections" / "season=2026" / "asof=backup"
+    stray.mkdir(parents=True)
+    (stray / "part.parquet").write_bytes(b"")  # would crash if selected
+    latest = read_latest_partition(tmp_path, "external_projections", season=2026)
+    assert latest["adp"].tolist() == [4.0]
+
+
+def test_partition_dir_raises_on_week_and_asof_together(tmp_path: Path) -> None:
+    import pytest
+
+    from projections.store.parquet import write_partition
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        write_partition(
+            tmp_path,
+            "some_table",
+            pd.DataFrame({"x": [1]}),
+            season=2026,
+            week=3,
+            asof=date(2026, 7, 15),
+        )
