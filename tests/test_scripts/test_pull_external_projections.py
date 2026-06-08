@@ -85,6 +85,36 @@ def test_parse_espn_players_extracts_proj_actual_adp_rank_and_filters_positions(
     assert row["interceptions"] == 12
 
 
+def test_parse_espn_players_drops_players_with_missing_id() -> None:
+    """Players with no ESPN id must be silently dropped, not stored as espn_id="None"."""
+    payload: dict[str, object] = {
+        "players": [
+            {
+                "player": {
+                    # id intentionally absent — placeholder/inactive entry
+                    "fullName": "Placeholder Player",
+                    "defaultPositionId": 1,  # QB -> would pass position filter
+                    "ownership": {},
+                    "draftRanksByRankType": {},
+                    "stats": [
+                        {
+                            "seasonId": 2024,
+                            "statSourceId": 1,
+                            "statSplitTypeId": 0,
+                            "stats": {"3": 3000.0, "4": 20.0},
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+    df = pull.parse_espn_players(payload, season=2024)
+    assert len(df) == 0, "player with no id must be dropped, not included"
+    if len(df) > 0:
+        # Belt-and-suspenders: also confirm the literal string "None" was not stored
+        assert "None" not in list(df["espn_id"])
+
+
 def test_parse_sleeper_adp_keeps_id_and_ppr_adp() -> None:
     from typing import Any
 

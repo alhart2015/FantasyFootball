@@ -79,12 +79,16 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
         position = _ESPN_POSITIONS.get(pl.get("defaultPositionId"))
         if position is None:
             continue
+        espn_id = pl.get("id")
+        if espn_id is None:
+            continue
         proj_stats: dict[str, float] | None = None
         actual_total: float | None = None
         for s in pl.get("stats", []):
             if s.get("seasonId") != season or s.get("statSplitTypeId") != 0:
                 continue
             if s.get("statSourceId") == 1:
+                # last-write-wins; ESPN provides at most one season-proj entry per player
                 proj_stats = s.get("stats", {})
             elif s.get("statSourceId") == 0:
                 actual_total = s.get("appliedTotal")
@@ -93,7 +97,7 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
         ownership = pl.get("ownership") or {}
         ppr_rank = ((pl.get("draftRanksByRankType") or {}).get("PPR") or {}).get("rank")
         row: dict[str, object] = {
-            "espn_id": str(pl.get("id")),
+            "espn_id": str(espn_id),
             "full_name": pl.get("fullName"),
             "position": position,
             "espn_adp": ownership.get("averageDraftPosition"),
@@ -125,7 +129,12 @@ def parse_sleeper_adp(payload: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def fetch_espn(season: int, limit: int = 800) -> dict[str, Any]:
+def fetch_espn(
+    season: int,
+    # ESPN returns ownership-sorted players; ~600-650 fantasy-relevant come back at
+    # this setting. A larger season could silently truncate the tail.
+    limit: int = 800,
+) -> dict[str, Any]:
     flt = {"players": {"limit": limit, "sortPercOwned": {"sortPriority": 1, "sortAsc": False}}}
     req = urllib.request.Request(
         _ESPN_URL.format(season=season),
