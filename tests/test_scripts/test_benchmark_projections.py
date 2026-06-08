@@ -118,3 +118,25 @@ def test_top_n_by_rank_picks_smallest_rank_per_position() -> None:
         ("WR", 2.0),
         ("RB", 1.0),
     }
+
+
+def test_render_report_contains_verdict_and_per_source_rows() -> None:
+    frame = pd.DataFrame(
+        {
+            "gsis_id": ["00-0000001", "00-0000002"],
+            "full_name": ["A B", "C D"],
+            "position": ["WR", "RB"],
+            "espn_pts": [210.0, 150.0],
+            "our_pts": [195.0, None],
+            "actual_pts": [188.0, 160.0],
+            "espn_pos_rank": [2.0, 1.0],
+            "espn_adp": [4.0, 1.0],
+            "sleeper_adp": [3.5, 1.2],
+        }
+    )
+    md = bench.render_report(frame, season=2024)
+    assert "# External Projection Benchmark" in md
+    assert "ESPN" in md and "Ours" in md
+    assert "Verdict" in md
+    # our model missing a row (C D) must be surfaced as coverage
+    assert "match" in md.lower() or "coverage" in md.lower()
