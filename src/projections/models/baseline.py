@@ -303,6 +303,13 @@ _WR_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "is_high_wind",
     "temperature_f",
     "is_grass_surface",
+    # Vegas team-context features (PR #51 WR+QB Vegas integration).
+    # lightgbm derives feature lists from WrFeaturesSchema dynamically and
+    # auto-picks-up; baseline.py is hardcoded so must be updated explicitly.
+    "preseason_implied_team_total",
+    "preseason_spread",
+    "season_avg_implied_team_total",
+    "season_avg_spread",
 )
 
 
@@ -347,6 +354,13 @@ _QB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "is_home",
     "roof_dome",
     "opp_allowed_qb_fppg_l4",
+    # Vegas team-context features (PR #51 WR+QB Vegas integration).
+    # lightgbm derives feature lists from QbFeaturesSchema dynamically and
+    # auto-picks-up; baseline.py is hardcoded so must be updated explicitly.
+    "preseason_implied_team_total",
+    "preseason_spread",
+    "season_avg_implied_team_total",
+    "season_avg_spread",
 )
 
 
