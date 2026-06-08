@@ -30,6 +30,8 @@ from projections.schemas import Ruleset
 from projections.scoring.score import StatLine, score
 from projections.store import read_partition
 
+# 2pt conversions and return TDs are rare and absent from ESPN projections;
+# omitted so all sides score on the same fields.
 _STAT_FIELDS = (
     "passing_yards",
     "passing_tds",
@@ -248,13 +250,18 @@ def render_report(frame: pd.DataFrame, season: int) -> str:
         out.append(f"| {label} | {sp:.3f} | {hit:.2f} |")
     out += [""]
 
-    espn_all = source_metrics(frame, "espn_pts")
-    our_all = source_metrics(frame[frame["our_pts"].notna()], "our_pts")
+    vets = frame[frame["our_pts"].notna()]
+    espn_all = source_metrics(frame, "espn_pts")  # ESPN, full population
+    espn_vets = source_metrics(vets, "espn_pts")  # ESPN, veterans-only (matched to our model)
+    our_vets = source_metrics(vets, "our_pts")  # ours, veterans-only
     out += [
         "## Verdict",
         "",
-        f"- ESPN full-population RMSE: {espn_all['rmse']:.2f} (n={espn_all['n']})",
-        f"- Our model veterans-only RMSE: {our_all['rmse']:.2f} (n={our_all['n']})",
+        f"- **Matched (veterans-only) — the fair head-to-head:** "
+        f"ESPN RMSE {espn_vets['rmse']:.2f} vs Ours RMSE {our_vets['rmse']:.2f} "
+        f"(n={our_vets['n']})",
+        f"- Full-population ESPN RMSE: {espn_all['rmse']:.2f} (n={espn_all['n']}) "
+        f"— broader coverage; includes rookies our model cannot project",
         "",
         "_Reading notes:_ one season (2024) — rerun on 2023 if close. ESPN is one strong "
         "source, not a consensus: losing to ESPN alone strongly implies losing to a consensus; "

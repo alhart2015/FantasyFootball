@@ -140,3 +140,6 @@ def test_render_report_contains_verdict_and_per_source_rows() -> None:
     assert "Verdict" in md
     # our model missing a row (C D) must be surfaced as coverage
     assert "match" in md.lower() or "coverage" in md.lower()
+    # matched-population comparison must be the primary headline in the Verdict
+    assert "veterans" in md.lower()
+    assert "Matched (veterans-only)" in md
