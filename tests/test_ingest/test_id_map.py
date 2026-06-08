@@ -138,3 +138,19 @@ def test_build_id_map_warns_on_placeholder_gsis_ids(
     assert any(
         "filtered 2 row(s) with non-GSIS placeholder ids" in r.getMessage() for r in caplog.records
     )
+
+
+def test_float_valued_external_id_persists_without_trailing_dot_zero() -> None:
+    # Upstream load_ff_playerids() returns espn_id/sleeper_id as float64 (NaNs force float),
+    # so an integer id arrives as 4374302.0. It must persist as "4374302", not "4374302.0",
+    # or the external-projection crosswalk join silently misses.
+    import pandas as pd
+
+    from projections.ingest.id_map import _coerce_external_id  # added in Step 3
+
+    s = pd.Series([4374302.0, float("nan"), 6794.0])
+    out = _coerce_external_id(s)
+    assert out.tolist()[0] == "4374302"
+    assert out.tolist()[2] == "6794"
+    assert pd.isna(out.tolist()[1])
+    assert str(out.dtype) == "string"

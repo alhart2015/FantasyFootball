@@ -25,6 +25,16 @@ from projections.store import write_partition
 logger = logging.getLogger(__name__)
 
 
+def _coerce_external_id(s: pd.Series) -> pd.Series:
+    """Persist an external id column (espn_id/sleeper_id) as a clean integer-string.
+    Upstream returns these as float64 (NaNs force float dtype), so a plain .astype(str)
+    yields '4374302.0'. Round-trip through nullable Int64 to drop the spurious '.0',
+    keeping NaN as <NA>."""
+    if pd.api.types.is_float_dtype(s):
+        s = s.astype("Int64")
+    return s.where(s.notna(), other=pd.NA).astype(_PYARROW_STR)
+
+
 def _fetch_raw_id_map() -> pd.DataFrame:
     return nflreadpy.load_ff_playerids().to_pandas()
 
@@ -79,7 +89,7 @@ def build_id_map(data_root: Path) -> Path:
     # Nullable ID columns get pd.NA for missing values (compatible with StringDtype).
     for col in ("espn_id", "sleeper_id", "pfr_id"):
         if col in df.columns:
-            df[col] = df[col].where(df[col].notna(), other=pd.NA).astype(_PYARROW_STR)
+            df[col] = _coerce_external_id(df[col])
 
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["full_name"] = df["full_name"].astype(_PYARROW_STR)
