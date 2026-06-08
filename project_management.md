@@ -4,6 +4,25 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## External Projection Ingest Mechanism (v1) — shipped (2026-06-08, on branch `feat/external-projection-ingest`)
+
+**Status:** Sub-project #2a (first slice of TODO #38) done. A repeatable, dated-snapshot ingest of ESPN + Sleeper preseason projections is in `src/`, verified live for 2026. Spec/plan at `docs/superpowers/specs|plans/2026-06-08-external-projection-ingest.*`.
+
+**What shipped:**
+- `src/projections/ingest/external_projections.py` — `refresh_external_projections(data_root, *, season, asof=None)` + CLI (`python -m projections.ingest.external_projections --season 2026`). Fetches ESPN (preseason stat line + ADP + PPR draft rank) and Sleeper (ADP + name/position), normalizes to `ExternalProjectionSchema`, writes one validated snapshot. Empty pull is a hard error (no partial snapshots).
+- **Store `asof` partition** — `write_partition`/`read_partition` gained an optional `asof` date dimension (`season=YYYY/asof=YYYY-MM-DD/`), plus `read_latest_partition`. Each refresh is a point-in-time snapshot; the accumulated series powers later riser/faller views.
+- **`ExternalProjectionSchema` + `ProjectionSource` enum** — one row per (source, player, asof); nullable stat line (Sleeper is ADP-only); stores stat lines, not points.
+- **Rookie placeholders** — veterans crosswalk to their real `gsis_id` via `id_map`; pre-camp rookies (no real gsis until ~late July, per TODO #37) get a deterministic `99-XXXXXXX` placeholder flagged `is_placeholder_gsis`, auto-reconciling on later refreshes. Scoped to this table only (NOT TODO #37's pipeline-wide system).
+- **`id_map` float-id fix** — `espn_id`/`sleeper_id` now persist as clean integer-strings (`'4374302'`, not `'4374302.0'`), so the crosswalk matches without a consumer-side workaround.
+
+**Live 2026 verification:** 3,492 rows (Sleeper 3,034 + ESPN 458); Ja'Marr Chase → real `00-0036900` from both sources; 2026 rookies (Jeremiyah Love, Carnell Tate, …) → `99-` placeholders with ADP, kept rather than dropped.
+
+**Decisions:** dated snapshots (history for riser/faller); ESPN+Sleeper only (consensus/scraping deferred); store stat lines; narrow rookie-placeholder scope; empty-pull = hard error.
+
+**Next (TODO #38 #2b+):** scraped sources → consensus blend (mind the cross-source rookie-matching caveat: match rookies on name/position across sources, not on per-source placeholder gsis) → distribution-wrapping → the Draft Hub. Re-run the ingest weekly up to the August draft (regen `id_map` too as rookies' real gsis_ids land ~late July).
+
+---
+
 ## External Projection Benchmark Spike — verdict **our model cannot do preseason; pivot to external for draft** (2026-06-08, on branch `feat/external-projection-benchmark`)
 
 **Status:** Spike concluded. The planned preseason ESPN-vs-ours RMSE benchmark was **not run** — it is invalid on our side and would falsely flatter our model. The verdict stands on architecture, not a metric. Spec `docs/superpowers/specs/2026-06-08-external-projection-benchmark-design.md`, plan `docs/superpowers/plans/2026-06-08-external-projection-benchmark.md`, verdict `reports/external_projection_benchmark_2024.md`.
