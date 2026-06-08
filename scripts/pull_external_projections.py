@@ -61,9 +61,11 @@ COUNT_FIELDS = frozenset(
 
 
 def round_count(value: float) -> int:
-    """Half-up rounding for non-negative projected count stats. Python's built-in
-    round() uses banker's rounding (round(0.5) == 0), which would silently drop a
-    half-unit projection; counts here are always >= 0."""
+    """Half-up rounding for projected count stats. Python's built-in round() uses
+    banker's rounding (round(0.5) == 0), which would silently drop a half-unit
+    projection. CALLER CONTRACT: value must be >= 0 (true for every count stat —
+    TDs, receptions, interceptions, fumbles); a negative input returns a wrong
+    integer without raising, so never call this on yardage or signed deltas."""
     return int(value + 0.5)
 
 
