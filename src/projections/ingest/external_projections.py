@@ -31,6 +31,7 @@ from projections.ingest.identity import placeholder_name_key
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import (
     _PYARROW_STR,
+    STAT_FIELDS,
     ExternalProjectionSchema,
     Position,
     ProjectionSource,
@@ -64,17 +65,6 @@ ESPN_STAT_IDS: dict[str, str] = {
     "43": "receiving_tds",
     "72": "fumbles_lost",
 }
-STAT_FIELDS: tuple[str, ...] = (
-    "passing_yards",
-    "passing_tds",
-    "interceptions",
-    "rushing_yards",
-    "rushing_tds",
-    "receptions",
-    "receiving_yards",
-    "receiving_tds",
-    "fumbles_lost",
-)
 COUNT_FIELDS = frozenset(
     {"passing_tds", "interceptions", "rushing_tds", "receptions", "receiving_tds", "fumbles_lost"}
 )

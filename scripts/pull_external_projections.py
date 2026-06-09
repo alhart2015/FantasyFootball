@@ -33,11 +33,11 @@ from projections.ingest.external_projections import (
     COUNT_FIELDS,
     ESPN_POSITIONS,
     ESPN_STAT_IDS,
-    STAT_FIELDS,
     fetch_espn,
     fetch_sleeper_season,
     round_count,
 )
+from projections.schemas import STAT_FIELDS
 
 # Explicit re-exports so downstream importers (benchmark_projections.py) and
 # mypy see these as public names of this module.

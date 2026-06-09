@@ -10,21 +10,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from projections.schemas import Ruleset
+from projections.schemas import STAT_FIELDS, Ruleset
 from projections.scoring import expected_points
-
-# The 9 canonical preseason stat-line fields the ExternalProjectionSchema carries.
-STAT_FIELDS: tuple[str, ...] = (
-    "passing_yards",
-    "passing_tds",
-    "interceptions",
-    "rushing_yards",
-    "rushing_tds",
-    "receptions",
-    "receiving_yards",
-    "receiving_tds",
-    "fumbles_lost",
-)
 
 _OUTPUT_COLUMNS: tuple[str, ...] = (
     "gsis_id",
@@ -86,7 +73,6 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
             "full_name": str(identity_row["full_name"]),
             "position": str(identity_row["position"]),
             "consensus_adp": consensus_adp,
-            "consensus_rank": pd.NA,  # filled after the full-group ranking below
             "n_adp_sources": n_adp_sources,
             "has_points": has_points,
             "projected_points_ppr": projected,

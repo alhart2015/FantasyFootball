@@ -184,6 +184,22 @@ class Stat(StrEnum):
     OFFENSE_PCT = "offense_pct"
 
 
+# The 9 canonical preseason stat-line fields carried by ExternalProjectionSchema and
+# ConsensusProjectionSchema. Single source for the ingest producer (external_projections) and
+# the consensus blend, which must stay in lockstep. Derived from Stat so a typo can't drift.
+STAT_FIELDS: Final[tuple[str, ...]] = (
+    Stat.PASSING_YARDS.value,
+    Stat.PASSING_TDS.value,
+    Stat.INTERCEPTIONS.value,
+    Stat.RUSHING_YARDS.value,
+    Stat.RUSHING_TDS.value,
+    Stat.RECEPTIONS.value,
+    Stat.RECEIVING_YARDS.value,
+    Stat.RECEIVING_TDS.value,
+    Stat.FUMBLES_LOST.value,
+)
+
+
 class ProjectionSource(StrEnum):
     """External preseason projection sources. Use ProjectionSource.ESPN, never "ESPN"."""
 

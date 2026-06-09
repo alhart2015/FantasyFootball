@@ -26,7 +26,7 @@ Running log of project status, decisions, and next steps. Append new entries at 
 **Next direction (concrete):**
 1. **Scraped points source** (FantasyPros or CBS) — leads to a genuine ≥2-source `projected_points_ppr`, then **distribution-wrapping** (real cross-source spread → floor/ceiling). This is the natural slice 2.
 2. **Draft Hub** on top of the consensus contract (`SnakeCheatSheetSchema` / `AuctionValuesSchema` / VORP already exist in `schemas.py` — wire them to consume `ConsensusProjectionSchema`).
-3. Small follow-ups logged in TODO #38: `external_projections.py:398` pandas `FutureWarning`; consolidate the duplicated `STAT_FIELDS` tuple into a shared `schemas.py` constant.
+3. Small follow-up logged in TODO #38: `external_projections.py:398` pandas `FutureWarning`. (The duplicated `STAT_FIELDS` tuple was consolidated into a shared `schemas.py` constant — derived from the `Stat` enum — during the post-implementation `/simplify` pass.)
 
 ---
 
