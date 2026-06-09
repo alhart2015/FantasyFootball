@@ -835,6 +835,10 @@ class ConsensusProjectionSchema(pa.DataFrameModel):
     `consensus_rank` is the ordinal over non-null `consensus_adp` (null when adp is null). The
     stat line + `projected_points_ppr` are present only for players a stat-line source covers
     (`has_points`). v1 sources: ESPN (stat line + ADP) + Sleeper (ADP only).
+
+    Nullable floats use the pandas `Float64` extension dtype (the blend builder emits `pd.NA`),
+    unlike the looser `ExternalProjectionSchema` raw-ingest counterpart. The `has_points` /
+    stat-line consistency is a blend-builder invariant, not schema-enforced.
     """
 
     gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", unique=True)
@@ -858,7 +862,7 @@ class ConsensusProjectionSchema(pa.DataFrameModel):
     receiving_tds: Series[pd.Float64Dtype] = pa.Field(nullable=True)
     fumbles_lost: Series[pd.Float64Dtype] = pa.Field(nullable=True)
     is_placeholder_gsis: Series[bool]
-    ruleset: Series[str]
+    ruleset: Series[str] = pa.Field(isin=_RULESET_NAME_VALUES)
 
     class Config:
         strict = "filter"
