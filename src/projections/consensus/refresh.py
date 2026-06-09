@@ -90,7 +90,7 @@ def main() -> None:
         out = refresh_consensus(args.data_root, season=args.season, asof=args.asof)
     except ConsensusError as exc:
         raise SystemExit(str(exc)) from exc
-    print(f"Wrote consensus snapshot: {out}")
+    print(f"Wrote consensus snapshot: {out}", flush=True)
 
 
 if __name__ == "__main__":

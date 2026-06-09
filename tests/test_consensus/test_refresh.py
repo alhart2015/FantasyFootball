@@ -86,3 +86,19 @@ def test_explicit_asof_reads_that_snapshot(tmp_path: Path) -> None:
 def test_missing_raw_snapshot_raises_consensus_error(tmp_path: Path) -> None:
     with pytest.raises(ConsensusError):
         refresh_consensus(tmp_path, season=2026)
+
+
+def test_missing_explicit_asof_raises_consensus_error(tmp_path: Path) -> None:
+    # explicit-asof read path (read_partition) -> FileNotFoundError -> ConsensusError
+    with pytest.raises(ConsensusError):
+        refresh_consensus(tmp_path, season=2026, asof=date(2026, 6, 9))
+
+
+def test_empty_raw_snapshot_raises_consensus_error(tmp_path: Path) -> None:
+    # A 0-row raw snapshot must be refused before writing an empty consensus snapshot.
+    empty = _raw_external().iloc[0:0]
+    write_partition(
+        tmp_path / "raw", "external_projections", empty, season=2026, asof=date(2026, 6, 9)
+    )
+    with pytest.raises(ConsensusError):
+        refresh_consensus(tmp_path, season=2026, asof=date(2026, 6, 9))
