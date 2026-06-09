@@ -184,6 +184,13 @@ class Stat(StrEnum):
     OFFENSE_PCT = "offense_pct"
 
 
+class ProjectionSource(StrEnum):
+    """External preseason projection sources. Use ProjectionSource.ESPN, never "ESPN"."""
+
+    ESPN = "ESPN"
+    SLEEPER = "SLEEPER"
+
+
 # Each ID flavor is a distinct mypy type so passing one where another is expected
 # is a type error. At runtime they are bare strings.
 GsisId = NewType("GsisId", str)
@@ -193,6 +200,12 @@ PfrId = NewType("PfrId", str)
 
 GSIS_ID_PATTERN: Final[str] = r"\d{2}-\d{7}"
 _GSIS_ID_RE = re.compile(rf"^{GSIS_ID_PATTERN}$")
+
+# Canonical resolution for tz-aware datetime columns. polars/nflreadpy `.to_pandas()` and
+# pyarrow parquet yield microseconds; pandas 2.x `merge_asof` and joins reject mixed
+# datetime64[us]/[ns] keys, so every datetime column we validate or join is pinned to this
+# unit (reference it; don't hardcode "us" at call sites). See ingest.depth_charts.
+DATETIME_UNIT: Final[str] = "us"
 
 
 def validate_gsis_id(raw: str) -> GsisId:
@@ -263,6 +276,7 @@ _TEAM_VALUES = [t.value for t in Team]
 _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
 _RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD"]
 _BACKTEST_VERDICT_VALUES = ["ADOPT", "NULL", "DO_NOT_ADOPT"]
+_SOURCE_VALUES = [s.value for s in ProjectionSource]
 
 
 class WeeklyStatsSchema(pa.DataFrameModel):
@@ -307,7 +321,7 @@ class SchedulesSchema(pa.DataFrameModel):
     home_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
     away_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
     kickoff: Series[pd.DatetimeTZDtype] = pa.Field(
-        dtype_kwargs={"tz": "UTC", "unit": "us"}, nullable=True
+        dtype_kwargs={"tz": "UTC", "unit": DATETIME_UNIT}, nullable=True
     )
     spread_line: Series[float] = pa.Field(nullable=True)
     total_line: Series[float] = pa.Field(ge=0, le=100, nullable=True)
@@ -778,6 +792,41 @@ class IdMapSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class ExternalProjectionSchema(pa.DataFrameModel):
+    """One row per (source, player, season, asof) of external preseason projection data.
+
+    Stat line is nullable: ESPN provides it; Sleeper provides ADP only (null stat line).
+    gsis_id is the real id for crosswalked veterans, else a synthetic 99-XXXXXXX placeholder
+    (flagged is_placeholder_gsis) for pre-camp rookies; source_player_id is the stable
+    cross-snapshot join key.
+    """
+
+    source: Series[str] = pa.Field(isin=_SOURCE_VALUES)
+    source_player_id: Series[str]
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    is_placeholder_gsis: Series[bool]
+    full_name: Series[str]
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    # ISO YYYY-MM-DD; also encoded in the partition path
+    asof: Series[str] = pa.Field(str_matches=r"^\d{4}-\d{2}-\d{2}$")
+    adp: Series[float] = pa.Field(nullable=True)
+    espn_draft_rank: Series[float] = pa.Field(nullable=True)
+    passing_yards: Series[float] = pa.Field(nullable=True)
+    passing_tds: Series[float] = pa.Field(nullable=True)
+    interceptions: Series[float] = pa.Field(nullable=True)
+    rushing_yards: Series[float] = pa.Field(nullable=True)
+    rushing_tds: Series[float] = pa.Field(nullable=True)
+    receptions: Series[float] = pa.Field(nullable=True)
+    receiving_yards: Series[float] = pa.Field(nullable=True)
+    receiving_tds: Series[float] = pa.Field(nullable=True)
+    fumbles_lost: Series[float] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
 class ProjectionWeeklySchema(pa.DataFrameModel):
     """Published per-week projection (the consumer-facing contract)."""
 
@@ -796,8 +845,10 @@ class ProjectionWeeklySchema(pa.DataFrameModel):
     p90: Series[float]
     model_id: Series[str]
     # pandas >=2.0 stores timezone-aware timestamps as datetime64[us, UTC];
-    # use unit='us' to match the actual dtype produced by pd.Timestamp(..., tz='UTC').
-    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(dtype_kwargs={"tz": "UTC", "unit": "us"})
+    # DATETIME_UNIT matches the actual dtype produced by pd.Timestamp(..., tz='UTC').
+    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(
+        dtype_kwargs={"tz": "UTC", "unit": DATETIME_UNIT}
+    )
 
     class Config:
         strict = "filter"
@@ -823,7 +874,9 @@ class ProjectionSeasonSchema(pa.DataFrameModel):
     season_p50: Series[float]
     season_p90: Series[float]
     model_id: Series[str]
-    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(dtype_kwargs={"tz": "UTC", "unit": "us"})
+    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(
+        dtype_kwargs={"tz": "UTC", "unit": DATETIME_UNIT}
+    )
 
     # `coerce = True` is required for empty-DataFrame validation (an empty
     # pd.DataFrame(columns=[...]) produces object-dtype columns); but pandera's

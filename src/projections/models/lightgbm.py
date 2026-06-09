@@ -34,6 +34,7 @@ from projections.distributions import (
 from projections.models.base import compute_code_hash
 from projections.schemas import (
     _PYARROW_STR,
+    DATETIME_UNIT,
     DistributionFamily,
     Position,
     ProjectionWeeklySchema,
@@ -461,7 +462,7 @@ class LightGBMModel:
                     "p50": composite.quantile(0.50),
                     "p90": composite.quantile(0.90),
                     "model_id": self.model_id,
-                    "generated_at": pd.Timestamp(generated_at).as_unit("us"),
+                    "generated_at": pd.Timestamp(generated_at).as_unit(DATETIME_UNIT),
                 }
             )
         out = pd.DataFrame(out_rows)

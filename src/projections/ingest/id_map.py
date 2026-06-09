@@ -25,6 +25,22 @@ from projections.store import write_partition
 logger = logging.getLogger(__name__)
 
 
+def _coerce_external_id(s: pd.Series, *, numeric: bool) -> pd.Series:
+    """Persist an external id column as a clean nullable pyarrow string. NUMERIC id columns
+    (espn_id/sleeper_id) round-trip the numeric values through Int64 to drop the spurious '.0'
+    that upstream float64 dtype produces; any genuinely non-numeric id (e.g. a team-defense or
+    future alphanumeric source id) is PRESERVED verbatim rather than silently nulled, so its
+    crosswalk mapping survives. String id columns (pfr_id, e.g. 'ChASEJa00', or leading-zero
+    ids) pass through unchanged."""
+    if numeric:
+        as_num = pd.to_numeric(s, errors="coerce")
+        # numeric values -> clean int-string ('4374302', not '4374302.0'); where coercion
+        # failed, keep the original string (a non-numeric id) verbatim, NA where truly missing.
+        cleaned = as_num.astype("Int64").astype(_PYARROW_STR)
+        return cleaned.where(as_num.notna(), other=s.astype(_PYARROW_STR))
+    return s.where(s.notna(), other=pd.NA).astype(_PYARROW_STR)
+
+
 def _fetch_raw_id_map() -> pd.DataFrame:
     return nflreadpy.load_ff_playerids().to_pandas()
 
@@ -77,9 +93,11 @@ def build_id_map(data_root: Path) -> Path:
 
     # Coerce all string columns to string[pyarrow] so pandera is satisfied.
     # Nullable ID columns get pd.NA for missing values (compatible with StringDtype).
-    for col in ("espn_id", "sleeper_id", "pfr_id"):
+    for col in ("espn_id", "sleeper_id"):
         if col in df.columns:
-            df[col] = df[col].where(df[col].notna(), other=pd.NA).astype(_PYARROW_STR)
+            df[col] = _coerce_external_id(df[col], numeric=True)
+    if "pfr_id" in df.columns:
+        df["pfr_id"] = _coerce_external_id(df["pfr_id"], numeric=False)
 
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["full_name"] = df["full_name"].astype(_PYARROW_STR)

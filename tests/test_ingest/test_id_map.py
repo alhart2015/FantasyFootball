@@ -138,3 +138,64 @@ def test_build_id_map_warns_on_placeholder_gsis_ids(
     assert any(
         "filtered 2 row(s) with non-GSIS placeholder ids" in r.getMessage() for r in caplog.records
     )
+
+
+def test_coerce_external_id_leaves_string_pfr_ids_unchanged() -> None:
+    import pandas as pd
+
+    from projections.ingest.id_map import _coerce_external_id
+
+    s = pd.Series(["ChASEJa00", None, "AlleJo02"])
+    out = _coerce_external_id(s, numeric=False)
+    assert out.tolist()[0] == "ChASEJa00"
+    assert out.tolist()[2] == "AlleJo02"
+    assert pd.isna(out.tolist()[1])
+
+
+def test_coerce_external_id_object_dtype_floats_drop_dot_zero() -> None:
+    import pandas as pd
+
+    from projections.ingest.id_map import _coerce_external_id
+
+    s = pd.Series([4374302.0, None, 6794.0], dtype=object)
+    out = _coerce_external_id(s, numeric=True)
+    assert out.tolist()[0] == "4374302" and out.tolist()[2] == "6794"
+
+
+def test_float_valued_external_id_persists_without_trailing_dot_zero() -> None:
+    # Upstream load_ff_playerids() returns espn_id/sleeper_id as float64 (NaNs force float),
+    # so an integer id arrives as 4374302.0. It must persist as "4374302", not "4374302.0",
+    # or the external-projection crosswalk join silently misses.
+    import pandas as pd
+
+    from projections.ingest.id_map import _coerce_external_id  # added in Step 3
+
+    s = pd.Series([4374302.0, float("nan"), 6794.0])
+    out = _coerce_external_id(s, numeric=True)
+    assert out.tolist()[0] == "4374302"
+    assert out.tolist()[2] == "6794"
+    assert pd.isna(out.tolist()[1])
+    assert str(out.dtype) == "string"
+
+
+def test_coerce_external_id_preserves_leading_zero_string_when_not_numeric() -> None:
+    import pandas as pd
+
+    from projections.ingest.id_map import _coerce_external_id
+
+    out = _coerce_external_id(pd.Series(["0012345", None]), numeric=False)
+    assert out.tolist()[0] == "0012345"
+
+
+def test_coerce_external_id_preserves_non_numeric_in_numeric_column() -> None:
+    import pandas as pd
+
+    from projections.ingest.id_map import _coerce_external_id
+
+    # A numeric id column that also carries a non-numeric id (e.g. a team-defense or future
+    # alphanumeric source id) must keep it verbatim, not coerce it to NA and lose the mapping.
+    out = _coerce_external_id(pd.Series(["4046", "DET", None], dtype=object), numeric=True)
+    assert out.tolist()[0] == "4046"  # numeric stays clean
+    assert out.tolist()[1] == "DET"  # non-numeric preserved, not nulled
+    assert pd.isna(out.tolist()[2])
+    assert str(out.dtype) == "string"

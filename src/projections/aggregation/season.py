@@ -21,6 +21,7 @@ import pandas as pd
 from projections.distributions import unpack_per_stat_params
 from projections.schemas import (
     _PYARROW_STR,
+    DATETIME_UNIT,
     DistributionFamily,
     ProjectionSeasonSchema,
     ProjectionWeeklySchema,
@@ -144,7 +145,7 @@ def aggregate_to_season(
                 "season_p50": float(np.quantile(season_samples, 0.5)),
                 "season_p90": float(np.quantile(season_samples, 0.9)),
                 "model_id": group["model_id"].iloc[0],
-                "generated_at": pd.Timestamp(generated_at).as_unit("us"),
+                "generated_at": pd.Timestamp(generated_at).as_unit(DATETIME_UNIT),
             }
         )
         if return_samples:

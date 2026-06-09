@@ -64,6 +64,7 @@ from projections.distributions.parametric import (
 from projections.models.base import compute_code_hash
 from projections.schemas import (
     _PYARROW_STR,
+    DATETIME_UNIT,
     DistributionFamily,
     Position,
     ProjectionWeeklySchema,
@@ -751,7 +752,7 @@ class BaselineModel:
                     "p50": points.quantile(0.5),
                     "p90": points.quantile(0.9),
                     "model_id": self.model_id,
-                    "generated_at": pd.Timestamp(generated_at).as_unit("us"),
+                    "generated_at": pd.Timestamp(generated_at).as_unit(DATETIME_UNIT),
                 }
             )
 

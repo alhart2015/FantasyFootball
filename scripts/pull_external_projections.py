@@ -18,60 +18,36 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-# ESPN numeric stat-id -> StatLine field (common scoring set only). Decoded
-# empirically against known 2024 players; reconstructing through ESPN PPR
-# matches appliedTotal within ~1 pt.
-ESPN_STAT_IDS: dict[str, str] = {
-    "3": "passing_yards",
-    "4": "passing_tds",
-    "20": "interceptions",
-    "24": "rushing_yards",
-    "25": "rushing_tds",
-    "53": "receptions",
-    "42": "receiving_yards",
-    "43": "receiving_tds",
-    "72": "fumbles_lost",
-}
-# The common scoring field set, single-sourced here and imported by
-# benchmark_projections.py so the two spike scripts cannot drift on which fields
-# count or how counts round. 2pt conversions and return TDs are rare and absent
-# from ESPN projections; omitted so all sides score on the same fields.
-STAT_FIELDS = (
-    "passing_yards",
-    "passing_tds",
-    "interceptions",
-    "rushing_yards",
-    "rushing_tds",
-    "receptions",
-    "receiving_yards",
-    "receiving_tds",
-    "fumbles_lost",
-)
-COUNT_FIELDS = frozenset(
-    {"passing_tds", "interceptions", "rushing_tds", "receptions", "receiving_tds", "fumbles_lost"}
+# Single-source the network I/O + decode constants from the ingest module. The PARSE helpers
+# below intentionally stay separate: this spike feeds the (frozen) RMSE benchmark, so it rounds
+# count stats and captures each player's ESPN ACTUAL applied total — neither of which the ingest
+# module wants (it stores raw fractional projections, no actuals). Keep these in sync by hand
+# only where the ESPN payload SHAPE changes; the shared fetch/URLs/positions move together.
+from projections.ingest.external_projections import (
+    COUNT_FIELDS,
+    ESPN_POSITIONS,
+    ESPN_STAT_IDS,
+    STAT_FIELDS,
+    fetch_espn,
+    fetch_sleeper_season,
+    round_count,
 )
 
-
-def round_count(value: float) -> int:
-    """Half-up rounding for projected count stats. Python's built-in round() uses
-    banker's rounding (round(0.5) == 0), which would silently drop a half-unit
-    projection. CALLER CONTRACT: value must be >= 0 (true for every count stat —
-    TDs, receptions, interceptions, fumbles); a negative input returns a wrong
-    integer without raising, so never call this on yardage or signed deltas."""
-    return int(value + 0.5)
+# Explicit re-exports so downstream importers (benchmark_projections.py) and
+# mypy see these as public names of this module.
+__all__ = ["COUNT_FIELDS", "ESPN_STAT_IDS", "STAT_FIELDS", "round_count"]
 
 
 def espn_stats_to_statline_dict(stats: dict[str, float]) -> dict[str, float]:
     """Map ESPN's numeric stat dict to our StatLine field names. Missing ids -> 0.
-    Count fields are half-up rounded to int; yards stay float."""
+    Count fields are half-up rounded to int; yards stay float. (Benchmark-specific: the ingest
+    module stores RAW fractional counts — see external_projections._espn_stats_to_statline.)"""
     out: dict[str, float] = {f: 0.0 for f in STAT_FIELDS}
     for sid, field in ESPN_STAT_IDS.items():
         if sid in stats:
@@ -80,17 +56,15 @@ def espn_stats_to_statline_dict(stats: dict[str, float]) -> dict[str, float]:
     return out
 
 
-_ESPN_POSITIONS: dict[int, str] = {1: "QB", 2: "RB", 3: "WR", 4: "TE"}
-
-
 def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
-    """Tidy one ESPN kona_player_info payload into one row per QB/RB/WR/TE with a
-    preseason projected season stat line. Players without a season-proj entry, or
-    not in QB/RB/WR/TE, are dropped."""
+    """Tidy one ESPN kona_player_info payload into one row per QB/RB/WR/TE with a preseason
+    projected season stat line PLUS the season's actual applied total (for RMSE benchmarking).
+    Players without a season-proj entry, or not in QB/RB/WR/TE, are dropped. (Diverges from the
+    ingest module's parse_espn_players, which omits actuals and stores raw fractional counts.)"""
     rows: list[dict[str, object]] = []
     for entry in payload.get("players", []):
         pl = entry.get("player", {})
-        position = _ESPN_POSITIONS.get(pl.get("defaultPositionId"))
+        position = ESPN_POSITIONS.get(pl.get("defaultPositionId"))
         if position is None:
             continue
         espn_id = pl.get("id")
@@ -127,16 +101,10 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-_ESPN_URL = (
-    "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
-    "{season}/segments/0/leaguedefaults/3?view=kona_player_info"
-)
-_SLEEPER_URL = "https://api.sleeper.com/projections/nfl/{season}?season_type=regular"
-_UA = "Mozilla/5.0"
-
-
 def parse_sleeper_adp(payload: list[dict[str, Any]]) -> pd.DataFrame:
-    """Keep sleeper player id + PPR ADP. Rows without a player id are dropped."""
+    """Keep sleeper player id + PPR ADP only (the benchmark uses Sleeper as a rank reference,
+    not a stat-line source — unlike the ingest module's parse_sleeper_projections, which also
+    keeps name/position). Rows without a player id are dropped."""
     rows: list[dict[str, object]] = []
     for item in payload:
         pid = item.get("player_id")
@@ -145,27 +113,6 @@ def parse_sleeper_adp(payload: list[dict[str, Any]]) -> pd.DataFrame:
         stats = item.get("stats") or {}
         rows.append({"sleeper_id": str(pid), "sleeper_adp": stats.get("adp_ppr")})
     return pd.DataFrame(rows)
-
-
-def fetch_espn(
-    season: int,
-    # ESPN returns ownership-sorted players; ~600-650 fantasy-relevant come back at
-    # this setting. A larger season could silently truncate the tail.
-    limit: int = 800,
-) -> dict[str, Any]:
-    flt = {"players": {"limit": limit, "sortPercOwned": {"sortPriority": 1, "sortAsc": False}}}
-    req = urllib.request.Request(
-        _ESPN_URL.format(season=season),
-        headers={"User-Agent": _UA, "X-Fantasy-Filter": json.dumps(flt)},
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.load(resp)  # type: ignore[no-any-return]
-
-
-def fetch_sleeper_season(season: int) -> list[dict[str, Any]]:
-    req = urllib.request.Request(_SLEEPER_URL.format(season=season), headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.load(resp)  # type: ignore[no-any-return]
 
 
 def main() -> None:

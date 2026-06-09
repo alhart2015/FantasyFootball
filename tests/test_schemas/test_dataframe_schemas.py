@@ -1058,3 +1058,67 @@ def test_preseason_backtest_schema_rejects_invalid_verdict() -> None:
     )
     with pytest.raises(SchemaError, match="verdict"):
         PreseasonBacktestSchema.validate(df)
+
+
+def test_external_projection_schema_accepts_espn_and_sleeper_rows() -> None:
+    import pandas as pd
+
+    from projections.schemas import ExternalProjectionSchema, ProjectionSource
+
+    df = pd.DataFrame(
+        {
+            "source": [ProjectionSource.ESPN.value, ProjectionSource.SLEEPER.value],
+            "source_player_id": pd.array(["4374302", "6794"], dtype="string[pyarrow]"),
+            "gsis_id": pd.array(["00-0036900", "99-0001234"], dtype="string[pyarrow]"),
+            "is_placeholder_gsis": [False, True],
+            "full_name": pd.array(["Ja'Marr Chase", "Some Rookie"], dtype="string[pyarrow]"),
+            "position": pd.array(["WR", "RB"], dtype="string[pyarrow]"),
+            "season": [2026, 2026],
+            "asof": pd.array(["2026-07-15", "2026-07-15"], dtype="string[pyarrow]"),
+            "adp": [4.8, 120.0],
+            "espn_draft_rank": pd.array([20.0, None], dtype="Float64"),
+            "passing_yards": pd.array([0.0, None], dtype="Float64"),
+            "passing_tds": pd.array([0.0, None], dtype="Float64"),
+            "interceptions": pd.array([0.0, None], dtype="Float64"),
+            "rushing_yards": pd.array([18.0, None], dtype="Float64"),
+            "rushing_tds": pd.array([0.0, None], dtype="Float64"),
+            "receptions": pd.array([105.0, None], dtype="Float64"),
+            "receiving_yards": pd.array([1335.0, None], dtype="Float64"),
+            "receiving_tds": pd.array([8.0, None], dtype="Float64"),
+            "fumbles_lost": pd.array([1.0, None], dtype="Float64"),
+        }
+    )
+    validated = ExternalProjectionSchema.validate(df)
+    assert len(validated) == 2
+
+
+def test_external_projection_schema_rejects_bad_gsis() -> None:
+    import pandas as pd
+
+    from projections.schemas import ExternalProjectionSchema
+
+    bad = pd.DataFrame(
+        {
+            "source": ["ESPN"],
+            "source_player_id": pd.array(["4374302"], dtype="string[pyarrow]"),
+            "gsis_id": pd.array(["not-a-gsis"], dtype="string[pyarrow]"),
+            "is_placeholder_gsis": [False],
+            "full_name": pd.array(["X"], dtype="string[pyarrow]"),
+            "position": pd.array(["WR"], dtype="string[pyarrow]"),
+            "season": [2026],
+            "asof": pd.array(["2026-07-15"], dtype="string[pyarrow]"),
+            "adp": [4.8],
+            "espn_draft_rank": [20.0],
+            "passing_yards": [0.0],
+            "passing_tds": [0.0],
+            "interceptions": [0.0],
+            "rushing_yards": [0.0],
+            "rushing_tds": [0.0],
+            "receptions": [0.0],
+            "receiving_yards": [0.0],
+            "receiving_tds": [0.0],
+            "fumbles_lost": [0.0],
+        }
+    )
+    with pytest.raises(SchemaError):
+        ExternalProjectionSchema.validate(bad)
