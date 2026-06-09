@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pydantic import BaseModel, ConfigDict
 
 from projections.schemas import Ruleset
@@ -34,23 +36,38 @@ class StatLine(BaseModel):
     return_tds: int = 0
 
 
+def _score_fields(f: Mapping[str, float], ruleset: Ruleset) -> float:
+    """Shared scoring arithmetic over a stat-field -> value mapping. Absent keys count as 0.0.
+
+    The single source of fantasy-points truth; both score() (realized int lines) and
+    expected_points() (fractional projections) delegate here.
+    """
+    pts = 0.0
+    pts += f.get("passing_yards", 0.0) / ruleset.passing_yds_per_pt
+    pts += f.get("passing_tds", 0.0) * ruleset.passing_td_pts
+    pts += f.get("interceptions", 0.0) * ruleset.interception_pts
+    pts += f.get("passing_2pt_conversions", 0.0) * ruleset.two_pt_pts
+
+    pts += f.get("rushing_yards", 0.0) / ruleset.rushing_yds_per_pt
+    pts += f.get("rushing_tds", 0.0) * ruleset.rushing_td_pts
+    pts += f.get("rushing_2pt_conversions", 0.0) * ruleset.two_pt_pts
+
+    pts += f.get("receptions", 0.0) * ruleset.reception_pts
+    pts += f.get("receiving_yards", 0.0) / ruleset.receiving_yds_per_pt
+    pts += f.get("receiving_tds", 0.0) * ruleset.receiving_td_pts
+    pts += f.get("receiving_2pt_conversions", 0.0) * ruleset.two_pt_pts
+
+    pts += f.get("fumbles_lost", 0.0) * ruleset.fumble_lost_pts
+    pts += f.get("return_tds", 0.0) * ruleset.return_td_pts
+    return pts
+
+
 def score(line: StatLine, ruleset: Ruleset) -> float:
     """Convert a `StatLine` to fantasy points under `ruleset`. Pure function."""
-    pts = 0.0
-    pts += line.passing_yards / ruleset.passing_yds_per_pt
-    pts += line.passing_tds * ruleset.passing_td_pts
-    pts += line.interceptions * ruleset.interception_pts
-    pts += line.passing_2pt_conversions * ruleset.two_pt_pts
+    return _score_fields(line.model_dump(), ruleset)
 
-    pts += line.rushing_yards / ruleset.rushing_yds_per_pt
-    pts += line.rushing_tds * ruleset.rushing_td_pts
-    pts += line.rushing_2pt_conversions * ruleset.two_pt_pts
 
-    pts += line.receptions * ruleset.reception_pts
-    pts += line.receiving_yards / ruleset.receiving_yds_per_pt
-    pts += line.receiving_tds * ruleset.receiving_td_pts
-    pts += line.receiving_2pt_conversions * ruleset.two_pt_pts
-
-    pts += line.fumbles_lost * ruleset.fumble_lost_pts
-    pts += line.return_tds * ruleset.return_td_pts
-    return pts
+def expected_points(line: Mapping[str, float], ruleset: Ruleset) -> float:
+    """Score a fractional *expected* stat line (e.g. a preseason projection's 8.4 receiving TDs)
+    under `ruleset`, using the same coefficients as score(). Absent fields count as 0.0."""
+    return _score_fields(line, ruleset)
