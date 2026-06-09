@@ -233,6 +233,137 @@ def test_cli_errors_when_config_requires_missing_position(
     assert "k" in combined  # slot label "K"
 
 
+def _make_consensus_partition(
+    data_root: Path,
+    season: int,
+    asof: str,
+    rows: list[dict[str, object]],
+) -> Path:
+    """Write one ConsensusProjectionSchema snapshot under
+    data_root/processed/consensus_projections/season=YYYY/asof=YYYY-MM-DD/part.parquet."""
+    from projections.schemas import ConsensusProjectionSchema
+
+    snap_dir = (
+        data_root / "processed" / "consensus_projections" / f"season={season}" / f"asof={asof}"
+    )
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(rows)
+    for col in ("gsis_id", "asof", "full_name", "position", "ruleset"):
+        df[col] = df[col].astype(_PYARROW_STR)
+    df = ConsensusProjectionSchema.validate(df)
+    df.to_parquet(snap_dir / "part.parquet", index=False)
+    return data_root
+
+
+def _consensus_rows() -> list[dict[str, object]]:
+    """A small skill-position consensus snapshot: every position has enough players to
+    fill the tiny_test config's pool, plus one ADP-only (no-points) draftable player."""
+    rows: list[dict[str, object]] = []
+    counts = {Position.QB: 8, Position.RB: 12, Position.WR: 12, Position.TE: 8}
+    rank = 1
+    for pos, n in counts.items():
+        for i in range(n):
+            rows.append(
+                {
+                    "gsis_id": f"00-{_POSITION_ID_PREFIX[pos]}{i:06d}",
+                    "season": 2026,
+                    "asof": "2026-06-09",
+                    "full_name": f"{pos.value} Player {i}",
+                    "position": pos.value,
+                    "consensus_adp": float(rank),
+                    "consensus_rank": rank,
+                    "n_adp_sources": 2,
+                    "has_points": True,
+                    "projected_points_ppr": 300.0 - rank,
+                    "passing_yards": None,
+                    "passing_tds": None,
+                    "interceptions": None,
+                    "rushing_yards": None,
+                    "rushing_tds": None,
+                    "receptions": None,
+                    "receiving_yards": None,
+                    "receiving_tds": None,
+                    "fumbles_lost": None,
+                    "is_placeholder_gsis": False,
+                    "ruleset": "ESPN_PPR",
+                }
+            )
+            rank += 1
+    # One draftable (low ADP) player with NO points -> must be dropped AND warned about.
+    rows.append(
+        {
+            "gsis_id": "00-3999999",
+            "season": 2026,
+            "asof": "2026-06-09",
+            "full_name": "Hyped Rookie",
+            "position": Position.WR.value,
+            "consensus_adp": 5.0,
+            "consensus_rank": 5,
+            "n_adp_sources": 1,
+            "has_points": False,
+            "projected_points_ppr": None,
+            "passing_yards": None,
+            "passing_tds": None,
+            "interceptions": None,
+            "rushing_yards": None,
+            "rushing_tds": None,
+            "receptions": None,
+            "receiving_yards": None,
+            "receiving_tds": None,
+            "fumbles_lost": None,
+            "is_placeholder_gsis": True,
+            "ruleset": "ESPN_PPR",
+        }
+    )
+    return rows
+
+
+def test_cli_consensus_mode_round_trip(cli_inputs: dict[str, Path], tmp_path: Path) -> None:
+    from projections.schemas import VorpTableSchema
+
+    data_root = tmp_path / "data"
+    _make_consensus_partition(data_root, 2026, "2026-06-09", _consensus_rows())
+    proc = _run_cli(
+        "--source",
+        "consensus",
+        "--season",
+        "2026",
+        "--league-config",
+        str(cli_inputs["config"]),
+        "--data-root",
+        str(data_root),
+        "--out",
+        str(cli_inputs["out_parquet"]),
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = pd.read_parquet(cli_inputs["out_parquet"])
+    VorpTableSchema.validate(out)
+    assert "consensus_adp" in out.columns
+    assert out["consensus_adp"].notna().all()
+    # The ADP-only "Hyped Rookie" is NOT in the VORP table (no points to rank on).
+    assert "00-3999999" not in set(out["gsis_id"])
+    # ...but the CLI WARNED about dropping a draftable player.
+    assert "Hyped Rookie" in proc.stderr
+
+
+def test_cli_consensus_mode_requires_data_root_not_weekly(cli_inputs: dict[str, Path]) -> None:
+    """--source consensus must not require --weekly-projections."""
+    # Missing --data-root falls back to default "data" (no partition there) -> a clear
+    # FileNotFoundError, NOT an argparse 'weekly-projections required' error.
+    proc = _run_cli(
+        "--source",
+        "consensus",
+        "--season",
+        "1999",
+        "--league-config",
+        str(cli_inputs["config"]),
+        "--out",
+        str(cli_inputs["out_parquet"]),
+    )
+    assert proc.returncode != 0
+    assert "weekly-projections" not in (proc.stderr + proc.stdout).lower()
+
+
 def test_cli_errors_on_ruleset_mismatch(cli_inputs: dict[str, Path], tmp_path: Path) -> None:
     mismatch_cfg_path = tmp_path / "league_mismatch.json"
     mismatch_cfg_path.write_text(
