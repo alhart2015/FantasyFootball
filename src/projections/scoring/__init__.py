@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from projections.scoring.actuals import actual_season_total
-from projections.scoring.score import StatLine, score
+from projections.scoring.score import StatLine, expected_points, score
 from projections.scoring.score_distribution import (
     INTEGER_STATS,
     SampledDistribution,
@@ -20,6 +20,7 @@ __all__ = [
     "StatLine",
     "actual_season_total",
     "derive_row_seed",
+    "expected_points",
     "score",
     "score_distribution",
     "scoring_coefficients",
