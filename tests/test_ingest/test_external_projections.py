@@ -77,6 +77,16 @@ def test_make_placeholder_gsis_deterministic_pattern_valid_and_cross_source_stab
     assert ext._make_placeholder_gsis("Some Other", "RB") != a  # distinct player -> distinct id
 
 
+def test_placeholder_key_folds_accents_and_guards_degenerate_names() -> None:
+    # Accents fold to ASCII, so the same player with/without accents reconciles across sources.
+    assert ext._make_placeholder_gsis("José Álvarez", "WR") == ext._make_placeholder_gsis(
+        "Jose Alvarez", "WR"
+    )
+    # Names that normalize to nothing (all-suffix / non-ASCII) must NOT collapse to one
+    # position-only key — two distinct such players keep distinct placeholders.
+    assert ext._make_placeholder_gsis("李明", "WR") != ext._make_placeholder_gsis("王伟", "WR")
+
+
 def test_attach_gsis_id_real_for_matched_placeholder_for_rookie() -> None:
     df = pd.DataFrame(
         {

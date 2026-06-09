@@ -39,6 +39,12 @@ def _partition_file(
     return _partition_dir(root, table, season, week, asof) / "part.parquet"
 
 
+def _asof_snapshot_dirs(season_dir: Path) -> list[Path]:
+    """The `asof=YYYY-MM-DD` snapshot dirs directly under `season_dir`, sorted chronologically
+    (ISO dates sort lexically). Single source for asof-layout detection across the readers."""
+    return sorted(d for d in season_dir.glob("asof=*") if d.is_dir() and _ASOF_DIR_RE.match(d.name))
+
+
 def write_partition(
     root: Path,
     table: str,
@@ -78,7 +84,7 @@ def read_partition(
     if asof is not None or week is not None:
         return pd.read_parquet(_partition_file(root, table, season, week, asof))
     season_dir = _partition_dir(root, table, season, None, None)
-    asof_dirs = [d for d in season_dir.glob("asof=*") if d.is_dir() and _ASOF_DIR_RE.match(d.name)]
+    asof_dirs = _asof_snapshot_dirs(season_dir)
     if asof_dirs:
         raise ValueError(
             f"{table} season={season} is asof-snapshotted ({len(asof_dirs)} snapshot(s)); a "
@@ -94,9 +100,7 @@ def read_partition(
 def read_latest_partition(root: Path, table: str, *, season: int) -> pd.DataFrame:
     """Read only the newest `asof` snapshot under a season (ISO dates sort chronologically)."""
     season_dir = _partition_dir(root, table, season, None, None)
-    asof_dirs = sorted(
-        d for d in season_dir.glob("asof=*") if d.is_dir() and _ASOF_DIR_RE.match(d.name)
-    )
+    asof_dirs = _asof_snapshot_dirs(season_dir)
     if not asof_dirs:
         raise FileNotFoundError(f"No asof snapshots under {season_dir}")
     return pd.read_parquet(asof_dirs[-1] / "part.parquet")

@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import re
+import unicodedata
 import urllib.error
 import urllib.request
 from datetime import UTC, date, datetime
@@ -196,12 +197,19 @@ _NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "v"})
 
 
 def _placeholder_name_key(full_name: str, position: str) -> str:
-    """Normalize (full_name, position) into a stable cross-source key: lowercased, punctuation
-    and whitespace removed, common generational suffixes (Jr/Sr/II…) dropped. ESPN and Sleeper
-    spell the same rookie nearly identically, so this lets both sources' rows reconcile."""
+    """Normalize (full_name, position) into a stable cross-source key: accents folded to ASCII
+    (so 'José'/'Jose' agree across sources), lowercased, punctuation/whitespace removed, common
+    generational suffixes (Jr/Sr/II…) dropped. ESPN and Sleeper spell the same rookie nearly
+    identically, so this lets both sources' rows reconcile."""
+    folded = unicodedata.normalize("NFKD", full_name).encode("ascii", "ignore").decode("ascii")
     tokens = [
-        t for t in re.sub(r"[^a-z0-9 ]", " ", full_name.lower()).split() if t not in _NAME_SUFFIXES
+        t for t in re.sub(r"[^a-z0-9 ]", " ", folded.lower()).split() if t not in _NAME_SUFFIXES
     ]
+    # Guard a degenerate name (all suffix/punctuation, or non-ASCII that folded to nothing): keep
+    # the raw lowercased name as one token so two such distinct players don't both collapse to the
+    # position-only key '|<pos>' and collide into one placeholder gsis.
+    if not tokens:
+        tokens = [full_name.strip().lower()]
     return "".join(tokens) + "|" + position.lower()
 
 
@@ -403,6 +411,9 @@ def refresh_external_projections(data_root: Path, *, season: int, asof: date | N
     out = write_partition(
         data_root / "raw", "external_projections", frame, season=season, asof=asof
     )
+    # Manifest keys on (table, season), so for this asof-snapshotted table it records the LATEST
+    # refresh (newest snapshot's rowcount/checksum) — the freshness signal that matters. Older
+    # snapshots stay on disk under their own asof= partitions; the manifest doesn't enumerate them.
     record_manifest(data_root, table="external_projections", season=season, df=frame)
     return out
 
