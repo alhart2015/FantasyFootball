@@ -13,7 +13,12 @@ import nflreadpy
 import pandas as pd
 
 from projections.ingest.manifest import record as record_manifest
-from projections.schemas import _PYARROW_STR, SchedulesSchema, normalize_team_code
+from projections.schemas import (
+    _PYARROW_STR,
+    DATETIME_UNIT,
+    SchedulesSchema,
+    normalize_team_code,
+)
 from projections.store import write_partition
 
 _KEEP = [
@@ -62,7 +67,7 @@ def _build_kickoff(gameday: pd.Series, gametime: pd.Series) -> pd.Series:
     parsed = parsed.dt.tz_localize(
         "America/New_York", ambiguous="NaT", nonexistent="NaT"
     ).dt.tz_convert("UTC")
-    return parsed.astype("datetime64[us, UTC]")
+    return parsed.astype(f"datetime64[{DATETIME_UNIT}, UTC]")
 
 
 def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:

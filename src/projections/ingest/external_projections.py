@@ -79,13 +79,13 @@ COUNT_FIELDS = frozenset(
     {"passing_tds", "interceptions", "rushing_tds", "receptions", "receiving_tds", "fumbles_lost"}
 )
 # ESPN numeric position-id -> canonical position string (reference the enum, not the literal).
-_ESPN_POSITIONS: dict[int, str] = {
+ESPN_POSITIONS: dict[int, str] = {
     1: Position.QB.value,
     2: Position.RB.value,
     3: Position.WR.value,
     4: Position.TE.value,
 }
-_SKILL_POSITIONS = frozenset(_ESPN_POSITIONS.values())
+_SKILL_POSITIONS = frozenset(ESPN_POSITIONS.values())
 
 
 def round_count(value: float) -> int:
@@ -114,7 +114,7 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
     n_no_projection = 0  # skill players dropped for a missing/empty projection block
     for entry in payload.get("players", []):
         pl = entry.get("player", {})
-        position = _ESPN_POSITIONS.get(pl.get("defaultPositionId"))
+        position = ESPN_POSITIONS.get(pl.get("defaultPositionId"))
         if position is None:
             continue
         n_skill += 1
@@ -318,10 +318,13 @@ def _warn_on_placeholder_collisions(frame: pd.DataFrame) -> None:
         _placeholder_name_key(name, pos)
         for name, pos in zip(placeholders["full_name"], placeholders["position"], strict=True)
     ]
-    distinct_keys_per_gsis = (
-        pd.Series(keys, index=placeholders["gsis_id"].to_numpy()).groupby(level=0).nunique()
-    )
-    colliding = distinct_keys_per_gsis[distinct_keys_per_gsis > 1]
+    # Distinct (gsis_id, name-key) pairs; a gsis_id appearing in more than one pair means two
+    # different rookies hashed to the same placeholder.
+    pairs = pd.DataFrame(
+        {"gsis_id": placeholders["gsis_id"].to_numpy(), "key": keys}
+    ).drop_duplicates()
+    counts = pairs["gsis_id"].value_counts()
+    colliding = counts[counts > 1]
     if not colliding.empty:
         _log.warning(
             "external_projections: %d placeholder gsis_id(s) shared by distinct rookies "
@@ -356,36 +359,29 @@ def refresh_external_projections(data_root: Path, *, season: int, asof: date | N
             f"Empty pull for {season} (both ESPN and Sleeper returned 0 rows) — "
             f"refusing to write an empty asof snapshot."
         )
-    if espn.empty:
-        _log.warning("ESPN returned 0 rows for %s; writing a Sleeper-only snapshot.", season)
-    if sleeper.empty:
-        _log.warning("Sleeper returned 0 rows for %s; writing an ESPN-only snapshot.", season)
 
     id_map = read_partition(data_root / "raw", "id_map")
+    # (parsed frame, source, id_col, adp_col, rank_col, has_stats). A single empty source is
+    # logged and skipped; only the all-empty pull above is refused.
+    source_specs: list[tuple[pd.DataFrame, ProjectionSource, str, str, str | None, bool]] = [
+        (espn, ProjectionSource.ESPN, "espn_id", "espn_adp", "espn_pos_rank", True),
+        (sleeper, ProjectionSource.SLEEPER, "sleeper_id", "sleeper_adp", None, False),
+    ]
     frames: list[pd.DataFrame] = []
-    if not espn.empty:
-        frames.append(
-            _to_canonical(
-                espn,
-                source=ProjectionSource.ESPN,
-                id_col="espn_id",
-                adp_col="espn_adp",
-                rank_col="espn_pos_rank",
-                has_stats=True,
-                season=season,
-                asof=asof,
-                id_map=id_map,
+    for parsed, source, id_col, adp_col, rank_col, has_stats in source_specs:
+        if parsed.empty:
+            _log.warning(
+                "%s returned 0 rows for %s; writing the snapshot without it.", source.value, season
             )
-        )
-    if not sleeper.empty:
+            continue
         frames.append(
             _to_canonical(
-                sleeper,
-                source=ProjectionSource.SLEEPER,
-                id_col="sleeper_id",
-                adp_col="sleeper_adp",
-                rank_col=None,
-                has_stats=False,
+                parsed,
+                source=source,
+                id_col=id_col,
+                adp_col=adp_col,
+                rank_col=rank_col,
+                has_stats=has_stats,
                 season=season,
                 asof=asof,
                 id_map=id_map,

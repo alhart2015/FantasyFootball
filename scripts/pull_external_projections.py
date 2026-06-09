@@ -30,8 +30,8 @@ import pandas as pd
 # module wants (it stores raw fractional projections, no actuals). Keep these in sync by hand
 # only where the ESPN payload SHAPE changes; the shared fetch/URLs/positions move together.
 from projections.ingest.external_projections import (
-    _ESPN_POSITIONS,
     COUNT_FIELDS,
+    ESPN_POSITIONS,
     ESPN_STAT_IDS,
     STAT_FIELDS,
     fetch_espn,
@@ -64,7 +64,7 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for entry in payload.get("players", []):
         pl = entry.get("player", {})
-        position = _ESPN_POSITIONS.get(pl.get("defaultPositionId"))
+        position = ESPN_POSITIONS.get(pl.get("defaultPositionId"))
         if position is None:
             continue
         espn_id = pl.get("id")

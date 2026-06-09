@@ -34,10 +34,10 @@ def _coerce_external_id(s: pd.Series, *, numeric: bool) -> pd.Series:
     ids) pass through unchanged."""
     if numeric:
         as_num = pd.to_numeric(s, errors="coerce")
-        # numeric values -> clean int-string ('4374302', not '4374302.0')
+        # numeric values -> clean int-string ('4374302', not '4374302.0'); where coercion
+        # failed, keep the original string (a non-numeric id) verbatim, NA where truly missing.
         cleaned = as_num.astype("Int64").astype(_PYARROW_STR)
-        # Keep the original string wherever numeric coercion failed (a non-numeric id).
-        s = cleaned.where(as_num.notna(), other=s.astype(_PYARROW_STR))
+        return cleaned.where(as_num.notna(), other=s.astype(_PYARROW_STR))
     return s.where(s.notna(), other=pd.NA).astype(_PYARROW_STR)
 
 

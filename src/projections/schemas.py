@@ -874,7 +874,9 @@ class ProjectionSeasonSchema(pa.DataFrameModel):
     season_p50: Series[float]
     season_p90: Series[float]
     model_id: Series[str]
-    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(dtype_kwargs={"tz": "UTC", "unit": "us"})
+    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(
+        dtype_kwargs={"tz": "UTC", "unit": DATETIME_UNIT}
+    )
 
     # `coerce = True` is required for empty-DataFrame validation (an empty
     # pd.DataFrame(columns=[...]) produces object-dtype columns); but pandera's
