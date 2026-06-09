@@ -629,6 +629,7 @@ git commit -m "feat(draft): VORP CLI --source consensus mode + dropped-draftable
 - Modify: `src/projections/schemas.py` (the `SnakeCheatSheetSchema` class, ~line 986)
 - Modify: `src/projections/draft/snake_cheat_sheet.py`
 - Test: `tests/test_draft/test_snake_cheat_sheet.py`
+- Test: `tests/test_schemas/test_dataframe_schemas.py` (update the existing round-trip — Step 3b)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -647,11 +648,19 @@ def _attach_consensus_adp(vorp: pd.DataFrame, adp_by_gsis: dict[str, float]) -> 
 Then the tests:
 
 ```python
+# NOTE on configs: `generate_snake_cheat_sheet` calls `_select_pool`, which RAISES
+# ("cannot fill N slots", _pool.py:51) if the LeagueConfig's pool can't be filled from the
+# fixture. So every fixture below is paired with a config whose pool it fills exactly (no
+# BENCH/FLEX unless there are leftover players). adp_delta is computed independently of pool
+# membership, so a minimal pool is fine for these tests.
+
+
 def test_cheat_sheet_without_adp_leaves_new_columns_na() -> None:
     """Weekly-path VORP table (no consensus_adp) -> consensus_adp/adp_delta all-NA,
     every other column unchanged (backward compatible)."""
-    vorp = _make_vorp_table({Position.QB: 4, Position.RB: 4})
-    sheet = generate_snake_cheat_sheet(vorp, _make_config())
+    vorp = _make_vorp_table({Position.QB: 2, Position.RB: 2})
+    cfg = _make_config(n_teams=2, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1})
+    sheet = generate_snake_cheat_sheet(vorp, cfg)
     assert sheet["consensus_adp"].isna().all()
     assert sheet["adp_delta"].isna().all()
 
@@ -660,10 +669,12 @@ def test_cheat_sheet_adp_delta_value_and_reach() -> None:
     """A late-ADP, high-VORP player is a 'value' (+delta); an early-ADP, low-VORP
     player is a 'reach' (-delta). Within position."""
     # Two QBs: best VORP (00-1000000) but LATE ADP -> value; worst VORP but EARLY ADP -> reach.
+    # Pool sized to the fixture (QB:1 x 2 teams = 2) so _select_pool fills exactly.
     vorp = _make_vorp_table({Position.QB: 2})
+    cfg = _make_config(n_teams=2, roster_slots={RosterSlot.QB: 1})
     # gsis ids from _make_vorp_table: 00-1000000 (higher vorp), 00-1000001 (lower vorp)
     adp = {"00-1000000": 50.0, "00-1000001": 5.0}
-    sheet = generate_snake_cheat_sheet(_attach_consensus_adp(vorp, adp), _make_config())
+    sheet = generate_snake_cheat_sheet(_attach_consensus_adp(vorp, adp), cfg)
     by_gsis = sheet.set_index("gsis_id")
     # 00-1000000: vorp_rank 1, adp_rank 2 -> delta +1 (value)
     assert by_gsis.loc["00-1000000", "adp_delta"] == 1
@@ -675,9 +686,10 @@ def test_cheat_sheet_null_adp_row_gets_null_delta() -> None:
     """A player missing consensus_adp gets null adp_delta but keeps its (passed-through)
     null consensus_adp; other players' deltas are unaffected (population isolation)."""
     vorp = _make_vorp_table({Position.WR: 3})
+    cfg = _make_config(n_teams=2, roster_slots={RosterSlot.WR: 1})
     # Only two of three WRs have an ADP.
     adp = {"00-3000000": 10.0, "00-3000001": 20.0}  # 00-3000002 has none
-    sheet = generate_snake_cheat_sheet(_attach_consensus_adp(vorp, adp), _make_config())
+    sheet = generate_snake_cheat_sheet(_attach_consensus_adp(vorp, adp), cfg)
     by_gsis = sheet.set_index("gsis_id")
     assert pd.isna(by_gsis.loc["00-3000002", "adp_delta"])
     assert pd.isna(by_gsis.loc["00-3000002", "consensus_adp"])
@@ -688,8 +700,9 @@ def test_cheat_sheet_null_adp_row_gets_null_delta() -> None:
 
 def test_cheat_sheet_with_adp_validates_schema() -> None:
     vorp = _make_vorp_table({Position.QB: 4, Position.RB: 6})
+    cfg = _make_config(n_teams=2, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1})
     adp = {g: float(i + 1) for i, g in enumerate(vorp["gsis_id"])}
-    sheet = generate_snake_cheat_sheet(_attach_consensus_adp(vorp, adp), _make_config())
+    sheet = generate_snake_cheat_sheet(_attach_consensus_adp(vorp, adp), cfg)
     SnakeCheatSheetSchema.validate(sheet)
     assert "consensus_adp" in sheet.columns
     assert "adp_delta" in sheet.columns
@@ -712,6 +725,24 @@ In `src/projections/schemas.py`, inside `class SnakeCheatSheetSchema`, add after
     # consensus_adp is NA (weekly path, or a player no source gave an ADP).
     adp_delta: Series[pd.Int64Dtype] = pa.Field(nullable=True)
 ```
+
+- [ ] **Step 3b: Update the existing `SnakeCheatSheetSchema` round-trip test**
+
+The two new columns are *required* (non-Optional), so the hand-built frame in
+`tests/test_schemas/test_dataframe_schemas.py::test_snake_cheat_sheet_schema_round_trip` now
+fails validation ("column not in dataframe"). Add the two columns after the existing `tier`
+line, before the closing `}`:
+
+```python
+            "tier": pd.array([1, 1], dtype=pd.Int64Dtype()),
+            "consensus_adp": pd.array([2.1, 18.7], dtype=pd.Float64Dtype()),
+            "adp_delta": pd.array([1, -1], dtype=pd.Int64Dtype()),
+        }
+    )
+```
+
+Run: `pytest tests/test_schemas/test_dataframe_schemas.py::test_snake_cheat_sheet_schema_round_trip -v`
+Expected: PASS (after the edit; it FAILS the moment Step 3 lands without this update).
 
 - [ ] **Step 4: Compute the columns in `generate_snake_cheat_sheet`**
 
@@ -768,7 +799,7 @@ Expected: PASS — the new ADP tests AND all pre-existing cheat-sheet tests (the
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/projections/schemas.py src/projections/draft/snake_cheat_sheet.py tests/test_draft/test_snake_cheat_sheet.py
+git add src/projections/schemas.py src/projections/draft/snake_cheat_sheet.py tests/test_draft/test_snake_cheat_sheet.py tests/test_schemas/test_dataframe_schemas.py
 git commit -m "feat(draft): ADP-delta (consensus_adp + adp_delta) on the snake cheat sheet"
 ```
 
@@ -810,16 +841,20 @@ def test_cheat_sheet_cli_carries_adp_delta(tmp_path: Path) -> None:
         json.dumps(
             {
                 "name": "tiny", "n_teams": 2, "budget": 100, "min_bid": 1,
-                "roster_slots": {"QB": 1, "RB": 1, "BENCH": 1}, "ruleset": "espn_ppr",
+                "roster_slots": {"QB": 1, "RB": 1}, "ruleset": "espn_ppr",
             }
         )
     )
     out_path = tmp_path / "sheet.parquet"
+    # NOTE: this file's _run_cli takes a single LIST (def _run_cli(args: list[str])),
+    # unlike the vorp/auction CLI test files (varargs). Pass a list.
     proc = _run_cli(
-        "--season", "2026",
-        "--league-config", str(cfg_path),
-        "--vorp-input", str(vorp_path),
-        "--out", str(out_path),
+        [
+            "--season", "2026",
+            "--league-config", str(cfg_path),
+            "--vorp-input", str(vorp_path),
+            "--out", str(out_path),
+        ]
     )
     assert proc.returncode == 0, proc.stderr
     sheet = pd.read_parquet(out_path)
@@ -828,7 +863,7 @@ def test_cheat_sheet_cli_carries_adp_delta(tmp_path: Path) -> None:
     assert sheet["adp_delta"].notna().any()
 ```
 
-(If the test file lacks `json` / `_run_cli` imports, add them mirroring `test_generate_vorp_table_cli.py`'s `_run_cli` — same `subprocess` + `PYTHONPATH=src` pattern, pointed at `scripts/generate_snake_cheat_sheet.py`.)
+Config note: `{QB:1, RB:1}` / `n_teams=2` → pool = 4, exactly the 4-player fixture (no BENCH, which would need leftover players `_select_pool` doesn't have). `json` and `_run_cli` already exist in `tests/test_scripts/test_generate_snake_cheat_sheet_cli.py` (verified) — `_run_cli` is the list-form helper at line 92, already pointed at `generate_snake_cheat_sheet.py`.
 
 - [ ] **Step 2: Run the test to verify it fails or passes**
 
@@ -949,15 +984,17 @@ Add to `tests/test_scripts/test_generate_auction_values_cli.py` a test that a co
 def test_auction_cli_ignores_consensus_adp_column(tmp_path: Path) -> None:
     from projections.schemas import _PYARROW_STR
 
+    # Pool {QB:1,RB:1} x n_teams=2 = 4 players; fixture is exactly 2 QB + 2 RB so
+    # _select_pool fills it (a required position with too few players would raise).
     base = pd.DataFrame(
         {
             "gsis_id": pd.array(
-                ["00-1000000", "00-2000000", "00-2000001", "00-3000000"], dtype=_PYARROW_STR
+                ["00-1000000", "00-1000001", "00-2000000", "00-2000001"], dtype=_PYARROW_STR
             ),
-            "position": pd.array(["QB", "RB", "RB", "WR"], dtype=_PYARROW_STR),
-            "season_mean_fpts": pd.array([320.0, 260.0, 250.0, 240.0], dtype="float64"),
-            "vorp": pd.array([80.0, 30.0, 20.0, 10.0], dtype="float64"),
-            "replacement_fpts": pd.array([240.0, 230.0, 230.0, 230.0], dtype="float64"),
+            "position": pd.array(["QB", "QB", "RB", "RB"], dtype=_PYARROW_STR),
+            "season_mean_fpts": pd.array([320.0, 300.0, 260.0, 250.0], dtype="float64"),
+            "vorp": pd.array([80.0, 60.0, 30.0, 20.0], dtype="float64"),
+            "replacement_fpts": pd.array([240.0, 240.0, 230.0, 230.0], dtype="float64"),
         }
     )
     cfg_path = tmp_path / "league.json"
@@ -965,7 +1002,7 @@ def test_auction_cli_ignores_consensus_adp_column(tmp_path: Path) -> None:
         json.dumps(
             {
                 "name": "tiny", "n_teams": 2, "budget": 100, "min_bid": 1,
-                "roster_slots": {"QB": 1, "RB": 1, "WR": 1, "BENCH": 1}, "ruleset": "espn_ppr",
+                "roster_slots": {"QB": 1, "RB": 1}, "ruleset": "espn_ppr",
             }
         )
     )
@@ -994,7 +1031,7 @@ def test_auction_cli_ignores_consensus_adp_column(tmp_path: Path) -> None:
     )
 ```
 
-(If the file lacks `json` / `_run_cli`, add them mirroring `test_generate_vorp_table_cli.py`, pointed at `scripts/generate_auction_values.py`.)
+(`json` and `_run_cli` already exist in `tests/test_scripts/test_generate_auction_values_cli.py` — `_run_cli` is the **varargs** form `def _run_cli(*args: str)` at line 88, pointed at `generate_auction_values.py`, so the `_run("...", "...")`-style calls above are correct.)
 
 - [ ] **Step 2: Run the test**
 
@@ -1067,6 +1104,7 @@ git commit -m "docs(pm,todo): Draft Hub on consensus shipped"
 | §6 `VorpTableSchema` round-trip (+legacy still validates) | Task 2 |
 | §6 `generate_vorp_table` unchanged (regression) | Task 3 Step 4 (existing tests green) |
 | §6 cheat-sheet ADP-delta tests | Task 4 |
+| (regression) existing `SnakeCheatSheetSchema` round-trip updated for 2 required cols | Task 4 Step 3b |
 | §6 VORP CLI consensus mode + dropped-warning tests | Task 3 |
 | §6 cheat-sheet CLI consensus-fed test | Task 5 |
 | §6 auction regression guard | Task 7 |
@@ -1074,6 +1112,8 @@ git commit -m "docs(pm,todo): Draft Hub on consensus shipped"
 
 No spec requirement is unmapped. The live-2026 smoke (§6) is manual/post-merge, not a plan task — noted in Task 8's PM entry as the operator step.
 
-**2. Placeholder scan:** No `TBD`/`TODO`/"handle edge cases"/"similar to". Every code step shows complete code; Tasks 5 and 7 explicitly flag the one reused-helper assumption (the existing CLI tests' `_run_cli`/parquet writer) and how to add it if absent.
+**2. Placeholder scan:** No `TBD`/`TODO`/"handle edge cases"/"similar to". Every code step shows complete code. The `_run_cli` helper in each CLI test file is verified present and its arity stated per file (vorp/auction varargs; cheat-sheet list).
 
 **3. Type consistency:** `consensus_to_season_projections(consensus: pd.DataFrame) -> pd.DataFrame` is used identically in Task 1 and Task 3. `consensus_adp` is `pd.Float64Dtype` (gt=0, nullable) everywhere (Task 2 VorpTableSchema, Task 4 SnakeCheatSheetSchema, all test fixtures). `adp_delta` is `pd.Int64Dtype` nullable in both schema (Task 4) and tests. CLI flag names (`--source`, `--data-root`, `--asof`, `--weekly-projections`) match between Task 3 implementation and its tests. `_FULL_SEASON_WEEKS = 17` matches the `n_weeks == 17` assertion in Task 1's tests and the existing `_bulk_rows` convention.
+
+**4. Pool-fill constraint (post-review):** `generate_snake_cheat_sheet` / `generate_auction_values` call `_select_pool`, which raises (`_pool.py:51`) if a `LeagueConfig`'s pool can't be filled from the input. Every test fixture is paired with a config whose pool it fills exactly — small `{QB:1,RB:1}`/`n_teams=2` configs for the unit/CLI fixtures (Tasks 4, 5, 7), and the deliberately oversized `consensus` fixture (40 players vs a 32 pool) in Task 3. `_run_cli` arity differs per file (cheat-sheet = list, vorp/auction = varargs) and each task's call matches its file.
