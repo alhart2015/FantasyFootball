@@ -222,7 +222,7 @@ def test_cheat_sheet_cli_carries_adp_delta(tmp_path: Path) -> None:
             "season_mean_fpts": pd.array([320.0, 300.0, 260.0, 250.0], dtype="float64"),
             "vorp": pd.array([80.0, 60.0, 30.0, 20.0], dtype="float64"),
             "replacement_fpts": pd.array([240.0, 240.0, 230.0, 230.0], dtype="float64"),
-            "consensus_adp": pd.array([3.0, 8.0, 12.0, 20.0], dtype=pd.Float64Dtype()),
+            "consensus_adp": pd.array([8.0, 3.0, 12.0, 20.0], dtype=pd.Float64Dtype()),
         }
     )
     vorp_path = tmp_path / "vorp.parquet"
@@ -259,3 +259,8 @@ def test_cheat_sheet_cli_carries_adp_delta(tmp_path: Path) -> None:
     SnakeCheatSheetSchema.validate(sheet)
     assert sheet["consensus_adp"].notna().any()
     assert sheet["adp_delta"].notna().any()
+    by_gsis = sheet.set_index("gsis_id")
+    # QB: 00-1000000 has the better VORP (rank 1) but the LATER ADP (rank 2) -> value, +1.
+    assert by_gsis.loc["00-1000000", "adp_delta"] == 1
+    # 00-1000001 worse VORP (rank 2) but EARLIER ADP (rank 1) -> reach, -1.
+    assert by_gsis.loc["00-1000001", "adp_delta"] == -1
