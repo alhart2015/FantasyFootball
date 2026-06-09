@@ -184,6 +184,22 @@ class Stat(StrEnum):
     OFFENSE_PCT = "offense_pct"
 
 
+# The 9 canonical preseason stat-line fields carried by ExternalProjectionSchema and
+# ConsensusProjectionSchema. Single source for the ingest producer (external_projections) and
+# the consensus blend, which must stay in lockstep. Derived from Stat so a typo can't drift.
+STAT_FIELDS: Final[tuple[str, ...]] = (
+    Stat.PASSING_YARDS.value,
+    Stat.PASSING_TDS.value,
+    Stat.INTERCEPTIONS.value,
+    Stat.RUSHING_YARDS.value,
+    Stat.RUSHING_TDS.value,
+    Stat.RECEPTIONS.value,
+    Stat.RECEIVING_YARDS.value,
+    Stat.RECEIVING_TDS.value,
+    Stat.FUMBLES_LOST.value,
+)
+
+
 class ProjectionSource(StrEnum):
     """External preseason projection sources. Use ProjectionSource.ESPN, never "ESPN"."""
 
@@ -821,6 +837,48 @@ class ExternalProjectionSchema(pa.DataFrameModel):
     receiving_yards: Series[float] = pa.Field(nullable=True)
     receiving_tds: Series[float] = pa.Field(nullable=True)
     fumbles_lost: Series[float] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
+class ConsensusProjectionSchema(pa.DataFrameModel):
+    """Published preseason consensus projection: one row per (gsis_id, season, asof).
+
+    The consumer-facing contract downstream draft tooling reads. `consensus_adp` is the mean of
+    available source ADPs (nullable -- a stat-line-only / unranked player can have none);
+    `consensus_rank` is the ordinal over non-null `consensus_adp` (null when adp is null). The
+    stat line + `projected_points_ppr` are present only for players a stat-line source covers
+    (`has_points`). v1 sources: ESPN (stat line + ADP) + Sleeper (ADP only).
+
+    Nullable floats use the pandas `Float64` extension dtype (the blend builder emits `pd.NA`),
+    unlike the looser `ExternalProjectionSchema` raw-ingest counterpart. The `has_points` /
+    stat-line consistency is a blend-builder invariant, not schema-enforced.
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", unique=True)
+    season: Series[pd.Int64Dtype] = pa.Field(ge=1999, le=2100)
+    # ISO YYYY-MM-DD; mirrors the raw external_projections snapshot this was derived from
+    asof: Series[str] = pa.Field(str_matches=r"^\d{4}-\d{2}-\d{2}$")
+    full_name: Series[str]
+    position: Series[str] = pa.Field(isin=_SKILL_POSITION_VALUES)
+    consensus_adp: Series[pd.Float64Dtype] = pa.Field(gt=0, nullable=True)
+    consensus_rank: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
+    n_adp_sources: Series[pd.Int64Dtype] = pa.Field(ge=0)
+    has_points: Series[bool]
+    projected_points_ppr: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    passing_yards: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    passing_tds: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    interceptions: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    rushing_yards: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    rushing_tds: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    receptions: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    receiving_yards: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    receiving_tds: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    fumbles_lost: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    is_placeholder_gsis: Series[bool]
+    ruleset: Series[str] = pa.Field(isin=_RULESET_NAME_VALUES)
 
     class Config:
         strict = "filter"

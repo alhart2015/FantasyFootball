@@ -19,8 +19,6 @@ import argparse
 import hashlib
 import json
 import logging
-import re
-import unicodedata
 import urllib.error
 import urllib.request
 from datetime import UTC, date, datetime
@@ -29,9 +27,11 @@ from typing import Any
 
 import pandas as pd
 
+from projections.ingest.identity import placeholder_name_key
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import (
     _PYARROW_STR,
+    STAT_FIELDS,
     ExternalProjectionSchema,
     Position,
     ProjectionSource,
@@ -65,17 +65,6 @@ ESPN_STAT_IDS: dict[str, str] = {
     "43": "receiving_tds",
     "72": "fumbles_lost",
 }
-STAT_FIELDS: tuple[str, ...] = (
-    "passing_yards",
-    "passing_tds",
-    "interceptions",
-    "rushing_yards",
-    "rushing_tds",
-    "receptions",
-    "receiving_yards",
-    "receiving_tds",
-    "fumbles_lost",
-)
 COUNT_FIELDS = frozenset(
     {"passing_tds", "interceptions", "rushing_tds", "receptions", "receiving_tds", "fumbles_lost"}
 )
@@ -136,11 +125,17 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
             continue
         ownership = pl.get("ownership") or {}
         ppr_rank = ((pl.get("draftRanksByRankType") or {}).get("PPR") or {}).get("rank")
+        # ESPN encodes "undrafted / no draft data" as ADP 0; normalize non-positive to None so the
+        # raw table stores honest null (adp is nullable) rather than an in-band sentinel that every
+        # downstream consumer would have to re-discover.
+        espn_adp = ownership.get("averageDraftPosition")
+        if espn_adp is not None and espn_adp <= 0:
+            espn_adp = None
         row: dict[str, object] = {
             "espn_id": str(espn_id),
             "full_name": full_name,
             "position": position,
-            "espn_adp": ownership.get("averageDraftPosition"),
+            "espn_adp": espn_adp,
             "espn_pos_rank": ppr_rank,
         }
         row.update(_espn_stats_to_statline(proj_stats))
@@ -193,26 +188,6 @@ def parse_sleeper_projections(payload: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-_NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "v"})
-
-
-def _placeholder_name_key(full_name: str, position: str) -> str:
-    """Normalize (full_name, position) into a stable cross-source key: accents folded to ASCII
-    (so 'José'/'Jose' agree across sources), lowercased, punctuation/whitespace removed, common
-    generational suffixes (Jr/Sr/II…) dropped. ESPN and Sleeper spell the same rookie nearly
-    identically, so this lets both sources' rows reconcile."""
-    folded = (
-        unicodedata.normalize("NFKD", full_name).encode("ascii", "ignore").decode("ascii").lower()
-    )
-    tokens = [t for t in re.split(r"[^a-z0-9]+", folded) if t and t not in _NAME_SUFFIXES]
-    if tokens:
-        return "".join(tokens) + "|" + position.lower()
-    # Degenerate name (all suffix/punctuation, or non-ASCII that folded to nothing): key on the raw
-    # name instead, so two such distinct players don't both collapse to the position-only key
-    # '|<pos>' and collide into one placeholder gsis.
-    return full_name.strip().lower() + "|" + position.lower()
-
-
 def _make_placeholder_gsis(full_name: str, position: str) -> str:
     """Deterministic synthetic gsis_id for a player not in id_map (e.g. a pre-camp rookie).
     Matches GSIS_ID_PATTERN with a reserved 99- prefix. Keyed on the normalized (full_name,
@@ -221,7 +196,7 @@ def _make_placeholder_gsis(full_name: str, position: str) -> str:
     fork every rookie into two phantom players). Residual limits: two distinct players sharing
     a normalized name+position collide (rare), and the 99-XXXXXXX space is 10^7, so a within-
     pull hash collision is possible at hundreds of rookies — refresh logs any that occur."""
-    digest = hashlib.sha1(_placeholder_name_key(full_name, position).encode()).hexdigest()
+    digest = hashlib.sha1(placeholder_name_key(full_name, position).encode()).hexdigest()
     return f"99-{int(digest, 16) % 10_000_000:07d}"
 
 
@@ -323,7 +298,7 @@ def _warn_on_placeholder_collisions(frame: pd.DataFrame) -> None:
     if placeholders.empty:
         return
     keys = [
-        _placeholder_name_key(name, pos)
+        placeholder_name_key(name, pos)
         for name, pos in zip(placeholders["full_name"], placeholders["position"], strict=True)
     ]
     # Distinct (gsis_id, name-key) pairs; a gsis_id appearing in more than one pair means two

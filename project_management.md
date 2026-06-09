@@ -4,6 +4,32 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## External Consensus Blend (v1) — shipped (2026-06-09, on branch `feat/external-consensus-blend`)
+
+**Status:** Sub-project #2b slice 1 (TODO #38) done. The raw ESPN+Sleeper snapshots from #2a are now blended into a single published per-player preseason projection — the contract downstream draft tooling consumes. Spec/plan at `docs/superpowers/specs|plans/2026-06-09-external-consensus-blend.*`. Verified live for 2026 (3,042 players). Built via subagent-driven development: 6 TDD tasks, each with two-stage (spec + code-quality) review.
+
+**What shipped:**
+- **`ConsensusProjectionSchema`** (`schemas.py`) — published contract, one row per `(gsis_id, season, asof)`: `consensus_adp`, `consensus_rank`, `n_adp_sources`, `has_points`, `projected_points_ppr`, the 9-field stat line, `is_placeholder_gsis`, `ruleset`. Nullable floats use the `Float64` extension dtype; `ruleset` constrained to known names.
+- **`build_consensus`** (`src/projections/consensus/blend.py`) — pure blend: group by `gsis_id`, mean ADP across sources → ordinal rank (deterministic `(adp, gsis_id)` tie-break), mean stat line → points. **Union coverage** (every player ranked by ≥1 source; ADP-only players get null points). Null-ADP players get null rank but still appear.
+- **`refresh_consensus`** orchestrator + CLI (`src/projections/consensus/refresh.py`) — reads the raw snapshot (latest or named `asof`), validates, writes `data/processed/consensus_projections/season=YYYY/asof=YYYY-MM-DD/` (asof **mirrors** the raw input → reproducible). `ConsensusError` on missing/empty raw.
+- **`scoring.expected_points(Mapping, Ruleset)`** — fractional-aware scorer (ESPN projects 8.4 receiving TDs; `score()`'s int `StatLine` can't). Factored to share `score()`'s exact coefficient arithmetic (single source of points truth).
+- **`ingest/identity.py`** — `placeholder_name_key` promoted to a shared util (ingest + blend agree by construction).
+
+**Key decisions (from brainstorming):**
+- **First slice = blend over the existing 2 sources**, not scrape-first — pins the consumer contract over trusted data before taking on scraping fragility.
+- **Point estimates now, distributions next slice** — ESPN is the only stat-line source today; a real distribution needs ≥2-source spread, which arrives with scraping. No synthetic floor/ceiling.
+- **Union coverage** — broadest draft coverage; honesty via `n_adp_sources` / `has_points`.
+- **Simple mean** for ADP + stat line (accuracy-weighting deferred). **Derived table under `data/processed/`**; `asof` mirrors raw.
+
+**Gates:** full suite 1286 passed / 17 skipped (env: network + missing feature parquet); `mypy src tests` clean (239 files); `ruff check` + `ruff format --check` clean.
+
+**Next direction (concrete):**
+1. **Scraped points source** (FantasyPros or CBS) — leads to a genuine ≥2-source `projected_points_ppr`, then **distribution-wrapping** (real cross-source spread → floor/ceiling). This is the natural slice 2.
+2. **Draft Hub** on top of the consensus contract (`SnakeCheatSheetSchema` / `AuctionValuesSchema` / VORP already exist in `schemas.py` — wire them to consume `ConsensusProjectionSchema`).
+3. Small follow-up logged in TODO #38: `external_projections.py:398` pandas `FutureWarning`. (The duplicated `STAT_FIELDS` tuple was consolidated into a shared `schemas.py` constant — derived from the `Stat` enum — during the post-implementation `/simplify` pass.)
+
+---
+
 ## External Projection Ingest Mechanism (v1) — shipped (2026-06-08, on branch `feat/external-projection-ingest`)
 
 **Status:** Sub-project #2a (first slice of TODO #38) done. A repeatable, dated-snapshot ingest of ESPN + Sleeper preseason projections is in `src/`, verified live for 2026. Spec/plan at `docs/superpowers/specs|plans/2026-06-08-external-projection-ingest.*`.
