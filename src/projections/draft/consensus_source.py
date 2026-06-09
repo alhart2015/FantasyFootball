@@ -14,7 +14,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from projections.schemas import _PYARROW_STR, ConsensusProjectionSchema, ProjectionSeasonSchema
+from projections.schemas import (
+    _PYARROW_STR,
+    DATETIME_UNIT,
+    ConsensusProjectionSchema,
+    ProjectionSeasonSchema,
+)
 
 # Sentinel n_weeks for a consensus-derived season total: "full season", not a per-week
 # aggregate. 17 reads as a complete season (vs the misleading 1 = "one week of data").
@@ -63,7 +68,7 @@ def consensus_to_season_projections(consensus: pd.DataFrame) -> pd.DataFrame:
             "season_p50": season_mean,
             "season_p90": season_mean,
             "model_id": f"consensus:{asof}",
-            "generated_at": pd.Timestamp.now(tz="UTC").as_unit("us"),
+            "generated_at": pd.Timestamp.now(tz="UTC").as_unit(DATETIME_UNIT),
         }
     )
     for col in ("gsis_id", "position", "ruleset", "model_id"):

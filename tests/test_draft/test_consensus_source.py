@@ -161,3 +161,28 @@ def test_raises_on_mixed_asof() -> None:
     )
     with pytest.raises(ValueError, match="asof"):
         consensus_to_season_projections(frame)
+
+
+def test_raises_on_mixed_season() -> None:
+    frame = _consensus_frame(
+        [
+            _consensus_row(
+                gsis_id="00-3000001",
+                position=Position.WR,
+                has_points=True,
+                projected_points_ppr=250.0,
+                asof="2026-06-09",
+                season=2026,
+            ),
+            _consensus_row(
+                gsis_id="00-3000002",
+                position=Position.WR,
+                has_points=True,
+                projected_points_ppr=240.0,
+                asof="2026-06-09",
+                season=2025,
+            ),
+        ]
+    )
+    with pytest.raises(ValueError, match="season"):
+        consensus_to_season_projections(frame)
