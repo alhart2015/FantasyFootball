@@ -359,6 +359,73 @@ def test_output_sorted_by_position_canonical_then_rank() -> None:
         assert list(sub["positional_rank"]) == sorted(sub["positional_rank"])
 
 
+def _attach_consensus_adp(vorp: pd.DataFrame, adp_by_gsis: dict[str, float]) -> pd.DataFrame:
+    """Return a copy of a VORP table with a consensus_adp column (re-validated)."""
+    out = vorp.copy()
+    out["consensus_adp"] = pd.array(
+        [adp_by_gsis.get(g) for g in out["gsis_id"]], dtype=pd.Float64Dtype()
+    )
+    return VorpTableSchema.validate(out)
+
+
+# NOTE on configs: generate_snake_cheat_sheet calls _select_pool, which RAISES if the
+# LeagueConfig pool can't be filled. So each fixture is paired with a config whose pool it
+# fills. adp_delta is computed independently of pool membership, so a minimal pool is fine.
+
+
+def test_cheat_sheet_without_adp_leaves_new_columns_na() -> None:
+    """Weekly-path VORP table (no consensus_adp) -> consensus_adp/adp_delta all-NA,
+    every other column unchanged (backward compatible)."""
+    vorp = _make_vorp_table({Position.QB: 2, Position.RB: 2})
+    cfg = _make_config(n_teams=2, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1})
+    sheet = generate_snake_cheat_sheet(vorp, cfg)
+    assert sheet["consensus_adp"].isna().all()
+    assert sheet["adp_delta"].isna().all()
+
+
+def test_cheat_sheet_adp_delta_value_and_reach() -> None:
+    """A late-ADP, high-VORP player is a 'value' (+delta); an early-ADP, low-VORP
+    player is a 'reach' (-delta). Within position."""
+    # Two QBs: best VORP (00-1000000) but LATE ADP -> value; worst VORP but EARLY ADP -> reach.
+    # Pool sized to the fixture (QB:1 x 2 teams = 2) so _select_pool fills exactly.
+    vorp = _make_vorp_table({Position.QB: 2})
+    cfg = _make_config(n_teams=2, roster_slots={RosterSlot.QB: 1})
+    # gsis ids from _make_vorp_table: 00-1000000 (higher vorp), 00-1000001 (lower vorp)
+    adp = {"00-1000000": 50.0, "00-1000001": 5.0}
+    sheet = generate_snake_cheat_sheet(_attach_consensus_adp(vorp, adp), cfg)
+    by_gsis = sheet.set_index("gsis_id")
+    # 00-1000000: vorp_rank 1, adp_rank 2 -> delta +1 (value)
+    assert by_gsis.loc["00-1000000", "adp_delta"] == 1
+    # 00-1000001: vorp_rank 2, adp_rank 1 -> delta -1 (reach)
+    assert by_gsis.loc["00-1000001", "adp_delta"] == -1
+
+
+def test_cheat_sheet_null_adp_row_gets_null_delta() -> None:
+    """A player missing consensus_adp gets null adp_delta but keeps its (passed-through)
+    null consensus_adp; other players' deltas are unaffected (population isolation)."""
+    vorp = _make_vorp_table({Position.WR: 3})
+    cfg = _make_config(n_teams=2, roster_slots={RosterSlot.WR: 1})
+    # Only two of three WRs have an ADP.
+    adp = {"00-3000000": 10.0, "00-3000001": 20.0}  # 00-3000002 has none
+    sheet = generate_snake_cheat_sheet(_attach_consensus_adp(vorp, adp), cfg)
+    by_gsis = sheet.set_index("gsis_id")
+    assert pd.isna(by_gsis.loc["00-3000002", "adp_delta"])
+    assert pd.isna(by_gsis.loc["00-3000002", "consensus_adp"])
+    # The two ADP-bearing WRs both rank 1/2 by both keys -> delta 0 each.
+    assert by_gsis.loc["00-3000000", "adp_delta"] == 0
+    assert by_gsis.loc["00-3000001", "adp_delta"] == 0
+
+
+def test_cheat_sheet_with_adp_validates_schema() -> None:
+    vorp = _make_vorp_table({Position.QB: 4, Position.RB: 6})
+    cfg = _make_config(n_teams=2, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1})
+    adp = {g: float(i + 1) for i, g in enumerate(vorp["gsis_id"])}
+    sheet = generate_snake_cheat_sheet(_attach_consensus_adp(vorp, adp), cfg)
+    SnakeCheatSheetSchema.validate(sheet)
+    assert "consensus_adp" in sheet.columns
+    assert "adp_delta" in sheet.columns
+
+
 def test_determinism_byte_identical_reruns() -> None:
     """§5.1 #16 — same inputs → byte-identical output frame."""
     cfg = _make_config()

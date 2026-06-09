@@ -85,6 +85,12 @@ def generate_snake_cheat_sheet(
     df = vorp.copy()
     df["is_in_pool"] = df["gsis_id"].isin(in_pool_ids)
 
+    # Carry consensus_adp through (NA when the input has none — the weekly path).
+    if "consensus_adp" in vorp.columns:
+        df["consensus_adp"] = vorp["consensus_adp"]
+    else:
+        df["consensus_adp"] = pd.array([pd.NA] * len(df), dtype=pd.Float64Dtype())
+
     df = df.sort_values(["position", "vorp", "gsis_id"], ascending=[True, False, True])
     df["positional_rank"] = df.groupby("position", sort=False).cumcount() + 1
     df["positional_rank"] = df["positional_rank"].astype(pd.Int64Dtype())
@@ -101,6 +107,29 @@ def generate_snake_cheat_sheet(
         tiers = _assign_tiers(vorps, tiers_per_position)
         tier_col[in_pool_idx] = tiers
     df["tier"] = tier_col
+
+    # ADP-delta: within position, over the non-null-consensus_adp subset, two deterministic
+    # gap-free integer ranks (sort + cumcount, like positional_rank — never Series.rank(),
+    # whose 'average' method yields fractional ranks). delta = adp_rank - vorp_rank;
+    # positive = value (market drafts later than VORP rank), negative = reach.
+    adp_delta = pd.Series(pd.array([pd.NA] * len(df), dtype=pd.Int64Dtype()), index=df.index)
+    sub = df[df["consensus_adp"].notna()]
+    if not sub.empty:
+        adp_rank = (
+            sub.sort_values(["position", "consensus_adp", "gsis_id"], ascending=[True, True, True])
+            .groupby("position", sort=False)
+            .cumcount()
+            + 1
+        )
+        vorp_rank = (
+            sub.sort_values(["position", "vorp", "gsis_id"], ascending=[True, False, True])
+            .groupby("position", sort=False)
+            .cumcount()
+            + 1
+        )
+        delta = (adp_rank - vorp_rank).astype(pd.Int64Dtype())  # index-aligned subtraction
+        adp_delta.loc[delta.index] = delta
+    df["adp_delta"] = adp_delta
 
     if display_names is None or display_names.empty:
         df["display_name"] = pd.Series([DISPLAY_NAME_FALLBACK] * len(df), dtype=_PYARROW_STR)

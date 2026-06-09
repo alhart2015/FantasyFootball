@@ -1004,6 +1004,11 @@ class SnakeCheatSheetSchema(pa.DataFrameModel):
     replacement_fpts: Series[float]
     is_in_pool: Series[bool]
     tier: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
+    # Raw consensus ADP (market view) carried from the VORP table; NA on the weekly path.
+    consensus_adp: Series[pd.Float64Dtype] = pa.Field(gt=0, nullable=True)
+    # Within-position (ADP-rank - VORP-rank): positive = value, negative = reach. NA when
+    # consensus_adp is NA (weekly path, or a player no source gave an ADP).
+    adp_delta: Series[pd.Int64Dtype] = pa.Field(nullable=True)
 
     class Config:
         strict = "filter"

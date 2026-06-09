@@ -925,6 +925,8 @@ def test_snake_cheat_sheet_schema_round_trip() -> None:
             "replacement_fpts": [242.2, 98.9],
             "is_in_pool": [True, True],
             "tier": pd.array([1, 1], dtype=pd.Int64Dtype()),
+            "consensus_adp": pd.array([2.1, 18.7], dtype=pd.Float64Dtype()),
+            "adp_delta": pd.array([1, -1], dtype=pd.Int64Dtype()),
         }
     )
     validated = SnakeCheatSheetSchema.validate(df)
