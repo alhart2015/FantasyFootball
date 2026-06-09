@@ -22,6 +22,7 @@ from projections.draft.consensus_source import consensus_to_season_projections
 from projections.draft.league_config import LeagueConfig
 from projections.draft.vorp import generate_vorp_table
 from projections.schemas import (
+    _PYARROW_STR,
     ConsensusProjectionSchema,
     Position,
     ProjectionWeeklySchema,
@@ -152,6 +153,7 @@ def main() -> int:
     if consensus is not None:
         adp = consensus[["gsis_id", "consensus_adp"]]
         out_df = out_df.merge(adp, on="gsis_id", how="left")
+        out_df["gsis_id"] = out_df["gsis_id"].astype(_PYARROW_STR)
         out_df = VorpTableSchema.validate(out_df)
 
     suffix = args.out.suffix.lower()

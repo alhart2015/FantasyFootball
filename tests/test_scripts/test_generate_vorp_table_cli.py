@@ -361,7 +361,9 @@ def test_cli_consensus_mode_requires_data_root_not_weekly(cli_inputs: dict[str, 
         str(cli_inputs["out_parquet"]),
     )
     assert proc.returncode != 0
-    assert "weekly-projections" not in (proc.stderr + proc.stdout).lower()
+    combined = (proc.stderr + proc.stdout).lower()
+    assert "weekly-projections" not in combined
+    assert "no asof snapshots" in combined
 
 
 def test_cli_errors_on_ruleset_mismatch(cli_inputs: dict[str, Path], tmp_path: Path) -> None:
