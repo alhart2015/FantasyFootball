@@ -186,3 +186,20 @@ def test_raises_on_mixed_season() -> None:
     )
     with pytest.raises(ValueError, match="season"):
         consensus_to_season_projections(frame)
+
+
+def test_skill_only_config_loads_without_k_dst() -> None:
+    """The shipped skill-only config must parse as a LeagueConfig and contain no K/DST
+    (consensus has no kicker/defense rows; generate_vorp_table would raise on them)."""
+    from pathlib import Path
+
+    from projections.draft.league_config import LeagueConfig
+    from projections.schemas import RosterSlot
+
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg = LeagueConfig.model_validate_json(
+        (repo_root / "configs" / "league_espn_ppr_12team_skill.json").read_text()
+    )
+    assert RosterSlot.K not in cfg.roster_slots
+    assert RosterSlot.DST not in cfg.roster_slots
+    assert cfg.ruleset.name == "ESPN_PPR"
