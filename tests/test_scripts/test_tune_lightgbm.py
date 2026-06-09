@@ -64,6 +64,12 @@ _WR_FEAT_COLUMNS: tuple[str, ...] = (
     "is_high_wind",
     "temperature_f",
     "is_grass_surface",
+    # Vegas team-context features (PR #51 WR+QB Vegas integration). Bounded
+    # ranges: implied_team_total in [0, 60]; spread unbounded but sane NFL range.
+    "preseason_implied_team_total",
+    "preseason_spread",
+    "season_avg_implied_team_total",
+    "season_avg_spread",
 )
 
 # Real WR target stats — needed in the joined frame because _run_one_study
@@ -129,8 +135,17 @@ def _build_synthetic_joined(seed: int = 42, n_per_season: int = 80) -> pd.DataFr
         "temperature_f",
         "is_grass_surface",
     }
+    # Vegas cols: implied totals must stay in [0, 60] (WrFeaturesSchema ge=0
+    # le=60); spread is unbounded but realistic NFL range is [-28, 28].
+    bounded_vegas_cols = {
+        "preseason_implied_team_total",
+        "preseason_spread",
+        "season_avg_implied_team_total",
+        "season_avg_spread",
+    }
+    bounded_cols = bounded_trajectory_cols | bounded_weather_cols | bounded_vegas_cols
     for col in _WR_FEAT_COLUMNS:
-        if col in bounded_trajectory_cols or col in bounded_weather_cols:
+        if col in bounded_cols:
             continue
         df[col] = rng.normal(0.0, 1.0, size=len(df))
     df["age"] = rng.uniform(21.0, 35.0, size=len(df))
@@ -141,6 +156,10 @@ def _build_synthetic_joined(seed: int = 42, n_per_season: int = 80) -> pd.DataFr
     df["is_high_wind"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
     df["temperature_f"] = rng.uniform(20.0, 90.0, size=len(df))
     df["is_grass_surface"] = rng.integers(0, 2, size=len(df)).astype(np.float64)
+    df["preseason_implied_team_total"] = rng.uniform(15.0, 35.0, size=len(df))
+    df["preseason_spread"] = rng.uniform(-14.0, 14.0, size=len(df))
+    df["season_avg_implied_team_total"] = rng.uniform(15.0, 35.0, size=len(df))
+    df["season_avg_spread"] = rng.uniform(-14.0, 14.0, size=len(df))
 
     # Synthetic targets with mild signal so trials produce non-degenerate
     # pinball losses (not all-zero predictions). receiving_yards uses

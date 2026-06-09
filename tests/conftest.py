@@ -20,12 +20,38 @@ parametrized smoke test can resolve them across all four positions.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Iterator
+from typing import Final
 
 import pandas as pd
 import pytest
 
 from projections.schemas import _PYARROW_STR
+
+# Unit tests fit lightgbm models for smoke / round-trip / schema / save-load
+# checks, none of which need a well-fit model. The production default
+# n_estimators=2000 (projections.models.lightgbm.LGBM_DEFAULTS) makes a single
+# such fit take 30-90s and dominated the suite wall-clock. Cap it for the whole
+# test session: every lightgbm class (base / tuned / nb, and the ensemble's
+# lgb-nb child) starts its hyperparameters from LGBM_DEFAULTS, and the tuned
+# params JSON does not set n_estimators, so this one knob covers all of them. The
+# only hyperparameter assertion in the suite (test_lightgbm's `(stat, q) in
+# model._best_iters` membership check) is unaffected. Set PYTEST_FULL_LIGHTGBM=1
+# to fit with the real config when a test genuinely needs a well-fit model.
+_TEST_N_ESTIMATORS: Final[int] = 30
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _fast_lightgbm_n_estimators() -> Iterator[None]:
+    if os.environ.get("PYTEST_FULL_LIGHTGBM"):
+        yield
+        return
+    from projections.models import lightgbm as _lgbm
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(_lgbm.LGBM_DEFAULTS, "n_estimators", _TEST_N_ESTIMATORS)
+        yield
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
