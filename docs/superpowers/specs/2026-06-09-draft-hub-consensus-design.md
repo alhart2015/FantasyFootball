@@ -256,7 +256,7 @@ All tests network-free (synthetic frames / fixture parquet).
 
 - **`consensus_to_season_projections`** (`tests/test_draft/test_consensus_source.py`):
   - `has_points` filtering (ADP-only rows dropped; points rows kept).
-  - `projected_points_ppr` → `season_mean`; degenerate `p10=p50=p90=mean`; `n_weeks=1`.
+  - `projected_points_ppr` → `season_mean`; degenerate `p10=p50=p90=mean`; `n_weeks=17`.
   - `ruleset` / `season` / `position` carried through; `model_id == f"consensus:{asof}"`;
     `generated_at` tz-aware UTC (passes `ProjectionSeasonSchema`'s naive-rejection parser).
   - Empty / all-ADP-only input → valid empty `ProjectionSeasonSchema` frame.
