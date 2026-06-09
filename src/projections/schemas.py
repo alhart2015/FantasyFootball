@@ -827,6 +827,44 @@ class ExternalProjectionSchema(pa.DataFrameModel):
         coerce = True
 
 
+class ConsensusProjectionSchema(pa.DataFrameModel):
+    """Published preseason consensus projection: one row per (gsis_id, season, asof).
+
+    The consumer-facing contract downstream draft tooling reads. `consensus_adp` is the mean of
+    available source ADPs (nullable -- a stat-line-only / unranked player can have none);
+    `consensus_rank` is the ordinal over non-null `consensus_adp` (null when adp is null). The
+    stat line + `projected_points_ppr` are present only for players a stat-line source covers
+    (`has_points`). v1 sources: ESPN (stat line + ADP) + Sleeper (ADP only).
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", unique=True)
+    season: Series[pd.Int64Dtype] = pa.Field(ge=1999, le=2100)
+    # ISO YYYY-MM-DD; mirrors the raw external_projections snapshot this was derived from
+    asof: Series[str] = pa.Field(str_matches=r"^\d{4}-\d{2}-\d{2}$")
+    full_name: Series[str]
+    position: Series[str] = pa.Field(isin=_SKILL_POSITION_VALUES)
+    consensus_adp: Series[pd.Float64Dtype] = pa.Field(gt=0, nullable=True)
+    consensus_rank: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
+    n_adp_sources: Series[pd.Int64Dtype] = pa.Field(ge=0)
+    has_points: Series[bool]
+    projected_points_ppr: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    passing_yards: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    passing_tds: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    interceptions: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    rushing_yards: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    rushing_tds: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    receptions: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    receiving_yards: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    receiving_tds: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    fumbles_lost: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    is_placeholder_gsis: Series[bool]
+    ruleset: Series[str]
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
 class ProjectionWeeklySchema(pa.DataFrameModel):
     """Published per-week projection (the consumer-facing contract)."""
 
