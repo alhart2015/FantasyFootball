@@ -205,6 +205,59 @@ def test_placeholder_rookie_carried_through() -> None:
     assert r["n_adp_sources"] == 2
 
 
+def test_nonpositive_adp_treated_as_missing() -> None:
+    # ESPN encodes "undrafted" as ADP 0; it must not corrupt the mean or violate the schema's
+    # consensus_adp > 0. Blended with a real ADP, only the positive value counts.
+    ext = _external(
+        [
+            _row(
+                "ESPN",
+                "00-0000010",
+                adp=0.0,
+                full_name="Zero ADP",
+                position="WR",
+                placeholder=False,
+                stats={c: 0.0 for c in _STAT_COLS},
+            ),
+            _row(
+                "SLEEPER",
+                "00-0000010",
+                adp=24.0,
+                full_name="Zero ADP",
+                position="WR",
+                placeholder=False,
+            ),
+        ]
+    )
+    out = build_consensus(ext, Ruleset())
+    out = ConsensusProjectionSchema.validate(out)  # must not raise on gt=0
+    r = out[out["gsis_id"] == "00-0000010"].iloc[0]
+    assert r["consensus_adp"] == 24.0  # the 0.0 is dropped, not averaged to 12.0
+    assert r["n_adp_sources"] == 1
+
+
+def test_only_nonpositive_adp_yields_null_adp_and_rank() -> None:
+    ext = _external(
+        [
+            _row(
+                "ESPN",
+                "00-0000011",
+                adp=0.0,
+                full_name="Undrafted",
+                position="RB",
+                placeholder=False,
+                stats={c: 0.0 for c in _STAT_COLS},
+            ),
+        ]
+    )
+    out = build_consensus(ext, Ruleset())
+    r = out[out["gsis_id"] == "00-0000011"].iloc[0]
+    assert pd.isna(r["consensus_adp"])
+    assert pd.isna(r["consensus_rank"])
+    assert r["n_adp_sources"] == 0
+    assert bool(r["has_points"]) is True  # still appears (union coverage)
+
+
 def test_empty_input_returns_empty_conforming_frame() -> None:
     cols = [
         "source",

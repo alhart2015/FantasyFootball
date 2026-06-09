@@ -48,7 +48,11 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
 
     records: list[dict[str, object]] = []
     for gsis_id, grp in external.groupby("gsis_id", sort=False):
+        # ESPN encodes "undrafted / no draft data" as ADP 0; treat any non-positive ADP as
+        # missing so it neither corrupts the mean nor violates ConsensusProjectionSchema's
+        # consensus_adp > 0 constraint (which would abort the whole refresh on validate).
         adp_vals = grp["adp"].dropna()
+        adp_vals = adp_vals[adp_vals > 0]
         n_adp_sources = int(adp_vals.shape[0])
         consensus_adp: float | None = float(adp_vals.mean()) if n_adp_sources > 0 else None
 

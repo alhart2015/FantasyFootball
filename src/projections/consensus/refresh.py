@@ -36,21 +36,25 @@ def refresh_consensus(data_root: Path, *, season: int, asof: date | None = None)
     try:
         if asof is not None:
             external = read_partition(raw_root, "external_projections", season=season, asof=asof)
-            snapshot_asof = asof
         else:
             external = read_latest_partition(raw_root, "external_projections", season=season)
-            snapshot_asof = date.fromisoformat(str(external["asof"].iloc[0]))
     except FileNotFoundError as exc:
         raise ConsensusError(
             f"No external_projections snapshot for season={season}"
             f"{f' asof={asof.isoformat()}' if asof else ''}; run the ingest first."
         ) from exc
 
+    # Guard emptiness before reading asof off the frame — an empty latest snapshot would
+    # otherwise IndexError on .iloc[0] and bypass this curated error.
     if external.empty:
+        which = f"asof={asof.isoformat()}" if asof is not None else "the latest snapshot"
         raise ConsensusError(
-            f"external_projections snapshot for season={season} asof={snapshot_asof.isoformat()} "
-            f"is empty; refusing to write an empty consensus snapshot."
+            f"external_projections snapshot for season={season} ({which}) is empty; "
+            f"refusing to write an empty consensus snapshot."
         )
+
+    # The consensus snapshot's asof mirrors the raw snapshot it was derived from.
+    snapshot_asof = asof if asof is not None else date.fromisoformat(str(external["asof"].iloc[0]))
 
     frame = build_consensus(external, ruleset=Ruleset())
     frame = ConsensusProjectionSchema.validate(frame)

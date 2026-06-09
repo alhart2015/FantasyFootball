@@ -102,3 +102,14 @@ def test_empty_raw_snapshot_raises_consensus_error(tmp_path: Path) -> None:
     )
     with pytest.raises(ConsensusError):
         refresh_consensus(tmp_path, season=2026, asof=date(2026, 6, 9))
+
+
+def test_empty_latest_snapshot_raises_consensus_error_not_indexerror(tmp_path: Path) -> None:
+    # asof=None resolves the latest snapshot then reads asof off the frame; an empty frame must
+    # raise the curated ConsensusError, not IndexError on .iloc[0].
+    empty = _raw_external().iloc[0:0]
+    write_partition(
+        tmp_path / "raw", "external_projections", empty, season=2026, asof=date(2026, 6, 9)
+    )
+    with pytest.raises(ConsensusError):
+        refresh_consensus(tmp_path, season=2026)  # latest path, no asof
