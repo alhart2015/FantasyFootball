@@ -400,6 +400,21 @@ def test_cheat_sheet_adp_delta_value_and_reach() -> None:
     assert by_gsis.loc["00-1000001", "adp_delta"] == -1
 
 
+def test_cheat_sheet_adp_delta_multiplayer_permutation() -> None:
+    """3 single-position players, ADP order != VORP order, |delta| > 1 — pins the
+    index-aligned (ADP-rank - VORP-rank) math against a positional-subtraction regression."""
+    vorp = _make_vorp_table({Position.QB: 3})
+    cfg = _make_config(n_teams=2, roster_slots={RosterSlot.QB: 1})
+    # VORP order: 00-1000000 (vorp 2) > 00-1000001 (1) > 00-1000002 (0) -> vorp_rank 1/2/3.
+    # ADP:        00-1000001 (10) < 00-1000002 (20) < 00-1000000 (30)   -> adp_rank  3/1/2.
+    adp = {"00-1000000": 30.0, "00-1000001": 10.0, "00-1000002": 20.0}
+    sheet = generate_snake_cheat_sheet(_attach_consensus_adp(vorp, adp), cfg)
+    by_gsis = sheet.set_index("gsis_id")
+    assert by_gsis.loc["00-1000000", "adp_delta"] == 2  # adp_rank 3 - vorp_rank 1
+    assert by_gsis.loc["00-1000001", "adp_delta"] == -1  # adp_rank 1 - vorp_rank 2
+    assert by_gsis.loc["00-1000002", "adp_delta"] == -1  # adp_rank 2 - vorp_rank 3
+
+
 def test_cheat_sheet_null_adp_row_gets_null_delta() -> None:
     """A player missing consensus_adp gets null adp_delta but keeps its (passed-through)
     null consensus_adp; other players' deltas are unaffected (population isolation)."""
