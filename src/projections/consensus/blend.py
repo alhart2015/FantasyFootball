@@ -48,9 +48,9 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
 
     records: list[dict[str, object]] = []
     for gsis_id, grp in external.groupby("gsis_id", sort=False):
-        # ESPN encodes "undrafted / no draft data" as ADP 0; treat any non-positive ADP as
-        # missing so it neither corrupts the mean nor violates ConsensusProjectionSchema's
-        # consensus_adp > 0 constraint (which would abort the whole refresh on validate).
+        # Defensive: a published consensus_adp must be > 0 (ConsensusProjectionSchema), so no
+        # source's ADP may be non-positive. The known ESPN "undrafted = 0" sentinel is normalized
+        # to null at the ingest parser; this guard keeps the contract robust for any other source.
         adp_vals = grp["adp"].dropna()
         adp_vals = adp_vals[adp_vals > 0]
         n_adp_sources = int(adp_vals.shape[0])

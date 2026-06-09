@@ -125,11 +125,17 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
             continue
         ownership = pl.get("ownership") or {}
         ppr_rank = ((pl.get("draftRanksByRankType") or {}).get("PPR") or {}).get("rank")
+        # ESPN encodes "undrafted / no draft data" as ADP 0; normalize non-positive to None so the
+        # raw table stores honest null (adp is nullable) rather than an in-band sentinel that every
+        # downstream consumer would have to re-discover.
+        espn_adp = ownership.get("averageDraftPosition")
+        if espn_adp is not None and espn_adp <= 0:
+            espn_adp = None
         row: dict[str, object] = {
             "espn_id": str(espn_id),
             "full_name": full_name,
             "position": position,
-            "espn_adp": ownership.get("averageDraftPosition"),
+            "espn_adp": espn_adp,
             "espn_pos_rank": ppr_rank,
         }
         row.update(_espn_stats_to_statline(proj_stats))

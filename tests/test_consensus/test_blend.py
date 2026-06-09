@@ -3,19 +3,9 @@ from __future__ import annotations
 import pandas as pd
 
 from projections.consensus.blend import build_consensus
-from projections.schemas import ConsensusProjectionSchema, Ruleset
+from projections.schemas import STAT_FIELDS, ConsensusProjectionSchema, Ruleset
 
-_STAT_COLS = [
-    "passing_yards",
-    "passing_tds",
-    "interceptions",
-    "rushing_yards",
-    "rushing_tds",
-    "receptions",
-    "receiving_yards",
-    "receiving_tds",
-    "fumbles_lost",
-]
+_STAT_COLS = list(STAT_FIELDS)
 
 
 def _row(

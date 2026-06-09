@@ -7,20 +7,10 @@ import pandas as pd
 import pytest
 
 from projections.consensus.refresh import ConsensusError, refresh_consensus
-from projections.schemas import ConsensusProjectionSchema
+from projections.schemas import STAT_FIELDS, ConsensusProjectionSchema
 from projections.store import read_partition, write_partition
 
-_STAT_COLS = [
-    "passing_yards",
-    "passing_tds",
-    "interceptions",
-    "rushing_yards",
-    "rushing_tds",
-    "receptions",
-    "receiving_yards",
-    "receiving_tds",
-    "fumbles_lost",
-]
+_STAT_COLS = list(STAT_FIELDS)
 
 
 def _raw_external() -> pd.DataFrame:

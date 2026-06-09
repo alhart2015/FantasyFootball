@@ -40,6 +40,33 @@ def test_parse_espn_players_extracts_statline_adp_rank() -> None:
     assert r["receptions"] == 105 and r["receiving_yards"] == 1335.0 and r["receiving_tds"] == 8
 
 
+def test_parse_espn_players_normalizes_undrafted_adp_zero_to_null() -> None:
+    # ESPN encodes "undrafted / no draft data" as ADP 0; the parser must store null, not 0.0.
+    payload: dict[str, Any] = {
+        "players": [
+            {
+                "player": {
+                    "id": 999,
+                    "fullName": "Deep Roster Guy",
+                    "defaultPositionId": 2,
+                    "ownership": {"averageDraftPosition": 0.0},
+                    "stats": [
+                        {
+                            "seasonId": 2026,
+                            "statSourceId": 1,
+                            "statSplitTypeId": 0,
+                            "stats": {"24": 300.0},
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+    df = ext.parse_espn_players(payload, season=2026)
+    assert len(df) == 1
+    assert pd.isna(df.iloc[0]["espn_adp"])  # 0.0 -> None, not stored as a sentinel
+
+
 def test_parse_sleeper_projections_keeps_name_position_adp_filters_to_skill() -> None:
     payload: list[dict[str, Any]] = [
         {
