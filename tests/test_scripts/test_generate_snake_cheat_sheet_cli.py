@@ -206,3 +206,56 @@ def test_cli_tiers_per_position_flag_propagates(tmp_path: Path) -> None:
         # tier column comes back as float64 from CSV when there are NaNs;
         # but in_pool rows have integer tiers, so max() is well-defined.
         assert sub["tier"].max() <= 3, f"position {pos_value} has tier > 3"
+
+
+def test_cheat_sheet_cli_carries_adp_delta(tmp_path: Path) -> None:
+    """A consensus-fed VORP parquet (with consensus_adp) -> cheat sheet with
+    consensus_adp + adp_delta columns populated."""
+    from projections.schemas import _PYARROW_STR, SnakeCheatSheetSchema
+
+    vorp = pd.DataFrame(
+        {
+            "gsis_id": pd.array(
+                ["00-1000000", "00-1000001", "00-2000000", "00-2000001"], dtype=_PYARROW_STR
+            ),
+            "position": pd.array(["QB", "QB", "RB", "RB"], dtype=_PYARROW_STR),
+            "season_mean_fpts": pd.array([320.0, 300.0, 260.0, 250.0], dtype="float64"),
+            "vorp": pd.array([80.0, 60.0, 30.0, 20.0], dtype="float64"),
+            "replacement_fpts": pd.array([240.0, 240.0, 230.0, 230.0], dtype="float64"),
+            "consensus_adp": pd.array([3.0, 8.0, 12.0, 20.0], dtype=pd.Float64Dtype()),
+        }
+    )
+    vorp_path = tmp_path / "vorp.parquet"
+    vorp.to_parquet(vorp_path, index=False)
+
+    cfg_path = tmp_path / "league.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "name": "tiny",
+                "n_teams": 2,
+                "budget": 100,
+                "min_bid": 1,
+                "roster_slots": {"QB": 1, "RB": 1},
+                "ruleset": "espn_ppr",
+            }
+        )
+    )
+    out_path = tmp_path / "sheet.parquet"
+    proc = _run_cli(
+        [
+            "--season",
+            "2026",
+            "--league-config",
+            str(cfg_path),
+            "--vorp-input",
+            str(vorp_path),
+            "--out",
+            str(out_path),
+        ]
+    )
+    assert proc.returncode == 0, proc.stderr
+    sheet = pd.read_parquet(out_path)
+    SnakeCheatSheetSchema.validate(sheet)
+    assert sheet["consensus_adp"].notna().any()
+    assert sheet["adp_delta"].notna().any()
