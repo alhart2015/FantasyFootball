@@ -201,16 +201,16 @@ def _placeholder_name_key(full_name: str, position: str) -> str:
     (so 'José'/'Jose' agree across sources), lowercased, punctuation/whitespace removed, common
     generational suffixes (Jr/Sr/II…) dropped. ESPN and Sleeper spell the same rookie nearly
     identically, so this lets both sources' rows reconcile."""
-    folded = unicodedata.normalize("NFKD", full_name).encode("ascii", "ignore").decode("ascii")
-    tokens = [
-        t for t in re.sub(r"[^a-z0-9 ]", " ", folded.lower()).split() if t not in _NAME_SUFFIXES
-    ]
-    # Guard a degenerate name (all suffix/punctuation, or non-ASCII that folded to nothing): keep
-    # the raw lowercased name as one token so two such distinct players don't both collapse to the
-    # position-only key '|<pos>' and collide into one placeholder gsis.
-    if not tokens:
-        tokens = [full_name.strip().lower()]
-    return "".join(tokens) + "|" + position.lower()
+    folded = (
+        unicodedata.normalize("NFKD", full_name).encode("ascii", "ignore").decode("ascii").lower()
+    )
+    tokens = [t for t in re.split(r"[^a-z0-9]+", folded) if t and t not in _NAME_SUFFIXES]
+    if tokens:
+        return "".join(tokens) + "|" + position.lower()
+    # Degenerate name (all suffix/punctuation, or non-ASCII that folded to nothing): key on the raw
+    # name instead, so two such distinct players don't both collapse to the position-only key
+    # '|<pos>' and collide into one placeholder gsis.
+    return full_name.strip().lower() + "|" + position.lower()
 
 
 def _make_placeholder_gsis(full_name: str, position: str) -> str:
