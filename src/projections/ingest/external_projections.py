@@ -18,6 +18,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
+import re
 import urllib.error
 import urllib.request
 from datetime import UTC, date, datetime
@@ -26,6 +28,7 @@ from typing import Any
 
 import pandas as pd
 
+from projections.ingest.manifest import record as record_manifest
 from projections.schemas import (
     _PYARROW_STR,
     ExternalProjectionSchema,
@@ -33,6 +36,8 @@ from projections.schemas import (
     ProjectionSource,
 )
 from projections.store import read_partition, write_partition
+
+_log = logging.getLogger(__name__)
 
 
 class ExternalProjectionError(RuntimeError):
@@ -90,11 +95,14 @@ def round_count(value: float) -> int:
 
 
 def _espn_stats_to_statline(stats: dict[str, float]) -> dict[str, float]:
+    # Store ESPN's RAW fractional projection (e.g. 8.4 receiving TDs), not a rounded count.
+    # Rounding here is irreversible and biases season totals; the scoring layer is the only
+    # place that decides how a projected stat becomes points. (round_count/COUNT_FIELDS are
+    # retained for the benchmark spike, which rounds for a different, frozen purpose.)
     out: dict[str, float] = {f: 0.0 for f in STAT_FIELDS}
     for sid, field in ESPN_STAT_IDS.items():
         if sid in stats:
-            val = float(stats[sid])
-            out[field] = float(round_count(val)) if field in COUNT_FIELDS else val
+            out[field] = float(stats[sid])
     return out
 
 
@@ -102,11 +110,14 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
     """Tidy one ESPN kona_player_info payload -> one row per QB/RB/WR/TE with a preseason
     projected stat line + espn_id + ADP + PPR draft rank."""
     rows: list[dict[str, object]] = []
+    n_skill = 0  # skill-position players seen (the population we expect projections for)
+    n_no_projection = 0  # skill players dropped for a missing/empty projection block
     for entry in payload.get("players", []):
         pl = entry.get("player", {})
         position = _ESPN_POSITIONS.get(pl.get("defaultPositionId"))
         if position is None:
             continue
+        n_skill += 1
         espn_id = pl.get("id")
         if espn_id is None:
             continue
@@ -120,6 +131,7 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
             if s.get("statSourceId") == 1:
                 proj_stats = s.get("stats", {})
         if not proj_stats:
+            n_no_projection += 1
             continue
         ownership = pl.get("ownership") or {}
         ppr_rank = ((pl.get("draftRanksByRankType") or {}).get("PPR") or {}).get("rank")
@@ -132,6 +144,18 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
         }
         row.update(_espn_stats_to_statline(proj_stats))
         rows.append(row)
+    # Surface silent drops: a degraded payload (projections for stars only) writes a
+    # plausible-but-truncated snapshot otherwise. Loud when coverage looks suspicious.
+    if n_skill:
+        level = logging.WARNING if len(rows) < n_skill // 2 else logging.INFO
+        _log.log(
+            level,
+            "ESPN parse season=%s: kept %d of %d skill players (%d had no usable projection).",
+            season,
+            len(rows),
+            n_skill,
+            n_no_projection,
+        )
     return pd.DataFrame(rows)
 
 
@@ -168,30 +192,55 @@ def parse_sleeper_projections(payload: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _make_placeholder_gsis(source: str, source_player_id: str) -> str:
-    """Deterministic synthetic gsis_id for a player not in id_map (e.g., a pre-camp rookie).
-    Matches GSIS_ID_PATTERN with a reserved 99- prefix. Source-scoped so an ESPN and a
-    Sleeper id never collide into the same placeholder."""
-    digest = hashlib.sha1(f"{source}:{source_player_id}".encode()).hexdigest()
+_NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "v"})
+
+
+def _placeholder_name_key(full_name: str, position: str) -> str:
+    """Normalize (full_name, position) into a stable cross-source key: lowercased, punctuation
+    and whitespace removed, common generational suffixes (Jr/Sr/II…) dropped. ESPN and Sleeper
+    spell the same rookie nearly identically, so this lets both sources' rows reconcile."""
+    tokens = [
+        t for t in re.sub(r"[^a-z0-9 ]", " ", full_name.lower()).split() if t not in _NAME_SUFFIXES
+    ]
+    return "".join(tokens) + "|" + position.lower()
+
+
+def _make_placeholder_gsis(full_name: str, position: str) -> str:
+    """Deterministic synthetic gsis_id for a player not in id_map (e.g. a pre-camp rookie).
+    Matches GSIS_ID_PATTERN with a reserved 99- prefix. Keyed on the normalized (full_name,
+    position) — NOT the per-source player id — so the SAME rookie gets the SAME placeholder
+    from ESPN and Sleeper and a gsis_id join still unifies them (a source-scoped key would
+    fork every rookie into two phantom players). Residual limits: two distinct players sharing
+    a normalized name+position collide (rare), and the 99-XXXXXXX space is 10^7, so a within-
+    pull hash collision is possible at hundreds of rookies — refresh logs any that occur."""
+    digest = hashlib.sha1(_placeholder_name_key(full_name, position).encode()).hexdigest()
     return f"99-{int(digest, 16) % 10_000_000:07d}"
 
 
-def _attach_gsis_id(
-    df: pd.DataFrame, id_map: pd.DataFrame, *, source: str, id_col: str
-) -> pd.DataFrame:
+def _attach_gsis_id(df: pd.DataFrame, id_map: pd.DataFrame, *, id_col: str) -> pd.DataFrame:
     """Left-join df to id_map on `id_col` (espn_id/sleeper_id) to attach a real gsis_id;
-    unmatched rows get a deterministic placeholder. Adds `gsis_id` + `is_placeholder_gsis`.
-    Dedupes the crosswalk on `id_col` so a duplicate id_map mapping can't multiply rows."""
+    unmatched rows get a deterministic placeholder keyed on (full_name, position). Adds
+    `gsis_id` + `is_placeholder_gsis`. Dedupes the crosswalk on `id_col` so a duplicate
+    id_map mapping can't multiply rows."""
     crosswalk = id_map[["gsis_id", id_col]].dropna(subset=[id_col]).drop_duplicates(subset=[id_col])
+    # Align the join-key dtype on both sides (parsed ids are object str, id_map ids are pyarrow
+    # string) so the merge can't silently miss on a cross-extension-dtype compare and send every
+    # veteran down the placeholder path.
+    df = df.copy()
+    df[id_col] = df[id_col].astype(_PYARROW_STR)
+    crosswalk[id_col] = crosswalk[id_col].astype(_PYARROW_STR)
     merged = df.merge(crosswalk, on=id_col, how="left")
     mask = merged["gsis_id"].isna()
     merged["is_placeholder_gsis"] = mask
     # Cast to object so .loc can fill NA slots with a plain str (pyarrow StringDtype rejects
     # mixed assignment); _finish_canonical recasts the column back to _PYARROW_STR downstream.
     merged["gsis_id"] = merged["gsis_id"].astype("object")
-    merged.loc[mask, "gsis_id"] = merged.loc[mask, id_col].map(
-        lambda pid: _make_placeholder_gsis(source, pid)
-    )
+    merged.loc[mask, "gsis_id"] = [
+        _make_placeholder_gsis(name, pos)
+        for name, pos in zip(
+            merged.loc[mask, "full_name"], merged.loc[mask, "position"], strict=True
+        )
+    ]
     return merged
 
 
@@ -223,7 +272,7 @@ def _to_canonical(
     gsis_id (real or placeholder), rename source-specific columns onto canonical names, and null
     out whatever the source doesn't carry (Sleeper has no stat line or draft rank). Numeric
     columns pass through untouched — ExternalProjectionSchema(coerce=True) casts them to Float64."""
-    keyed = _attach_gsis_id(df, id_map, source=source.value, id_col=id_col)
+    keyed = _attach_gsis_id(df, id_map, id_col=id_col)
     null_col = pd.array([pd.NA] * len(keyed), dtype="Float64")
     out = pd.DataFrame(
         {
@@ -258,9 +307,35 @@ def fetch_sleeper_season(season: int) -> list[dict[str, Any]]:
         return json.load(resp)  # type: ignore[no-any-return]
 
 
+def _warn_on_placeholder_collisions(frame: pd.DataFrame) -> None:
+    """Log if two DISTINCT rookies hashed to the same placeholder gsis_id (bounded 10^7 space).
+    Distinct = different normalized name+position; the same rookie appearing under ESPN and
+    Sleeper shares one key by design and is NOT a collision."""
+    placeholders = frame.loc[frame["is_placeholder_gsis"], ["gsis_id", "full_name", "position"]]
+    if placeholders.empty:
+        return
+    keys = [
+        _placeholder_name_key(name, pos)
+        for name, pos in zip(placeholders["full_name"], placeholders["position"], strict=True)
+    ]
+    distinct_keys_per_gsis = (
+        pd.Series(keys, index=placeholders["gsis_id"].to_numpy()).groupby(level=0).nunique()
+    )
+    colliding = distinct_keys_per_gsis[distinct_keys_per_gsis > 1]
+    if not colliding.empty:
+        _log.warning(
+            "external_projections: %d placeholder gsis_id(s) shared by distinct rookies "
+            "(hash collision in the bounded 99-XXXXXXX space): %s",
+            len(colliding),
+            colliding.index.tolist(),
+        )
+
+
 def refresh_external_projections(data_root: Path, *, season: int, asof: date | None = None) -> Path:
     """Fetch ESPN + Sleeper preseason projections, crosswalk to gsis_id (placeholder for
-    rookies), validate, and write one dated snapshot. `asof` defaults to today (UTC)."""
+    rookies), validate, and write one dated snapshot. `asof` defaults to today (UTC). A pull is
+    refused only if BOTH sources are empty; a single empty source is logged and the other is
+    written (losing a good single-source snapshot would be worse than a partial one)."""
     asof = asof or datetime.now(UTC).date()
     try:
         espn_payload = fetch_espn(season)
@@ -276,15 +351,20 @@ def refresh_external_projections(data_root: Path, *, season: int, asof: date | N
 
     espn = parse_espn_players(espn_payload, season)
     sleeper = parse_sleeper_projections(sleeper_payload)
-    if espn.empty or sleeper.empty:
+    if espn.empty and sleeper.empty:
         raise ExternalProjectionError(
-            f"Empty pull for {season} (espn={len(espn)} rows, sleeper={len(sleeper)} rows) — "
+            f"Empty pull for {season} (both ESPN and Sleeper returned 0 rows) — "
             f"refusing to write an empty asof snapshot."
         )
+    if espn.empty:
+        _log.warning("ESPN returned 0 rows for %s; writing a Sleeper-only snapshot.", season)
+    if sleeper.empty:
+        _log.warning("Sleeper returned 0 rows for %s; writing an ESPN-only snapshot.", season)
 
     id_map = read_partition(data_root / "raw", "id_map")
-    frame = pd.concat(
-        [
+    frames: list[pd.DataFrame] = []
+    if not espn.empty:
+        frames.append(
             _to_canonical(
                 espn,
                 source=ProjectionSource.ESPN,
@@ -295,7 +375,10 @@ def refresh_external_projections(data_root: Path, *, season: int, asof: date | N
                 season=season,
                 asof=asof,
                 id_map=id_map,
-            ),
+            )
+        )
+    if not sleeper.empty:
+        frames.append(
             _to_canonical(
                 sleeper,
                 source=ProjectionSource.SLEEPER,
@@ -306,14 +389,26 @@ def refresh_external_projections(data_root: Path, *, season: int, asof: date | N
                 season=season,
                 asof=asof,
                 id_map=id_map,
-            ),
-        ],
-        ignore_index=True,
-    )
+            )
+        )
+    frame = pd.concat(frames, ignore_index=True)
     frame = ExternalProjectionSchema.validate(frame)
-    return write_partition(
+    _warn_on_placeholder_collisions(frame)
+    _log.info(
+        "external_projections season=%s asof=%s: wrote %d rows (espn=%d, sleeper=%d, "
+        "placeholders=%d).",
+        season,
+        asof.isoformat(),
+        len(frame),
+        len(espn),
+        len(sleeper),
+        int(frame["is_placeholder_gsis"].sum()),
+    )
+    out = write_partition(
         data_root / "raw", "external_projections", frame, season=season, asof=asof
     )
+    record_manifest(data_root, table="external_projections", season=season, df=frame)
+    return out
 
 
 def main() -> None:

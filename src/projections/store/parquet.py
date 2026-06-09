@@ -67,17 +67,24 @@ def read_partition(
     asof: date | None = None,
 ) -> pd.DataFrame:
     """Read parquet partition(s). `season=None` reads the unpartitioned table file. With a
-    season set: a specific `asof` (or `week`) reads that one partition; otherwise all
-    `part.parquet` under the season (across week/asof subdirs) are concatenated.
+    season set: a specific `asof` (or `week`) reads that one partition; otherwise all weekly
+    `part.parquet` under the season are concatenated.
 
-    For asof-snapshotted tables, a season-only read concatenates EVERY dated snapshot under
-    that season (use the in-row `asof` column to distinguish them, or `read_latest_partition`
-    for just the newest)."""
+    A season-only read of an ASOF-snapshotted table raises — concatenating every dated snapshot
+    would silently duplicate each player once per snapshot. Pass `asof=` for one snapshot, or
+    use `read_latest_partition` for the newest."""
     if season is None:
         return pd.read_parquet(_partition_file(root, table, None, None, None))
     if asof is not None or week is not None:
         return pd.read_parquet(_partition_file(root, table, season, week, asof))
     season_dir = _partition_dir(root, table, season, None, None)
+    asof_dirs = [d for d in season_dir.glob("asof=*") if d.is_dir() and _ASOF_DIR_RE.match(d.name)]
+    if asof_dirs:
+        raise ValueError(
+            f"{table} season={season} is asof-snapshotted ({len(asof_dirs)} snapshot(s)); a "
+            f"season-only read would concatenate them all and duplicate every row. Pass asof=… "
+            f"for one snapshot, or use read_latest_partition(root, table, season=season)."
+        )
     files = sorted(season_dir.rglob("part.parquet"))
     if not files:
         raise FileNotFoundError(f"No parquet partitions under {season_dir}")

@@ -27,6 +27,7 @@ import pandas as pd
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import (
     _PYARROW_STR,
+    DATETIME_UNIT,
     DepthChartsSchema,
     Position,
     SchedulesSchema,
@@ -96,10 +97,10 @@ def _derive_weekly_snapshots_from_new_format(
         raise ValueError(f"new-format payload missing required columns: {sorted(missing_cols)}")
 
     raw = raw.copy()
-    # Coerce to microsecond resolution to match SchedulesSchema's `kickoff` (unit="us",
-    # from polars/nflreadpy `.to_pandas()`). pandas 2.3 `merge_asof` rejects mixed
-    # datetime64[us] / [ns] keys, so both sides of the per-team merge must agree.
-    raw["dt"] = pd.to_datetime(raw["dt"], utc=True).dt.as_unit("us")
+    # Coerce to the canonical resolution (schemas.DATETIME_UNIT) so this merges with
+    # SchedulesSchema's `kickoff`. pd.to_datetime defaults to ns; pandas 2.3 merge_asof rejects
+    # mixed datetime64[us]/[ns] keys, so both sides of the per-team merge must agree on the unit.
+    raw["dt"] = pd.to_datetime(raw["dt"], utc=True).dt.as_unit(DATETIME_UNIT)
     # Normalize team codes BEFORE the per-team groupby/merge — raw nflverse
     # uses `JAX` and `LA` while validated schedules use `JAC` and `LAR`
     # (`normalize_team_code` semantics). Without this, the team-match drops

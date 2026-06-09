@@ -27,11 +27,17 @@ logger = logging.getLogger(__name__)
 
 def _coerce_external_id(s: pd.Series, *, numeric: bool) -> pd.Series:
     """Persist an external id column as a clean nullable pyarrow string. NUMERIC id columns
-    (espn_id/sleeper_id) round-trip through Int64 to drop the spurious '.0' that upstream
-    float64 dtype produces; string id columns (pfr_id, e.g. 'ChASEJa00', or any future
-    numeric-LOOKING string id with leading zeros) pass through unchanged."""
+    (espn_id/sleeper_id) round-trip the numeric values through Int64 to drop the spurious '.0'
+    that upstream float64 dtype produces; any genuinely non-numeric id (e.g. a team-defense or
+    future alphanumeric source id) is PRESERVED verbatim rather than silently nulled, so its
+    crosswalk mapping survives. String id columns (pfr_id, e.g. 'ChASEJa00', or leading-zero
+    ids) pass through unchanged."""
     if numeric:
-        s = pd.to_numeric(s, errors="coerce").astype("Int64")
+        as_num = pd.to_numeric(s, errors="coerce")
+        # numeric values -> clean int-string ('4374302', not '4374302.0')
+        cleaned = as_num.astype("Int64").astype(_PYARROW_STR)
+        # Keep the original string wherever numeric coercion failed (a non-numeric id).
+        s = cleaned.where(as_num.notna(), other=s.astype(_PYARROW_STR))
     return s.where(s.notna(), other=pd.NA).astype(_PYARROW_STR)
 
 

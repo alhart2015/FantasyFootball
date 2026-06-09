@@ -185,3 +185,17 @@ def test_coerce_external_id_preserves_leading_zero_string_when_not_numeric() -> 
 
     out = _coerce_external_id(pd.Series(["0012345", None]), numeric=False)
     assert out.tolist()[0] == "0012345"
+
+
+def test_coerce_external_id_preserves_non_numeric_in_numeric_column() -> None:
+    import pandas as pd
+
+    from projections.ingest.id_map import _coerce_external_id
+
+    # A numeric id column that also carries a non-numeric id (e.g. a team-defense or future
+    # alphanumeric source id) must keep it verbatim, not coerce it to NA and lose the mapping.
+    out = _coerce_external_id(pd.Series(["4046", "DET", None], dtype=object), numeric=True)
+    assert out.tolist()[0] == "4046"  # numeric stays clean
+    assert out.tolist()[1] == "DET"  # non-numeric preserved, not nulled
+    assert pd.isna(out.tolist()[2])
+    assert str(out.dtype) == "string"

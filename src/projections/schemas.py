@@ -201,6 +201,12 @@ PfrId = NewType("PfrId", str)
 GSIS_ID_PATTERN: Final[str] = r"\d{2}-\d{7}"
 _GSIS_ID_RE = re.compile(rf"^{GSIS_ID_PATTERN}$")
 
+# Canonical resolution for tz-aware datetime columns. polars/nflreadpy `.to_pandas()` and
+# pyarrow parquet yield microseconds; pandas 2.x `merge_asof` and joins reject mixed
+# datetime64[us]/[ns] keys, so every datetime column we validate or join is pinned to this
+# unit (reference it; don't hardcode "us" at call sites). See ingest.depth_charts.
+DATETIME_UNIT: Final[str] = "us"
+
 
 def validate_gsis_id(raw: str) -> GsisId:
     """Validate that `raw` matches the canonical gsis_id format and return it
@@ -315,7 +321,7 @@ class SchedulesSchema(pa.DataFrameModel):
     home_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
     away_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
     kickoff: Series[pd.DatetimeTZDtype] = pa.Field(
-        dtype_kwargs={"tz": "UTC", "unit": "us"}, nullable=True
+        dtype_kwargs={"tz": "UTC", "unit": DATETIME_UNIT}, nullable=True
     )
     spread_line: Series[float] = pa.Field(nullable=True)
     total_line: Series[float] = pa.Field(ge=0, le=100, nullable=True)
@@ -839,8 +845,10 @@ class ProjectionWeeklySchema(pa.DataFrameModel):
     p90: Series[float]
     model_id: Series[str]
     # pandas >=2.0 stores timezone-aware timestamps as datetime64[us, UTC];
-    # use unit='us' to match the actual dtype produced by pd.Timestamp(..., tz='UTC').
-    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(dtype_kwargs={"tz": "UTC", "unit": "us"})
+    # DATETIME_UNIT matches the actual dtype produced by pd.Timestamp(..., tz='UTC').
+    generated_at: Series[pd.DatetimeTZDtype] = pa.Field(
+        dtype_kwargs={"tz": "UTC", "unit": DATETIME_UNIT}
+    )
 
     class Config:
         strict = "filter"

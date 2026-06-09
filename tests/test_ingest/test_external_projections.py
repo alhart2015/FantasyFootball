@@ -64,32 +64,86 @@ def test_parse_sleeper_projections_keeps_name_position_adp_filters_to_skill() ->
     assert r["full_name"] == "A B" and r["position"] == "WR" and r["sleeper_adp"] == 14.5
 
 
-def test_make_placeholder_gsis_is_deterministic_and_pattern_valid() -> None:
+def test_make_placeholder_gsis_deterministic_pattern_valid_and_cross_source_stable() -> None:
     import re
 
-    a = ext._make_placeholder_gsis("ESPN", "5555")
-    b = ext._make_placeholder_gsis("ESPN", "5555")
-    assert a == b  # deterministic
+    a = ext._make_placeholder_gsis("Jeremiyah Love", "RB")
+    assert a == ext._make_placeholder_gsis("Jeremiyah Love", "RB")  # deterministic
     assert a.startswith("99-") and re.fullmatch(r"\d{2}-\d{7}", a)
-    assert ext._make_placeholder_gsis("SLEEPER", "5555") != a  # source-scoped
+    # suffix-insensitive: ESPN "Brian Thomas Jr." and Sleeper "Brian Thomas" reconcile
+    assert ext._make_placeholder_gsis("Brian Thomas Jr.", "WR") == ext._make_placeholder_gsis(
+        "Brian Thomas", "WR"
+    )
+    assert ext._make_placeholder_gsis("Some Other", "RB") != a  # distinct player -> distinct id
 
 
 def test_attach_gsis_id_real_for_matched_placeholder_for_rookie() -> None:
-    df = pd.DataFrame({"espn_id": ["4374302", "9999999"], "x": [1, 2]})
+    df = pd.DataFrame(
+        {
+            "espn_id": ["4374302", "9999999"],
+            "full_name": ["Ja'Marr Chase", "Jeremiyah Love"],
+            "position": ["WR", "RB"],
+        }
+    )
     id_map = pd.DataFrame(
         {
             "gsis_id": pd.array(["00-0036900"], dtype="string[pyarrow]"),
             "espn_id": pd.array(["4374302"], dtype="string[pyarrow]"),
         }
     )
-    out = ext._attach_gsis_id(df, id_map, source="ESPN", id_col="espn_id")
+    out = ext._attach_gsis_id(df, id_map, id_col="espn_id")
     veteran = out[out["espn_id"] == "4374302"].iloc[0]
     rookie = out[out["espn_id"] == "9999999"].iloc[0]
     assert veteran["gsis_id"] == "00-0036900"
     assert not bool(veteran["is_placeholder_gsis"])
     assert bool(rookie["is_placeholder_gsis"])
-    assert rookie["gsis_id"] == ext._make_placeholder_gsis("ESPN", "9999999")
+    assert rookie["gsis_id"] == ext._make_placeholder_gsis("Jeremiyah Love", "RB")
     assert len(out) == 2  # no row multiplication
+
+
+def test_rookie_placeholder_reconciles_across_sources() -> None:
+    # The SAME rookie, with different per-source ids, must get the SAME placeholder gsis so a
+    # gsis_id join unifies ESPN's stat line with Sleeper's ADP instead of forking the player.
+    empty_map = pd.DataFrame(
+        {
+            "gsis_id": pd.array([], dtype="string[pyarrow]"),
+            "espn_id": pd.array([], dtype="string[pyarrow]"),
+            "sleeper_id": pd.array([], dtype="string[pyarrow]"),
+        }
+    )
+    espn = pd.DataFrame({"espn_id": ["111"], "full_name": ["Jeremiyah Love"], "position": ["RB"]})
+    sleeper = pd.DataFrame(
+        {"sleeper_id": ["222"], "full_name": ["Jeremiyah Love"], "position": ["RB"]}
+    )
+    e = ext._attach_gsis_id(espn, empty_map, id_col="espn_id")
+    s = ext._attach_gsis_id(sleeper, empty_map, id_col="sleeper_id")
+    assert bool(e.iloc[0]["is_placeholder_gsis"]) and bool(s.iloc[0]["is_placeholder_gsis"])
+    assert e.iloc[0]["gsis_id"] == s.iloc[0]["gsis_id"]
+
+
+def test_espn_statline_preserves_fractional_counts() -> None:
+    # ESPN projects fractional counts (8.4 TDs); ingest stores them raw, never rounded.
+    payload = {
+        "players": [
+            {
+                "player": {
+                    "id": 5,
+                    "fullName": "Frac Guy",
+                    "defaultPositionId": 4,
+                    "stats": [
+                        {
+                            "seasonId": 2026,
+                            "statSourceId": 1,
+                            "statSplitTypeId": 0,
+                            "stats": {"43": 8.4, "53": 6.6},
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+    r = ext.parse_espn_players(payload, season=2026).iloc[0]
+    assert r["receiving_tds"] == 8.4 and r["receptions"] == 6.6
 
 
 def _tiny_id_map() -> pd.DataFrame:
@@ -278,6 +332,40 @@ def test_refresh_refuses_empty_pull(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     ).to_parquet(tmp_path / "raw" / "id_map.parquet", index=False)
     with pytest.raises(ext.ExternalProjectionError):
         ext.refresh_external_projections(tmp_path, season=2026)
+
+
+def test_refresh_writes_single_source_when_other_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import date
+
+    from projections.store import read_latest_partition
+
+    # ESPN empty, Sleeper good -> write a Sleeper-only snapshot rather than discard the pull.
+    monkeypatch.setattr(ext, "fetch_espn", lambda season: {"players": []})
+    monkeypatch.setattr(
+        ext,
+        "fetch_sleeper_season",
+        lambda season: [
+            {
+                "player_id": "6794",
+                "stats": {"adp_ppr": 14.5},
+                "player": {"first_name": "A", "last_name": "B", "position": "WR"},
+            }
+        ],
+    )
+    (tmp_path / "raw").mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036900"], dtype="string[pyarrow]"),
+            "espn_id": pd.array(["4374302"], dtype="string[pyarrow]"),
+            "sleeper_id": pd.array(["6794"], dtype="string[pyarrow]"),
+        }
+    ).to_parquet(tmp_path / "raw" / "id_map.parquet", index=False)
+
+    ext.refresh_external_projections(tmp_path, season=2026, asof=date(2026, 7, 15))
+    latest = read_latest_partition(tmp_path / "raw", "external_projections", season=2026)
+    assert set(latest["source"]) == {"SLEEPER"}
 
 
 def test_parse_espn_drops_player_with_null_full_name() -> None:
