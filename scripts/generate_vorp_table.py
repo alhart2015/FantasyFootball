@@ -53,8 +53,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data-root",
         type=Path,
-        default=Path("data"),
-        help="[--source consensus] Store root; reads <root>/processed/consensus_projections/.",
+        default=None,
+        help="[--source consensus] Store root (default: data); reads "
+        "<root>/processed/consensus_projections/.",
     )
     parser.add_argument(
         "--asof",
@@ -66,6 +67,27 @@ def _parse_args() -> argparse.Namespace:
         "--out", type=Path, required=True, help="Output path; .csv or .parquet (sniffed)."
     )
     return parser.parse_args()
+
+
+def _reject_irrelevant_flags(args: argparse.Namespace) -> str | None:
+    """Reject flags that don't apply to the chosen ``--source`` so a wrong-source flag can't be
+    silently ignored (e.g. ``--weekly-projections`` in consensus mode, which would otherwise be
+    discarded while the run reads the default ``--data-root`` — a silent wrong-data footgun).
+
+    Returns an error message, or None when the flags are consistent with ``--source``.
+    """
+    if args.source == "weekly":
+        irrelevant = [
+            name
+            for name, value in (("--asof", args.asof), ("--data-root", args.data_root))
+            if value is not None
+        ]
+        if irrelevant:
+            verb = "is" if len(irrelevant) == 1 else "are"
+            return f"{', '.join(irrelevant)} {verb} only valid with --source consensus"
+    elif args.weekly_projections is not None:
+        return "--weekly-projections is only valid with --source weekly"
+    return None
 
 
 def _log_per_position_summary(
@@ -118,6 +140,10 @@ def _warn_dropped_draftable(consensus: pd.DataFrame, league_config: LeagueConfig
 
 def main() -> int:
     args = _parse_args()
+    flag_error = _reject_irrelevant_flags(args)
+    if flag_error is not None:
+        print(f"ERROR: {flag_error}", file=sys.stderr)
+        return 1
     league_config = LeagueConfig.model_validate_json(args.league_config.read_text())
 
     consensus: pd.DataFrame | None = None
@@ -130,7 +156,7 @@ def main() -> int:
         weekly = ProjectionWeeklySchema.validate(weekly)
         season_proj = aggregate_to_season(weekly, ruleset=league_config.ruleset)
     else:
-        processed = args.data_root / "processed"
+        processed = (args.data_root or Path("data")) / "processed"
         if args.asof is not None:
             consensus = read_partition(
                 processed, "consensus_projections", season=args.season, asof=args.asof

@@ -400,3 +400,42 @@ def test_cli_errors_on_ruleset_mismatch(cli_inputs: dict[str, Path], tmp_path: P
     assert proc.returncode != 0
     combined = (proc.stderr + proc.stdout).lower()
     assert "ruleset" in combined or "no rows" in combined
+
+
+def test_cli_rejects_weekly_projections_in_consensus_mode(cli_inputs: dict[str, Path]) -> None:
+    """A weekly-only flag passed in consensus mode is rejected, not silently ignored
+    (otherwise the run would read the default data root instead of the intended path)."""
+    proc = _run_cli(
+        "--source",
+        "consensus",
+        "--season",
+        "2026",
+        "--league-config",
+        str(cli_inputs["config"]),
+        "--weekly-projections",
+        str(cli_inputs["weekly"]),
+        "--out",
+        str(cli_inputs["out_parquet"]),
+    )
+    assert proc.returncode != 0
+    assert "--weekly-projections is only valid with --source weekly" in proc.stderr
+
+
+def test_cli_rejects_asof_in_weekly_mode(cli_inputs: dict[str, Path]) -> None:
+    """A consensus-only flag passed in weekly mode is rejected, not silently ignored."""
+    proc = _run_cli(
+        "--source",
+        "weekly",
+        "--season",
+        "2026",
+        "--league-config",
+        str(cli_inputs["config"]),
+        "--weekly-projections",
+        str(cli_inputs["weekly"]),
+        "--asof",
+        "2026-06-09",
+        "--out",
+        str(cli_inputs["out_parquet"]),
+    )
+    assert proc.returncode != 0
+    assert "only valid with --source consensus" in proc.stderr
