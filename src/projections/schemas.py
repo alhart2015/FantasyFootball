@@ -977,6 +977,9 @@ class VorpTableSchema(pa.DataFrameModel):
     season_mean_fpts: Series[float]
     vorp: Series[float]
     replacement_fpts: Series[float] = pa.Field(ge=0)
+    # Optional (not-required): populated only on the consensus-fed path (the raw market ADP
+    # the cheat sheet's adp_delta uses). Weekly-path VORP tables omit it and still validate.
+    consensus_adp: Series[pd.Float64Dtype] | None = pa.Field(gt=0, nullable=True)
 
     class Config:
         strict = "filter"
