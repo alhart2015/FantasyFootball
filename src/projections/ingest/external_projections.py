@@ -29,6 +29,7 @@ import pandas as pd
 from projections.schemas import (
     _PYARROW_STR,
     ExternalProjectionSchema,
+    Position,
     ProjectionSource,
 )
 from projections.store import read_partition, write_partition
@@ -72,8 +73,14 @@ STAT_FIELDS: tuple[str, ...] = (
 COUNT_FIELDS = frozenset(
     {"passing_tds", "interceptions", "rushing_tds", "receptions", "receiving_tds", "fumbles_lost"}
 )
-_ESPN_POSITIONS: dict[int, str] = {1: "QB", 2: "RB", 3: "WR", 4: "TE"}
-_SKILL_POSITIONS = frozenset({"QB", "RB", "WR", "TE"})
+# ESPN numeric position-id -> canonical position string (reference the enum, not the literal).
+_ESPN_POSITIONS: dict[int, str] = {
+    1: Position.QB.value,
+    2: Position.RB.value,
+    3: Position.WR.value,
+    4: Position.TE.value,
+}
+_SKILL_POSITIONS = frozenset(_ESPN_POSITIONS.values())
 
 
 def round_count(value: float) -> int:
@@ -179,7 +186,9 @@ def _attach_gsis_id(
     merged = df.merge(crosswalk, on=id_col, how="left")
     mask = merged["gsis_id"].isna()
     merged["is_placeholder_gsis"] = mask
-    merged["gsis_id"] = merged["gsis_id"].astype("object")  # allow filling pyarrow-NA with a str
+    # Cast to object so .loc can fill NA slots with a plain str (pyarrow StringDtype rejects
+    # mixed assignment); _finish_canonical recasts the column back to _PYARROW_STR downstream.
+    merged["gsis_id"] = merged["gsis_id"].astype("object")
     merged.loc[mask, "gsis_id"] = merged.loc[mask, id_col].map(
         lambda pid: _make_placeholder_gsis(source, pid)
     )
@@ -190,7 +199,7 @@ _CANONICAL_STR_COLS = ("source", "source_player_id", "gsis_id", "full_name", "po
 
 
 def _finish_canonical(df: pd.DataFrame, *, season: int, asof: date) -> pd.DataFrame:
-    df = df.copy()
+    # Mutates df in place; callers always pass a freshly built frame, so no copy needed.
     df["season"] = season
     df["asof"] = asof.isoformat()
     for c in _CANONICAL_STR_COLS:
@@ -198,47 +207,38 @@ def _finish_canonical(df: pd.DataFrame, *, season: int, asof: date) -> pd.DataFr
     return df
 
 
-def _espn_to_canonical(
-    espn: pd.DataFrame, *, season: int, asof: date, id_map: pd.DataFrame
+def _to_canonical(
+    df: pd.DataFrame,
+    *,
+    source: ProjectionSource,
+    id_col: str,
+    adp_col: str,
+    rank_col: str | None,
+    has_stats: bool,
+    season: int,
+    asof: date,
+    id_map: pd.DataFrame,
 ) -> pd.DataFrame:
-    keyed = _attach_gsis_id(espn, id_map, source=ProjectionSource.ESPN.value, id_col="espn_id")
+    """Normalize a parsed source frame to the canonical ExternalProjectionSchema shape: attach
+    gsis_id (real or placeholder), rename source-specific columns onto canonical names, and null
+    out whatever the source doesn't carry (Sleeper has no stat line or draft rank). Numeric
+    columns pass through untouched — ExternalProjectionSchema(coerce=True) casts them to Float64."""
+    keyed = _attach_gsis_id(df, id_map, source=source.value, id_col=id_col)
+    null_col = pd.array([pd.NA] * len(keyed), dtype="Float64")
     out = pd.DataFrame(
         {
-            "source": ProjectionSource.ESPN.value,
-            "source_player_id": keyed["espn_id"],
+            "source": source.value,
+            "source_player_id": keyed[id_col],
             "gsis_id": keyed["gsis_id"],
             "is_placeholder_gsis": keyed["is_placeholder_gsis"],
             "full_name": keyed["full_name"],
             "position": keyed["position"],
-            "adp": keyed["espn_adp"].astype(float),
-            "espn_draft_rank": keyed["espn_pos_rank"].astype(float),
+            "adp": keyed[adp_col],
+            "espn_draft_rank": keyed[rank_col] if rank_col else null_col,
         }
     )
     for f in STAT_FIELDS:
-        out[f] = keyed[f].astype(float)
-    return _finish_canonical(out, season=season, asof=asof)
-
-
-def _sleeper_to_canonical(
-    sleeper: pd.DataFrame, *, season: int, asof: date, id_map: pd.DataFrame
-) -> pd.DataFrame:
-    keyed = _attach_gsis_id(
-        sleeper, id_map, source=ProjectionSource.SLEEPER.value, id_col="sleeper_id"
-    )
-    out = pd.DataFrame(
-        {
-            "source": ProjectionSource.SLEEPER.value,
-            "source_player_id": keyed["sleeper_id"],
-            "gsis_id": keyed["gsis_id"],
-            "is_placeholder_gsis": keyed["is_placeholder_gsis"],
-            "full_name": keyed["full_name"],
-            "position": keyed["position"],
-            "adp": keyed["sleeper_adp"].astype(float),
-            "espn_draft_rank": pd.array([pd.NA] * len(keyed), dtype="Float64"),
-        }
-    )
-    for f in STAT_FIELDS:
-        out[f] = pd.array([pd.NA] * len(keyed), dtype="Float64")
+        out[f] = keyed[f] if has_stats else null_col
     return _finish_canonical(out, season=season, asof=asof)
 
 
@@ -285,8 +285,28 @@ def refresh_external_projections(data_root: Path, *, season: int, asof: date | N
     id_map = read_partition(data_root / "raw", "id_map")
     frame = pd.concat(
         [
-            _espn_to_canonical(espn, season=season, asof=asof, id_map=id_map),
-            _sleeper_to_canonical(sleeper, season=season, asof=asof, id_map=id_map),
+            _to_canonical(
+                espn,
+                source=ProjectionSource.ESPN,
+                id_col="espn_id",
+                adp_col="espn_adp",
+                rank_col="espn_pos_rank",
+                has_stats=True,
+                season=season,
+                asof=asof,
+                id_map=id_map,
+            ),
+            _to_canonical(
+                sleeper,
+                source=ProjectionSource.SLEEPER,
+                id_col="sleeper_id",
+                adp_col="sleeper_adp",
+                rank_col=None,
+                has_stats=False,
+                season=season,
+                asof=asof,
+                id_map=id_map,
+            ),
         ],
         ignore_index=True,
     )

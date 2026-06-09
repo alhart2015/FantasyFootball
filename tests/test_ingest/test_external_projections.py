@@ -105,7 +105,7 @@ def _tiny_id_map() -> pd.DataFrame:
 def test_espn_to_canonical_is_schema_valid_with_stat_line() -> None:
     from datetime import date
 
-    from projections.schemas import ExternalProjectionSchema
+    from projections.schemas import ExternalProjectionSchema, ProjectionSource
 
     espn_payload: dict[str, Any] = {
         "players": [
@@ -129,7 +129,17 @@ def test_espn_to_canonical_is_schema_valid_with_stat_line() -> None:
         ]
     }
     espn = ext.parse_espn_players(espn_payload, season=2026)
-    out = ext._espn_to_canonical(espn, season=2026, asof=date(2026, 7, 15), id_map=_tiny_id_map())
+    out = ext._to_canonical(
+        espn,
+        source=ProjectionSource.ESPN,
+        id_col="espn_id",
+        adp_col="espn_adp",
+        rank_col="espn_pos_rank",
+        has_stats=True,
+        season=2026,
+        asof=date(2026, 7, 15),
+        id_map=_tiny_id_map(),
+    )
     ExternalProjectionSchema.validate(out)
     r = out.iloc[0]
     assert r["source"] == "ESPN" and r["source_player_id"] == "4374302"
@@ -140,7 +150,7 @@ def test_espn_to_canonical_is_schema_valid_with_stat_line() -> None:
 def test_sleeper_to_canonical_has_null_stat_line() -> None:
     from datetime import date
 
-    from projections.schemas import ExternalProjectionSchema
+    from projections.schemas import ExternalProjectionSchema, ProjectionSource
 
     sl = ext.parse_sleeper_projections(
         [
@@ -151,7 +161,17 @@ def test_sleeper_to_canonical_has_null_stat_line() -> None:
             }
         ]
     )
-    out = ext._sleeper_to_canonical(sl, season=2026, asof=date(2026, 7, 15), id_map=_tiny_id_map())
+    out = ext._to_canonical(
+        sl,
+        source=ProjectionSource.SLEEPER,
+        id_col="sleeper_id",
+        adp_col="sleeper_adp",
+        rank_col=None,
+        has_stats=False,
+        season=2026,
+        asof=date(2026, 7, 15),
+        id_map=_tiny_id_map(),
+    )
     ExternalProjectionSchema.validate(out)
     r = out.iloc[0]
     assert r["source"] == "SLEEPER" and r["adp"] == 14.5
