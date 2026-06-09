@@ -53,6 +53,19 @@ def _assign_tiers(
     return tier
 
 
+def _rank_within_position(frame: pd.DataFrame, by: str, ascending: bool) -> pd.Series:
+    """Gap-free 1-based integer rank within each position: sort by `by` (tie-broken by
+    gsis_id) then cumcount. Deliberately NOT `Series.rank()`, whose default 'average'
+    method yields fractional ranks. The returned Series is index-aligned to `frame`.
+    """
+    return (
+        frame.sort_values(["position", by, "gsis_id"], ascending=[True, ascending, True])
+        .groupby("position", sort=False)
+        .cumcount()
+        + 1
+    )
+
+
 def generate_snake_cheat_sheet(
     vorp_table: pd.DataFrame,
     league_config: LeagueConfig,
@@ -85,10 +98,9 @@ def generate_snake_cheat_sheet(
     df = vorp.copy()
     df["is_in_pool"] = df["gsis_id"].isin(in_pool_ids)
 
-    # Carry consensus_adp through (NA when the input has none — the weekly path).
-    if "consensus_adp" in vorp.columns:
-        df["consensus_adp"] = vorp["consensus_adp"]
-    else:
+    # Carry consensus_adp through: df is a copy of vorp, so the column is already present on
+    # the consensus path; only the weekly path (no ADP) needs an all-NA column added.
+    if "consensus_adp" not in df.columns:
         df["consensus_adp"] = pd.array([pd.NA] * len(df), dtype=pd.Float64Dtype())
 
     df = df.sort_values(["position", "vorp", "gsis_id"], ascending=[True, False, True])
@@ -108,25 +120,14 @@ def generate_snake_cheat_sheet(
         tier_col[in_pool_idx] = tiers
     df["tier"] = tier_col
 
-    # ADP-delta: within position, over the non-null-consensus_adp subset, two deterministic
-    # gap-free integer ranks (sort + cumcount, like positional_rank — never Series.rank(),
-    # whose 'average' method yields fractional ranks). delta = adp_rank - vorp_rank;
-    # positive = value (market drafts later than VORP rank), negative = reach.
+    # ADP-delta: within position, over the non-null-consensus_adp subset, delta = adp_rank -
+    # vorp_rank (both gap-free integer ranks; see _rank_within_position). Positive = value
+    # (market drafts later than VORP rank), negative = reach. NA for null-ADP rows.
     adp_delta = pd.Series(pd.array([pd.NA] * len(df), dtype=pd.Int64Dtype()), index=df.index)
     sub = df[df["consensus_adp"].notna()]
     if not sub.empty:
-        adp_rank = (
-            sub.sort_values(["position", "consensus_adp", "gsis_id"], ascending=[True, True, True])
-            .groupby("position", sort=False)
-            .cumcount()
-            + 1
-        )
-        vorp_rank = (
-            sub.sort_values(["position", "vorp", "gsis_id"], ascending=[True, False, True])
-            .groupby("position", sort=False)
-            .cumcount()
-            + 1
-        )
+        adp_rank = _rank_within_position(sub, "consensus_adp", ascending=True)
+        vorp_rank = _rank_within_position(sub, "vorp", ascending=False)
         delta = (adp_rank - vorp_rank).astype(pd.Int64Dtype())  # index-aligned subtraction
         adp_delta.loc[delta.index] = delta
     df["adp_delta"] = adp_delta
