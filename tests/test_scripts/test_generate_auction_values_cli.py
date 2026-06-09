@@ -148,3 +148,61 @@ def test_cli_errors_on_missing_vorp_input(cli_inputs: dict[str, Path], tmp_path:
         )
     stderr = exc_info.value.stderr.lower()
     assert "no such file" in stderr or "does_not_exist" in stderr
+
+
+def test_auction_cli_ignores_consensus_adp_column(tmp_path: Path) -> None:
+    from projections.schemas import _PYARROW_STR
+
+    # Pool {QB:1,RB:1} x n_teams=2 = 4 players; fixture is exactly 2 QB + 2 RB so
+    # _select_pool fills it (a required position with too few players would raise).
+    base = pd.DataFrame(
+        {
+            "gsis_id": pd.array(
+                ["00-1000000", "00-1000001", "00-2000000", "00-2000001"], dtype=_PYARROW_STR
+            ),
+            "position": pd.array(["QB", "QB", "RB", "RB"], dtype=_PYARROW_STR),
+            "season_mean_fpts": pd.array([320.0, 300.0, 260.0, 250.0], dtype="float64"),
+            "vorp": pd.array([80.0, 60.0, 30.0, 20.0], dtype="float64"),
+            "replacement_fpts": pd.array([240.0, 240.0, 230.0, 230.0], dtype="float64"),
+        }
+    )
+    cfg_path = tmp_path / "league.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "name": "tiny",
+                "n_teams": 2,
+                "budget": 100,
+                "min_bid": 1,
+                "roster_slots": {"QB": 1, "RB": 1},
+                "ruleset": "espn_ppr",
+            }
+        )
+    )
+
+    def _run(vorp: pd.DataFrame, tag: str) -> pd.DataFrame:
+        vorp_path = tmp_path / f"vorp_{tag}.parquet"
+        out_path = tmp_path / f"auction_{tag}.parquet"
+        vorp.to_parquet(vorp_path, index=False)
+        proc = _run_cli(
+            "--season",
+            "2026",
+            "--league-config",
+            str(cfg_path),
+            "--vorp-input",
+            str(vorp_path),
+            "--out",
+            str(out_path),
+        )
+        assert proc.returncode == 0, proc.stderr
+        return pd.read_parquet(out_path)
+
+    without = _run(base, "without")
+    with_adp = base.copy()
+    with_adp["consensus_adp"] = pd.array([3.0, 8.0, 20.0, 12.0], dtype=pd.Float64Dtype())
+    got = _run(with_adp, "with")
+
+    pd.testing.assert_frame_equal(
+        without.sort_values("gsis_id").reset_index(drop=True),
+        got[without.columns].sort_values("gsis_id").reset_index(drop=True),
+    )

@@ -98,6 +98,15 @@ def _log_per_position_summary(df: pd.DataFrame, n_tiers: int, ruleset: str, seas
             if pd.notna(row["tier"])
         )
         print(f"  {pos.value}  in_pool={len(in_pool):>4}  tier1={tier_1_size:>2}  top: {top_str}")
+        if "adp_delta" in sub.columns and sub["adp_delta"].notna().any():
+            best_value = sub.loc[sub["adp_delta"].idxmax()]
+            biggest_reach = sub.loc[sub["adp_delta"].idxmin()]
+            print(
+                f"      ADP value: {best_value['display_name']} "
+                f"(delta {int(best_value['adp_delta']):+d}); "
+                f"reach: {biggest_reach['display_name']} "
+                f"(delta {int(biggest_reach['adp_delta']):+d})"
+            )
 
 
 def main() -> int:

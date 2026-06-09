@@ -1,50 +1,93 @@
 """CLI wrapper for `projections.draft.vorp.generate_vorp_table`.
 
-Reads a weekly-projections parquet partition for a given season, aggregates
-to season totals, computes VORP under the given LeagueConfig, and writes the
-resulting VORP table as CSV or parquet.
+Reads projections for a given season, aggregates to season totals, computes VORP
+under the given LeagueConfig, and writes the resulting VORP table as CSV or parquet.
+
+Supports two projection sources:
+  --source weekly     (default) In-season model: reads a weekly-projections partition.
+  --source consensus  Pre-season: reads the latest consensus-projections snapshot.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
 from projections.aggregation.season import aggregate_to_season
+from projections.draft.consensus_source import consensus_to_season_projections
 from projections.draft.league_config import LeagueConfig
 from projections.draft.vorp import generate_vorp_table
-from projections.schemas import Position, ProjectionWeeklySchema
-from projections.store import read_partition
+from projections.schemas import (
+    _PYARROW_STR,
+    ConsensusProjectionSchema,
+    Position,
+    ProjectionWeeklySchema,
+    VorpTableSchema,
+)
+from projections.store import read_latest_partition, read_partition
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a per-player VORP table.")
     parser.add_argument("--season", type=int, required=True, help="Target season (e.g. 2026).")
     parser.add_argument(
-        "--league-config",
-        type=Path,
-        required=True,
-        help="Path to LeagueConfig JSON.",
+        "--league-config", type=Path, required=True, help="Path to LeagueConfig JSON."
+    )
+    parser.add_argument(
+        "--source",
+        choices=["weekly", "consensus"],
+        default="weekly",
+        help="Projection source: 'weekly' (in-season model, default) or 'consensus' (preseason).",
     )
     parser.add_argument(
         "--weekly-projections",
         type=Path,
-        required=True,
-        help=(
-            "Path to the weekly-projections partition root "
-            "(e.g. data/projections/weekly/ruleset=espn_ppr)."
-        ),
+        default=None,
+        help="[--source weekly] Weekly-projections partition root "
+        "(e.g. data/projections/weekly/ruleset=espn_ppr).",
     )
     parser.add_argument(
-        "--out",
+        "--data-root",
         type=Path,
-        required=True,
-        help="Output path; .csv or .parquet (sniffed by extension).",
+        default=None,
+        help="[--source consensus] Store root (default: data); reads "
+        "<root>/processed/consensus_projections/.",
+    )
+    parser.add_argument(
+        "--asof",
+        type=date.fromisoformat,
+        default=None,
+        help="[--source consensus] Snapshot date YYYY-MM-DD; defaults to the latest snapshot.",
+    )
+    parser.add_argument(
+        "--out", type=Path, required=True, help="Output path; .csv or .parquet (sniffed)."
     )
     return parser.parse_args()
+
+
+def _reject_irrelevant_flags(args: argparse.Namespace) -> str | None:
+    """Reject flags that don't apply to the chosen ``--source`` so a wrong-source flag can't be
+    silently ignored (e.g. ``--weekly-projections`` in consensus mode, which would otherwise be
+    discarded while the run reads the default ``--data-root`` — a silent wrong-data footgun).
+
+    Returns an error message, or None when the flags are consistent with ``--source``.
+    """
+    if args.source == "weekly":
+        irrelevant = [
+            name
+            for name, value in (("--asof", args.asof), ("--data-root", args.data_root))
+            if value is not None
+        ]
+        if irrelevant:
+            verb = "is" if len(irrelevant) == 1 else "are"
+            return f"{', '.join(irrelevant)} {verb} only valid with --source consensus"
+    elif args.weekly_projections is not None:
+        return "--weekly-projections is only valid with --source weekly"
+    return None
 
 
 def _log_per_position_summary(
@@ -75,15 +118,56 @@ def _log_per_position_summary(
     print()
 
 
+def _warn_dropped_draftable(consensus: pd.DataFrame, league_config: LeagueConfig) -> None:
+    """Surface players the has_points filter drops whose ADP is inside the draftable range,
+    so the coverage gap is an explicit eyeball check rather than silent (spec §3.3)."""
+    dropped = consensus[~consensus["has_points"] & consensus["consensus_adp"].notna()]
+    draftable = dropped[dropped["consensus_adp"] <= league_config.total_pool_size]
+    if draftable.empty:
+        print("0 draftable players dropped for missing points.", file=sys.stderr)
+        return
+    print(
+        f"WARNING: {len(draftable)} draftable player(s) dropped — have an ADP inside the "
+        f"top {league_config.total_pool_size} but no projected points:",
+        file=sys.stderr,
+    )
+    for row in draftable.sort_values("consensus_adp").head(25).itertuples(index=False):
+        print(
+            f"  {row.full_name}  ADP={float(row.consensus_adp):.1f}  rank={row.consensus_rank}",
+            file=sys.stderr,
+        )
+
+
 def main() -> int:
     args = _parse_args()
+    flag_error = _reject_irrelevant_flags(args)
+    if flag_error is not None:
+        print(f"ERROR: {flag_error}", file=sys.stderr)
+        return 1
     league_config = LeagueConfig.model_validate_json(args.league_config.read_text())
 
-    weekly_root: Path = args.weekly_projections
-    weekly = read_partition(weekly_root.parent, table=weekly_root.name, season=args.season)
-    weekly = ProjectionWeeklySchema.validate(weekly)
-
-    season_proj = aggregate_to_season(weekly, ruleset=league_config.ruleset)
+    consensus: pd.DataFrame | None = None
+    if args.source == "weekly":
+        if args.weekly_projections is None:
+            print("ERROR: --weekly-projections is required for --source weekly", file=sys.stderr)
+            return 1
+        weekly_root: Path = args.weekly_projections
+        weekly = read_partition(weekly_root.parent, table=weekly_root.name, season=args.season)
+        weekly = ProjectionWeeklySchema.validate(weekly)
+        season_proj = aggregate_to_season(weekly, ruleset=league_config.ruleset)
+    else:
+        processed = (args.data_root or Path("data")) / "processed"
+        if args.asof is not None:
+            consensus = read_partition(
+                processed, "consensus_projections", season=args.season, asof=args.asof
+            )
+        else:
+            consensus = read_latest_partition(
+                processed, "consensus_projections", season=args.season
+            )
+        consensus = ConsensusProjectionSchema.validate(consensus)
+        _warn_dropped_draftable(consensus, league_config)
+        season_proj = consensus_to_season_projections(consensus)
 
     in_scope = {slot.value for slot, count in league_config.roster_slots.items() if count > 0}
     dropped_positions = (
@@ -91,6 +175,12 @@ def main() -> int:
     )
 
     out_df = generate_vorp_table(season_proj, league_config)
+
+    if consensus is not None:
+        adp = consensus[["gsis_id", "consensus_adp"]]
+        out_df = out_df.merge(adp, on="gsis_id", how="left")
+        out_df["gsis_id"] = out_df["gsis_id"].astype(_PYARROW_STR)
+        out_df = VorpTableSchema.validate(out_df)
 
     suffix = args.out.suffix.lower()
     if suffix == ".csv":

@@ -977,6 +977,9 @@ class VorpTableSchema(pa.DataFrameModel):
     season_mean_fpts: Series[float]
     vorp: Series[float]
     replacement_fpts: Series[float] = pa.Field(ge=0)
+    # Optional (not-required): populated only on the consensus-fed path (the raw market ADP
+    # the cheat sheet's adp_delta uses). Weekly-path VORP tables omit it and still validate.
+    consensus_adp: Series[pd.Float64Dtype] | None = pa.Field(gt=0, nullable=True)
 
     class Config:
         strict = "filter"
@@ -1001,6 +1004,11 @@ class SnakeCheatSheetSchema(pa.DataFrameModel):
     replacement_fpts: Series[float]
     is_in_pool: Series[bool]
     tier: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
+    # Raw consensus ADP (market view) carried from the VORP table; NA on the weekly path.
+    consensus_adp: Series[pd.Float64Dtype] = pa.Field(gt=0, nullable=True)
+    # Within-position (ADP-rank - VORP-rank): positive = value, negative = reach. NA when
+    # consensus_adp is NA (weekly path, or a player no source gave an ADP).
+    adp_delta: Series[pd.Int64Dtype] = pa.Field(nullable=True)
 
     class Config:
         strict = "filter"

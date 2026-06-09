@@ -925,6 +925,8 @@ def test_snake_cheat_sheet_schema_round_trip() -> None:
             "replacement_fpts": [242.2, 98.9],
             "is_in_pool": [True, True],
             "tier": pd.array([1, 1], dtype=pd.Int64Dtype()),
+            "consensus_adp": pd.array([2.1, 18.7], dtype=pd.Float64Dtype()),
+            "adp_delta": pd.array([1, -1], dtype=pd.Int64Dtype()),
         }
     )
     validated = SnakeCheatSheetSchema.validate(df)
@@ -1090,6 +1092,34 @@ def test_external_projection_schema_accepts_espn_and_sleeper_rows() -> None:
     )
     validated = ExternalProjectionSchema.validate(df)
     assert len(validated) == 2
+
+
+def test_vorp_table_schema_accepts_optional_consensus_adp() -> None:
+    """Consensus-fed VORP tables carry consensus_adp; weekly-fed ones do not.
+    The column is Optional so both validate."""
+    base = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-1000001", "00-2000001"], dtype=_PYARROW_STR),
+            "position": pd.array([Position.QB.value, Position.RB.value], dtype=_PYARROW_STR),
+            "season_mean_fpts": pd.array([320.0, 260.0], dtype="float64"),
+            "vorp": pd.array([80.0, 30.0], dtype="float64"),
+            "replacement_fpts": pd.array([240.0, 230.0], dtype="float64"),
+        }
+    )
+    # Without consensus_adp (weekly path) -> still validates.
+    VorpTableSchema.validate(base)
+
+    # With consensus_adp (consensus path) -> validates and the column survives.
+    with_adp = base.copy()
+    with_adp["consensus_adp"] = pd.array([2.1, 15.4], dtype=pd.Float64Dtype())
+    validated = VorpTableSchema.validate(with_adp)
+    assert "consensus_adp" in validated.columns
+
+    # Non-positive ADP is rejected (gt=0).
+    bad = with_adp.copy()
+    bad.loc[bad.index[0], "consensus_adp"] = 0.0
+    with pytest.raises(SchemaError):
+        VorpTableSchema.validate(bad)
 
 
 def test_external_projection_schema_rejects_bad_gsis() -> None:
