@@ -4,6 +4,29 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Hub on Consensus — repoint VORP + ADP-delta (2026-06-09, on branch `feat/draft-hub-consensus`)
+
+**Status:** Sub-project #2 Draft Hub consumption (TODO #38) done. The already-shipped Draft Hub (VORP → auction $ → snake cheat sheet) is re-pointed OFF the draft-invalid in-season model and ONTO PR #55's `ConsensusProjectionSchema`; the cheat sheet gains the long-deferred ADP-delta column. Source change, not math. Spec/plan at `docs/superpowers/specs|plans/2026-06-09-draft-hub-consensus.*`. Built via subagent-driven development (8 TDD tasks, two-stage review each).
+
+**What shipped:**
+- **`consensus_to_season_projections`** (`src/projections/draft/consensus_source.py`, re-exported from `projections.draft`) — pure adapter `ConsensusProjectionSchema` → `ProjectionSeasonSchema`: filters `has_points`, `projected_points_ppr` → `season_mean`, degenerate band `p10=p50=p90=mean` (honest single-source point estimate), `n_weeks=17` sentinel, `model_id="consensus:<asof>"`, raises on mixed asof/season.
+- **`VorpTableSchema`** gains an optional nullable `consensus_adp` (weekly path omits it and still validates; consensus path carries it).
+- **VORP CLI `--source {weekly,consensus}`** (`scripts/generate_vorp_table.py`, default `weekly` unchanged). Consensus mode reads `data/processed/consensus_projections` (latest or `--asof`), emits a stderr **dropped-but-draftable warning** (players with `has_points=False` but ADP ≤ `total_pool_size`), then left-joins `consensus_adp` onto the VORP output. `generate_vorp_table` / auction / `_select_pool` UNCHANGED.
+- **Snake cheat sheet ADP-delta** — `SnakeCheatSheetSchema` gains `consensus_adp` (raw market ADP) + `adp_delta` (within-position ADP-rank − VORP-rank; positive = value, negative = reach; deterministic sort+cumcount, NA on the weekly path). CLI summary surfaces top value/reach per position.
+- **Skill-only config** `configs/league_espn_ppr_12team_skill.json` (consensus has no K/DST; K/DST folded into BENCH to preserve roster size).
+
+**Key decisions:** consensus-only points source (realizes the #52 spike's draft pivot); **change source, not math** (VORP/auction/_select_pool untouched); `consensus_adp` rides the VORP parquet as the single channel to the cheat sheet; **point estimates only** (degenerate band — real spread waits for the scraping slice); **skill-positions-only v1** (K/DST → TODO #10); `has_points` is the draft surface (pure-ADP-only long tail drops out, surfaced by the CLI warning).
+
+**Gates:** full suite 1307 passed / 17 skipped (env: network + missing feature parquet); mypy src tests clean (241 files); ruff check + ruff format --check clean (275 files formatted).
+
+**Next direction:**
+1. **Scraped points source** (TODO #38 #2b+) — a real ≥2-source `projected_points_ppr`, then **distribution-wrapping** (real cross-source spread → the cheat-sheet confidence band, currently deferred).
+2. **K/DST in the Draft Hub** (TODO #10) — needs K/DST projections + a pool-fill tolerant of them; unblocks the full ESPN/Yahoo roster shape (the v1 consensus path is skill-positions-only).
+3. **Non-`espn_ppr` rulesets** — half-PPR/standard drafts need `refresh_consensus` to accept a ruleset (re-score the stored stat line); a consensus-layer change, separate from this draft slice.
+4. **Overall cross-position draft board** — the cheat sheet is per-position; a VORP-ranked overall board with ADP-delta is a natural next surface.
+
+---
+
 ## External Consensus Blend (v1) — shipped (2026-06-09, on branch `feat/external-consensus-blend`)
 
 **Status:** Sub-project #2b slice 1 (TODO #38) done. The raw ESPN+Sleeper snapshots from #2a are now blended into a single published per-player preseason projection — the contract downstream draft tooling consumes. Spec/plan at `docs/superpowers/specs|plans/2026-06-09-external-consensus-blend.*`. Verified live for 2026 (3,042 players). Built via subagent-driven development: 6 TDD tasks, each with two-stage (spec + code-quality) review.
