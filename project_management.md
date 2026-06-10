@@ -4,6 +4,27 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant Engine (Slice 1) — shipped (2026-06-09, on branch `feat/draft-assistant-engine`)
+
+**Status:** Slice 1 of the live **Draft Assistant** sub-project done — a headless, pluggable-strategy pick recommender over the consensus VORP table. This is the "live, stateful" draft surface (vs. the static cheat sheet): you feed it the current draft state and it ranks *your* best pick now, accounting for when your next pick comes and who'll be gone by then (dynamic scarcity that static VORP can't capture). Spec/plan at `docs/superpowers/specs|plans/2026-06-09-draft-assistant-engine.*`. Built via subagent-driven development (8 TDD tasks, two-stage review each; opus on the now-or-never math).
+
+**What shipped (`src/projections/draft/assistant/` + `roster_eligibility.py`):**
+- **`DraftStrategy` Protocol** (the substitution seam, mirrors `Distribution`) + two strategies: **`NowOrNeverStrategy`** (analytic opportunity-cost — `score = vorp − E[best survivor at position by my next pick]`; reorders *across* positions, picks which position to attack now) and **`RawVorpStrategy`** (best-available control). Roster-need aware via a scale-free starting-need tier.
+- **`roster_eligibility.py`** — slot↔position eligibility (promoted out of `_pool.py`'s private symbols → one source of truth; `_pool.py`/`vorp.py` now delegate) + a greedy slot-allocation `eligible_positions(roster_slots, my_roster)` that drops un-rosterable positions and flags `fills_starting_slot`.
+- **`pick_timing.py`** (pure snake math: `slot_for`, `my_next_pick` strictly-after, `picks_until_next`), **`survival.py`** (`SurvivalModel` Protocol + `LogisticSurvival` ADP→P(available), no scipy), **`state.py`** (`DraftState` + `load_draft_state` — ordered-gsis-id state file, slot derived by snake order, my-roster positions resolved via `id_map`, hard errors on malformed/duplicate/missing-id), **`RecommendationSchema`** (output contract), **CLI** `scripts/draft_assistant.py` → `assistant/cli.py` (`--state`/`--vorp-table` required, `--strategy`, `--top`, `--sigma`; prints a ranked table with names).
+
+**Key decisions:** consume the existing consensus VORP table (change source, not math — VORP already encodes *static* positional scarcity; the engine adds only the *dynamic* pick-timing layer); analytic now-or-never first, Monte Carlo deferred to a later strategy behind the same protocol; survival is ADP + a single global σ (`default_sigma = ⅔·n_teams`, tuned empirically in Slice 2); gsis-id-native engine, `id_map` is the universal position+name source; engine never imports the CLI/UI. The starting-need preference is a scale-free *tier* (not an additive weight) so it behaves identically across strategies.
+
+**Gates:** the engine surface is fully green — 1344 passed / 16 skipped, **mypy** clean (255 files), **ruff check** + **ruff format --check** clean. 37 new tests (schema, eligibility, pick-timing, survival, state, strategies incl. hand-computed now-or-never reorder + determinism + null-ADP + last-pick fallback, CLI smoke). **One pre-existing failure unrelated to this branch:** `tests/backtest/test_backtest_smoke.py::test_backtest_smoke_one_cell` (WR feature build lacks PR #51's `preseason_implied_team_total` — the TODO #40 cluster). Proven independent: `wr.py`/`vegas_team_context_features.py`/`backtest/` are byte-identical to `main`, and this branch's only `schemas.py` change is the additive `RecommendationSchema`.
+
+**Spec/plan review caught real bugs before execution and during** (the gate worked): plan-review fixed an additive-vs-scale-free roster nudge and survivor/rank tie-breaks; during execution subagents caught two plan-test bugs I'd written (six identical filler gsis_ids that the duplicate-pick guard correctly rejects; an exact-float `score == 12.6` assertion unsatisfiable in IEEE) and one spec deviation (an implementer dropped `IdMapSchema.validate` on a false "lightweight id_map" premise — reverted to match the sibling cheat-sheet CLI + the real 7-column `id_map.parquet`).
+
+**Next direction:**
+1. **Slice 2 — strategy comparison harness** (CLI tournament): simulate full drafts with strategies in seats, score final rosters, declare an empirical winner, and tune σ. Built on this slice's `DraftStrategy` protocol; CLI-first so comparisons run headless in-session. The survival model's unconditional approximation (ignores that an available player already lasted to now) is the natural Slice-2 refinement.
+2. **Slice 3 — Streamlit UI**: the live draft-day board over this engine (mark a pick → re-run → updated recommendation).
+
+---
+
 ## Draft Hub on Consensus — repoint VORP + ADP-delta (2026-06-09, on branch `feat/draft-hub-consensus`)
 
 **Status:** Sub-project #2 Draft Hub consumption (TODO #38) done. The already-shipped Draft Hub (VORP → auction $ → snake cheat sheet) is re-pointed OFF the draft-invalid in-season model and ONTO PR #55's `ConsensusProjectionSchema`; the cheat sheet gains the long-deferred ADP-delta column. Source change, not math. Spec/plan at `docs/superpowers/specs|plans/2026-06-09-draft-hub-consensus.*`. Built via subagent-driven development (8 TDD tasks, two-stage review each).
