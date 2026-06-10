@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from projections.draft.assistant.survival import (
     LogisticSurvival,
     SurvivalModel,
@@ -13,6 +15,14 @@ from projections.draft.assistant.survival import (
 
 def test_is_survival_model() -> None:
     assert isinstance(LogisticSurvival(sigma=8.0), SurvivalModel)
+
+
+@pytest.mark.parametrize("bad_sigma", [0.0, -1.0, math.nan])
+def test_rejects_non_positive_sigma(bad_sigma: float) -> None:
+    # NaN must be rejected too: `nan <= 0` is False, so without an explicit
+    # guard it would silently produce an all-null p_available column.
+    with pytest.raises(ValueError, match="sigma"):
+        LogisticSurvival(sigma=bad_sigma)
 
 
 def test_monotone_in_adp() -> None:

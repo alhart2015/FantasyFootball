@@ -39,8 +39,10 @@ class LogisticSurvival:
     sigma: float
 
     def __post_init__(self) -> None:
-        if self.sigma <= 0:
-            raise ValueError(f"sigma must be > 0; got {self.sigma}")
+        # `nan <= 0` is False, so guard NaN explicitly — otherwise every
+        # p_available silently returns NaN and the whole column degrades to null.
+        if math.isnan(self.sigma) or self.sigma <= 0:
+            raise ValueError(f"sigma must be a positive number; got {self.sigma}")
 
     def p_available(self, adp: float, at_pick: int) -> float:
         # No market signal (missing ADP arrives as NaN from pandas) → treat as
