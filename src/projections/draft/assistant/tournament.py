@@ -82,30 +82,16 @@ def _validate_run_params(config: LeagueConfig, *, my_slot: int, n_seeds: int) ->
         raise ValueError(f"n_seeds must be >= 1; got {n_seeds}")
 
 
-def _bootstrap(values: np.ndarray, *, n_bootstrap: int = _N_BOOTSTRAP, seed: int) -> Interval:
-    """Percentile-bootstrap CI of the mean of `values`."""
+def _bootstrap_mean(values: np.ndarray, *, n_bootstrap: int = _N_BOOTSTRAP, seed: int) -> Interval:
+    """Percentile-bootstrap CI of the mean of `values` (pass `a - b` for a paired diff)."""
     v = np.asarray(values, dtype=np.float64)
     rng = np.random.default_rng(seed)
     n = v.shape[0]
     boot = np.empty(n_bootstrap, dtype=np.float64)
     for b in range(n_bootstrap):
         boot[b] = v[rng.integers(0, n, size=n)].mean()
-    lo, hi = np.percentile(boot, [2.5, 97.5])
+    lo, hi = np.percentile(boot, _CI_PCTILES)
     return Interval(point=float(v.mean()), lo_95=float(lo), hi_95=float(hi))
-
-
-def _paired_diff_ci(
-    a: np.ndarray, b: np.ndarray, *, n_bootstrap: int = _N_BOOTSTRAP, seed: int
-) -> Interval:
-    """Percentile-bootstrap CI of the paired mean difference `a - b`."""
-    d = np.asarray(a, dtype=np.float64) - np.asarray(b, dtype=np.float64)
-    rng = np.random.default_rng(seed)
-    n = d.shape[0]
-    boot = np.empty(n_bootstrap, dtype=np.float64)
-    for b_i in range(n_bootstrap):
-        boot[b_i] = d[rng.integers(0, n, size=n)].mean()
-    lo, hi = np.percentile(boot, [2.5, 97.5])
-    return Interval(point=float(d.mean()), lo_95=float(lo), hi_95=float(hi))
 
 
 def _strategy_values(
@@ -152,14 +138,14 @@ def run_tournament(
         )
         for name, strat in strategies.items()
     }
-    summaries = {name: _bootstrap(v, seed=base_seed) for name, v in values.items()}
+    summaries = {name: _bootstrap_mean(v, seed=base_seed) for name, v in values.items()}
     ranked = sorted(summaries, key=lambda n: summaries[n].point, reverse=True)
 
     diff: Interval | None = None
     winner: str | None = ranked[0] if ranked else None
     if len(ranked) >= 2:
         top, second = ranked[0], ranked[1]
-        diff = _paired_diff_ci(values[top], values[second], seed=base_seed)
+        diff = _bootstrap_mean(values[top] - values[second], seed=base_seed)
         winner = top if diff.lo_95 > 0 else None
 
     return TournamentResult(

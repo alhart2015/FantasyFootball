@@ -12,7 +12,7 @@ from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.strategy import NowOrNeverStrategy
 from projections.draft.assistant.survival import LogisticSurvival
 from projections.draft.assistant.tournament import (
-    _paired_diff_ci,
+    _bootstrap_mean,
     _validate_pool,
     run_tournament,
     tune_sigma,
@@ -105,17 +105,17 @@ def test_tune_sigma_rejects_non_positive_seeds() -> None:
         )
 
 
-def test_paired_diff_ci_constant_edge_excludes_zero() -> None:
+def test_bootstrap_mean_paired_constant_edge_excludes_zero() -> None:
     a = np.array([10.0, 12.0, 11.0, 9.0, 13.0] * 4)
     b = a - 3.0  # A beats B by a constant 3 every paired seed
-    ci = _paired_diff_ci(a, b, n_bootstrap=500, seed=0)
+    ci = _bootstrap_mean(a - b, n_bootstrap=500, seed=0)
     assert ci.point == pytest.approx(3.0)
     assert ci.lo_95 > 0
 
 
-def test_paired_diff_ci_zero_edge_brackets_zero() -> None:
+def test_bootstrap_mean_paired_zero_edge_brackets_zero() -> None:
     a = np.array([10.0, 12.0, 11.0, 9.0, 13.0] * 4)
-    ci = _paired_diff_ci(a, a.copy(), n_bootstrap=500, seed=0)
+    ci = _bootstrap_mean(a - a.copy(), n_bootstrap=500, seed=0)
     assert ci.lo_95 <= 0 <= ci.hi_95
 
 
