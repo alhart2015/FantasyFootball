@@ -114,7 +114,7 @@ class NowOrNeverStrategy:
                 float(a) if pd.notna(a) else float("nan"), next_pick
             )
         ).astype(float)
-        display_p = pd.Series(internal_p, index=df.index).where(adp.notna(), other=pd.NA)
+        display_p = internal_p.where(adp.notna(), other=pd.NA)
 
         df = df.assign(_p=internal_p)
         e_best: dict[str, float] = {}

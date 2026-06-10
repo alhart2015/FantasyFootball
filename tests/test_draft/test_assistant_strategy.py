@@ -12,6 +12,7 @@ from projections.draft.assistant.strategy import (
     NowOrNeverStrategy,
     RawVorpStrategy,
 )
+from projections.draft.assistant.survival import LogisticSurvival
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import (
     _PYARROW_STR,
@@ -74,6 +75,8 @@ class _FakeSurvival:
     _P: ClassVar[dict[float, float]] = {5.0: 0.1, 6.0: 0.9, 7.0: 0.95, 8.0: 0.9}
 
     def p_available(self, adp: float, at_pick: int) -> float:
+        # at_pick ignored: the fake table is keyed by ADP only, so expectations
+        # remain deterministic and hand-computable.
         return self._P[adp]
 
 
@@ -158,8 +161,6 @@ def test_equal_score_tie_break_is_gsis_id() -> None:
 def test_now_or_never_null_adp_p_available_is_null() -> None:
     # A null-ADP player still ranks, but its displayed p_available_next is null
     # (spec §3.5 output contract). Uses the real survival model (handles NaN).
-    from projections.draft.assistant.survival import LogisticSurvival
-
     pool = pd.DataFrame(
         {
             "gsis_id": pd.array(["00-0000040", "00-0000041"], dtype=_PYARROW_STR),
@@ -175,3 +176,28 @@ def test_now_or_never_null_adp_p_available_is_null() -> None:
     by_id = rec.set_index("gsis_id")["p_available_next"]
     assert pd.isna(by_id["00-0000041"])  # null ADP → null p_available_next
     assert pd.notna(by_id["00-0000040"])  # has ADP → populated
+
+
+def test_drafted_player_excluded_from_recommendations() -> None:
+    # A player already in state.picks must not reappear in the recommendation.
+    pool = _pool()
+    state = DraftState(
+        my_slot=7,
+        n_teams=12,
+        rounds=9,
+        picks=(GsisId("00-0000010"),),  # rb1 already drafted (by someone)
+        my_roster=(),
+    )
+    rec = RawVorpStrategy().recommend(state, pool, _config())
+    assert "00-0000010" not in set(rec["gsis_id"])
+    assert "00-0000020" in set(rec["gsis_id"])  # undrafted players remain
+
+
+def test_missing_consensus_adp_degrades_gracefully() -> None:
+    # A pool WITHOUT a consensus_adp column must not raise — it should degrade to
+    # all-null and still produce a valid recommendation.
+    pool = _pool().drop(columns=["consensus_adp"])
+    rec = NowOrNeverStrategy(LogisticSurvival(sigma=8.0)).recommend(_state(), pool, _config())
+    RecommendationSchema.validate(rec)
+    assert rec["consensus_adp"].isna().all()
+    assert rec["p_available_next"].isna().all()  # no ADP → null display
