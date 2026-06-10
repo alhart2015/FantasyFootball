@@ -64,5 +64,5 @@ def test_tie_break_is_deterministic() -> None:
     slots = {RosterSlot.RB: 1, RosterSlot.FLEX: 1}
     # RB slot + FLEX both fillable by RB; best two RBs start (100+100); WR benched.
     assert optimal_lineup_points(roster, slots) == 200.0
-    # Run twice -- identical (no set-iteration nondeterminism).
+    # same inputs -> same total; the impl's sorted() gives the cross-run guarantee.
     assert optimal_lineup_points(roster, slots) == 200.0

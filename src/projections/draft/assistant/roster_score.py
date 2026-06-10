@@ -31,7 +31,8 @@ def optimal_lineup_points(
 ) -> float:
     """Sum the `season_mean_fpts` of the optimal legal starting lineup.
 
-    `roster_rows` needs columns `gsis_id`, `position`, `season_mean_fpts`.
+    `roster_rows` needs columns `gsis_id`, `position`, `season_mean_fpts`
+    (no NaN in `season_mean_fpts`; the upstream pandera schema enforces this).
     Bench/IR slots contribute nothing; a starting slot no player can fill scores 0.
     """
     # Per-position points, best-first, deterministic gsis_id tie-break.
@@ -56,7 +57,8 @@ def optimal_lineup_points(
         for _ in range(roster_slots.get(slot, 0)):
             best_pos: Position | None = None
             best_val = float("-inf")
-            for pos in sorted(eligible, key=lambda p: p.value):  # sorted -> deterministic
+            # stable pos order when top-remaining fpts tie
+            for pos in sorted(eligible, key=lambda p: p.value):
                 if cursor[pos] < len(by_pos[pos]) and by_pos[pos][cursor[pos]] > best_val:
                     best_pos, best_val = pos, by_pos[pos][cursor[pos]]
             if best_pos is not None:
