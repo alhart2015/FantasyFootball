@@ -2,6 +2,7 @@
 
 from projections.draft.assistant import (
     DraftState,
+    DraftStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
     load_draft_state,
@@ -14,6 +15,7 @@ from projections.draft.vorp import generate_vorp_table
 
 __all__ = [
     "DraftState",
+    "DraftStrategy",
     "LeagueConfig",
     "NowOrNeverStrategy",
     "RawVorpStrategy",

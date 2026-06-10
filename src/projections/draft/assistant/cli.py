@@ -71,7 +71,7 @@ def format_table(rec: pd.DataFrame, id_map: pd.DataFrame, top: int) -> str:
     )
     lines = [header]
     for row in rec.head(top).itertuples(index=False):
-        name = str(names.get(row.gsis_id, "-"))
+        name = str(names.get(row.gsis_id, "-"))[:24]
         adp = f"{float(row.consensus_adp):.1f}" if pd.notna(row.consensus_adp) else "-"
         p_next = f"{float(row.p_available_next):.2f}" if pd.notna(row.p_available_next) else "-"
         star = "*" if row.fills_starting_slot else " "
@@ -123,6 +123,8 @@ def run(argv: list[str] | None = None) -> int:
         strategy_name=args.strategy,
         sigma=args.sigma,
     )
+    # Reload id_map for display names; generate_recommendation stays a self-contained
+    # path-in/frame-out API rather than returning its internal id_map.
     id_map = _load_id_map(args.id_map)
     print(format_table(rec, id_map, int(args.top)))
     return 0
