@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -167,3 +169,40 @@ def test_sigma_changes_now_or_never_top_pick() -> None:
     assert top_tight == "00-0000002"  # WR1: opportunity cost dominates under tight sigma
     assert top_loose == "00-0000001"  # RB1: raw vorp dominates under loose sigma
     assert top_tight != top_loose
+
+
+def test_league_driven_two_roster_shapes_same_pool() -> None:
+    # Same pool, two different roster shapes (FLEX vs SUPER_FLEX) -- the harness must
+    # run off LeagueConfig alone, with no hardcoded slots. We assert it produces valid
+    # finite results for both shapes (not a winner ordering: the position-blind fakes
+    # don't guarantee best>worst on a balance-sensitive metric).
+    pool = _pool(n=24)
+    flex = LeagueConfig(
+        name="flex",
+        n_teams=2,
+        roster_slots={RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.FLEX: 1, RosterSlot.BENCH: 1},
+        ruleset=Ruleset.espn_ppr(),
+    )
+    superflex = LeagueConfig(
+        name="sf",
+        n_teams=2,
+        roster_slots={
+            RosterSlot.RB: 1,
+            RosterSlot.WR: 1,
+            RosterSlot.SUPER_FLEX: 1,
+            RosterSlot.BENCH: 1,
+        },
+        ruleset=Ruleset.espn_ppr(),
+    )
+    for cfg in (flex, superflex):
+        result = run_tournament(
+            {"best": _BestFpts(), "worst": _WorstFpts()},
+            pool=pool,
+            config=cfg,
+            my_slot=1,
+            n_seeds=10,
+            adp_jitter=2.0,
+            base_seed=0,
+        )
+        assert set(result.summaries) == {"best", "worst"}
+        assert all(math.isfinite(ci.point) for ci in result.summaries.values())
