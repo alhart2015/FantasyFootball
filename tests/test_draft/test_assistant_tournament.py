@@ -113,6 +113,21 @@ def test_run_tournament_allows_zero_adp_jitter() -> None:
     assert set(result.summaries) == {"best", "worst"}
 
 
+def test_tune_sigma_rejects_non_positive_sigma() -> None:
+    # LogisticSurvival needs sigma > 0; the engine rejects the whole grid up front
+    # (protects programmatic callers, not just the CLI).
+    with pytest.raises(ValueError, match="must all be > 0"):
+        tune_sigma(
+            [1.0, 0.0, 2.0],
+            pool=_pool(),
+            config=_config(),
+            my_slot=1,
+            n_seeds=5,
+            adp_jitter=2.0,
+            base_seed=0,
+        )
+
+
 def test_tune_sigma_rejects_empty_grid() -> None:
     with pytest.raises(ValueError, match="sigma_grid must be non-empty"):
         tune_sigma(

@@ -42,19 +42,17 @@ def _default_sigma_grid(n_teams: int) -> list[float]:
 
 
 def _parse_sigma_grid(raw: str) -> list[float]:
-    """Parse a comma-separated sigma grid; tolerate whitespace/trailing commas, reject junk."""
+    """Parse a comma-separated sigma grid; tolerate whitespace/trailing commas, reject junk.
+
+    Value positivity is enforced by tune_sigma (the engine), so every caller is covered.
+    """
     tokens = [t.strip() for t in raw.split(",") if t.strip()]
     if not tokens:
         raise ValueError(f"--sigma-grid had no numeric values: {raw!r}")
     try:
-        grid = [float(t) for t in tokens]
+        return [float(t) for t in tokens]
     except ValueError as exc:
         raise ValueError(f"--sigma-grid has a non-numeric value: {raw!r}") from exc
-    # Survival sigma must be positive (LogisticSurvival rejects <= 0); fail here at
-    # the CLI layer rather than mid-tune_sigma loop after wasted simulation.
-    if any(s <= 0 for s in grid):
-        raise ValueError(f"--sigma-grid values must all be > 0; got {raw!r}")
-    return grid
 
 
 def format_compare(result: TournamentResult) -> str:

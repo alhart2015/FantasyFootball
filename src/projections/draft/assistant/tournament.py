@@ -182,6 +182,10 @@ def tune_sigma(
     _validate_run_params(config, my_slot=my_slot, n_seeds=n_seeds, adp_jitter=adp_jitter)
     if not sigma_grid:
         raise ValueError("sigma_grid must be non-empty")
+    if any(s <= 0 for s in sigma_grid):
+        # LogisticSurvival requires sigma > 0; reject the whole grid up front rather
+        # than mid-loop at strategy construction (protects every caller, not just the CLI).
+        raise ValueError(f"sigma_grid values must all be > 0; got {list(sigma_grid)}")
     grid: list[tuple[float, float]] = []
     for sigma in sigma_grid:
         strat = NowOrNeverStrategy(LogisticSurvival(sigma=float(sigma)))
