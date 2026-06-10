@@ -19,7 +19,12 @@ def bot_pick(available: pd.DataFrame, rng: np.random.Generator, *, adp_jitter: f
     `available` needs columns `gsis_id` and `consensus_adp` (nullable Float64).
     Null ADP -> treated as `+inf` (no market signal). Ties (incl. all-null) break
     on `gsis_id` ascending. `available` must be non-empty (caller guarantees it).
+
+    Result is independent of the input row order: rows are sorted by `gsis_id`
+    ascending before any random draws, so the same RNG seed always yields the
+    same pick for a given player set regardless of how the caller ordered the rows.
     """
+    available = available.sort_values("gsis_id", ignore_index=True)
     adp = available["consensus_adp"].to_numpy(dtype=float, na_value=np.inf)
     noisy = adp + rng.normal(0.0, adp_jitter, size=len(available))
     gsis = available["gsis_id"].to_numpy(dtype=str)

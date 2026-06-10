@@ -21,6 +21,10 @@ def _available(rows: list[tuple[str, float | None]]) -> pd.DataFrame:
     )
 
 
+def _available_copy(df: pd.DataFrame) -> pd.DataFrame:
+    return df.copy()
+
+
 def test_zero_jitter_picks_lowest_adp() -> None:
     avail = _available([("00-0000001", 10.0), ("00-0000002", 3.0), ("00-0000003", 7.0)])
     rng = np.random.default_rng(0)
@@ -49,5 +53,16 @@ def test_deterministic_given_seed() -> None:
     assert a == b
 
 
-def _available_copy(df: pd.DataFrame) -> pd.DataFrame:
-    return df.copy()
+def test_result_independent_of_row_order() -> None:
+    rows = [("00-0000001", 5.0), ("00-0000002", 5.1), ("00-0000003", 4.9)]
+    avail_ab = _available(rows)
+    avail_ba = _available(list(reversed(rows)))
+    for seed in range(50):
+        a = bot_pick(avail_ab.copy(), np.random.default_rng(seed), adp_jitter=3.0)
+        b = bot_pick(avail_ba.copy(), np.random.default_rng(seed), adp_jitter=3.0)
+        assert a == b, f"seed {seed}: row order changed result"
+
+
+def test_single_player_available() -> None:
+    avail = _available([("00-0000001", 5.0)])
+    assert bot_pick(avail, np.random.default_rng(0), adp_jitter=99.0) == "00-0000001"
