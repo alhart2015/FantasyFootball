@@ -54,7 +54,11 @@ def test_deterministic_given_seed() -> None:
 
 
 def test_result_independent_of_row_order() -> None:
-    rows = [("00-0000001", 5.0), ("00-0000002", 5.1), ("00-0000003", 4.9)]
+    rows: list[tuple[str, float | None]] = [
+        ("00-0000001", 5.0),
+        ("00-0000002", 5.1),
+        ("00-0000003", 4.9),
+    ]
     avail_ab = _available(rows)
     avail_ba = _available(list(reversed(rows)))
     for seed in range(50):
