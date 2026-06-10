@@ -5,12 +5,14 @@ from __future__ import annotations
 from typing import ClassVar
 
 import pandas as pd
+import pytest
 
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.strategy import (
     DraftStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
+    _finalize,
 )
 from projections.draft.assistant.survival import LogisticSurvival
 from projections.draft.league_config import LeagueConfig
@@ -201,3 +203,21 @@ def test_missing_consensus_adp_degrades_gracefully() -> None:
     RecommendationSchema.validate(rec)
     assert rec["consensus_adp"].isna().all()
     assert rec["p_available_next"].isna().all()  # no ADP → null display
+
+
+def test_finalize_fails_loud_on_position_outside_eligibility() -> None:
+    # Invariant: _eligible_subset filters to elig's keyset before _finalize, so a
+    # position absent from elig must never reach here. If it does, fail loud
+    # rather than coerce a NaN to True and silently mislabel fills_starting_slot.
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0000099"], dtype=_PYARROW_STR),
+            "position": pd.array(["QB"], dtype=_PYARROW_STR),
+            "vorp": [10.0],
+            "consensus_adp": pd.array([3.0], dtype=pd.Float64Dtype()),
+            "score": [10.0],
+        }
+    )
+    p_na: pd.Series[float] = pd.Series(pd.NA, index=df.index, dtype=pd.Float64Dtype())
+    with pytest.raises(KeyError, match="eligibility keyset"):
+        _finalize(df, {Position.RB: True}, p_na)

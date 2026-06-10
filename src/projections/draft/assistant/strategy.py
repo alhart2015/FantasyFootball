@@ -63,7 +63,14 @@ def _finalize(
     # VORP delta.
     out["score"] = out["score"].astype(float).round(10)
     fills_by_value = {pos.value: fills for pos, fills in elig.items()}
-    out["fills_starting_slot"] = out["position"].map(fills_by_value).astype(bool)
+    fills = out["position"].map(fills_by_value)
+    # _eligible_subset already filtered to elig's keyset, so every position maps.
+    # Fail loud if that invariant is ever broken — a NaN here would otherwise
+    # coerce to True via astype(bool) and silently float a player to the top.
+    if fills.isna().any():
+        missing = sorted(set(out.loc[fills.isna(), "position"]))
+        raise KeyError(f"position(s) outside the eligibility keyset reached _finalize: {missing}")
+    out["fills_starting_slot"] = fills.astype(bool)
     out["p_available_next"] = p_available.astype(pd.Float64Dtype())
     out["consensus_adp"] = out["consensus_adp"].astype(pd.Float64Dtype())
     out["gsis_id"] = out["gsis_id"].astype(_PYARROW_STR)
