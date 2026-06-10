@@ -48,6 +48,9 @@ def _state_file(tmp_path: Path, cfg_path: Path, picks: list[str]) -> Path:
     return p
 
 
+# _OPP_PICKS must be six UNIQUE ids: the original ["00-0000018"] * 6 fixture was
+# six identical ids that the duplicate-pick guard correctly rejects, so unique
+# opponent fillers are required here to keep the happy-path tests valid.
 _OPP_PICKS = [f"00-000000{i}" for i in range(1, 7)]  # 6 unique opponent-filler ids
 
 
@@ -83,4 +86,27 @@ def test_bad_slot_raises(tmp_path: Path) -> None:
     p = tmp_path / "state.json"
     p.write_text(json.dumps({"league_config": str(cfg), "my_slot": 99, "picks": []}))
     with pytest.raises(ValueError, match="my_slot"):
+        load_draft_state(p, _id_map())
+
+
+def test_missing_picks_key_raises(tmp_path: Path) -> None:
+    cfg = _write_config(tmp_path)
+    p = tmp_path / "state.json"
+    p.write_text(json.dumps({"league_config": str(cfg), "my_slot": 1}))
+    with pytest.raises(ValueError, match="picks"):
+        load_draft_state(p, _id_map())
+
+
+def test_picks_non_list_raises(tmp_path: Path) -> None:
+    cfg = _write_config(tmp_path)
+    p = tmp_path / "state.json"
+    p.write_text(json.dumps({"league_config": str(cfg), "my_slot": 1, "picks": "not-a-list"}))
+    with pytest.raises(ValueError, match="picks"):
+        load_draft_state(p, _id_map())
+
+
+def test_non_object_json_raises(tmp_path: Path) -> None:
+    p = tmp_path / "state.json"
+    p.write_text(json.dumps(["league_config", "my_slot", "picks"]))
+    with pytest.raises(ValueError, match="object"):
         load_draft_state(p, _id_map())

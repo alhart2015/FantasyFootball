@@ -45,6 +45,13 @@ def load_draft_state(state_path: Path, id_map: pd.DataFrame) -> tuple[DraftState
     one of *my* picks being absent from id_map (unknown position).
     """
     data = json.loads(state_path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError("draft-state JSON must be an object")
+    missing = [k for k in ("league_config", "my_slot", "picks") if k not in data]
+    if missing:
+        raise ValueError(f"draft-state JSON missing required key(s): {', '.join(missing)}")
+    if not isinstance(data["picks"], list):
+        raise ValueError("draft-state JSON 'picks' must be a list")
     league = LeagueConfig.model_validate_json(Path(data["league_config"]).read_text())
 
     my_slot = int(data["my_slot"])
