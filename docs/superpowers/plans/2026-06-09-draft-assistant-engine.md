@@ -1008,6 +1008,30 @@ def test_equal_score_tie_break_is_gsis_id() -> None:
     rec = RawVorpStrategy().recommend(_state(), pool, _config())
     assert list(rec["gsis_id"]) == ["00-0000030", "00-0000031"]  # gsis asc
     assert list(rec["rank"]) == [1, 2]
+
+
+def test_now_or_never_null_adp_p_available_is_null() -> None:
+    # A null-ADP player still ranks, but its displayed p_available_next is null
+    # (spec §3.5 output contract). Uses the real survival model (handles NaN).
+    from projections.draft.assistant.survival import LogisticSurvival
+
+    pool = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0000040", "00-0000041"], dtype=_PYARROW_STR),
+            "position": pd.array(["RB", "RB"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [240.0, 230.0],
+            "vorp": [40.0, 30.0],
+            "replacement_fpts": [200.0, 200.0],
+            "consensus_adp": pd.array([5.0, pd.NA], dtype=pd.Float64Dtype()),
+        }
+    )
+    rec = NowOrNeverStrategy(LogisticSurvival(sigma=8.0)).recommend(
+        _state(), pool, _config()
+    )
+    RecommendationSchema.validate(rec)
+    by_id = rec.set_index("gsis_id")["p_available_next"]
+    assert pd.isna(by_id["00-0000041"])  # null ADP → null p_available_next
+    assert pd.notna(by_id["00-0000040"])  # has ADP → populated
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1155,7 +1179,7 @@ class NowOrNeverStrategy:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_draft/test_assistant_strategy.py -v`
-Expected: PASS (6 passed).
+Expected: PASS (8 passed).
 
 - [ ] **Step 5: Commit**
 

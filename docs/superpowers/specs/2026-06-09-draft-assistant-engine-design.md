@@ -169,11 +169,13 @@ evaluated as "not taken on or before pick 17."
 where `at_pick` is the absolute pick number I want the player to still be available *at* (my next
 pick `N`).
 
-Default implementation `LogisticSurvival(sigma)`:
-`P(taken on or before pick n) = Φ((n − adp) / sigma)` (normal CDF), so
-`p_available(adp, N) = 1 − Φ((N − 1 − adp) / sigma)` — available *at* `N` means *not taken on or
+Default implementation `LogisticSurvival(sigma)` uses the **logistic CDF** (sigmoid) in ADP space:
+`P(taken on or before pick n) = σ((n − adp) / sigma)` where `σ(x) = 1/(1+e^−x)`, so
+`p_available(adp, N) = 1 − σ((N − 1 − adp) / sigma)` — available *at* `N` means *not taken on or
 before pick `N − 1`*. One global spread parameter `sigma` (picks); default documented (≈ two-thirds
-of a round, refined empirically in Slice 2). Monotone in ADP, deterministic.
+of a round, refined empirically in Slice 2). The CDF *shape* (logistic vs normal) is not
+load-bearing — both are monotone in ADP and deterministic; we use the logistic to keep the name and
+math aligned and avoid a scipy dependency.
 
 Null-ADP players (long tail, no market signal): survival ≈ 1.0 (treated as "won't be taken soon") —
 they are never the urgent pick, which is correct.
