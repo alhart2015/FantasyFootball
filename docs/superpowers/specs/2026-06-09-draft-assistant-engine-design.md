@@ -60,8 +60,9 @@ control (needed as the tournament baseline anyway).
    - `RawVorpStrategy` — best available by VORP, roster-need filtered (the control).
    - `NowOrNeverStrategy` — analytic opportunity-cost recommendation (Approach A).
 5. **Roster-need awareness** (§3.6): a deterministic greedy slot-allocation rule (reusing `_pool.py`'s
-   eligibility sets via a promoted shared helper) drops positions I can no longer roster and nudges
-   open starting slots over bench depth.
+   eligibility sets via a promoted shared helper) drops positions I can no longer roster and tiers
+   open-starting-slot players ahead of bench-only depth (a scale-free preference, not an additive
+   weight).
 6. A **CLI** (`scripts/draft_assistant.py`) that reads a draft-state file + the consensus VORP table
    + `id_map`, runs a chosen strategy, and prints the ranked recommendation with names attached.
 
@@ -203,22 +204,30 @@ class DraftStrategy(Protocol):
 
 `RecommendationSchema` (consumer-facing output) columns: `gsis_id`, `position`, `vorp`,
 `consensus_adp` (nullable), `p_available_next` (nullable — null for null-ADP players),
-`score` (the strategy's ranking value), `rank` (1-based). Names are attached by the CLI, not the
-engine.
+`fills_starting_slot` (bool — the §3.6 starting-need tier), `score` (the strategy's ranking value),
+`rank` (1-based). Names are attached by the CLI, not the engine.
+
+**Final ordering (both strategies).** After a strategy computes `score`, the engine produces `rank`
+by sorting on `(fills_starting_slot desc, score desc, vorp desc, gsis_id asc)` — the §3.6
+starting-need tier first, then the strategy's score, then deterministic tie-breaks. Because
+`fills_starting_slot` is constant within a position (§3.6), this outer tier never splits a position,
+so the within-position property below is preserved.
 
 **`RawVorpStrategy`** (control): filter the pool to roster-eligible positions (§3.6), `score = vorp`,
 rank desc. It takes **no survival model** and leaves `p_available_next` null — the trivial
 "best-available" baseline, decoupled from any timing assumption.
 
 **`NowOrNeverStrategy`** (Approach A): for each roster-eligible position, sort its available players
-by VORP desc and compute the **expected VORP of the best player still available at my next pick**:
+by **`vorp` desc, then `gsis_id` asc** (deterministic; ties never make the survivor sum
+order-dependent) and compute the **expected VORP of the best player still available at my next pick**:
 
 ```
 E[best survivor VORP at pos] = Σ_i  vorp_i · p_i · Π_{j<i} (1 − p_j)
 ```
 
-where `p_i = SurvivalModel.p_available(adp_i, state.my_next_pick)` and the product runs over higher-VORP
-players at the same position (the chance every better one is gone). `cost_of_waiting(pos) =
+where `p_i = SurvivalModel.p_available(adp_i, state.my_next_pick)` and the product runs over the
+earlier-sorted (higher-VORP) players at the same position (the chance every better one is gone).
+`cost_of_waiting(pos) =
 vorp(best available now at pos) − E[best survivor VORP at pos]`. The per-player score:
 
 ```
@@ -269,10 +278,16 @@ that position). The leftover open slots after placing all my picks define need.
   `FLEX` (if `P ∈ _FLEX_ELIGIBLE`), a `SUPER_FLEX` (if `P ∈ _SUPER_FLEX_ELIGIBLE`), or `BENCH` (if P
   is benchable and bench capacity remains). Ineligible positions (I've filled every slot they could
   go in) are dropped from the candidate pool before scoring.
-- **Unfilled starting slot** for P: an open **non-`BENCH`** slot P could occupy. When one exists, a
-  small documented `STARTING_NEED_WEIGHT` (a named constant, added to `score`) nudges P's players up
-  so the engine won't rank luxury bench depth over filling an open starting slot — e.g. a backup RB
-  over a startable WR when a WR/FLEX start is still open.
+- **Starting-need tier (scale-free).** Each eligible player is tagged `fills_starting_slot` = there
+  is an open **non-`BENCH`** slot its position could occupy (its position slot, `FLEX`, or
+  `SUPER_FLEX`). The recommendation is then ordered **lexicographically**: starters-tier
+  (`fills_starting_slot=True`) ahead of bench-depth-tier, and *within each tier* by the strategy's
+  `score`. This is a deliberately scale-free preference — it works identically for `RawVorpStrategy`
+  and `NowOrNeverStrategy` regardless of their different score magnitudes (no additive constant whose
+  size would mean different things to each), so the engine won't rank luxury bench depth over filling
+  an open starting slot (e.g. a backup RB over a startable WR when a WR/FLEX start is still open),
+  while never reordering two players who share a tier. `fills_starting_slot` is surfaced as an output
+  column so the tiering is explainable.
 
 Kept deliberately simple and rule-based for v1; richer roster-construction logic is a future strategy
 concern, not an engine primitive.
@@ -306,14 +321,19 @@ Per the repo's correctness bar, each pure unit gets isolated tests with hand-com
   raw-VORP when `my_next_pick is None`.
 - **`RawVorpStrategy`** — pure VORP order; roster-eligibility filtering; `p_available_next` stays null.
 - **Roster-state / eligibility** — greedy slot allocation: a player consumes its position slot, then
-  `FLEX`, then `SUPER_FLEX`, then `BENCH`; a position with every eligible slot filled is dropped; an
-  open non-bench slot triggers the starting-need nudge; bench-sharing across positions is respected
-  (the same shared helper `_pool.py` uses).
+  `FLEX`, then `SUPER_FLEX`, then `BENCH`; a position with every eligible slot filled is dropped;
+  starting-need tiering puts an open-starting-slot position ahead of a bench-only one *even when the
+  bench-only player has the higher score* (proves the tier dominates score), while two players in the
+  same tier keep score order; bench-sharing across positions is respected (the same shared helper
+  `_pool.py` uses).
 - **`my_roster` / `id_map` resolution** — my picks resolve to positions via `id_map`; a pick whose
   `gsis_id` is missing from `id_map` raises with the offending id; a drafted player absent from the
   VORP table (e.g. off-board) is still position-counted via `id_map`.
 - **Protocol conformance** — both strategies satisfy `DraftStrategy` structurally; output validates
   against `RecommendationSchema`.
+- **Determinism / tie-breaks** — equal-`vorp` same-position players resolve by `gsis_id` (survivor
+  sum is order-independent); equal-`score` players resolve by `(vorp desc, gsis_id asc)` so `rank` is
+  reproducible across runs.
 - **CLI smoke** — runs end-to-end on a tiny fixture state + VORP table + id_map, prints a stable table.
 
 Gates (per `CLAUDE.md`): `pytest`, `mypy src tests`, `ruff check`, `ruff format --check` all clean.
