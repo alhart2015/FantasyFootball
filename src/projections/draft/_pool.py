@@ -20,6 +20,9 @@ from projections.draft.roster_eligibility import (
 from projections.draft.roster_eligibility import (
     SUPER_FLEX_ELIGIBLE as _SUPER_FLEX_ELIGIBLE,
 )
+from projections.draft.roster_eligibility import (
+    bench_eligible_positions,
+)
 from projections.schemas import RosterSlot
 
 
@@ -111,9 +114,7 @@ def _select_pool(vorp_table: pd.DataFrame, league_config: LeagueConfig) -> list[
     # Bench eligibility excludes positions the league doesn't roster (e.g. no K slots
     # → no K on bench). Guards against drafting K/DST into a K-less / DST-less league.
     bench_eligible = frozenset(
-        slot.value
-        for slot in league_config.roster_slots
-        if slot in _POSITION_SLOTS and league_config.roster_slots[slot] > 0
+        pos.value for pos in bench_eligible_positions(league_config.roster_slots)
     )
     _take_top_n(
         sorted_df,

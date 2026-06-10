@@ -34,7 +34,8 @@ def bench_eligible_positions(roster_slots: Mapping[RosterSlot, int]) -> frozense
     """Positions the league actually rosters (so the shared bench can hold them).
 
     Excludes positions with no position slot — e.g. a K-less league never benches
-    a kicker. Mirrors `_pool.py`'s bench-eligibility rule.
+    a kicker. Source of truth for bench eligibility; `_pool.py`'s pool selector
+    delegates here.
     """
     return frozenset(
         Position(slot.value) for slot in POSITION_SLOTS if roster_slots.get(slot, 0) > 0

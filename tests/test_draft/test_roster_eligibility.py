@@ -48,8 +48,8 @@ def test_filled_position_slot_falls_to_flex_then_bench() -> None:
 
 
 def test_position_fully_filled_is_dropped() -> None:
-    # QB:1 + no flex/superflex eligibility for a 2nd QB starting slot, and the
-    # bench is exhausted by three RBs → a 2nd QB can only go to bench.
+    # QB:1 filled by a QB, no FLEX/SUPER_FLEX, and BENCH:0 → no room for a
+    # 2nd QB anywhere, so QB must be absent from eligible_positions.
     slots = {RosterSlot.QB: 1, RosterSlot.RB: 2, RosterSlot.BENCH: 0}
     elig = eligible_positions(slots, [Position.QB])
     # QB position slot filled, no FLEX/SUPER_FLEX/BENCH → QB ineligible.
