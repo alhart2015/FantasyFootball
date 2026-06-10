@@ -44,11 +44,13 @@ def bench_eligible_positions(roster_slots: Mapping[RosterSlot, int]) -> frozense
 
 def _open_slots_after(
     roster_slots: Mapping[RosterSlot, int], my_roster: Iterable[Position]
-) -> Counter[RosterSlot]:
+) -> tuple[Counter[RosterSlot], frozenset[Position]]:
     """Per-team open slots remaining after greedily placing my drafted players.
 
     Fill priority per player: own position slot → FLEX → SUPER_FLEX → BENCH.
     A player with no open slot (roster overflow) is left unplaced (no negatives).
+    Also returns the bench-eligible set it computes, so the caller need not
+    recompute it.
     """
     open_: Counter[RosterSlot] = Counter(
         {slot: count for slot, count in roster_slots.items() if slot != RosterSlot.IR and count > 0}
@@ -66,7 +68,7 @@ def _open_slots_after(
             if eligible and open_.get(slot, 0) > 0:
                 open_[slot] -= 1
                 break
-    return open_
+    return open_, benchable
 
 
 def _has_open_starting(pos: Position, open_: Counter[RosterSlot]) -> bool:
@@ -92,8 +94,7 @@ def eligible_positions(
     Positions I can no longer roster are absent (the caller drops them).
     """
     my_roster = list(my_roster)
-    open_ = _open_slots_after(roster_slots, my_roster)
-    benchable = bench_eligible_positions(roster_slots)
+    open_, benchable = _open_slots_after(roster_slots, my_roster)
     bench_open = open_.get(RosterSlot.BENCH, 0) > 0
     result: dict[Position, bool] = {}
     for pos in Position:
