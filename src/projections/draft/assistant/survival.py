@@ -43,8 +43,9 @@ class LogisticSurvival:
             raise ValueError(f"sigma must be > 0; got {self.sigma}")
 
     def p_available(self, adp: float, at_pick: int) -> float:
-        # No market signal → treat as "won't be taken soon".
-        if adp is None or math.isnan(adp):
+        # No market signal (missing ADP arrives as NaN from pandas) → treat as
+        # "won't be taken soon".
+        if math.isnan(adp):
             return 1.0
         # Available *at* `at_pick` ⇔ not taken on or before `at_pick - 1`.
         return 1.0 - _sigmoid((at_pick - 1 - adp) / self.sigma)
