@@ -59,10 +59,11 @@ control (needed as the tournament baseline anyway).
 4. A **`DraftStrategy` protocol** (the substitution seam) + two concrete strategies:
    - `RawVorpStrategy` — best available by VORP, roster-need filtered (the control).
    - `NowOrNeverStrategy` — analytic opportunity-cost recommendation (Approach A).
-5. **Roster-need awareness**: recommendations respect `LeagueConfig` slot maxes and prefer unfilled
-   starting slots over bench depth.
-6. A **CLI** (`scripts/draft_assistant.py`) that reads a draft-state file + the consensus VORP table,
-   runs a chosen strategy, and prints the ranked recommendation with player names attached.
+5. **Roster-need awareness** (§3.6): a deterministic greedy slot-allocation rule (reusing `_pool.py`'s
+   eligibility sets via a promoted shared helper) drops positions I can no longer roster and nudges
+   open starting slots over bench depth.
+6. A **CLI** (`scripts/draft_assistant.py`) that reads a draft-state file + the consensus VORP table
+   + `id_map`, runs a chosen strategy, and prints the ranked recommendation with names attached.
 
 ### Explicitly out of scope (later slices / other work)
 - **Streamlit UI** — Slice 3.
@@ -92,8 +93,14 @@ resolution (typing picks during a draft) is a CLI/UI concern, not the engine's.
   `generate_vorp_table.py --source consensus`. Provides, per player: `gsis_id`, `position`,
   `season_mean_fpts`, `vorp`, `consensus_adp` (nullable — the long tail has no ADP). This is the
   candidate universe. The engine does not re-derive any of these.
-- **`LeagueConfig`** — existing dataclass; supplies `n_teams`, roster slot structure (starting slots
-  per position, bench size), and drives roster-need + pool sizing.
+- **`id_map`** — `IdMapSchema` (`gsis_id` → `position` (non-nullable) + `full_name`). The **position
+  source for *my* drafted players**, which the VORP table cannot supply on its own: the consensus
+  VORP table is skill-positions-only and `has_points`-only (PR #56), so a drafted K/DST or a
+  `has_points=False` player has no VORP row. `id_map` covers every gsis_id, so roster-need counts
+  every pick I make. (The CLI already needs `id_map` for name display — same dependency.)
+- **`LeagueConfig`** — existing pydantic model; supplies `n_teams` and `roster_slots`
+  (`dict[RosterSlot, int]` — note: keyed by `RosterSlot`, including the shared `FLEX` /
+  `SUPER_FLEX` / `BENCH` slots, **not** by `Position`). Drives roster-need (§3.6) and pool sizing.
 - **Draft-state file** — see §3.2.
 
 ### 3.2 Draft-state model
@@ -118,13 +125,19 @@ Derived (computed, not stored in the file):
 - `drafted_ids: frozenset[GsisId]` — every `gsis_id` in `picks`.
 - `current_pick: int` — `len(picks) + 1` (the pick about to be made).
 - `slot_for(pick_number)` — snake-order slot of any absolute pick (see §3.3).
-- `my_roster` — positions I've filled: the picks whose derived slot equals `my_slot`, mapped to
-  `position` via the VORP table.
+- `my_roster` — the positions I've filled: each pick whose derived slot equals `my_slot`, resolved
+  to a `Position` via **`id_map`** (the universal position source — see §3.1). A pick whose
+  `gsis_id` is absent from `id_map` is a hard error (we can't roster-account a player of unknown
+  position); the CLI surfaces the offending id so it can be corrected.
 - `available pool` — VORP rows whose `gsis_id ∉ drafted_ids`.
 
 The picks list is validated at the boundary (each entry matches the GSIS pattern via
 `validate_gsis_id`; the list is order-preserving) so malformed state fails loudly, per repo
 convention. Duplicate `gsis_id` across picks is a hard error (a player can't be drafted twice).
+
+**Precondition:** the engine assumes `current_pick` is *my* pick — the recommendation answers "who
+should I take, on the clock, right now." (Running it off-turn still produces a ranking, but the
+opportunity-cost framing in §3.5 is written for "it's my turn.")
 
 ### 3.3 Pick-timing (pure functions)
 
@@ -132,16 +145,22 @@ Snake order: round `r` (1-indexed) goes slot `1→n` on odd rounds and `n→1` o
 `my_slot`, `n_teams`, and `current_pick`:
 
 - `slot_for(pick_number)` → which slot owns an absolute pick.
-- `my_upcoming_picks(current_pick)` → the ordered list of my remaining absolute pick numbers
-  (including the current pick if it's mine).
-- `my_next_pick(current_pick)` → my next absolute pick number `N` — the pick the survival model
-  measures availability *at* (a player must survive picks `current_pick..N−1` to be there for me).
-- `picks_until_next(current_pick)` → count of *opponent* picks before my next turn (informational).
+- `my_upcoming_picks(current_pick)` → the ordered list of my absolute pick numbers `≥ current_pick`
+  (so the current pick is the first entry when it's my turn).
+- `my_next_pick(current_pick)` → my first pick **strictly after** `current_pick` — i.e. the pick
+  *after* the one I'm about to make. This is the pick the survival model measures availability *at*:
+  a candidate must survive picks `current_pick+1 .. my_next_pick−1` to still be there when I'm next
+  up. Returns `None` when I have no pick after the current one (see §3.5 last-pick fallback).
+- `picks_until_next(current_pick)` → count of *opponent* picks between this pick and `my_next_pick`
+  (informational).
+
+`my_next_pick` deliberately excludes the current pick: I take a player now with certainty; the
+opportunity cost is against what survives to my *following* turn.
 
 All pure, no pandas, hand-computable expected values for tests. E.g. slot 7 of 12: my picks are
-7, 18, 31, 42 …; standing at pick 7, `my_next_pick` = 18, the intervening opponent picks are 8–17
-(so `picks_until_next` = 10), and a candidate's availability is evaluated as "not taken on or before
-pick 17."
+7, 18, 31, 42 …; standing at pick 7, `my_upcoming_picks` = [7, 18, 31, …], `my_next_pick` = 18, the
+intervening opponent picks are 8–17 (`picks_until_next` = 10), and a candidate's availability is
+evaluated as "not taken on or before pick 17."
 
 ### 3.4 Survival model (pluggable)
 
@@ -157,6 +176,15 @@ of a round, refined empirically in Slice 2). Monotone in ADP, deterministic.
 
 Null-ADP players (long tail, no market signal): survival ≈ 1.0 (treated as "won't be taken soon") —
 they are never the urgent pick, which is correct.
+
+**Known approximation (v1):** `p_available` is *unconditional* — it does not condition on the fact
+that a candidate has already lasted to the current pick. A player who has fallen well past their ADP
+(still on the board at pick 7 with ADP 3) is scored as near-certain to be gone, ignoring the
+evidence that they're sliding. Strategies only ever evaluate currently-available players, so a
+survive-to-now conditioning would be more correct; it's deferred as a Slice-2 refinement (it changes
+the survival model, not the strategy, thanks to the injection seam). Acceptable for v1 because ADP
+sliders are a small minority and the error is conservative (it never *over*-rates a faller's
+availability).
 
 The model is injected into strategies, so survival assumptions can be swapped without touching
 strategy logic.
@@ -179,8 +207,8 @@ class DraftStrategy(Protocol):
 engine.
 
 **`RawVorpStrategy`** (control): filter the pool to roster-eligible positions (§3.6), `score = vorp`,
-rank desc. `p_available_next` populated for transparency but unused in ranking. The "best available"
-baseline.
+rank desc. It takes **no survival model** and leaves `p_available_next` null — the trivial
+"best-available" baseline, decoupled from any timing assumption.
 
 **`NowOrNeverStrategy`** (Approach A): for each roster-eligible position, sort its available players
 by VORP desc and compute the **expected VORP of the best player still available at my next pick**:
@@ -201,19 +229,50 @@ i.e. the value I lock in *over what I could expect at this position if I pass no
 player is the most urgent good value. Deterministic; every intermediate (VORP, ADP, `p_available`,
 expected-alternative) is surfaced for explainability.
 
+**Ranking property (intended, load-bearing):** the subtracted term `E[best survivor VORP at pos]`
+is **constant across all players at a position**. Therefore *within* a position the ranking is
+exactly VORP order — the strategy never reorders two same-position players. Its entire effect is
+**cross-position**: it decides *which position to attack now* by how depleted that position will be
+by my next pick (`cost_of_waiting`), then takes the best player there. This is the intended design
+(chosen over the alternative of ranking positions by `cost_of_waiting` and picking best-within,
+which produces the same ordering when there is one open slot per position; the additive form
+generalizes more cleanly and keeps `score` directly comparable across positions). The §4 "reorders
+vs raw VORP" test exercises exactly this cross-position reordering.
+
+**Last-pick fallback:** when `my_next_pick` is `None` (the current pick is my final pick — no future
+turn to wait for), there is no survival window and the opportunity-cost framing is undefined.
+`NowOrNeverStrategy` falls back to `RawVorpStrategy`'s ranking (take the best available), with
+`p_available_next` left null. This is a stated requirement with its own test.
+
 Edge cases: a position with only one available player → `E[best survivor]` over an empty
 "better-players" set is just `vorp · p_avail`; a position I can no longer roster is filtered out
 before scoring (so it never appears, and never anchors another position's cost).
 
 ### 3.6 Roster-need awareness
 
-From `LeagueConfig` roster structure and `my_roster`:
-- A position is **roster-eligible** if I have not hit its maximum rosterable count (starting slots +
-  share of bench + flex eligibility). Ineligible positions are dropped from the candidate pool before
-  scoring.
-- Among eligible positions, **unfilled starting slots** are preferred over pure bench depth: a small,
-  documented starting-need weight nudges the score so the engine won't rank a luxury bench RB over a
-  startable WR when WR is still an open starting slot. The weight is a named constant, not magic.
+Because `roster_slots` is keyed by `RosterSlot` with shared `FLEX` / `SUPER_FLEX` / `BENCH` slots,
+"how many more of position P can I roster" is not a per-position constant — it depends on how my
+existing picks consumed shared slots. We make it well-defined with an explicit **greedy
+slot-allocation** rule, reusing the eligibility sets already defined in `_pool.py`
+(`_FLEX_ELIGIBLE = {RB, WR, TE}`, `_SUPER_FLEX_ELIGIBLE = {QB, RB, WR, TE}`, and its bench-eligibility
+rule that excludes positions the league doesn't roster). To avoid a private-symbol import, those sets
++ the slot-fill priority are promoted to a small shared helper (e.g.
+`projections/draft/roster_eligibility.py`) that both `_pool.py` and the assistant import — one source
+of truth for slot↔position eligibility.
+
+**Allocation (deterministic):** start from my league's per-team slot counts (`roster_slots`). Place
+each of *my* drafted players (from `my_roster`) into the first open slot in priority order — its own
+position slot → `FLEX` (if eligible) → `SUPER_FLEX` (if eligible) → `BENCH` (if the league benches
+that position). The leftover open slots after placing all my picks define need.
+
+- **Roster-eligible position** P: there exists an open slot P could occupy — P's position slot, a
+  `FLEX` (if `P ∈ _FLEX_ELIGIBLE`), a `SUPER_FLEX` (if `P ∈ _SUPER_FLEX_ELIGIBLE`), or `BENCH` (if P
+  is benchable and bench capacity remains). Ineligible positions (I've filled every slot they could
+  go in) are dropped from the candidate pool before scoring.
+- **Unfilled starting slot** for P: an open **non-`BENCH`** slot P could occupy. When one exists, a
+  small documented `STARTING_NEED_WEIGHT` (a named constant, added to `score`) nudges P's players up
+  so the engine won't rank luxury bench depth over filling an open starting slot — e.g. a backup RB
+  over a startable WR when a WR/FLEX start is still open.
 
 Kept deliberately simple and rule-based for v1; richer roster-construction logic is a future strategy
 concern, not an engine primitive.
@@ -221,11 +280,14 @@ concern, not an engine primitive.
 ### 3.7 CLI surface
 
 `scripts/draft_assistant.py`:
-- `--state PATH` (draft-state JSON), `--vorp-table PATH` (consensus VORP parquet; default to the
-  latest under `data/processed/`), `--strategy {now_or_never,raw_vorp}` (default `now_or_never`),
-  `--top N` (rows to print, default 15), `--sigma FLOAT` (override survival spread).
-- Resolves player names from `id_map` (+ consensus placeholder names for rookies) for display only;
-  prints a ranked table: rank, name, position, VORP, ADP, P(available next pick), score.
+- `--state PATH` (draft-state JSON; **required**), `--vorp-table PATH` (consensus VORP table written
+  by `generate_vorp_table.py --source consensus --out ...`; **required** — there is no canonical
+  partitioned VORP location to default to, the VORP CLI writes to a caller-named `--out`),
+  `--strategy {now_or_never,raw_vorp}` (default `now_or_never`), `--top N` (rows to print,
+  default 15), `--sigma FLOAT` (override survival spread).
+- Resolves player names + positions from `id_map` (`full_name` for display; `position` for
+  `my_roster`, per §3.2). Prints a ranked table: rank, name, position, VORP, ADP,
+  P(available next pick), score.
 - This is the surface Slice 2's harness and our in-session strategy comparisons drive.
 
 ---
@@ -233,16 +295,26 @@ concern, not an engine primitive.
 ## 4. Testing
 
 Per the repo's correctness bar, each pure unit gets isolated tests with hand-computed expected values:
-- **Pick-timing** — snake math across slots/rounds (incl. wrap at round boundaries); `picks_until_next`.
+- **Pick-timing** — snake math across slots/rounds (incl. wrap at round boundaries); `my_upcoming_picks`
+  includes the current pick when it's mine; `my_next_pick` is strictly after `current_pick` (e.g.
+  slot 7/12 at pick 7 → 18) and returns `None` at my last pick; `picks_until_next`.
 - **Survival model** — monotonicity, boundary (adp ≪ pick → ~0; adp ≫ pick → ~1), null-ADP → 1.0.
 - **`NowOrNeverStrategy`** — small hand-built pools where the expected-survivor sum and resulting
-  ranking are computed by hand; a case where now-or-never reorders vs raw VORP (urgent scarce player
-  jumps a higher-VORP-but-safe player), proving the strategies differ.
-- **`RawVorpStrategy`** — pure VORP order, roster-eligibility filtering.
-- **Roster-need** — a filled position is dropped; a startable open slot is preferred over bench depth.
+  ranking are computed by hand; a case where now-or-never reorders vs raw VORP (urgent scarce
+  position attacked over a higher-VORP-but-safe one), proving the strategies differ; a within-position
+  case confirming order equals VORP order (the ranking property); the **last-pick fallback** to
+  raw-VORP when `my_next_pick is None`.
+- **`RawVorpStrategy`** — pure VORP order; roster-eligibility filtering; `p_available_next` stays null.
+- **Roster-state / eligibility** — greedy slot allocation: a player consumes its position slot, then
+  `FLEX`, then `SUPER_FLEX`, then `BENCH`; a position with every eligible slot filled is dropped; an
+  open non-bench slot triggers the starting-need nudge; bench-sharing across positions is respected
+  (the same shared helper `_pool.py` uses).
+- **`my_roster` / `id_map` resolution** — my picks resolve to positions via `id_map`; a pick whose
+  `gsis_id` is missing from `id_map` raises with the offending id; a drafted player absent from the
+  VORP table (e.g. off-board) is still position-counted via `id_map`.
 - **Protocol conformance** — both strategies satisfy `DraftStrategy` structurally; output validates
   against `RecommendationSchema`.
-- **CLI smoke** — runs end-to-end on a tiny fixture state + VORP table, prints a stable table.
+- **CLI smoke** — runs end-to-end on a tiny fixture state + VORP table + id_map, prints a stable table.
 
 Gates (per `CLAUDE.md`): `pytest`, `mypy src tests`, `ruff check`, `ruff format --check` all clean.
 
@@ -260,10 +332,16 @@ Gates (per `CLAUDE.md`): `pytest`, `mypy src tests`, `ruff check`, `ruff format 
   assumptions and is a later strategy behind the same protocol.
 - **Survival via ADP + a single global σ** — simplest defensible model; per-player ADP spread isn't
   available today (consensus ADP is a mean). σ is configurable and gets empirically tuned in Slice 2.
-- **Engine is gsis-id-native; name resolution lives in the CLI/UI** — keeps the brain pure and the
-  display concern at the edge.
-- **Roster-need is a simple rule, not a model** — enough to avoid drafting a 4th QB; richer
-  construction logic is a future strategy, not an engine primitive.
+- **Engine is gsis-id-native; `id_map` is the universal position + name source** — the VORP table
+  can't supply a position for non-skill / `has_points=False` picks, so `my_roster` resolves positions
+  via `id_map` (which the CLI already loads for names). A pick missing from `id_map` is a hard error.
+- **Roster-need is a deterministic greedy-allocation rule, not a model** — slot↔position eligibility
+  is shared with `_pool.py` (promoted out of its private symbols) so there is one source of truth;
+  enough to avoid drafting a 4th QB. Richer construction logic is a future strategy, not an engine
+  primitive.
+- **Now-or-never reorders only across positions** — the opportunity-cost offset is a per-position
+  constant, so within a position the order is plain VORP; the strategy's job is choosing *which
+  position to attack now*. Falls back to raw VORP at my last pick.
 
 ---
 
