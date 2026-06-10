@@ -77,6 +77,34 @@ def test_validate_pool_accepts_valid() -> None:
     _validate_pool(_pool(), _config())  # no raise
 
 
+def test_run_tournament_rejects_out_of_range_my_slot() -> None:
+    # An out-of-range slot owns no snake pick -> hero drafts nobody, scores 0, and a
+    # bogus "winner" would be declared. Must fail loud instead (final-review #1).
+    with pytest.raises(ValueError, match="my_slot must be in"):
+        run_tournament(
+            {"best": _BestFpts(), "worst": _WorstFpts()},
+            pool=_pool(),
+            config=_config(n_teams=2),
+            my_slot=99,
+            n_seeds=5,
+            adp_jitter=2.0,
+            base_seed=0,
+        )
+
+
+def test_tune_sigma_rejects_non_positive_seeds() -> None:
+    with pytest.raises(ValueError, match="n_seeds must be >= 1"):
+        tune_sigma(
+            [1.0, 2.0],
+            pool=_pool(),
+            config=_config(),
+            my_slot=1,
+            n_seeds=0,
+            adp_jitter=2.0,
+            base_seed=0,
+        )
+
+
 def test_paired_diff_ci_constant_edge_excludes_zero() -> None:
     a = np.array([10.0, 12.0, 11.0, 9.0, 13.0] * 4)
     b = a - 3.0  # A beats B by a constant 3 every paired seed

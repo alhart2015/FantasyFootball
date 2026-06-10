@@ -70,6 +70,18 @@ def _validate_pool(pool: pd.DataFrame, config: LeagueConfig) -> None:
         raise ValueError(f"pool has {len(pool)} players; need >= {need} to fill a full draft")
 
 
+def _validate_run_params(config: LeagueConfig, *, my_slot: int, n_seeds: int) -> None:
+    """Guard the run parameters both entry points share.
+
+    An out-of-range my_slot would never own a snake pick, so the hero drafts
+    nobody, scores 0, and the harness would report a confidently-wrong verdict.
+    """
+    if not 1 <= my_slot <= config.n_teams:
+        raise ValueError(f"my_slot must be in 1..{config.n_teams}; got {my_slot}")
+    if n_seeds < 1:
+        raise ValueError(f"n_seeds must be >= 1; got {n_seeds}")
+
+
 def _bootstrap(values: np.ndarray, *, n_bootstrap: int = _N_BOOTSTRAP, seed: int) -> Interval:
     """Percentile-bootstrap CI of the mean of `values`."""
     v = np.asarray(values, dtype=np.float64)
@@ -127,6 +139,7 @@ def run_tournament(
 ) -> TournamentResult:
     """Compare `strategies` over `n_seeds` paired drafts; declare a winner."""
     _validate_pool(pool, config)
+    _validate_run_params(config, my_slot=my_slot, n_seeds=n_seeds)
     values = {
         name: _strategy_values(
             strat,
@@ -172,6 +185,7 @@ def tune_sigma(
 ) -> SigmaTuningResult:
     """Sweep the survival sigma for NowOrNeverStrategy; return the (sigma, mean) grid + argmax."""
     _validate_pool(pool, config)
+    _validate_run_params(config, my_slot=my_slot, n_seeds=n_seeds)
     grid: list[tuple[float, float]] = []
     for sigma in sigma_grid:
         strat = NowOrNeverStrategy(LogisticSurvival(sigma=float(sigma)))
