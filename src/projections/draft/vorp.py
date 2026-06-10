@@ -16,11 +16,11 @@ from __future__ import annotations
 import pandas as pd
 
 from projections.draft._pool import (
-    _POSITION_SLOTS,
     _reject_duplicate_gsis_ids,
     _select_pool,
 )
 from projections.draft.league_config import LeagueConfig
+from projections.draft.roster_eligibility import POSITION_SLOTS as _POSITION_SLOTS
 from projections.schemas import (
     _PYARROW_STR,
     ProjectionSeasonSchema,

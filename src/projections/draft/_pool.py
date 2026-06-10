@@ -11,21 +11,16 @@ from __future__ import annotations
 import pandas as pd
 
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import Position, RosterSlot
-
-_POSITION_SLOTS: tuple[RosterSlot, ...] = (
-    RosterSlot.QB,
-    RosterSlot.RB,
-    RosterSlot.WR,
-    RosterSlot.TE,
-    RosterSlot.K,
-    RosterSlot.DST,
+from projections.draft.roster_eligibility import (
+    FLEX_ELIGIBLE as _FLEX_ELIGIBLE,
 )
-
-_FLEX_ELIGIBLE: frozenset[Position] = frozenset({Position.RB, Position.WR, Position.TE})
-_SUPER_FLEX_ELIGIBLE: frozenset[Position] = frozenset(
-    {Position.QB, Position.RB, Position.WR, Position.TE}
+from projections.draft.roster_eligibility import (
+    POSITION_SLOTS as _POSITION_SLOTS,
 )
+from projections.draft.roster_eligibility import (
+    SUPER_FLEX_ELIGIBLE as _SUPER_FLEX_ELIGIBLE,
+)
+from projections.schemas import RosterSlot
 
 
 def _take_top_n(
