@@ -50,8 +50,12 @@ def generate_recommendation(
     id_map_path: Path,
     strategy_name: str,
     sigma: float | None,
-) -> pd.DataFrame:
-    """Load inputs, run the chosen strategy, return a RecommendationSchema frame."""
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load inputs, run the chosen strategy.
+
+    Returns `(recommendation, id_map)` — the validated id_map is handed back so
+    callers (the CLI display path) reuse it instead of re-reading + re-validating.
+    """
     id_map = _load_id_map(id_map_path)
     state, league = load_draft_state(state_path, id_map)
 
@@ -60,7 +64,7 @@ def generate_recommendation(
     vorp = VorpTableSchema.validate(vorp)
 
     strategy = _build_strategy(strategy_name, league.n_teams, sigma)
-    return strategy.recommend(state, vorp, league)
+    return strategy.recommend(state, vorp, league), id_map
 
 
 def format_table(rec: pd.DataFrame, id_map: pd.DataFrame, top: int) -> str:
@@ -116,15 +120,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def run(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    rec = generate_recommendation(
+    rec, id_map = generate_recommendation(
         state_path=args.state,
         vorp_path=args.vorp_table,
         id_map_path=args.id_map,
         strategy_name=args.strategy,
         sigma=args.sigma,
     )
-    # Reload id_map for display names; generate_recommendation stays a self-contained
-    # path-in/frame-out API rather than returning its internal id_map.
-    id_map = _load_id_map(args.id_map)
     print(format_table(rec, id_map, int(args.top)))
     return 0

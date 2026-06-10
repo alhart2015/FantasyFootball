@@ -62,7 +62,7 @@ def _setup(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 def test_generate_recommendation(tmp_path: Path) -> None:
     state_path, vorp_path, id_path = _setup(tmp_path)
-    rec = generate_recommendation(
+    rec, id_map = generate_recommendation(
         state_path=state_path,
         vorp_path=vorp_path,
         id_map_path=id_path,
@@ -71,6 +71,7 @@ def test_generate_recommendation(tmp_path: Path) -> None:
     )
     RecommendationSchema.validate(rec)
     assert set(rec["gsis_id"]) == {"00-0000010", "00-0000020"}
+    assert set(id_map["gsis_id"]) == {"00-0000010", "00-0000020"}
 
 
 def test_run_prints_table(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

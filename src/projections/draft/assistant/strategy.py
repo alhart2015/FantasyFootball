@@ -62,7 +62,8 @@ def _finalize(
     # stable across accumulation order. 10 decimals is far below any meaningful
     # VORP delta.
     out["score"] = out["score"].astype(float).round(10)
-    out["fills_starting_slot"] = out["position"].map(lambda value: elig[Position(value)])
+    fills_by_value = {pos.value: fills for pos, fills in elig.items()}
+    out["fills_starting_slot"] = out["position"].map(fills_by_value).astype(bool)
     out["p_available_next"] = p_available.astype(pd.Float64Dtype())
     out["consensus_adp"] = out["consensus_adp"].astype(pd.Float64Dtype())
     out["gsis_id"] = out["gsis_id"].astype(_PYARROW_STR)
@@ -76,6 +77,14 @@ def _finalize(
     return RecommendationSchema.validate(out[cols])
 
 
+def _raw_vorp_result(df: pd.DataFrame, elig: dict[Position, bool]) -> pd.DataFrame:
+    """Score = VORP, no timing signal (null p_available). The control and the
+    last-pick fallback share this."""
+    df["score"] = df["vorp"].astype(float)
+    p_na: pd.Series[float] = pd.Series(pd.NA, index=df.index, dtype=pd.Float64Dtype())
+    return _finalize(df, elig, p_na)
+
+
 @dataclass(frozen=True)
 class RawVorpStrategy:
     """Best available by VORP (roster-eligible), no timing. The control."""
@@ -84,9 +93,7 @@ class RawVorpStrategy:
         self, state: DraftState, pool: pd.DataFrame, config: LeagueConfig
     ) -> pd.DataFrame:
         df, elig = _eligible_subset(state, pool, config)
-        df["score"] = df["vorp"].astype(float)
-        p_na: pd.Series[float] = pd.Series(pd.NA, index=df.index, dtype=pd.Float64Dtype())
-        return _finalize(df, elig, p_na)
+        return _raw_vorp_result(df, elig)
 
 
 @dataclass(frozen=True)
@@ -102,9 +109,7 @@ class NowOrNeverStrategy:
         next_pick = my_next_pick(state.current_pick, state.my_slot, state.n_teams, state.rounds)
         if next_pick is None:
             # Last-pick fallback → raw VORP, null p_available.
-            df["score"] = df["vorp"].astype(float)
-            p_na: pd.Series[float] = pd.Series(pd.NA, index=df.index, dtype=pd.Float64Dtype())
-            return _finalize(df, elig, p_na)
+            return _raw_vorp_result(df, elig)
 
         # Internal survival prob per row (1.0 for null ADP); displayed value is
         # null where ADP is null.

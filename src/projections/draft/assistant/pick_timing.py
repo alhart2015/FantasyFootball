@@ -32,10 +32,8 @@ def my_upcoming_picks(current_pick: int, my_slot: int, n_teams: int, rounds: int
 
 def my_next_pick(current_pick: int, my_slot: int, n_teams: int, rounds: int) -> int | None:
     """My first pick strictly after `current_pick`, or None if none remain."""
-    later = [
-        p for p in my_upcoming_picks(current_pick, my_slot, n_teams, rounds) if p > current_pick
-    ]
-    return later[0] if later else None
+    later = [p for r in range(rounds) if (p := _pick_number(r, my_slot, n_teams)) > current_pick]
+    return min(later) if later else None
 
 
 def picks_until_next(current_pick: int, my_slot: int, n_teams: int, rounds: int) -> int | None:
