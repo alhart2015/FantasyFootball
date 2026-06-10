@@ -16,11 +16,11 @@ from __future__ import annotations
 import pandas as pd
 
 from projections.draft._pool import (
-    _POSITION_SLOTS,
     _reject_duplicate_gsis_ids,
     _select_pool,
 )
 from projections.draft.league_config import LeagueConfig
+from projections.draft.roster_eligibility import bench_eligible_positions
 from projections.schemas import (
     _PYARROW_STR,
     ProjectionSeasonSchema,
@@ -40,13 +40,10 @@ def _in_scope_positions(league_config: LeagueConfig) -> frozenset[str]:
     """The set of `Position.value`s the league cares about.
 
     Excludes FLEX / SUPER_FLEX / BENCH / IR (those slots accept multiple
-    positions or are not draft-position slots at all).
+    positions or are not draft-position slots at all). Delegates to the shared
+    bench-eligibility rule so VORP and the pool selector cannot drift.
     """
-    return frozenset(
-        slot.value
-        for slot in league_config.roster_slots
-        if slot in _POSITION_SLOTS and league_config.roster_slots[slot] > 0
-    )
+    return frozenset(pos.value for pos in bench_eligible_positions(league_config.roster_slots))
 
 
 def _validate_input(season_projections: pd.DataFrame, league_config: LeagueConfig) -> pd.DataFrame:
