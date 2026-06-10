@@ -41,6 +41,17 @@ def _default_sigma_grid(n_teams: int) -> list[float]:
     return [round(f * base, 3) for f in (1 / 3, 1 / 2, 2 / 3, 1.0, 4 / 3)]
 
 
+def _parse_sigma_grid(raw: str) -> list[float]:
+    """Parse a comma-separated sigma grid; tolerate whitespace/trailing commas, reject junk."""
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    if not tokens:
+        raise ValueError(f"--sigma-grid had no numeric values: {raw!r}")
+    try:
+        return [float(t) for t in tokens]
+    except ValueError as exc:
+        raise ValueError(f"--sigma-grid has a non-numeric value: {raw!r}") from exc
+
+
 def format_compare(result: TournamentResult) -> str:
     lines = [
         f"Strategy tournament -- {result.n_seeds} seeds, my_slot={result.my_slot}, "
@@ -90,7 +101,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--adp-jitter",
         type=float,
         default=None,
-        help="Bot ADP noise SD in picks (default ~2/3 of a round).",
+        help="Bot ADP noise SD in picks (default ~2/3 of a draft round, i.e. 2/3*n_teams).",
     )
     p.add_argument("--seed", type=int, default=0, help="Base RNG seed (reproducibility).")
     sub = p.add_subparsers(dest="mode", required=True)
@@ -139,7 +150,7 @@ def run(argv: list[str] | None = None) -> int:
     grid = (
         _default_sigma_grid(config.n_teams)
         if args.sigma_grid is None
-        else [float(x) for x in args.sigma_grid.split(",")]
+        else _parse_sigma_grid(args.sigma_grid)
     )
     tuned = tune_sigma(
         grid,

@@ -59,6 +59,7 @@ def test_compare_mode_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     assert code == 0
     out = capsys.readouterr().out
     assert "now_or_never" in out and "raw_vorp" in out
+    assert "Winner:" in out  # the winner/no-separation line is always printed
 
 
 def test_tune_sigma_mode_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -83,3 +84,46 @@ def test_tune_sigma_mode_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     assert code == 0
     out = capsys.readouterr().out
     assert "recommended" in out.lower()
+
+
+def test_tune_sigma_tolerates_trailing_comma(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vorp_path, cfg_path = _write_inputs(tmp_path)
+    code = run(
+        [
+            "--vorp-table",
+            str(vorp_path),
+            "--league-config",
+            str(cfg_path),
+            "--my-slot",
+            "2",
+            "--seeds",
+            "8",
+            "--seed",
+            "0",
+            "tune-sigma",
+            "--sigma-grid",
+            "2, 4,",  # whitespace + trailing comma must not crash
+        ]
+    )
+    assert code == 0
+    assert "recommended" in capsys.readouterr().out.lower()
+
+
+def test_missing_vorp_table_fails_loud(tmp_path: Path) -> None:
+    _, cfg_path = _write_inputs(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        run(
+            [
+                "--vorp-table",
+                str(tmp_path / "does_not_exist.parquet"),
+                "--league-config",
+                str(cfg_path),
+                "--my-slot",
+                "2",
+                "--seeds",
+                "8",
+                "compare",
+            ]
+        )
