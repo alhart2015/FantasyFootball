@@ -40,7 +40,7 @@ class TournamentResult:
 
     summaries: dict[str, Interval]
     diff: Interval | None  # top-vs-second paired difference; None if <2 strategies
-    winner: str | None  # named iff diff.lo_95 > 0 (CI excludes 0)
+    winner: str | None  # top strategy iff diff.lo_95 > 0; the sole strategy if only one supplied
     n_seeds: int
     adp_jitter: float
     base_seed: int
@@ -70,13 +70,13 @@ def _validate_pool(pool: pd.DataFrame, config: LeagueConfig) -> None:
         raise ValueError(f"pool has {len(pool)} players; need >= {need} to fill a full draft")
 
 
-def _bootstrap(values: np.ndarray, *, seed: int) -> Interval:
+def _bootstrap(values: np.ndarray, *, n_bootstrap: int = _N_BOOTSTRAP, seed: int) -> Interval:
     """Percentile-bootstrap CI of the mean of `values`."""
     v = np.asarray(values, dtype=np.float64)
     rng = np.random.default_rng(seed)
     n = v.shape[0]
-    boot = np.empty(_N_BOOTSTRAP, dtype=np.float64)
-    for b in range(_N_BOOTSTRAP):
+    boot = np.empty(n_bootstrap, dtype=np.float64)
+    for b in range(n_bootstrap):
         boot[b] = v[rng.integers(0, n, size=n)].mean()
     lo, hi = np.percentile(boot, [2.5, 97.5])
     return Interval(point=float(v.mean()), lo_95=float(lo), hi_95=float(hi))
