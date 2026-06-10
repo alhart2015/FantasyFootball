@@ -1038,6 +1038,29 @@ class AuctionValuesSchema(pa.DataFrameModel):
         coerce = True
 
 
+class RecommendationSchema(pa.DataFrameModel):
+    """Ranked draft-pick recommendation — the output of a `DraftStrategy`.
+
+    One row per roster-eligible *available* player. `rank` is 1-based and dense
+    in the final ordering (`(fills_starting_slot desc, score desc, vorp desc,
+    gsis_id asc)`). `p_available_next` is null for null-ADP players and on the
+    raw-VORP / last-pick-fallback paths.
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$", unique=True)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    vorp: Series[float]
+    consensus_adp: Series[pd.Float64Dtype] = pa.Field(gt=0, nullable=True)
+    p_available_next: Series[pd.Float64Dtype] = pa.Field(ge=0, le=1, nullable=True)
+    fills_starting_slot: Series[bool]
+    score: Series[float]
+    rank: Series[pd.Int64Dtype] = pa.Field(ge=1, unique=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
 class PreseasonFeaturesSchema(pa.DataFrameModel):
     """One row per (gsis_id, season) for every player on depth_charts_{season}
     with position in {QB, RB, WR, TE}. Inputs to PreseasonModel.predict_season_distribution.
