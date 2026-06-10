@@ -75,7 +75,9 @@ All three inputs already exist; the harness adds no new ingest or schema-produci
   scored upstream under the league ruleset), `vorp`, and optional `consensus_adp`. **`season_mean_fpts`
   is the roster-scoring currency** and **`consensus_adp` drives the bots**; a pool with an all-null
   `consensus_adp` is a hard error in this harness (a tournament with no market signal is meaningless —
-  unlike the single-recommendation engine, which degrades gracefully).
+  unlike the single-recommendation engine, which degrades gracefully). This check is enforced once at the
+  `run_tournament` / `tune_sigma` entry (sharing a small `_validate_pool` helper with the §3.3
+  pool-sufficiency check), so both CLI modes inherit it; `simulate_draft` itself assumes a validated pool.
 - **`LeagueConfig`** — team count (`n_teams`), roster shape (`roster_slots`), and scoring ruleset
   (`ruleset`). **The documented precondition:** this must be the same config the VORP table was
   generated under. The parquet does not carry a ruleset column, so the harness cannot verify the match
@@ -135,10 +137,12 @@ The function tracks `available` (pool minus drafted) and the hero's own drafted-
 hero's drafted rows (a sub-frame of the pool) — the input to scoring.
 
 **Pool sufficiency.** A full draft needs `n_teams * roster_size` distinct draftable players. If the pool
-is smaller, `simulate_draft` raises a clear error rather than running off the end of `available` (a
-silently short hero roster would mis-score). Starting slots that *no* pool player can fill — e.g. `K` /
-`DST` starting slots run against the skill-only consensus pool, which contains neither — are simply never
-drafted and score 0 in §3.4 by design. The intended pairing is the skill-only league config
+is smaller, the run raises a clear error rather than running off the end of `available` (a silently short
+hero roster would mis-score). This is the second check in the shared `_validate_pool` helper called at the
+`run_tournament` / `tune_sigma` entry (alongside the §3.1 all-null-ADP check); `simulate_draft` assumes a
+validated pool. Starting slots that *no* pool player can fill — e.g. `K` / `DST` starting slots run
+against the skill-only consensus pool, which contains neither — are simply never drafted and score 0 in
+§3.4 by design. The intended pairing is the skill-only league config
 (`configs/league_espn_ppr_12team_skill.json`, which folds K/DST into BENCH), consistent with the rest of
 the consensus Draft Hub.
 
@@ -258,8 +262,11 @@ Synthetic fixtures only (project norm — no network, no real parquet in unit te
 - **Bot policy** — `bot_pick` returns the lowest noisy-ADP player; with `adp_jitter → 0` it is exactly
   the min-`consensus_adp` available player, and a null-ADP player is taken only when nothing else remains.
 - **Pool exhaustion** — a config whose `n_teams * roster_size` exceeds the pool size raises a clear error
-  from `simulate_draft` (not an off-the-end crash); and a config with `K`/`DST` starting slots run on a
-  skill-only pool drafts no K/DST and scores those slots 0 (the unfillable-slot path in §3.4).
+  (not an off-the-end crash); and a config with `K`/`DST` starting slots run on a skill-only pool drafts
+  no K/DST and scores those slots 0 (the unfillable-slot path in §3.4).
+- **All-null-ADP pool** — `run_tournament` / `tune_sigma` raise a clear error when the pool's
+  `consensus_adp` is entirely null (the §3.1 hard constraint), exercised at the entry point that enforces
+  it, so both CLI modes are covered.
 - **`adp_jitter` vs survival σ are independent knobs** — `RawVorpStrategy` results are invariant to the
   survival σ; `NowOrNeverStrategy` results change with σ at fixed `adp_jitter`; `simulate_draft` passes
   `adp_jitter` to bots only and never to the strategy's σ (guards conflation).
