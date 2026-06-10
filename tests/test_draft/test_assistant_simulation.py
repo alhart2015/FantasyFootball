@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from projections.draft.assistant.simulation import _draft_picks, simulate_draft
 from projections.draft.assistant.state import DraftState
@@ -54,6 +55,16 @@ class _WorstFpts:
     ) -> pd.DataFrame:
         avail = pool[~pool["gsis_id"].isin(state.drafted_ids)]
         return avail.sort_values(["season_mean_fpts", "gsis_id"], ascending=[True, True])
+
+
+class _AlwaysFirstRow:
+    """Buggy hero fake: ignores drafted_ids and always returns the pool's first row.
+    On its second pick that player is already gone -> the simulator must fail loud."""
+
+    def recommend(
+        self, state: DraftState, pool: pd.DataFrame, config: LeagueConfig
+    ) -> pd.DataFrame:
+        return pool
 
 
 def test_hero_gets_exactly_roster_size_picks() -> None:
@@ -164,3 +175,49 @@ def test_paired_field_identical_before_hero_diverges() -> None:
         rng=np.random.default_rng(11),
     )
     assert picks_a[0] == picks_b[0]  # the pre-divergence bot pick
+
+
+def test_hero_at_the_turn_threads_state_across_back_to_back_picks() -> None:
+    # n_teams=2, hero=slot 2 -> picks 2,3 (back-to-back at the snake turn) and 6.
+    # adp_jitter=0: bots take lowest adp; _BestFpts takes highest fpts (= lowest gsis).
+    # p1 bot->01, p2 hero->02, p3 hero->03, p4 bot->04, p5 bot->05, p6 hero->06.
+    # The 02 then 03 hero picks prove state is threaded (03 not re-picked as 02).
+    cfg = _config(n_teams=2)
+    picks = _draft_picks(
+        _BestFpts(),
+        my_slot=2,
+        pool=_pool(),
+        config=cfg,
+        adp_jitter=0.0,
+        rng=np.random.default_rng(0),
+    )
+    assert picks == [
+        "00-0000001",
+        "00-0000002",
+        "00-0000003",
+        "00-0000004",
+        "00-0000005",
+        "00-0000006",
+    ]
+    roster = simulate_draft(
+        _BestFpts(),
+        my_slot=2,
+        pool=_pool(),
+        config=cfg,
+        adp_jitter=0.0,
+        rng=np.random.default_rng(0),
+    )
+    assert set(roster["gsis_id"]) == {"00-0000002", "00-0000003", "00-0000006"}
+
+
+def test_strategy_returning_drafted_player_fails_loud() -> None:
+    cfg = _config(n_teams=2)
+    with pytest.raises(ValueError, match="already-drafted"):
+        _draft_picks(
+            _AlwaysFirstRow(),
+            my_slot=2,
+            pool=_pool(),
+            config=cfg,
+            adp_jitter=0.0,
+            rng=np.random.default_rng(0),
+        )

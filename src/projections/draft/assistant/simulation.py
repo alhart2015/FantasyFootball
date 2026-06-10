@@ -53,6 +53,10 @@ def _draft_picks(
                     "pool too small or fully ineligible (should be caught upstream)"
                 )
             gid = validate_gsis_id(str(rec.iloc[0]["gsis_id"]))
+            if gid in drafted_set:
+                raise ValueError(
+                    f"strategy returned already-drafted player {gid!r} at pick {pick_number}"
+                )
             my_roster.append(Position(pos_by_id[gid]))
         else:
             available = pool[~pool["gsis_id"].isin(drafted_set)]
