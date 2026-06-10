@@ -413,13 +413,20 @@ def test_hero_gets_exactly_roster_size_picks() -> None:
     assert len(roster) == cfg.roster_size  # 3
 
 
-def test_hero_best_fpts_drafts_the_top_players_slot1() -> None:
-    # my_slot=1 picks first each round; _BestFpts always grabs the global best left.
+def test_snake_pick_order_hand_computed() -> None:
+    # n_teams=2, roster_size=3 → 6 picks; snake slots p1=s1,p2=s2,p3=s2,p4=s1,p5=s1,p6=s2.
+    # Hero = slot 1 → picks 1,4,5. adp_jitter=0 → bots deterministically take lowest adp;
+    # _BestFpts takes highest fpts (= lowest gsis here). Pool fpts desc, adp asc by gsis.
+    # p1 hero->01, p2 bot->02, p3 bot->03, p4 hero->04, p5 hero->05, p6 bot->06.
     cfg = _config(n_teams=2)
-    rng = np.random.default_rng(0)
-    roster = simulate_draft(_BestFpts(), my_slot=1, pool=_pool(), config=cfg, adp_jitter=0.0, rng=rng)
-    # Pick 1 = best (00-000001, 200). Bot at pick 2 (jitter 0) takes lowest adp among rest.
-    assert "00-0000001" in set(roster["gsis_id"])
+    picks = _draft_picks(_BestFpts(), my_slot=1, pool=_pool(), config=cfg, adp_jitter=0.0,
+                         rng=np.random.default_rng(0))
+    assert picks == ["00-0000001", "00-0000002", "00-0000003",
+                     "00-0000004", "00-0000005", "00-0000006"]
+    # The harness returns exactly the hero's three snake seats (picks 1,4,5).
+    roster = simulate_draft(_BestFpts(), my_slot=1, pool=_pool(), config=cfg, adp_jitter=0.0,
+                            rng=np.random.default_rng(0))
+    assert set(roster["gsis_id"]) == {"00-0000001", "00-0000004", "00-0000005"}
 
 
 def test_determinism_same_seed_same_roster() -> None:
@@ -431,14 +438,16 @@ def test_determinism_same_seed_same_roster() -> None:
     assert list(r1["gsis_id"]) == list(r2["gsis_id"])
 
 
-def test_different_seed_generally_differs() -> None:
+def test_different_seed_changes_the_field() -> None:
+    # Compare the FULL deterministic draft (12 picks) across two seeds, not just the
+    # 3-player hero roster — far lower chance of coincidental equality. Different bot
+    # noise → different board. (Each draft is itself deterministic given its seed.)
     cfg = _config()
-    r1 = simulate_draft(_BestFpts(), my_slot=2, pool=_pool(), config=cfg, adp_jitter=5.0,
-                        rng=np.random.default_rng(1))
-    r2 = simulate_draft(_BestFpts(), my_slot=2, pool=_pool(), config=cfg, adp_jitter=5.0,
-                        rng=np.random.default_rng(2))
-    # Not a hard guarantee, but with this pool + jitter the fields diverge.
-    assert list(r1["gsis_id"]) != list(r2["gsis_id"])
+    picks1 = _draft_picks(_BestFpts(), my_slot=2, pool=_pool(), config=cfg, adp_jitter=5.0,
+                          rng=np.random.default_rng(1))
+    picks2 = _draft_picks(_BestFpts(), my_slot=2, pool=_pool(), config=cfg, adp_jitter=5.0,
+                          rng=np.random.default_rng(2))
+    assert picks1 != picks2
 
 
 def test_paired_field_identical_before_hero_diverges() -> None:
@@ -688,6 +697,29 @@ def test_tune_sigma_returns_argmax() -> None:
     assert len(result.grid) == 2
     assert result.best_sigma in (1.0, 8.0)
     assert result.best_sigma == max(result.grid, key=lambda r: r[1])[0]
+
+
+def test_sigma_flows_through_and_jitter_is_separate() -> None:
+    # Spec §4: adp_jitter (bots) and survival sigma (strategy) are independent knobs.
+    # Sigma must actually flow into NowOrNeverStrategy's pick choice — guards the
+    # "p_available silently NaN / sigma ignored" wiring-bug class. Hold the field
+    # (adp_jitter, seed) fixed and vary only sigma; the hero rosters must differ.
+    from projections.draft.assistant.simulation import simulate_draft
+    from projections.draft.assistant.strategy import NowOrNeverStrategy
+    from projections.draft.assistant.survival import LogisticSurvival
+
+    pool, cfg = _pool(n=24), _config(n_teams=4)  # deeper field so timing bites
+    tight = NowOrNeverStrategy(LogisticSurvival(sigma=0.1))
+    loose = NowOrNeverStrategy(LogisticSurvival(sigma=50.0))
+    roster_tight = simulate_draft(
+        tight, my_slot=2, pool=pool, config=cfg, adp_jitter=3.0, rng=np.random.default_rng(0)
+    )
+    roster_loose = simulate_draft(
+        loose, my_slot=2, pool=pool, config=cfg, adp_jitter=3.0, rng=np.random.default_rng(0)
+    )
+    # Same field (same jitter + seed), different sigma → different opportunity-cost
+    # reordering → different rosters. If sigma were ignored, these would be identical.
+    assert list(roster_tight["gsis_id"]) != list(roster_loose["gsis_id"])
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1007,8 +1039,8 @@ import pandas as pd
 from projections.draft.assistant.strategy import NowOrNeverStrategy, RawVorpStrategy
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.assistant.tournament import (
-    TournamentResult,
     SigmaTuningResult,
+    TournamentResult,
     run_tournament,
     tune_sigma,
 )
@@ -1230,9 +1262,7 @@ git commit -m "test(draft): league-driven guard + docs for tournament (Slice 2)"
 
 ## Self-Review (completed by plan author)
 
-**Spec coverage:** §3.1 inputs (pool/config load + `_validate_pool` all-null + sufficiency) → Tasks 4, 5. §3.2 bot → Task 2. §3.3 simulation + paired field + pool-sufficiency-assumed → Task 3 (+ Task 4 validate). §3.4 scoring incl. strand case + tie-break + unfillable slot → Task 1. §3.5 tournament/bootstrap/winner → Task 4. §3.6 σ-tuning → Task 4. §3.7 CLI both modes → Task 5. §4 tests: pick-order, determinism, paired-field, bot-policy, pool-exhaustion (`_validate_pool`) + unfillable-slot (Task 1) + all-null-ADP (Task 4), adp_jitter-vs-σ independence (covered structurally: `RawVorpStrategy` invariant to σ — `run_tournament` only feeds σ into `NowOrNeverStrategy`; `simulate_draft` passes only `adp_jitter` to bots), `optimal_lineup_points`, paired-difference stat, σ-tuning, CLI smoke, league-driven → Tasks 1–6. §5 decisions are honored by construction. §6 future work untouched (correct).
-
-**Note on the one structural test:** the spec's "`adp_jitter` vs σ independence" is enforced by code shape (separate params, separate consumers) rather than a single assertion; the `_BestFpts`/`_WorstFpts` fakes carry no σ and the real `RawVorpStrategy` has none, so no extra test is required — call this out for the executor rather than writing a vacuous test.
+**Spec coverage:** §3.1 inputs (pool/config load + `_validate_pool` all-null + sufficiency) → Tasks 4, 5. §3.2 bot → Task 2. §3.3 simulation + paired field + pool-sufficiency-assumed → Task 3 (+ Task 4 validate). §3.4 scoring incl. strand case + tie-break + unfillable slot → Task 1. §3.5 tournament/bootstrap/winner → Task 4. §3.6 σ-tuning → Task 4. §3.7 CLI both modes → Task 5. §4 tests: snake pick-order (hand-computed), determinism, different-seed (full-draft), paired-field, bot-policy, pool-exhaustion (`_validate_pool`) + unfillable-slot (Task 1) + all-null-ADP (Task 4), adp_jitter-vs-σ independence (`test_sigma_flows_through_and_jitter_is_separate`, Task 4 — same field/seed, two σ values → different rosters; deterministic, so it fails only if σ is ignored), `optimal_lineup_points`, paired-difference stat, σ-tuning, CLI smoke, league-driven → Tasks 1–6. §5 decisions are honored by construction. §6 future work untouched (correct).
 
 **Placeholder scan:** no TBD/TODO/"handle edge cases"; every code step is complete.
 
