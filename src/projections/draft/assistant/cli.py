@@ -18,29 +18,20 @@ from projections.draft.assistant.strategy import (
     RawVorpStrategy,
 )
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
-from projections.schemas import _PYARROW_STR, VorpTableSchema
+from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
 
 _DEFAULT_ID_MAP = Path("data/raw/id_map.parquet")
 
 
 def _load_id_map(path: Path) -> pd.DataFrame:
-    """Load id_map and verify required columns exist.
-
-    The CLI uses only gsis_id, position, and full_name (for display + position
-    resolution). Full IdMapSchema validation is not applied here because the CLI
-    must accept a lightweight fixture (3-column parquet) used in tests and in
-    generate_vorp_table pipelines that do not carry all cross-platform ID columns.
-    """
+    """Load + validate id_map. Required — it is the position + name source (spec §3.2)."""
     try:
         df = pd.read_parquet(path)
     except FileNotFoundError as exc:
         raise FileNotFoundError(
             f"id_map parquet not found at {path}; it is required (position + name source)."
         ) from exc
-    missing = [c for c in ("gsis_id", "position", "full_name") if c not in df.columns]
-    if missing:
-        raise ValueError(f"id_map is missing required columns: {missing}")
-    return df
+    return IdMapSchema.validate(df)
 
 
 def _build_strategy(name: str, n_teams: int, sigma: float | None) -> DraftStrategy:

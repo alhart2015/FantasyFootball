@@ -47,8 +47,12 @@ def _setup(tmp_path: Path) -> tuple[Path, Path, Path]:
     id_map = pd.DataFrame(
         {
             "gsis_id": pd.array(["00-0000010", "00-0000020"], dtype=_PYARROW_STR),
-            "position": pd.array(["RB", "WR"], dtype=_PYARROW_STR),
+            "espn_id": pd.array([pd.NA, pd.NA], dtype=_PYARROW_STR),
+            "sleeper_id": pd.array([pd.NA, pd.NA], dtype=_PYARROW_STR),
+            "pfr_id": pd.array([pd.NA, pd.NA], dtype=_PYARROW_STR),
             "full_name": pd.array(["RB One", "WR One"], dtype=_PYARROW_STR),
+            "position": pd.array(["RB", "WR"], dtype=_PYARROW_STR),
+            "team": pd.array([pd.NA, pd.NA], dtype=_PYARROW_STR),
         }
     )
     id_path = tmp_path / "id_map.parquet"
