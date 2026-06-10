@@ -36,8 +36,7 @@ the user already passes. Nothing in the harness assumes a 12-team PPR room.
 
 ### In scope (this slice)
 
-- **`opponent.py`** — the ADP-bot pick policy (lowest noisy consensus_adp among roster-eligible
-  positions, seeded RNG).
+- **`opponent.py`** — the ADP-bot pick policy (lowest noisy `consensus_adp`, seeded RNG).
 - **`simulation.py`** — `simulate_draft`: one full snake draft, hero seat via a `DraftStrategy`, all
   other seats via the ADP-bot; returns the hero's final roster.
 - **`roster_score.py`** — `optimal_lineup_points`: value a completed roster by its optimal starting
@@ -83,7 +82,7 @@ All three inputs already exist; the harness adds no new ingest or schema-produci
   — it is the caller's responsibility, exactly as `generate_vorp_table` and the cheat sheet already pair
   a config with a table. The CLI mirrors the `generate_vorp_table` `--league-config` convention to make
   the correct pairing the obvious one.
-- **`id_map`** — only needed to resolve bot/hero rosters' positions when a drafted player's position
+- **`id_map`** — only needed to resolve the hero's roster positions when a drafted player's position
   must be known. Positions are already in the VORP pool for every in-pool player, and the simulation
   only ever drafts in-pool players, so **the harness needs no id_map** (a simplification over Slice 1's
   `load_draft_state`, which had to resolve off-board human picks). Stated here to make the absence
@@ -194,7 +193,7 @@ For each strategy and each seed `s in 0 .. n_seeds-1`:
 
 - `rng = Generator(PCG64(base_seed + s))` — **the same `s` yields the same bot field across strategies**
   (the paired design).
-- `roster = simulate_draft(strategy, my_slot, pool, config, adp_jitter=…, rng=rng)`.
+- `roster = simulate_draft(strategy, my_slot, pool, config, adp_jitter=adp_jitter, rng=rng)`.
 - `value[strategy][s] = optimal_lineup_points(roster, config.roster_slots)`.
 
 Then:
