@@ -91,20 +91,26 @@ All three inputs already exist; the harness adds no new ingest or schema-produci
 
 ### 3.2 Opponent model — the ADP-bot (`opponent.py`)
 
-A bot occupies every non-hero seat. Its policy is pure and deterministic given its RNG:
+A bot occupies every non-hero seat. Its policy is pure noisy-ADP, deterministic given its RNG:
 
 ```
-bot_pick(available: DataFrame, my_roster: tuple[Position, ...], config, rng) -> gsis_id
+bot_pick(available: DataFrame, rng) -> gsis_id
 ```
 
-1. Restrict `available` to positions the bot can still roster, via the shared
-   `roster_eligibility.eligible_positions(config.roster_slots, my_roster)` (the same greedy slot
-   allocator the hero uses — one source of truth). This stops degenerate fields (a bot drafting a 5th QB
-   purely because ADP said so) and keeps bot rosters realistic.
-2. Among the eligible available players, draw a **noisy ADP** per player:
-   `noisy_adp = consensus_adp + rng.normal(0, adp_jitter)`. Players with null `consensus_adp` sit at the
-   back (treated as `+inf`, i.e. effectively undrafted by bots — they have no market signal).
-3. Pick the player with the **lowest** noisy ADP (deterministic tie-break on `gsis_id`).
+1. Draw a **noisy ADP** per available player: `noisy_adp = consensus_adp + rng.normal(0, adp_jitter)`.
+   Players with null `consensus_adp` sit at the back (treated as `+inf` — no market signal, so bots leave
+   them to the hero).
+2. Pick the player with the **lowest** noisy ADP (deterministic tie-break on `gsis_id`).
+
+**The bot takes no roster argument — realism comes from ADP, not from a positional constraint.**
+Consensus ADP already spaces positions the way a real room does (QBs leave the board sparsely), so
+noisy-ADP bots produce realistic rosters without any roster-construction rule. A roster-eligibility
+filter would be a no-op here anyway: under a shared bench, `eligible_positions` never drops a benchable
+position until a team's roster is *full* (its bench is position-agnostic — see `roster_eligibility.py`),
+and snake order already gives each seat exactly `roster_size` picks. Pure-ADP bots are therefore the
+honest, simplest field; opponent roster-construction modeling is an explicit non-goal (§2). The VORP pool
+contains only positions the league rosters (the generator filters to `roster_slots`), so a bot can never
+draft an un-rosterable position.
 
 `adp_jitter` (the bot reach/fall spread, in picks) is a harness parameter **distinct from the hero
 survival model's σ**. Default `adp_jitter = default_sigma(n_teams)` — reusing the same "≈⅔ of a round"
@@ -123,10 +129,19 @@ Runs absolute picks `1 .. n_teams * roster_size`. For each pick:
   positions straight from the pool — no id_map), call `strategy.recommend(state, pool, config)`, and take
   the rank-1 row. The strategy already filters drafted + roster-ineligible players, so the top row is a
   legal pick.
-- Else: `bot_pick(available, that_seat's_roster, config, rng)`.
+- Else: `bot_pick(available, rng)`.
 
-The function tracks `available` (pool minus drafted) and a per-seat roster-position list. It returns the
+The function tracks `available` (pool minus drafted) and the hero's own drafted-position list (for the
+`DraftState` it builds at each hero pick); bots need no roster tracking (pure-ADP, §3.2). It returns the
 hero's drafted rows (a sub-frame of the pool) — the input to scoring.
+
+**Pool sufficiency.** A full draft needs `n_teams * roster_size` distinct draftable players. If the pool
+is smaller, `simulate_draft` raises a clear error rather than running off the end of `available` (a
+silently short hero roster would mis-score). Starting slots that *no* pool player can fill — e.g. `K` /
+`DST` starting slots run against the skill-only consensus pool, which contains neither — are simply never
+drafted and score 0 in §3.4 by design. The intended pairing is the skill-only league config
+(`configs/league_espn_ppr_12team_skill.json`, which folds K/DST into BENCH), consistent with the rest of
+the consensus Draft Hub.
 
 **Determinism & the paired counterfactual.** One seeded `numpy.random.Generator` per draft drives every
 bot's noise. When comparing strategy A vs B at the same seed, the bots draw the *same* noise sequence, so
@@ -147,18 +162,24 @@ optimal_lineup_points(roster_rows: DataFrame, roster_slots: dict[RosterSlot, int
 
 Value a completed roster by the points it would actually start:
 
-1. Group the roster's `season_mean_fpts` by `position`, each group sorted desc.
-2. **Fill restrictive (single-position) starting slots first** — `RosterSlot.QB → Position.QB`, etc. —
-   each taking the best unused player of its position.
-3. **Fill FLEX / SUPER_FLEX last**, each taking the best *remaining* eligible player across its accepted
-   positions (FLEX = RB/WR/TE; SUPER_FLEX = QB/RB/WR/TE).
-4. Sum the `season_mean_fpts` of the filled starters. `BENCH` / `IR` slots contribute nothing.
+1. Group the roster's `season_mean_fpts` by `position`, each group sorted desc with a deterministic
+   `gsis_id`-ascending secondary key — so *which* equal-points player fills a slot (and thus what is left
+   for later slots) is reproducible.
+2. **Fill slots in ascending eligibility-breadth order:** single-position slots (`RosterSlot.QB →
+   Position.QB`, etc.) first, then `FLEX` (RB/WR/TE), then `SUPER_FLEX` (QB/RB/WR/TE) — each slot taking
+   the best *unused* player it is eligible for.
+3. Sum the `season_mean_fpts` of the filled starters. `BENCH` / `IR` slots contribute nothing.
 
-Filling restrictive slots before flex slots, with flex always taking the global best remaining, is
-optimal for this nested-eligibility slot structure — no assignment solver needed. Slot↔position
-eligibility reuses `roster_eligibility`'s map (one source of truth; no second copy of "what can play
-FLEX"). The roster shape is `roster_slots` verbatim from `LeagueConfig`, so any composition
-(SUPER_FLEX, 3-WR, K/DST-less skill leagues) scores correctly with no code change.
+**The fill order is load-bearing, not cosmetic.** Greedy is optimal for this slot structure *only* when
+slots fill most-restrictive-first. The eligibility sets are laminar (`{QB} ⊂ SUPER_FLEX`,
+`{RB} ⊂ FLEX ⊂ SUPER_FLEX`, …), which is exactly the condition under which restrictive-first greedy is
+optimal — no assignment solver needed. Filling a wider slot before a narrower one can strand a player and
+undercount: roster `{RB:100, QB:90}`, slots `{FLEX:1, SUPER_FLEX:1}` scores **190** the correct way
+(FLEX←RB 100, SUPER_FLEX←QB 90), but only **100** if `SUPER_FLEX` greedily grabs RB 100 first and `FLEX`
+is left with an ineligible QB. §4 pins this case. Slot↔position eligibility reuses
+`roster_eligibility`'s `FLEX_ELIGIBLE` / `SUPER_FLEX_ELIGIBLE` sets (one source of truth; no second copy
+of "what can play FLEX"). The roster shape is `roster_slots` verbatim from `LeagueConfig`, so any
+composition (SUPER_FLEX, 3-WR, K/DST-less skill leagues) scores correctly with no code change.
 
 If a starting slot cannot be filled (roster short at a position), it contributes 0 and the lineup is
 simply worth less — a realistic penalty for a strategy that left a starting hole, not an error.
@@ -235,13 +256,19 @@ Synthetic fixtures only (project norm — no network, no real parquet in unit te
   different (guards the "every p_available silently NaN" class of RNG/σ wiring bugs).
 - **Paired field** — same seed, two strategies: assert the bots' early picks (before the hero diverges
   the board) are identical across the two runs (proves the paired counterfactual actually holds).
-- **Bot roster-awareness** — a bot facing a pool where ADP would otherwise force a 5th QB instead drafts
-  the best eligible non-QB once its QB slots+bench tolerance are full (proves `eligible_positions` reuse).
-- **`adp_jitter` ≠ survival σ** — a test that sets them to distinct values and confirms changing one does
-  not change the other's effect (guards conflation).
+- **Bot policy** — `bot_pick` returns the lowest noisy-ADP player; with `adp_jitter → 0` it is exactly
+  the min-`consensus_adp` available player, and a null-ADP player is taken only when nothing else remains.
+- **Pool exhaustion** — a config whose `n_teams * roster_size` exceeds the pool size raises a clear error
+  from `simulate_draft` (not an off-the-end crash); and a config with `K`/`DST` starting slots run on a
+  skill-only pool drafts no K/DST and scores those slots 0 (the unfillable-slot path in §3.4).
+- **`adp_jitter` vs survival σ are independent knobs** — `RawVorpStrategy` results are invariant to the
+  survival σ; `NowOrNeverStrategy` results change with σ at fixed `adp_jitter`; `simulate_draft` passes
+  `adp_jitter` to bots only and never to the strategy's σ (guards conflation).
 - **`optimal_lineup_points`** — known roster with a SUPER_FLEX and a FLEX; assert the optimal starters are
-  chosen (best QB to QB, best leftover to SUPER_FLEX, FLEX takes best remaining RB/WR/TE), bench excluded,
-  and a roster short at a position scores the partial lineup. Tie-breaks deterministic.
+  chosen (best of each position to its slot, **FLEX before SUPER_FLEX**). Includes the strand case from
+  §3.4 (`{RB:100, QB:90}`, `{FLEX:1, SUPER_FLEX:1}` → 190, not 100) to pin the fill order; plus bench
+  excluded, a roster short at a position scores the partial lineup, and equal-points tie-breaks
+  deterministic.
 - **Paired-difference stat** — a synthetic fixture where strategy A captures a constant edge over B every
   seed; assert the paired-diff CI excludes 0 and names A. A zero-edge fixture ⇒ "no separation".
 - **σ-tuning** — a fixture where a known σ is best; assert `tune_sigma` recovers it as the argmax.
@@ -267,8 +294,11 @@ All gates per the project bar: `pytest`, `mypy src tests` (strict), `ruff check`
   `LeagueConfig`; the harness never references a literal position count or PPR. Scoring rules are honored
   by consuming a VORP table built under that league's ruleset (a documented precondition the parquet
   can't self-verify).
-- **5.5 Bots are roster-aware** — reuse `eligible_positions` so the field doesn't draft degenerate
-  rosters; cheap, and keeps one definition of "what can a roster still take".
+- **5.5 Bots are pure noisy-ADP, not roster-constrained** — under a shared bench `eligible_positions`
+  never drops a position until a team's roster is full, so a roster-eligibility filter would be a no-op;
+  realism comes from ADP sparsity itself (consensus ADP already spaces positions like a real room).
+  Opponent roster-construction modeling is an explicit non-goal. The pool holds only league-rostered
+  positions, so a bot can never draft an un-rosterable player.
 - **5.6 No new pandera schema** — the result is a handful of floats rendered by the CLI; a schema would be
   ceremony. Persisting the per-seed matrix earns a schema when a consumer needs it, not pre-emptively.
 - **5.7 Simulate → score → compare split, with the auction seam documented** — `optimal_lineup_points`
