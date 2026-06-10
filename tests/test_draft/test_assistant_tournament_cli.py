@@ -111,6 +111,28 @@ def test_tune_sigma_tolerates_trailing_comma(
     assert "recommended" in capsys.readouterr().out.lower()
 
 
+def test_tune_sigma_rejects_non_positive_grid_value(tmp_path: Path) -> None:
+    # A 0 (or negative) sigma must fail at the CLI parse layer, not mid-tune_sigma
+    # loop inside LogisticSurvival after wasted simulation (code-review #2).
+    vorp_path, cfg_path = _write_inputs(tmp_path)
+    with pytest.raises(ValueError, match="must all be > 0"):
+        run(
+            [
+                "--vorp-table",
+                str(vorp_path),
+                "--league-config",
+                str(cfg_path),
+                "--my-slot",
+                "2",
+                "--seeds",
+                "8",
+                "tune-sigma",
+                "--sigma-grid",
+                "2,0,4",
+            ]
+        )
+
+
 def test_missing_vorp_table_fails_loud(tmp_path: Path) -> None:
     _, cfg_path = _write_inputs(tmp_path)
     with pytest.raises(FileNotFoundError):

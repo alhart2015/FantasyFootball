@@ -77,6 +77,55 @@ def test_validate_pool_accepts_valid() -> None:
     _validate_pool(_pool(), _config())  # no raise
 
 
+def test_validate_pool_empty_reports_size_not_adp() -> None:
+    # An empty/mis-filtered pool should report the pool-size problem, not the
+    # vacuously-true "no ADP signal" (code-review #6).
+    empty = _pool(n=0)
+    with pytest.raises(ValueError, match="need >="):
+        _validate_pool(empty, _config())
+
+
+def test_run_tournament_rejects_negative_adp_jitter() -> None:
+    # A negative jitter would crash deep in numpy ("scale < 0"); fail loud, named.
+    with pytest.raises(ValueError, match="adp_jitter must be >= 0"):
+        run_tournament(
+            {"best": _BestFpts(), "worst": _WorstFpts()},
+            pool=_pool(),
+            config=_config(),
+            my_slot=1,
+            n_seeds=5,
+            adp_jitter=-1.0,
+            base_seed=0,
+        )
+
+
+def test_run_tournament_allows_zero_adp_jitter() -> None:
+    # 0 is a valid (deterministic, zero-noise) field, not an error.
+    result = run_tournament(
+        {"best": _BestFpts(), "worst": _WorstFpts()},
+        pool=_pool(),
+        config=_config(),
+        my_slot=1,
+        n_seeds=5,
+        adp_jitter=0.0,
+        base_seed=0,
+    )
+    assert set(result.summaries) == {"best", "worst"}
+
+
+def test_tune_sigma_rejects_empty_grid() -> None:
+    with pytest.raises(ValueError, match="sigma_grid must be non-empty"):
+        tune_sigma(
+            [],
+            pool=_pool(),
+            config=_config(),
+            my_slot=1,
+            n_seeds=5,
+            adp_jitter=2.0,
+            base_seed=0,
+        )
+
+
 def test_run_tournament_rejects_out_of_range_my_slot() -> None:
     # An out-of-range slot owns no snake pick -> hero drafts nobody, scores 0, and a
     # bogus "winner" would be declared. Must fail loud instead (final-review #1).

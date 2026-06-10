@@ -61,25 +61,33 @@ class SigmaTuningResult:
 
 def _validate_pool(pool: pd.DataFrame, config: LeagueConfig) -> None:
     """Hard preconditions shared by both entry points (spec §3.1, §3.3)."""
+    # Pool size first: it's the more fundamental gate, so an empty/mis-filtered
+    # file reports "0 players" rather than the vacuously-true "no ADP signal".
+    need = config.n_teams * config.roster_size
+    if len(pool) < need:
+        raise ValueError(f"pool has {len(pool)} players; need >= {need} to fill a full draft")
     if "consensus_adp" not in pool.columns or bool(pool["consensus_adp"].isna().all()):
         raise ValueError(
             "pool has no consensus_adp signal; the tournament needs market ADP to drive the field"
         )
-    need = config.n_teams * config.roster_size
-    if len(pool) < need:
-        raise ValueError(f"pool has {len(pool)} players; need >= {need} to fill a full draft")
 
 
-def _validate_run_params(config: LeagueConfig, *, my_slot: int, n_seeds: int) -> None:
+def _validate_run_params(
+    config: LeagueConfig, *, my_slot: int, n_seeds: int, adp_jitter: float
+) -> None:
     """Guard the run parameters both entry points share.
 
     An out-of-range my_slot would never own a snake pick, so the hero drafts
     nobody, scores 0, and the harness would report a confidently-wrong verdict.
+    A negative adp_jitter would crash deep in numpy (`scale < 0`); 0 is allowed
+    (a deterministic, zero-noise field).
     """
     if not 1 <= my_slot <= config.n_teams:
         raise ValueError(f"my_slot must be in 1..{config.n_teams}; got {my_slot}")
     if n_seeds < 1:
         raise ValueError(f"n_seeds must be >= 1; got {n_seeds}")
+    if adp_jitter < 0:
+        raise ValueError(f"adp_jitter must be >= 0; got {adp_jitter}")
 
 
 def _bootstrap_mean(values: np.ndarray, *, n_bootstrap: int = _N_BOOTSTRAP, seed: int) -> Interval:
@@ -125,7 +133,7 @@ def run_tournament(
 ) -> TournamentResult:
     """Compare `strategies` over `n_seeds` paired drafts; declare a winner."""
     _validate_pool(pool, config)
-    _validate_run_params(config, my_slot=my_slot, n_seeds=n_seeds)
+    _validate_run_params(config, my_slot=my_slot, n_seeds=n_seeds, adp_jitter=adp_jitter)
     values = {
         name: _strategy_values(
             strat,
@@ -171,7 +179,9 @@ def tune_sigma(
 ) -> SigmaTuningResult:
     """Sweep the survival sigma for NowOrNeverStrategy; return the (sigma, mean) grid + argmax."""
     _validate_pool(pool, config)
-    _validate_run_params(config, my_slot=my_slot, n_seeds=n_seeds)
+    _validate_run_params(config, my_slot=my_slot, n_seeds=n_seeds, adp_jitter=adp_jitter)
+    if not sigma_grid:
+        raise ValueError("sigma_grid must be non-empty")
     grid: list[tuple[float, float]] = []
     for sigma in sigma_grid:
         strat = NowOrNeverStrategy(LogisticSurvival(sigma=float(sigma)))

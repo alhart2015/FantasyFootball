@@ -129,15 +129,27 @@ class NowOrNeverStrategy:
         display_p = internal_p.where(adp.notna(), other=pd.NA)
 
         df = df.assign(_p=internal_p)
+        # E[best survivor at each position]. Sort once (position, vorp desc, gsis asc)
+        # and walk contiguous position blocks over numpy arrays — avoids the per-pick
+        # pandas groupby + per-group sort_values that dominates this hot path at
+        # tournament scale. The accumulation stays sequential (not np.sum) so the
+        # float result is bit-identical to the prior implementation.
+        ordered = df.sort_values(["position", "vorp", "gsis_id"], ascending=[True, False, True])
+        pos_arr = ordered["position"].to_numpy()
+        vorp_arr = ordered["vorp"].to_numpy(dtype=float)
+        p_arr = ordered["_p"].to_numpy(dtype=float)
         e_best: dict[str, float] = {}
-        for position, sub in df.groupby("position"):
-            sub = sub.sort_values(["vorp", "gsis_id"], ascending=[False, True])
-            expected = 0.0
-            prob_all_better_gone = 1.0
-            for vorp_i, p_i in zip(sub["vorp"], sub["_p"], strict=True):
-                expected += float(vorp_i) * p_i * prob_all_better_gone
-                prob_all_better_gone *= 1.0 - p_i
-            e_best[str(position)] = expected
+        n_rows = len(ordered)
+        start = 0
+        for end in range(1, n_rows + 1):
+            if end == n_rows or pos_arr[end] != pos_arr[start]:
+                expected = 0.0
+                prob_all_better_gone = 1.0
+                for k in range(start, end):
+                    expected += vorp_arr[k] * p_arr[k] * prob_all_better_gone
+                    prob_all_better_gone *= 1.0 - p_arr[k]
+                e_best[str(pos_arr[start])] = expected
+                start = end
 
         df["score"] = df["vorp"].astype(float) - df["position"].map(e_best).astype(float)
         return _finalize(df, elig, display_p)
