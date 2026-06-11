@@ -10,7 +10,7 @@ we MC one generic week and reuse it (the factorization is exact in expectation).
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -23,6 +23,46 @@ from projections.schemas import RosterSlot
 # (uniform scaling, spec §3.3). Distinct from availability._sched_games, which is the
 # era-correct *historical* schedule length used to estimate injury rates.
 _GAMES = 17
+
+
+def _week_value(
+    roster: pd.DataFrame, roster_slots: Mapping[RosterSlot, int], available: np.ndarray
+) -> float:
+    """Optimal weekly lineup points from the available roster rows (UNSCALED).
+
+    The /_GAMES per-game scaling is applied once by the caller (after averaging over
+    sims), exactly as the original expected_season_points did — summing pre-scaled
+    values per sim would be a different float expression and break exact-equality tests.
+    """
+    sub = roster.iloc[np.flatnonzero(available)]
+    return optimal_lineup_points(sub, roster_slots)
+
+
+def _factorized_season_value(
+    roster: pd.DataFrame,
+    availability: PlayerAvailability,
+    weeks: Iterable[int],
+    week_value_fn: Callable[[np.ndarray], float],
+) -> float:
+    """Sum the season via the single-week factorization (spec §3.4 of PR #60).
+
+    `week_value_fn(forced_out)` returns E[week points | these roster indices are
+    forced out (bye)]. Every non-bye week shares one expectation; each distinct
+    roster bye week is recomputed with that player forced out. Exact in
+    expectation. Call order (clean week, then bye weeks ascending) is fixed so
+    callers that advance a shared RNG inside week_value_fn stay reproducible.
+    """
+    n = len(roster)
+    gsis = roster["gsis_id"].astype(str).to_numpy()
+    bye_arr = np.array([b if (b := availability.bye_week(g)) is not None else -1 for g in gsis])
+    weeks = list(weeks)
+    roster_bye_weeks = sorted({w for w in bye_arr.tolist() if w in weeks})
+
+    clean = week_value_fn(np.zeros(n, dtype=bool))
+    total = (len(weeks) - len(roster_bye_weeks)) * clean
+    for w in roster_bye_weeks:
+        total += week_value_fn(bye_arr == w)
+    return total
 
 
 def expected_season_points(
@@ -40,25 +80,12 @@ def expected_season_points(
         return 0.0
     gsis = roster["gsis_id"].astype(str).to_numpy()
     p_arr = np.array([availability.p_week(g) for g in gsis], dtype=np.float64)
-    # -1 sentinel = "no bye"; never a real week, so it drops out of roster_bye_weeks below.
-    bye_arr = np.array([b if (b := availability.bye_week(g)) is not None else -1 for g in gsis])
-    weeks = list(weeks)
-    roster_bye_weeks = sorted({w for w in bye_arr.tolist() if w in weeks})
 
-    def week_expectation(forced_out: np.ndarray) -> float:
-        # Hot path: optimal_lineup_points runs once per sim. A vectorized numpy
-        # fill is the deferred optimization (spec §3.4) if n_sims*rosters grows.
+    def week_value_fn(forced_out: np.ndarray) -> float:
         acc = 0.0
         for _ in range(n_sims):
             available = (rng.random(n) < p_arr) & ~forced_out
-            sub = roster.iloc[np.flatnonzero(available)]
-            acc += optimal_lineup_points(sub, roster_slots)
+            acc += _week_value(roster, roster_slots, available)
         return acc / n_sims / _GAMES
 
-    no_force = np.zeros(n, dtype=bool)
-    clean_week_value = week_expectation(no_force)
-    clean_weeks = len(weeks) - len(roster_bye_weeks)  # bye weeks ⊆ weeks, distinct
-    total = clean_weeks * clean_week_value
-    for w in roster_bye_weeks:
-        total += week_expectation(bye_arr == w)
-    return total
+    return _factorized_season_value(roster, availability, weeks, week_value_fn)
