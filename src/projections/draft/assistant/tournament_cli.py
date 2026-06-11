@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from projections.draft.assistant.availability import build_availability
+from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.strategy import NowOrNeverStrategy, RawVorpStrategy
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.assistant.tournament import (
@@ -26,7 +26,6 @@ from projections.draft.assistant.tournament import (
 from projections.draft.assistant.valuer import RosterValuer, SeasonValuer, StartersValuer
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, VorpTableSchema
-from projections.store import read_partition
 
 
 def _load_pool(path: Path) -> pd.DataFrame:
@@ -44,39 +43,10 @@ def _default_sigma_grid(n_teams: int) -> list[float]:
     return [round(f * base, 3) for f in (1 / 3, 1 / 2, 2 / 3, 1.0, 4 / 3)]
 
 
-_HISTORY_SEASONS = range(2018, 2025)  # weekly_stats coverage for the availability model
-
-
 def _build_season_valuer(
     pool: pd.DataFrame, *, season: int, n_sims: int, base_seed: int, data_root: Path
 ) -> SeasonValuer:
-    raw = data_root / "raw"
-    frames: list[pd.DataFrame] = []
-    for yr in _HISTORY_SEASONS:
-        try:
-            frames.append(read_partition(raw, "weekly_stats", season=yr))
-        except FileNotFoundError:
-            continue
-    if not frames:
-        raise FileNotFoundError(
-            f"no weekly_stats partitions under {raw} for seasons "
-            f"{_HISTORY_SEASONS.start}-{_HISTORY_SEASONS.stop - 1}; check --data-root"
-        )
-    weekly_stats = pd.concat(frames, ignore_index=True)
-    try:
-        schedules = read_partition(raw, "schedules", season=season)
-    except FileNotFoundError:
-        # Spec §3.2 step 4: a missing target-season schedule degrades to no byes
-        # (build_availability warns and the injury model still applies), not a hard fail.
-        schedules = pd.DataFrame(columns=["season", "week", "home_team", "away_team"])
-    # build_availability only reads gsis_id + team, so full IdMapSchema validation is skipped.
-    # Guard on existence rather than catching FileNotFoundError, which would also swallow a
-    # parquet-internal missing-file error and misattribute it to the id_map path.
-    id_map_path = raw / "id_map.parquet"
-    if not id_map_path.exists():
-        raise FileNotFoundError(f"id_map.parquet not found at {id_map_path}; check --data-root")
-    id_map = pd.read_parquet(id_map_path)
-    availability = build_availability(weekly_stats, schedules, id_map, pool, season=season)
+    availability = load_store_availability(pool, season=season, data_root=data_root)
     return SeasonValuer(availability=availability, n_sims=n_sims, base_seed=base_seed)
 
 
