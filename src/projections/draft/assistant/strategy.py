@@ -61,6 +61,13 @@ def _finalize(
 
     `df` must already carry `score`. `p_available` is index-aligned (Float64,
     null where unknown).
+
+    `starting_need_tier`: when True (default), `fills_starting_slot` is the primary
+    sort key so players filling an unmet starting slot bubble above bench-only adds.
+    Pass False when `score` already encodes roster-construction value (e.g. the
+    season-marginal strategy, whose score is the expected season points a pick adds)
+    and the tier promotion would double-count starting-slot value. `fills_starting_slot`
+    is still computed and emitted either way — only its use as a sort key is gated.
     """
     out = df.copy()
     # `score` is a difference of float sums (vorp - E[best survivor]); strip the
