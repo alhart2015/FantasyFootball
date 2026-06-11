@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from projections.draft.assistant.state import DraftState, load_draft_state
-from projections.schemas import _PYARROW_STR, Position, RosterSlot, Ruleset
+from projections.schemas import _PYARROW_STR, GsisId, Position, RosterSlot, Ruleset
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -113,9 +113,6 @@ def test_non_object_json_raises(tmp_path: Path) -> None:
 
 
 def test_my_pick_ids_picks_out_my_snake_slots() -> None:
-    from projections.draft.assistant.state import DraftState
-    from projections.schemas import GsisId, Position
-
     # 4 teams, my_slot=1 → my picks are #1, #8, #9 (snake).
     picks = tuple(
         GsisId(g)
@@ -142,7 +139,5 @@ def test_my_pick_ids_picks_out_my_snake_slots() -> None:
 
 
 def test_my_pick_ids_empty_when_no_picks() -> None:
-    from projections.draft.assistant.state import DraftState
-
     state = DraftState(my_slot=1, n_teams=4, rounds=5, picks=(), my_roster=())
     assert state.my_pick_ids == ()
