@@ -46,14 +46,16 @@ def _factorized_season_value(
 ) -> float:
     """Sum the season via the single-week factorization (spec §3.4 of PR #60).
 
-    `week_value_fn(forced_out)` returns E[week points | these roster indices are
-    forced out (bye)]. Every non-bye week shares one expectation; each distinct
-    roster bye week is recomputed with that player forced out. Exact in
-    expectation. Call order (clean week, then bye weeks ascending) is fixed so
-    callers that advance a shared RNG inside week_value_fn stay reproducible.
+    `week_value_fn(forced_out)` takes a boolean mask over roster rows (True where
+    the player is on bye that week) and returns E[week points | those players are
+    forced out]. Every non-bye week shares one expectation; each distinct roster
+    bye week is recomputed with that player forced out. Exact in expectation. Call
+    order (clean week, then bye weeks ascending) is fixed so callers that advance a
+    shared RNG inside week_value_fn stay reproducible.
     """
     n = len(roster)
     gsis = roster["gsis_id"].astype(str).to_numpy()
+    # -1 sentinel = "no bye"; never a real week, so it drops out of roster_bye_weeks below.
     bye_arr = np.array([b if (b := availability.bye_week(g)) is not None else -1 for g in gsis])
     weeks = list(weeks)
     roster_bye_weeks = sorted({w for w in bye_arr.tolist() if w in weeks})
