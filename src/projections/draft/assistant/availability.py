@@ -88,10 +88,8 @@ def build_availability(
     ws = weekly_stats[["gsis_id", "season", "week", "position"]].copy()
     ws["position"] = ws["position"].astype(str)
     ws["gsis_id"] = ws["gsis_id"].astype(str)
-    # Availability is a regular-season concept, but weekly_stats partitions carry
-    # playoff weeks (19-22). Drop them (same cutoff as the bye filter) so playoff
-    # appearances don't inflate games played or set first_week from a playoff-only
-    # season -- the symmetric half of the _team_byes regular-season restriction.
+    # Drop playoff weeks (same cutoff as the bye filter) so they don't inflate
+    # games played or set first_week from a playoff-only season.
     ws = ws[ws["week"] <= ws["season"].map(_last_regular_week)]
 
     games = (

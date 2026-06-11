@@ -4,6 +4,15 @@ Running project management list. Add items as they come up; remove or check off 
 
 ## Open
 
+### 41. Filter playoff weeks at the ingest boundary (currently per-consumer, and inconsistently)
+
+Surfaced by the `/code-review` + `/simplify` of the risk-aware availability work (PR #60). `weekly_stats` and `schedules` partitions both carry playoff rows (`WeeklyStatsSchema.week`/`SchedulesSchema.week` allow `le=22`; `ingest/weekly_stats.py` and `ingest/schedules.py` keep no `season_type`/`game_type` column and apply no REG filter). Consumers each re-derive "regular season" independently, and they **disagree**:
+
+- `draft/assistant/availability.py` filters via the era-aware `_last_regular_week(season)` (17 pre-2021, 18 after) — correct.
+- `preseason/features.py:228` hardcodes `weekly_stats["week"] <= 17` for the `prior_N_season_games_played` aggregation. **This is a latent bug for 2021+:** it drops regular-season week 18, undercounting `games_played` (its own comment mislabels week 18 as "playoff"). Verify and fix to the era-aware cutoff, or delete it once ingest filters.
+
+**Deepest fix:** filter `season_type == "REG"` once in `ingest/weekly_stats.py` / `ingest/schedules.py` (nflreadpy exposes `season_type`) and tighten the schema `week` bound to `le=18`, so every present/future consumer is protected and the invariant is documented. That changes stored partitions (other consumers, e.g. PBP receiver features, tolerate `week<=22`), so it was out of scope for the draft slice. When it lands, also hoist the era split (`_sched_games` / `_last_regular_week`) to a shared schedule/calendar location instead of living in `availability.py`.
+
 ### 40. Regenerate the backtest snapshot for the baseline Vegas feature change (`--run-backtest`)
 
 **The 15 tests that were red on `main` are fixed in this PR (`chore/test-suite-speedup`).** Root cause was PR #51 half-completing its Vegas team-context integration: it added the 4 cols (`preseason_implied_team_total`, `preseason_spread`, `season_avg_implied_team_total`, `season_avg_spread`) to `Qb/WrFeaturesSchema` but left `_WR/_QB_FEATURE_COLUMNS` (baseline.py) and two hardcoded WR fixtures (`test_decomposed_baseline`, `test_tune_lightgbm`) inconsistent. Fixed by bringing the feature lists to schema parity + emitting the cols in those fixtures. (`pyproject.toml` also now requires `tabulate>=0.9` — `pip install -e .` to pick it up.)
