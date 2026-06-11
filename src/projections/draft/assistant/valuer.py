@@ -52,7 +52,7 @@ class SeasonValuer:
     availability: PlayerAvailability
     n_sims: int
     base_seed: int
-    weeks: Iterable[int] = field(default_factory=lambda: range(1, 18))
+    weeks: Iterable[int] = field(default=range(1, 18))
 
     def value(self, roster: pd.DataFrame, roster_slots: Mapping[RosterSlot, int]) -> float:
         rng = np.random.default_rng(_roster_seed(self.base_seed, roster))

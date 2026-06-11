@@ -49,3 +49,24 @@ def test_season_valuer_differs_from_starters_under_risk() -> None:
     season = SeasonValuer(availability=avail, n_sims=2000, base_seed=0).value(roster, slots)
     starters = StartersValuer().value(roster, slots)
     assert season < starters  # ~ (200+180)*0.7 ≈ 266 < 380
+
+
+def test_season_valuer_different_rosters_get_different_values() -> None:
+    # Confirms the per-roster seed actually varies (a constant seed would pass the
+    # determinism test but fail here).
+    slots = {RosterSlot.RB: 1, RosterSlot.FLEX: 1}
+    avail = PlayerAvailability(p={"00-0000001": 0.7, "00-0000002": 0.7, "00-0000003": 0.7}, bye={})
+    v = SeasonValuer(availability=avail, n_sims=300, base_seed=0)
+    a = v.value(_roster([("00-0000001", "RB", 200.0), ("00-0000002", "RB", 150.0)]), slots)
+    b = v.value(_roster([("00-0000001", "RB", 200.0), ("00-0000003", "RB", 150.0)]), slots)
+    assert a != b
+
+
+def test_season_valuer_base_seed_changes_value() -> None:
+    # Confirms base_seed is wired into the per-roster seed.
+    roster = _roster([("00-0000001", "RB", 200.0), ("00-0000002", "RB", 150.0)])
+    slots = {RosterSlot.RB: 1, RosterSlot.FLEX: 1}
+    avail = PlayerAvailability(p={"00-0000001": 0.7, "00-0000002": 0.7}, bye={})
+    a = SeasonValuer(availability=avail, n_sims=300, base_seed=0).value(roster, slots)
+    b = SeasonValuer(availability=avail, n_sims=300, base_seed=999).value(roster, slots)
+    assert a != b
