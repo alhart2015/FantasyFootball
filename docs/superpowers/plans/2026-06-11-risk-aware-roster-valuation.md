@@ -274,7 +274,9 @@ def build_availability(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_draft/test_assistant_availability.py -v -n0`
-Expected: 3 passed.
+Expected: 3 passed. (If pandas raises on the `pos_hist` lambda agg over the pyarrow-string
+`position` column, add `.astype(str)` to `ws["position"]` before the groupby — a dtype quirk, not
+a design change.)
 
 - [ ] **Step 5: Lint + type-check**
 
@@ -339,6 +341,21 @@ def test_closed_form_single_slot() -> None:
         weeks=range(1, 3),
     )
     assert abs(val - 10.0) < 0.3  # MC tolerance
+
+
+def test_closed_form_two_player_backup() -> None:
+    # The core insurance math: {RB:1}, starter S=200 (p=0.6) + backup B=120 (p=0.7),
+    # no bye, 1 week. The best AVAILABLE RB starts, so
+    #   E[week] = [p_s*p_b*max(S,B) + p_s*(1-p_b)*S + (1-p_s)*p_b*B] / 17.
+    # (Pins the max(S,B) fill-in term -- a wrong insurance term, e.g. S+B, fails this.)
+    roster = _roster([("00-0000001", "RB", 200.0), ("00-0000002", "RB", 120.0)])
+    avail = _avail({"00-0000001": 0.6, "00-0000002": 0.7})
+    expected = (0.6 * 0.7 * 200 + 0.6 * 0.3 * 200 + 0.4 * 0.7 * 120) / 17  # = 9.035...
+    val = expected_season_points(
+        roster, {RosterSlot.RB: 1}, avail, n_sims=40000, rng=np.random.default_rng(0),
+        weeks=range(1, 2),
+    )
+    assert abs(val - expected) < 0.2
 
 
 def test_reduces_to_starters_when_always_available() -> None:
@@ -485,7 +502,7 @@ def expected_season_points(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_draft/test_assistant_season_value.py -v -n0`
-Expected: 5 passed. (The factorization test is the slow one — a few seconds.)
+Expected: 6 passed. (The factorization test is the slow one — a few seconds.)
 
 - [ ] **Step 5: Lint + type-check**
 
@@ -553,6 +570,17 @@ def test_season_valuer_is_deterministic_per_roster() -> None:
     avail = PlayerAvailability(p={"00-0000001": 0.7, "00-0000002": 0.7}, bye={})
     v = SeasonValuer(availability=avail, n_sims=100, base_seed=0)
     assert v.value(roster, slots) == v.value(roster, slots)  # same roster -> same value
+
+
+def test_season_valuer_differs_from_starters_under_risk() -> None:
+    # The two metrics genuinely differ: with sub-1.0 availability the risk-aware value
+    # is strictly below the no-risk starters value (each starter plays only ~p of weeks).
+    roster = _roster([("00-0000001", "RB", 200.0), ("00-0000002", "WR", 180.0)])
+    slots = {RosterSlot.RB: 1, RosterSlot.WR: 1}
+    avail = PlayerAvailability(p={"00-0000001": 0.7, "00-0000002": 0.7}, bye={})
+    season = SeasonValuer(availability=avail, n_sims=2000, base_seed=0).value(roster, slots)
+    starters = StartersValuer().value(roster, slots)
+    assert season < starters  # ~ (200+180)*0.7 ≈ 266 < 380
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -631,7 +659,7 @@ class SeasonValuer:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_draft/test_assistant_valuer.py -v -n0`
-Expected: 3 passed.
+Expected: 4 passed.
 
 - [ ] **Step 5: Lint + type-check**
 
