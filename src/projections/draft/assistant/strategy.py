@@ -1,10 +1,13 @@
-"""Draft strategies: the substitution seam + two concrete implementations.
+"""Draft strategies: the substitution seam + three concrete implementations.
 
 `RawVorpStrategy` is the best-available control. `NowOrNeverStrategy` is the
 analytic opportunity-cost strategy (spec §3.5): rank by value locked in over the
-expected best survivor at the same position by my next pick. Both share
-`_finalize`, which filters to roster-eligible positions, tags the scale-free
-starting-need tier, and applies the deterministic final ordering.
+expected best survivor at the same position by my next pick. `SeasonValueStrategy`
+is the depth-aware strategy (spec §3.2): rank by the marginal expected season points
+a pick adds to the current roster, under common random numbers. All share `_finalize`,
+which filters to roster-eligible positions, tags the starting-need tier, and applies
+the deterministic final ordering (the season-marginal strategy opts out of the tier
+as a sort key — its score already values open slots).
 """
 
 from __future__ import annotations

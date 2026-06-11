@@ -351,19 +351,46 @@ def test_season_value_is_deterministic() -> None:
     assert list(a["score"]) == list(b["score"])
 
 
-def test_season_value_pruning_invariance() -> None:
-    # top_k larger than the per-position pool depth → identical to no pruning.
+def test_season_value_pruning_keeps_argmax_but_prunes_tail() -> None:
+    # Three WR candidates at one position so top_k ACTUALLY prunes. top_k=1 evaluates
+    # only the top-VORP WR (the other two fall to the 0.0 pruned tail); top_k=3 evaluates
+    # all. The #1 pick (argmax) is identical — within a position the best add is the
+    # highest-VORP one (monotonic in points) — while the tail differs, proving pruning
+    # is genuinely active (not a degenerate same==same).
+    from projections.draft.assistant.availability import PlayerAvailability
     from projections.draft.assistant.strategy import SeasonValueStrategy
 
-    state, pool, config = _depth_state(), _depth_pool(), _depth_config()
-    small = SeasonValueStrategy(_depth_avail(), n_sims=500, base_seed=1, top_k=1).recommend(
-        state, pool, config
+    ids = ["00-0000401", "00-0000402", "00-0000403"]
+    pool = pd.DataFrame(
+        {
+            "gsis_id": pd.array(ids, dtype=_PYARROW_STR),
+            "position": pd.array(["WR", "WR", "WR"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [210.0, 195.0, 180.0],
+            "vorp": [70.0, 55.0, 40.0],
+            "replacement_fpts": [140.0, 140.0, 140.0],
+            "consensus_adp": pd.array([3.0, 4.0, 5.0], dtype=pd.Float64Dtype()),
+        }
     )
-    big = SeasonValueStrategy(_depth_avail(), n_sims=500, base_seed=1, top_k=50).recommend(
-        state, pool, config
+    avail = PlayerAvailability(p=dict.fromkeys(ids, 0.95), bye={})
+    config = LeagueConfig(
+        name="t",
+        n_teams=4,
+        roster_slots={RosterSlot.WR: 1, RosterSlot.FLEX: 1, RosterSlot.BENCH: 3},
+        ruleset=Ruleset.espn_ppr(),
     )
-    # Only one candidate per position here, so even top_k=1 evaluates all → same #1.
-    assert small.iloc[0]["gsis_id"] == big.iloc[0]["gsis_id"]
+    state = DraftState(my_slot=1, n_teams=4, rounds=5, picks=(), my_roster=())
+
+    k1 = SeasonValueStrategy(avail, n_sims=300, base_seed=2, top_k=1).recommend(state, pool, config)
+    k3 = SeasonValueStrategy(avail, n_sims=300, base_seed=2, top_k=3).recommend(state, pool, config)
+
+    # Argmax invariant: the highest-VORP WR wins under both top_k.
+    assert k1.iloc[0]["gsis_id"] == k3.iloc[0]["gsis_id"] == "00-0000401"
+    # Pruning is active: the lowest WR is pruned (score 0.0) at top_k=1 but evaluated
+    # to a real positive marginal at top_k=3.
+    k1_score = dict(zip(k1["gsis_id"], k1["score"], strict=True))
+    k3_score = dict(zip(k3["gsis_id"], k3["score"], strict=True))
+    assert k1_score["00-0000403"] == 0.0
+    assert k3_score["00-0000403"] > 0.0
 
 
 def test_season_value_warns_on_roster_player_missing_from_pool() -> None:
