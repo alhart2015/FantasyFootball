@@ -1380,7 +1380,7 @@ Expected: point CIs (`lo == hi == point`) — identical roster on a single zero-
 
 - [ ] **Step 4: Run the starters-metric guardrail**
 
-Repeat Step 2's slot-1/6/12 runs with `--valuer starters` (drop `--season/--n-sims/--data-root` are still accepted/ignored by the starters valuer; keep `--with-season-value` which still needs the season args to build the strategy — so keep `--season 2026 --n-sims 300 --data-root data`). Record `season_value`'s starters-metric numbers vs `now_or_never`.
+Repeat Step 2's slot-1/6/12 runs with `--valuer starters`. Keep `--with-season-value` and the `--season 2026 --n-sims 300 --data-root data` args: under the starters valuer the strategy still loads availability (via the `load_store_availability` else-branch), so those args are still required to build it. Record `season_value`'s starters-metric numbers vs `now_or_never`.
 
 - [ ] **Step 5: Write the report**
 
