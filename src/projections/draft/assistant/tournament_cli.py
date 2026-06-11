@@ -15,7 +15,12 @@ from pathlib import Path
 import pandas as pd
 
 from projections.draft.assistant.availability_loader import load_store_availability
-from projections.draft.assistant.strategy import NowOrNeverStrategy, RawVorpStrategy
+from projections.draft.assistant.strategy import (
+    DraftStrategy,
+    NowOrNeverStrategy,
+    RawVorpStrategy,
+    SeasonValueStrategy,
+)
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.assistant.tournament import (
     SigmaTuningResult,
@@ -149,6 +154,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="Survival sigma for now_or_never (default ~2/3 of a round).",
     )
+    cmp_p.add_argument(
+        "--with-season-value",
+        action="store_true",
+        help="Also run the depth-aware SeasonValueStrategy (requires --valuer season data).",
+    )
     tune_p = sub.add_parser("tune-sigma", help="Sweep survival sigma for now_or_never.")
     tune_p.add_argument(
         "--sigma-grid",
@@ -184,11 +194,24 @@ def run(argv: list[str] | None = None) -> int:
         sigma = (
             default_sigma(config.n_teams) if args.strategy_sigma is None else args.strategy_sigma
         )
+        strategies: dict[str, DraftStrategy] = {
+            "now_or_never": NowOrNeverStrategy(LogisticSurvival(sigma=sigma)),
+            "raw_vorp": RawVorpStrategy(),
+        }
+        if args.with_season_value:
+            # Reuse the valuer's availability when --valuer season (the validation path)
+            # so partitions are read once; only load separately for the rare
+            # starters-valuer + season-strategy combo.
+            availability = (
+                valuer.availability
+                if isinstance(valuer, SeasonValuer)
+                else load_store_availability(pool, season=args.season, data_root=args.data_root)
+            )
+            strategies["season_value"] = SeasonValueStrategy(
+                availability, n_sims=args.n_sims, base_seed=args.seed
+            )
         result = run_tournament(
-            {
-                "now_or_never": NowOrNeverStrategy(LogisticSurvival(sigma=sigma)),
-                "raw_vorp": RawVorpStrategy(),
-            },
+            strategies,
             pool=pool,
             config=config,
             my_slot=args.my_slot,
