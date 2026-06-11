@@ -19,7 +19,10 @@ from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.roster_score import optimal_lineup_points
 from projections.schemas import RosterSlot
 
-_GAMES = 17  # season projection -> per-game divisor (uniform scaling, spec §3.3)
+# Healthy-season denominator: a full season projection divided into per-game points
+# (uniform scaling, spec §3.3). Distinct from availability._sched_games, which is the
+# era-correct *historical* schedule length used to estimate injury rates.
+_GAMES = 17
 
 
 def expected_season_points(
@@ -43,6 +46,8 @@ def expected_season_points(
     roster_bye_weeks = sorted({w for w in bye_arr.tolist() if w in weeks})
 
     def week_expectation(forced_out: np.ndarray) -> float:
+        # Hot path: optimal_lineup_points runs once per sim. A vectorized numpy
+        # fill is the deferred optimization (spec §3.4) if n_sims*rosters grows.
         acc = 0.0
         for _ in range(n_sims):
             available = (rng.random(n) < p_arr) & ~forced_out
@@ -52,7 +57,7 @@ def expected_season_points(
 
     no_force = np.zeros(n, dtype=bool)
     clean_week_value = week_expectation(no_force)
-    clean_weeks = sum(1 for w in weeks if w not in roster_bye_weeks)
+    clean_weeks = len(weeks) - len(roster_bye_weeks)  # bye weeks ⊆ weeks, distinct
     total = clean_weeks * clean_week_value
     for w in roster_bye_weeks:
         total += week_expectation(bye_arr == w)

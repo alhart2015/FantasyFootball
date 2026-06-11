@@ -70,12 +70,12 @@ def _build_season_valuer(
         # (build_availability warns and the injury model still applies), not a hard fail.
         schedules = pd.DataFrame(columns=["season", "week", "home_team", "away_team"])
     # build_availability only reads gsis_id + team, so full IdMapSchema validation is skipped.
-    try:
-        id_map = pd.read_parquet(raw / "id_map.parquet")
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"id_map.parquet not found at {raw / 'id_map.parquet'}; check --data-root"
-        ) from exc
+    # Guard on existence rather than catching FileNotFoundError, which would also swallow a
+    # parquet-internal missing-file error and misattribute it to the id_map path.
+    id_map_path = raw / "id_map.parquet"
+    if not id_map_path.exists():
+        raise FileNotFoundError(f"id_map.parquet not found at {id_map_path}; check --data-root")
+    id_map = pd.read_parquet(id_map_path)
     availability = build_availability(weekly_stats, schedules, id_map, pool, season=season)
     return SeasonValuer(availability=availability, n_sims=n_sims, base_seed=base_seed)
 
