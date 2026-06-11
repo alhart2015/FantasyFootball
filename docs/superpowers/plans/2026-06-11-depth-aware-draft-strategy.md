@@ -712,6 +712,26 @@ def test_season_value_warns_on_roster_player_missing_from_pool() -> None:
             state, pool, config
         )
     RecommendationSchema.validate(rec)
+
+
+def test_season_value_empty_eligible_returns_valid_empty_frame() -> None:
+    # Every pool player is already drafted → no eligible candidates. recommend must
+    # return a valid, empty RecommendationSchema frame, not raise (spec §4 edge).
+    from projections.draft.assistant.strategy import SeasonValueStrategy
+
+    pool = _depth_pool()
+    state = DraftState(
+        my_slot=1,
+        n_teams=4,
+        rounds=5,
+        picks=tuple(GsisId(g) for g in pool["gsis_id"].astype(str)),  # all drafted
+        my_roster=(),
+    )
+    rec = SeasonValueStrategy(_depth_avail(), n_sims=50, base_seed=0).recommend(
+        state, pool, _depth_config()
+    )
+    RecommendationSchema.validate(rec)
+    assert len(rec) == 0
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -779,8 +799,11 @@ class SeasonValueStrategy:
         )
 
         out = df.copy()
-        # Evaluated candidates carry their real marginal; pruned-out get 0.0 (marginal
-        # is always >= 0, and the argmax is always an evaluated candidate — spec §3.5).
+        # Evaluated candidates carry their real marginal; pruned-out get 0.0. Marginal
+        # is always >= 0 and the argmax (the actual pick) is always an evaluated
+        # candidate, so the pick is unaffected. A 0-marginal evaluated candidate (one
+        # that never cracks the lineup) may interleave with the 0.0 pruned tail by VORP
+        # — acceptable per spec §3.5's cosmetic-tail clause (only the head drives a pick).
         out["score"] = out["gsis_id"].astype(str).map(marginals).fillna(0.0).astype(float)
         p_na: pd.Series[float] = pd.Series(pd.NA, index=out.index, dtype=pd.Float64Dtype())
         return _finalize(out, elig, p_na, starting_need_tier=False)
@@ -1018,8 +1041,13 @@ In `run`, inside the `if args.mode == "compare":` block, build the strategy dict
             "raw_vorp": RawVorpStrategy(),
         }
         if args.with_season_value:
-            availability = load_store_availability(
-                pool, season=args.season, data_root=args.data_root
+            # Reuse the valuer's availability when --valuer season (the validation path)
+            # so partitions are read once; only load separately for the rare
+            # starters-valuer + season-strategy combo.
+            availability = (
+                valuer.availability
+                if isinstance(valuer, SeasonValuer)
+                else load_store_availability(pool, season=args.season, data_root=args.data_root)
             )
             strategies["season_value"] = SeasonValueStrategy(
                 availability, n_sims=args.n_sims, base_seed=args.seed
@@ -1210,7 +1238,7 @@ from projections.draft.assistant.availability_loader import load_store_availabil
 from projections.draft.assistant.strategy import SeasonValueStrategy
 ```
 
-Change `generate_recommendation` to accept the season args and build the strategy after the pool is loaded. Replace the function with:
+Change `generate_recommendation` to accept the season args and build the strategy after the pool is loaded. The new `season`/`n_sims`/`data_root` params carry defaults so the existing `test_generate_recommendation` (which passes only the original args for `now_or_never`) keeps passing unchanged — do **not** edit that test. Replace the function with:
 
 ```python
 def generate_recommendation(
@@ -1220,9 +1248,9 @@ def generate_recommendation(
     id_map_path: Path,
     strategy_name: str,
     sigma: float | None,
-    season: int,
-    n_sims: int,
-    data_root: Path,
+    season: int = 2026,
+    n_sims: int = 300,
+    data_root: Path = Path("data"),
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load inputs, run the chosen strategy.
 
