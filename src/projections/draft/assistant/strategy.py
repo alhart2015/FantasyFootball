@@ -10,8 +10,10 @@ starting-need tier, and applies the deterministic final ordering.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import groupby
 from typing import Protocol, runtime_checkable
 
+import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.pick_timing import my_next_pick
@@ -128,16 +130,28 @@ class NowOrNeverStrategy:
         ).astype(float)
         display_p = internal_p.where(adp.notna(), other=pd.NA)
 
-        df = df.assign(_p=internal_p)
+        # E[best survivor at each position]: lexsort the eligible pool once
+        # (position, vorp desc via negation, gsis asc) on plain numpy/lists, then
+        # walk contiguous position runs with itertools.groupby — far cheaper than a
+        # per-pick pandas groupby + per-group sort_values at tournament scale. The
+        # accumulation stays sequential (not np.sum), so the float result is
+        # bit-identical to the prior implementation.
+        pos = df["position"].to_numpy()
+        vorp = df["vorp"].to_numpy(dtype=float)
+        p = internal_p.to_numpy(dtype=float)
+        gsis = df["gsis_id"].to_numpy()
+        order = np.lexsort((gsis, -vorp, pos))
         e_best: dict[str, float] = {}
-        for position, sub in df.groupby("position"):
-            sub = sub.sort_values(["vorp", "gsis_id"], ascending=[False, True])
+        rows = zip(pos[order].tolist(), vorp[order].tolist(), p[order].tolist(), strict=True)
+        for position, group in groupby(rows, key=lambda r: r[0]):
             expected = 0.0
             prob_all_better_gone = 1.0
-            for vorp_i, p_i in zip(sub["vorp"], sub["_p"], strict=True):
-                expected += float(vorp_i) * p_i * prob_all_better_gone
+            for _, vorp_i, p_i in group:
+                expected += vorp_i * p_i * prob_all_better_gone
                 prob_all_better_gone *= 1.0 - p_i
             e_best[str(position)] = expected
 
-        df["score"] = df["vorp"].astype(float) - df["position"].map(e_best).astype(float)
+        # score = vorp - E[best survivor at position], reusing the already-extracted
+        # numpy arrays (a pyarrow-string .map(e_best) here is ~30x slower).
+        df["score"] = vorp - np.array([e_best[pos_i] for pos_i in pos], dtype=float)
         return _finalize(df, elig, display_p)

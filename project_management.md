@@ -4,6 +4,30 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — Strategy Comparison Harness (Slice 2) — shipped (2026-06-10, on branch `feat/draft-strategy-tournament`)
+
+**Status:** Slice 2 of the **Draft Assistant** sub-project done — a headless CLI tournament that finally *measures* the Slice 1 engine. It simulates full snake drafts with a `DraftStrategy` in the hero seat against an ADP-bot field, scores each resulting roster by its optimal starting lineup, and declares an empirical winner via a paired-seed bootstrap — plus a σ-tuning mode that sweeps the survival spread. This closes the two gaps Slice 1 left open: `NowOrNeverStrategy` was analytically motivated but unmeasured, and the survival σ default was a guess flagged for empirical tuning. Spec/plan at `docs/superpowers/specs|plans/2026-06-10-draft-strategy-tournament.*`. Built via subagent-driven development (6 TDD tasks, fresh implementer + two-stage spec-then-quality review each).
+
+**What shipped (`src/projections/draft/assistant/`):**
+- **`roster_score.py`** — `optimal_lineup_points(roster_rows, roster_slots)`: value a roster by its optimal *starting* lineup (single-position slots → FLEX → SUPER_FLEX, ascending eligibility breadth; bench scores nothing). Fill order is load-bearing (laminar eligibility → restrictive-first greedy is optimal); reuses `roster_eligibility`'s FLEX/SUPER_FLEX sets.
+- **`opponent.py`** — `bot_pick(available, rng, *, adp_jitter)`: pure noisy-ADP opponent (null ADP → +inf, deterministic gsis tie-break). Hardened to be a pure function of the player *set* (sorts by gsis before drawing noise) so it's order-independent.
+- **`simulation.py`** — `simulate_draft(...)` + internal `_draft_picks(...)`: one full snake draft, hero via the strategy / others via the bot, deterministic given seed. Fails loud if a strategy returns an already-drafted player.
+- **`tournament.py`** — `_validate_pool` (all-null-ADP + pool-sufficiency guard at the entry), `run_tournament` (per-strategy mean + percentile-bootstrap CI; winner only when the top-two **paired** diff CI excludes 0), `tune_sigma` (σ-grid argmax), `Interval`/`TournamentResult`/`SigmaTuningResult` dataclasses. Bootstrap mirrors `adoption_gate.py`. No new pandera schema.
+- **`tournament_cli.py`** + **`scripts/draft_tournament.py`** — `compare` and `tune-sigma` modes. Usage: `python scripts/draft_tournament.py --vorp-table <consensus_vorp.parquet> --league-config <league.json> --my-slot N [--seeds K] [--adp-jitter F] [--seed B] {compare [--strategy-sigma S] | tune-sigma [--sigma-grid "a,b,c"]}`.
+
+**Key decisions:** hero-vs-ADP-field (the only setup where survival is calibrated against real ADP behavior, so σ-tuning means something); **optimal starting-lineup points** as the metric (fantasy is won by starters — not total roster/VORP, which over-credit bench depth); **paired-seed bootstrap** (same seed → same bot field across strategies, so the diff is paired and low-variance); **pure noisy-ADP bots** (a roster filter is a no-op under a shared bench — realism comes from ADP itself); **league-driven, nothing hardcoded** (roster shape/team count/ruleset all from `LeagueConfig`); **no new schema** (result is a small dataclass the CLI renders); the **auction equivalent is a documented future seam** (simulate→score→compare split lets it reuse roster-scoring + the bootstrap stats unchanged — only the draft-mechanism module swaps).
+
+**Process caught real issues (the gates earned their keep):** three spec-review rounds (two genuine correctness bugs — flex fill order strands a player; "roster-aware bots" was a no-op under a shared bench — plus an unguarded all-null-ADP constraint) and one plan-review round (a dropped σ-vs-jitter guard test). During execution, code review hardened `bot_pick` to be order-independent and the simulator to fail loud on a drafted-player pick; **two prescribed test fixtures were corrected** when an implementer correctly refused to hack failing tests — the position-blind `_BestFpts`/`_WorstFpts` fakes are confounded by the balance-sensitive lineup metric (fixed: single-slot config), and the monotone σ pool never flipped the now-or-never argmax (replaced with a deterministic strategy-level flip test, hand-computed). A test-file mypy-strict invariance error (only caught by the full `mypy src tests`, not the per-module run) was fixed.
+
+**Gates:** the Slice surface is green — `tests/test_draft` 155 passed; full suite `1379 passed, 16 skipped, 1 failed` where the single failure is the **pre-existing TODO #40** backtest-snapshot cell (`test_backtest_smoke_one_cell`, WR feature build) — confirmed independent (this branch touches no `features`/`backtest` paths). **mypy src tests** clean (265 files); **ruff check** + **ruff format --check** clean.
+
+**Next direction:**
+1. **Slice 3 — Streamlit live-draft UI** over this engine (the last Draft Assistant slice): a draft-day board — mark a pick → re-run → updated recommendation.
+2. **σ is now empirically tunable** — run `tune-sigma` on a real consensus VORP table to replace the `⅔·n_teams` default; the survival model's unconditional approximation (ignores that an available player already lasted to now) is the natural refinement, now measurable behind the same Protocol.
+3. **Auction tournament** (user-flagged, later): inherits the simulate→score→compare seam.
+
+---
+
 ## Draft Assistant Engine (Slice 1) — shipped (2026-06-09, on branch `feat/draft-assistant-engine`)
 
 **Status:** Slice 1 of the live **Draft Assistant** sub-project done — a headless, pluggable-strategy pick recommender over the consensus VORP table. This is the "live, stateful" draft surface (vs. the static cheat sheet): you feed it the current draft state and it ranks *your* best pick now, accounting for when your next pick comes and who'll be gone by then (dynamic scarcity that static VORP can't capture). Spec/plan at `docs/superpowers/specs|plans/2026-06-09-draft-assistant-engine.*`. Built via subagent-driven development (8 TDD tasks, two-stage review each; opus on the now-or-never math).
