@@ -119,6 +119,49 @@ def test_cross_era_averaging() -> None:
     assert avail.p_week("00-0000001") == pytest.approx(0.97)
 
 
+def test_byes_ignore_playoff_weeks() -> None:
+    # Real schedule partitions include playoff weeks 19-22; the single-gap bye
+    # rule must restrict to the regular season (spec 3.1: weeks 1..18) or every
+    # team "misses" the playoff weeks it didn't reach and no bye is ever found.
+    base = _schedules(2026, {"AA": 7, "BB": 9})  # regular-season weeks 1-18
+    playoffs = pd.DataFrame(
+        {
+            "season": [2026, 2026, 2026, 2026],
+            "week": [19, 20, 21, 22],
+            "home_team": pd.array(["CC", "CC", "CC", "CC"], dtype=_PYARROW_STR),
+            "away_team": pd.array(["DD", "DD", "DD", "DD"], dtype=_PYARROW_STR),
+        }
+    )
+    sched = pd.concat([base, playoffs], ignore_index=True)
+    ws = _weekly_stats([("00-0000001", 2022, w, "RB") for w in range(1, 18)])
+    avail = build_availability(
+        ws, sched, _id_map([("00-0000001", "AA")]), _pool([("00-0000001", "RB")]), season=2026
+    )
+    assert avail.bye_week("00-0000001") == 7  # AA's bye, not lost to the playoff rows
+
+
+def test_midseason_debut_not_penalized_as_injury() -> None:
+    # Availability is measured over the player's ACTIVE span, so a mid-season
+    # debut (rookie / trade / call-up) is not conflated with injury risk.
+    # MID debuts week 6 then plays every game (12 games, bye at 10) -> fully
+    # available once active. INJ debuts week 1, plays 12, then is injured out for
+    # the rest -> genuinely missed games. Same game count, very different p.
+    mid_weeks = [w for w in range(6, 19) if w != 10]  # weeks 6-18 minus bye 10 = 12 games
+    inj_weeks = list(range(1, 13))  # weeks 1-12 = 12 games, then out
+    ws = _weekly_stats(
+        [("00-0000010", 2024, w, "RB") for w in mid_weeks]
+        + [("00-0000011", 2024, w, "RB") for w in inj_weeks]
+    )
+    sched = _schedules(2026, {"MM": 7, "NN": 8})
+    id_map = _id_map([("00-0000010", "MM"), ("00-0000011", "NN")])
+    pool = _pool([("00-0000010", "RB"), ("00-0000011", "RB")])
+    avail = build_availability(ws, sched, id_map, pool, season=2026)
+    # MID: active span = weeks 6..18 -> denom 17-(6-1)=12, games 12 -> frac 1.0 -> clamp hi
+    assert avail.p_week("00-0000010") == pytest.approx(0.97)
+    # INJ: debut week 1 -> denom 17, games 12 -> 12/17, the injury weeks count
+    assert avail.p_week("00-0000011") == pytest.approx(12 / 17, abs=1e-9)
+
+
 def test_pool_player_absent_from_id_map_has_no_bye() -> None:
     ws = _weekly_stats([("00-0000001", 2022, w, "WR") for w in range(1, 15)])
     sched = _schedules(2026, {"AA": 9})

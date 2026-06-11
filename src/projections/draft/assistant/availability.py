@@ -1,9 +1,11 @@
 """Per-player season availability: injury Bernoulli `p` + bye week (spec §3.2).
 
-`p` is the fraction of its team's games a player plays, era-normalized over their
-`weekly_stats` history (16-game 2018-2020 vs 17-game 2021+), with a per-position
-default for rookies / no-history and a clamp to keep no player degenerate. Byes
-come from the target-season schedule via the player's `id_map` team.
+`p` is the fraction of its team's games a player plays over their ACTIVE span,
+era-normalized over their `weekly_stats` history (16-game 2018-2020 vs 17-game
+2021+), with a per-position default for rookies / no-history and a clamp to keep
+no player degenerate. Measuring from each season's first appearance keeps a
+mid-season debut from looking injury-prone. Byes come from the regular-season
+target schedule via the player's `id_map` team.
 """
 
 from __future__ import annotations
@@ -29,6 +31,12 @@ def _team_byes(schedules: pd.DataFrame, season: int) -> dict[str, int]:
     if len(sch) == 0:
         warnings.warn(f"no schedules for season {season}; byes will be empty", stacklevel=2)
         return {}
+    # A bye is a regular-season concept (spec 3.1: weeks 1..18). Ingested schedule
+    # partitions also carry playoff weeks (19-22); without this filter a team that
+    # missed the playoffs "misses" every playoff week too, so the single-gap rule
+    # below never fires and no bye is ever detected. Regular-season calendar weeks
+    # = scheduled games + the one bye.
+    sch = sch[sch["week"] <= _sched_games(season) + 1]
     weeks = sorted(int(w) for w in sch["week"].unique())
     teams = pd.unique(pd.concat([sch["home_team"], sch["away_team"]], ignore_index=True))
     byes: dict[str, int] = {}
@@ -73,9 +81,20 @@ def build_availability(
     ws["position"] = ws["position"].astype(str)
     ws["gsis_id"] = ws["gsis_id"].astype(str)
 
-    games = ws.groupby(["gsis_id", "season"]).size().rename("games").reset_index()
+    games = (
+        ws.groupby(["gsis_id", "season"])
+        .agg(games=("week", "count"), first_week=("week", "min"))
+        .reset_index()
+    )
     games["sched"] = games["season"].map(_sched_games)
-    games["frac"] = games["games"] / games["sched"]
+    # Availability is measured over the player's ACTIVE span, not the whole season:
+    # weeks before a player's first appearance ("not yet active" -- rookie debut,
+    # mid-season signing or trade, call-up) are not missed games, so counting them
+    # would conflate roster status with injury risk (spec 3.2: p is "healthy/active").
+    # Denominator = scheduled games from the first week on; clip keeps frac in (0, 1]
+    # (the first_week-1 approximation can over-trim by the pre-debut bye).
+    active = (games["sched"] - (games["first_week"] - 1)).clip(lower=1)
+    games["frac"] = (games["games"] / active).clip(upper=1.0)
     p_raw = games.groupby("gsis_id")["frac"].mean()
     pos_hist = ws.groupby("gsis_id")["position"].agg(lambda s: str(s.mode().iloc[0]))
 
