@@ -86,7 +86,12 @@ class SeasonValueStrategy:
    roster-ineligible rows, guarantees `consensus_adp`.
 2. **My roster rows** — select the pool rows for `state.my_roster` (the hero's current players). These are
    the incumbents every marginal is measured against. (Players already on the roster are also already in
-   `drafted_ids`, so they are not in the eligible candidate subset — no overlap.)
+   `drafted_ids`, so they are not in the eligible candidate subset — no overlap.) **Missing-from-pool roster
+   players:** in live use `load_draft_state` resolves the roster from `id_map`, so a rostered `gsis_id` could
+   have no consensus VORP row and therefore no `season_mean_fpts` to score. Such players are **dropped from
+   the valued roster with a warning** (an unscored player can only undercount the base, biasing every
+   marginal). This cannot happen in the tournament — every hero pick comes from the pool — so it is a
+   live-CLI-only path.
 3. **Prune** — within each eligible position, take the top-`top_k` candidates by `vorp`. A candidate ranked
    below `top_k` at its position is strictly dominated as a *starter* by `top_k` better players there and so
    contributes ≈ 0 marginal season points; spending an MC on it is wasted (§5.3). Pruned candidates are kept
@@ -157,15 +162,24 @@ frame is complete and stable:
   tail ordering matters only for the live-assistant display, where a VORP-ordered remainder is the sensible
   default.
 
+`top_k` therefore controls only **how many candidates per position get a real marginal score for display** —
+it is not a correctness/safety knob. By the within-position monotonicity argument (a strictly-higher-points
+player at the same position weakly dominates in every lineup-fill scenario, so marginal season value is
+monotonic in `season_mean_fpts`, whose within-position order equals VORP's), the per-position best is always
+`top_k=1`, so the cross-position **argmax — the actual pick — is correct for any `top_k ≥ 1`**. The default 8
+is a generous display depth, not a hedge against missing the pick.
+
 ### 3.6 What changes and what does not
 
 - **Unchanged:** the draft simulation, `now_or_never` / `raw_vorp` strategies and their exact output,
   `optimal_lineup_points`, `expected_season_points`'s public contract, the availability/survival models, the
   bootstrap/winner machinery, the `RosterValuer` seam.
 - **New:** `SeasonValueStrategy` (+ the CRN season-value evaluation it calls).
-- **Touched:** `strategy.py` (new strategy + optional finalize tier), `tournament_cli.py` (register
-  `season_value`, build its availability), the live assistant `cli.py` / `scripts/draft_assistant.py`
-  (`--strategy season_value`), and the season-value module (factor the CRN kernel).
+- **Touched:** `strategy.py` (new strategy + optional finalize tier), `tournament_cli.py` (factor the shared
+  `_load_availability` helper out of `_build_season_valuer`; register `season_value`), the live assistant
+  `cli.py` / `scripts/draft_assistant.py` (new `--season` / `--data-root` / `--n-sims` args + availability
+  load + `--strategy season_value`), and the season-value module (factor the CRN kernel). CLI wiring detail
+  in §3.8.
 
 ### 3.7 Cost
 
@@ -176,6 +190,40 @@ the strategy runs once per hero pick (`≈ rounds` picks) per simulated draft pe
 than `now_or_never` but acceptable for an offline validation. A live single-draft `recommend()` is trivially
 fast (one pick, a few hundred candidate-evals). A numpy fast-path for the weekly fill (PR #60 §3.4 deferral)
 is the lever if season-valuer tournament sweeps are ever wanted; not a v1 requirement.
+
+### 3.8 CLI wiring (both CLIs share one availability builder)
+
+Both the tournament CLI and the live-assistant CLI need a `PlayerAvailability` to construct the strategy
+(and, in the tournament, the `SeasonValuer`). Today `tournament_cli._build_season_valuer` loads the
+partitions and calls `build_availability` **inline**, returning a `SeasonValuer` — it does not expose the
+availability the strategy needs. So:
+
+- **Factor a shared loader** — extract the partition-load + `build_availability` from `_build_season_valuer`
+  into one helper, `_load_availability(pool, *, season, data_root) -> PlayerAvailability` (same module).
+  `_build_season_valuer` becomes `SeasonValuer(_load_availability(...), n_sims=..., base_seed=...)`. This is
+  the single construction point; `SeasonValueStrategy` takes the returned `PlayerAvailability` (already the
+  design, §3.2). The missing-target-schedule degradation (warn → no byes) and the historical-`weekly_stats`
+  span both live in this helper unchanged.
+
+- **Tournament CLI** (`tournament_cli.py`) — register `season_value` alongside `now_or_never` / `raw_vorp` in
+  the strategy `choices`. When selected, build it via the shared `_load_availability(...)` with the existing
+  `--season` / `--n-sims` / `--data-root` flags and `--seed` as `base_seed`; `top_k` uses the
+  `SeasonValueStrategy` default (a `--top-k` flag is optional, not required for v1).
+
+- **Live-assistant CLI** (`cli.py` / `scripts/draft_assistant.py`) — the live CLI currently has **no**
+  partition loader and `_build_strategy(name, n_teams, sigma)` takes no data. Adding `season_value` therefore
+  adds an availability path it does not have today:
+  - New args: **`--season`** (default `2026`), **`--data-root`** (default `data`), **`--n-sims`** (default
+    matching the tournament's, e.g. `300`). `--seed` for `base_seed` (default a fixed constant for
+    reproducibility).
+  - The loaded consensus VORP table (already read as `vorp`) is the `pool` passed to `_load_availability`;
+    the same `id_map` the live CLI already loads is reused.
+  - `_build_strategy` (or the `recommend`-driving caller) gains access to the loaded `pool` + the built
+    `PlayerAvailability` so it can construct `SeasonValueStrategy(availability, n_sims, base_seed, top_k)`.
+    `now_or_never` / `raw_vorp` construction is unchanged (they ignore the new args).
+  - **Degradation:** a missing target-season `schedules` partition warns and proceeds with no byes (identical
+    to `_load_availability`); the injury model still applies. These args are inert for the other two
+    strategies.
 
 ## 4. Testing
 
@@ -201,6 +249,9 @@ Synthetic fixtures (project norm — no network in unit tests):
   **byte-identical to today** (regression guard on the optional-tier refactor).
 - **Last-pick / empty-eligible edges** — a state with one eligible position, and a near-full roster, both
   return a valid frame.
+- **Missing-from-pool roster player** — a `state.my_roster` `gsis_id` with no pool row is dropped from the
+  valued base roster with a warning (§3.2 step 2); marginals are computed against the scorable incumbents and
+  the returned frame still validates.
 - **CLI** — `--strategy season_value` runs end-to-end on a fixture in both the tournament and live-assistant
   CLIs.
 
@@ -228,8 +279,10 @@ Gates per the project bar: `pytest`, `mypy src tests` (strict), `ruff check`, `r
   column and an opt-in for the other strategies; it is just not a sort key here.
 - **5.6 Strategy holds the MC config, protocol unchanged** — `recommend(state, pool, config)` is untouched;
   availability / `n_sims` / `base_seed` / `top_k` are constructor args, mirroring
-  `NowOrNeverStrategy(survival=...)`. The tournament and live CLIs build the strategy the same way they build
-  the `SeasonValuer`, reusing `_build_season_valuer`'s loader.
+  `NowOrNeverStrategy(survival=...)`. Both CLIs construct the bound `PlayerAvailability` through one shared
+  `_load_availability` helper (factored out of `_build_season_valuer`, §3.8), so the strategy and the
+  `SeasonValuer` agree by construction and the partition-load / missing-schedule degradation lives in exactly
+  one place.
 
 ## 6. Success criteria
 
