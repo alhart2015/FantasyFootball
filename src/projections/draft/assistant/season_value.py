@@ -3,20 +3,28 @@
 Monte-Carlo a season: each week, players are available (not on bye, healthy w.p.
 `p`), and the best legal lineup is filled from the available roster. Because
 `per_game = season_mean_fpts / 17` is a uniform scaling, the weekly optimal lineup
-is exactly `optimal_lineup_points(available_subset) / 17` -- the existing greedy
-fill is reused verbatim. Weeks with no roster bye are identical in expectation, so
-we MC one generic week and reuse it (the factorization is exact in expectation).
+is `optimal_lineup_points(available_subset) / 17`. The per-sim fill is vectorized
+across all draws at once (`_vectorized_lineup_points`) — equivalent to looping
+`optimal_lineup_points` per sim (pinned by an equivalence test) but orders of
+magnitude faster, which is what makes the season-value strategy tractable in a
+tournament. Weeks with no roster bye are identical in expectation, so we MC one
+generic week and reuse it (the factorization is exact in expectation).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
-from projections.draft.assistant.roster_score import optimal_lineup_points
+from projections.draft.roster_eligibility import (
+    FLEX_ELIGIBLE,
+    POSITION_SLOTS,
+    SUPER_FLEX_ELIGIBLE,
+)
 from projections.schemas import RosterSlot
 
 # Healthy-season denominator: a full season projection divided into per-game points
@@ -25,17 +33,81 @@ from projections.schemas import RosterSlot
 _GAMES = 17
 
 
-def _week_value(
-    roster: pd.DataFrame, roster_slots: Mapping[RosterSlot, int], available: np.ndarray
-) -> float:
-    """Optimal weekly lineup points from the available roster rows (UNSCALED).
+@dataclass(frozen=True)
+class _FillMeta:
+    """Roster fill plan precomputed once, reused across every MC draw of a roster.
 
-    The /_GAMES per-game scaling is applied once by the caller (after averaging over
-    sims), exactly as the original expected_season_points did — summing pre-scaled
-    values per sim would be a different float expression and break exact-equality tests.
+    `single`: per single-position starting slot, the roster columns at that position
+    sorted by points descending, those points, and the slot count. `flex`: per flex
+    tier (FLEX then SUPER_FLEX, narrowest first), the flex-eligible roster columns and
+    the slot count. `pts` is every roster player's points in roster-row order.
     """
-    sub = roster.iloc[np.flatnonzero(available)]
-    return optimal_lineup_points(sub, roster_slots)
+
+    pts: np.ndarray
+    single: tuple[tuple[np.ndarray, np.ndarray, int], ...]
+    flex: tuple[tuple[np.ndarray, int], ...]
+
+
+def _roster_fill_meta(roster: pd.DataFrame, roster_slots: Mapping[RosterSlot, int]) -> _FillMeta:
+    """Precompute the restrictive-first fill plan for `roster` under `roster_slots`."""
+    pos = roster["position"].astype(str).to_numpy()
+    pts = roster["season_mean_fpts"].to_numpy(dtype=np.float64)
+    single: list[tuple[np.ndarray, np.ndarray, int]] = []
+    for slot in POSITION_SLOTS:
+        count = roster_slots.get(slot, 0)
+        if count <= 0:
+            continue
+        cols = np.flatnonzero(pos == slot.value)
+        if cols.size == 0:
+            continue
+        order = np.argsort(-pts[cols], kind="stable")  # points descending
+        sorted_cols = cols[order]
+        single.append((sorted_cols, pts[sorted_cols], count))
+    flex: list[tuple[np.ndarray, int]] = []
+    for slot, eligible in (
+        (RosterSlot.FLEX, FLEX_ELIGIBLE),
+        (RosterSlot.SUPER_FLEX, SUPER_FLEX_ELIGIBLE),
+    ):
+        count = roster_slots.get(slot, 0)
+        if count <= 0:
+            continue
+        elig_values = [p.value for p in eligible]
+        cols = np.flatnonzero(np.isin(pos, elig_values))
+        if cols.size == 0:
+            continue
+        flex.append((cols, count))
+    return _FillMeta(pts=pts, single=tuple(single), flex=tuple(flex))
+
+
+def _vectorized_lineup_points(avail: np.ndarray, meta: _FillMeta) -> np.ndarray:
+    """Optimal starting-lineup points for each row of `avail` ((n_sims, n) booleans).
+
+    Vectorized equivalent of `optimal_lineup_points` over many availability draws of one
+    fixed roster: restrictive-first greedy (single-position slots, then FLEX, then
+    SUPER_FLEX — narrowest eligibility first, which is optimal for laminar slots). Equal
+    to the per-sim `optimal_lineup_points` sum up to float summation order; pinned by
+    `test_vectorized_lineup_matches_optimal_lineup_points`.
+    """
+    n_sims = avail.shape[0]
+    total = np.zeros(n_sims, dtype=np.float64)
+    flex_avail = avail.copy()
+    for sorted_cols, sorted_pts, count in meta.single:
+        a = avail[:, sorted_cols]  # (n_sims, m), points-descending
+        rank = np.cumsum(a, axis=1)  # availability rank among players at this position
+        used = a & (rank <= count)  # the top-`count` available fill the starting slots
+        total += (used * sorted_pts).sum(axis=1)
+        flex_avail[:, sorted_cols] &= ~used  # a started player can't also fill a flex slot
+    for cols, count in meta.flex:
+        pts_cols = meta.pts[cols]
+        for _ in range(count):
+            cand = np.where(flex_avail[:, cols], pts_cols, -np.inf)  # (n_sims, |cols|)
+            best = cand.max(axis=1)
+            has = best > -np.inf  # a sim may have no eligible flex player → contributes 0
+            total += np.where(has, best, 0.0)
+            chosen = cols[cand.argmax(axis=1)]  # roster column per sim (valid where has)
+            rows = np.flatnonzero(has)
+            flex_avail[rows, chosen[rows]] = False  # consume the chosen player
+    return total
 
 
 def _factorized_season_value(
@@ -89,14 +161,11 @@ def expected_season_points_crn(
     p_arr = np.array([availability.p_week(g) for g in gsis], dtype=np.float64)
     cols = np.array([col_of[g] for g in gsis])
     sub_draws = draws[:, cols]  # (n_sims, n), aligned to roster row order
-    n_sims: int = sub_draws.shape[0]
+    meta = _roster_fill_meta(roster, roster_slots)
 
     def week_value_fn(forced_out: np.ndarray) -> float:
-        acc = 0.0
-        for s in range(n_sims):
-            available = (sub_draws[s] < p_arr) & ~forced_out
-            acc += _week_value(roster, roster_slots, available)
-        return acc / n_sims / _GAMES
+        avail = (sub_draws < p_arr) & ~forced_out  # (n_sims, n)
+        return float(_vectorized_lineup_points(avail, meta).mean()) / _GAMES
 
     return _factorized_season_value(roster, availability, weeks, week_value_fn)
 
@@ -116,13 +185,11 @@ def expected_season_points(
         return 0.0
     gsis = roster["gsis_id"].astype(str).to_numpy()
     p_arr = np.array([availability.p_week(g) for g in gsis], dtype=np.float64)
+    meta = _roster_fill_meta(roster, roster_slots)
 
     def week_value_fn(forced_out: np.ndarray) -> float:
-        acc = 0.0
-        for _ in range(n_sims):
-            available = (rng.random(n) < p_arr) & ~forced_out
-            acc += _week_value(roster, roster_slots, available)
-        return acc / n_sims / _GAMES
+        avail = (rng.random((n_sims, n)) < p_arr) & ~forced_out  # (n_sims, n)
+        return float(_vectorized_lineup_points(avail, meta).mean()) / _GAMES
 
     return _factorized_season_value(roster, availability, weeks, week_value_fn)
 

@@ -26,6 +26,50 @@ def _avail(p: dict[str, float], bye: dict[str, int] | None = None) -> PlayerAvai
     return PlayerAvailability(p=p, bye=bye or {})
 
 
+def test_vectorized_lineup_matches_optimal_lineup_points() -> None:
+    # The fast-path is correct iff its per-sim lineup sum equals the canonical
+    # optimal_lineup_points on the same available subset, for every mask. Cover a
+    # multi-position roster with single-slot counts, FLEX, and SUPER_FLEX, over 200
+    # random availability masks (incl. all-out / all-in by chance at the extremes).
+    from projections.draft.assistant.roster_score import optimal_lineup_points
+    from projections.draft.assistant.season_value import (
+        _roster_fill_meta,
+        _vectorized_lineup_points,
+    )
+
+    roster = _roster(
+        [
+            ("00-0000001", "QB", 300.0),
+            ("00-0000002", "QB", 250.0),
+            ("00-0000003", "RB", 220.0),
+            ("00-0000004", "RB", 180.0),
+            ("00-0000005", "RB", 140.0),
+            ("00-0000006", "WR", 210.0),
+            ("00-0000007", "WR", 190.0),
+            ("00-0000008", "WR", 150.0),
+            ("00-0000009", "TE", 160.0),
+            ("00-0000010", "TE", 120.0),
+        ]
+    )
+    slots = {
+        RosterSlot.QB: 1,
+        RosterSlot.RB: 2,
+        RosterSlot.WR: 2,
+        RosterSlot.FLEX: 1,
+        RosterSlot.SUPER_FLEX: 1,
+    }
+    meta = _roster_fill_meta(roster, slots)
+    n = len(roster)
+    rng = np.random.default_rng(0)
+    avail = rng.random((200, n)) < 0.6
+    avail[0, :] = False  # force an all-unavailable sim (lineup scores 0)
+    avail[1, :] = True  # force an all-available sim (full optimal lineup)
+    vec = _vectorized_lineup_points(avail, meta)
+    for s in range(avail.shape[0]):
+        sub = roster.iloc[np.flatnonzero(avail[s])]
+        assert abs(vec[s] - optimal_lineup_points(sub, slots)) < 1e-9
+
+
 def test_closed_form_single_slot() -> None:
     # 1 RB, p=0.5, no bye, 2 weeks. per_game = 170/17 = 10. E = 2 * 0.5 * 10 = 10.
     roster = _roster([("00-0000001", "RB", 170.0)])
