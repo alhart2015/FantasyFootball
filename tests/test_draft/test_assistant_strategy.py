@@ -7,6 +7,7 @@ from typing import ClassVar
 import pandas as pd
 import pytest
 
+from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.strategy import (
     DraftStrategy,
@@ -248,3 +249,152 @@ def test_finalize_fails_loud_on_position_outside_eligibility() -> None:
     p_na: pd.Series[float] = pd.Series(pd.NA, index=df.index, dtype=pd.Float64Dtype())
     with pytest.raises(KeyError, match="eligibility keyset"):
         _finalize(df, {Position.RB: True}, p_na)
+
+
+# ---------------------------------------------------------------------------
+# SeasonValueStrategy helpers
+# ---------------------------------------------------------------------------
+
+
+def _depth_pool() -> pd.DataFrame:
+    # My roster will be {WR_a safe, WR_b safe, RB_a RISKY}. Candidates: WR_c (high VORP,
+    # saturated WR room) vs RB_b (insurance for the risky RB). season_value must take
+    # the insurance; now_or_never takes the higher VORP.
+    return pd.DataFrame(
+        {
+            "gsis_id": pd.array(
+                ["00-0000201", "00-0000202", "00-0000301", "00-0000203", "00-0000302"],
+                dtype=_PYARROW_STR,
+            ),
+            "position": pd.array(["WR", "WR", "RB", "WR", "RB"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [200.0, 195.0, 200.0, 190.0, 185.0],
+            "vorp": [60.0, 50.0, 58.0, 55.0, 45.0],
+            "replacement_fpts": [140.0, 140.0, 140.0, 140.0, 140.0],
+            "consensus_adp": pd.array([3.0, 4.0, 5.0, 20.0, 20.0], dtype=pd.Float64Dtype()),
+        }
+    )
+
+
+def _depth_state() -> DraftState:
+    # 4 teams, my_slot=1 → my picks at #1, #8, #9. Place WR_a, WR_b, RB_a there;
+    # fillers (not in pool) elsewhere. current_pick = 10.
+    picks = (
+        GsisId("00-0000201"),  # #1 mine (WR_a)
+        GsisId("00-9000002"),
+        GsisId("00-9000003"),
+        GsisId("00-9000004"),
+        GsisId("00-9000005"),
+        GsisId("00-9000006"),
+        GsisId("00-9000007"),
+        GsisId("00-0000202"),  # #8 mine (WR_b)
+        GsisId("00-0000301"),  # #9 mine (RB_a)
+    )
+    return DraftState(
+        my_slot=1,
+        n_teams=4,
+        rounds=5,  # == roster_size (RB+WR+FLEX+2*BENCH)
+        picks=picks,
+        my_roster=(Position.WR, Position.WR, Position.RB),
+    )
+
+
+def _depth_config() -> LeagueConfig:
+    return LeagueConfig(
+        name="t",
+        n_teams=4,
+        roster_slots={RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.FLEX: 1, RosterSlot.BENCH: 2},
+        ruleset=Ruleset.espn_ppr(),
+    )
+
+
+def _depth_avail() -> PlayerAvailability:
+    return PlayerAvailability(
+        p={
+            "00-0000201": 0.97,  # WR_a (safe)
+            "00-0000202": 0.97,  # WR_b (safe)
+            "00-0000301": 0.40,  # RB_a (risky starter — depth at RB pays off)
+            "00-0000203": 0.97,  # WR_c (candidate, redundant WR)
+            "00-0000302": 0.95,  # RB_b (candidate, RB insurance)
+        },
+        bye={},
+    )
+
+
+def test_season_value_satisfies_protocol() -> None:
+    from projections.draft.assistant.strategy import SeasonValueStrategy
+
+    strat = SeasonValueStrategy(_depth_avail(), n_sims=200, base_seed=0)
+    assert isinstance(strat, DraftStrategy)
+
+
+def test_season_value_takes_insurance_where_now_or_never_takes_vorp() -> None:
+    from projections.draft.assistant.strategy import SeasonValueStrategy
+
+    state, pool, config = _depth_state(), _depth_pool(), _depth_config()
+    season = SeasonValueStrategy(_depth_avail(), n_sims=4000, base_seed=0).recommend(
+        state, pool, config
+    )
+    RecommendationSchema.validate(season)
+    assert season.iloc[0]["gsis_id"] == "00-0000302"  # RB_b, the RB insurance pick
+
+    non = NowOrNeverStrategy(LogisticSurvival(sigma=8.0)).recommend(state, pool, config)
+    assert non.iloc[0]["gsis_id"] == "00-0000203"  # WR_c, the higher-VORP redundant WR
+
+
+def test_season_value_is_deterministic() -> None:
+    from projections.draft.assistant.strategy import SeasonValueStrategy
+
+    state, pool, config = _depth_state(), _depth_pool(), _depth_config()
+    a = SeasonValueStrategy(_depth_avail(), n_sims=300, base_seed=7).recommend(state, pool, config)
+    b = SeasonValueStrategy(_depth_avail(), n_sims=300, base_seed=7).recommend(state, pool, config)
+    assert list(a["gsis_id"]) == list(b["gsis_id"])
+    assert list(a["score"]) == list(b["score"])
+
+
+def test_season_value_pruning_invariance() -> None:
+    # top_k larger than the per-position pool depth → identical to no pruning.
+    from projections.draft.assistant.strategy import SeasonValueStrategy
+
+    state, pool, config = _depth_state(), _depth_pool(), _depth_config()
+    small = SeasonValueStrategy(_depth_avail(), n_sims=500, base_seed=1, top_k=1).recommend(
+        state, pool, config
+    )
+    big = SeasonValueStrategy(_depth_avail(), n_sims=500, base_seed=1, top_k=50).recommend(
+        state, pool, config
+    )
+    # Only one candidate per position here, so even top_k=1 evaluates all → same #1.
+    assert small.iloc[0]["gsis_id"] == big.iloc[0]["gsis_id"]
+
+
+def test_season_value_warns_on_roster_player_missing_from_pool() -> None:
+    # A rostered id absent from the pool is dropped from the valued base, with a warning.
+    from projections.draft.assistant.strategy import SeasonValueStrategy
+
+    pool = _depth_pool()
+    pool = pool[pool["gsis_id"] != "00-0000301"].copy()  # drop rostered RB_a from the pool
+    state, config = _depth_state(), _depth_config()
+    with pytest.warns(UserWarning, match="absent from the VORP pool"):
+        rec = SeasonValueStrategy(_depth_avail(), n_sims=200, base_seed=0).recommend(
+            state, pool, config
+        )
+    RecommendationSchema.validate(rec)
+
+
+def test_season_value_empty_eligible_returns_valid_empty_frame() -> None:
+    # Every pool player is already drafted → no eligible candidates. recommend must
+    # return a valid, empty RecommendationSchema frame, not raise (spec §4 edge).
+    from projections.draft.assistant.strategy import SeasonValueStrategy
+
+    pool = _depth_pool()
+    state = DraftState(
+        my_slot=1,
+        n_teams=4,
+        rounds=5,
+        picks=tuple(GsisId(g) for g in pool["gsis_id"].astype(str)),  # all drafted
+        my_roster=(),
+    )
+    rec = SeasonValueStrategy(_depth_avail(), n_sims=50, base_seed=0).recommend(
+        state, pool, _depth_config()
+    )
+    RecommendationSchema.validate(rec)
+    assert len(rec) == 0
