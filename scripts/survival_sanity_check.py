@@ -6,11 +6,15 @@ Two diagnostics against the real consensus VORP pool:
    ADP-bot draft prefixes and compare the model's predicted availability to the empirical
    availability at the hero's next pick. A well-calibrated model tracks the diagonal.
 2. SAMPLE ROSTERS — run one draft (fixed seed) with NowOrNeverStrategy and with
-   RawVorpStrategy from the same slot, and print the two hero rosters side by side.
+   RawVorpStrategy from the same slot, and print the two hero rosters side by side, each
+   scored by BOTH the starters metric (best single-week lineup) and the season metric
+   (expected points under injuries + byes). The gap between the two exposes bench quality:
+   a QB-hoarding roster barely moves on starters but bleeds heavily on the season metric.
 
 Usage:
     python scripts/survival_sanity_check.py --vorp-table <parquet> --league-config <json> \
-        --my-slot 6 [--sigma N] [--adp-jitter F] [--seeds K]
+        --my-slot 6 [--sigma N] [--adp-jitter F] [--seeds K] \
+        [--season 2026] [--n-sims 4000] [--data-root data]
 """
 
 from __future__ import annotations
@@ -29,6 +33,8 @@ from projections.draft.assistant.roster_score import optimal_lineup_points
 from projections.draft.assistant.simulation import simulate_draft
 from projections.draft.assistant.strategy import NowOrNeverStrategy, RawVorpStrategy
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
+from projections.draft.assistant.tournament_cli import _build_season_valuer
+from projections.draft.assistant.valuer import SeasonValuer
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 
@@ -115,20 +121,30 @@ def _calibration(
 
 
 def _print_roster(
-    label: str, roster: pd.DataFrame, names: dict[str, str], config: LeagueConfig
+    label: str,
+    roster: pd.DataFrame,
+    names: dict[str, str],
+    config: LeagueConfig,
+    season_valuer: SeasonValuer,
 ) -> None:
-    total = optimal_lineup_points(roster, config.roster_slots)
+    avail = season_valuer.availability
+    starters = optimal_lineup_points(roster, config.roster_slots)
+    season = season_valuer.value(roster, config.roster_slots)
+    pct = (season - starters) / starters * 100 if starters else 0.0
     by_pos = Counter(roster["position"].astype(str))
-    print(
-        f"\n--- {label}: optimal starting lineup = {total:.1f} pts | "
-        f"counts {dict(sorted(by_pos.items()))} ---"
-    )
-    ordered = roster.sort_values(["position", "vorp"], ascending=[True, False])
-    print(f"  {'PLAYER':<24} {'POS':<4} {'VORP':>7} {'ADP':>6}")
+    print(f"\n--- {label}: counts {dict(sorted(by_pos.items()))} ---")
+    print(f"    starters metric (best 1-week lineup) : {starters:8.1f}")
+    print(f"    season   metric (E[pts] inj + byes)  : {season:8.1f}  ({pct:+.1f}% vs starters)")
+    ordered = roster.sort_values(["position", "season_mean_fpts"], ascending=[True, False])
+    print(f"  {'PLAYER':<24} {'POS':<4} {'PROJ':>6} {'VORP':>7} {'p_wk':>5} {'bye':>4}")
     for row in ordered.itertuples(index=False):
-        name = names.get(str(row.gsis_id), str(row.gsis_id))[:24]
-        adp = f"{float(row.consensus_adp):.1f}" if pd.notna(row.consensus_adp) else "-"
-        print(f"  {name:<24} {row.position:<4} {row.vorp:>7.1f} {adp:>6}")
+        gid = str(row.gsis_id)
+        name = names.get(gid, gid)[:24]
+        bye = avail.bye_week(gid)
+        print(
+            f"  {name:<24} {row.position:<4} {row.season_mean_fpts:>6.1f} {row.vorp:>7.1f} "
+            f"{avail.p_week(gid):>5.2f} {(str(bye) if bye else '-'):>4}"
+        )
 
 
 def _sample_rosters(
@@ -139,9 +155,16 @@ def _sample_rosters(
     my_slot: int,
     sigma: float,
     adp_jitter: float,
+    season: int,
+    n_sims: int,
+    data_root: Path,
 ) -> None:
     print(
-        f"\n=== SAMPLE ROSTERS (slot {my_slot}, seed 0, adp_jitter={adp_jitter}, sigma={sigma}) ==="
+        f"\n=== SAMPLE ROSTERS (slot {my_slot}, seed 0, adp_jitter={adp_jitter}, sigma={sigma}; "
+        f"season metric: {season}, n_sims={n_sims}) ==="
+    )
+    season_valuer = _build_season_valuer(
+        pool, season=season, n_sims=n_sims, base_seed=0, data_root=data_root
     )
     non = NowOrNeverStrategy(LogisticSurvival(sigma=sigma))
     raw = RawVorpStrategy()
@@ -151,8 +174,8 @@ def _sample_rosters(
     r_raw = simulate_draft(
         raw, my_slot, pool, config, adp_jitter=adp_jitter, rng=np.random.default_rng(0)
     )
-    _print_roster("now_or_never", r_non, names, config)
-    _print_roster("raw_vorp", r_raw, names, config)
+    _print_roster("now_or_never", r_non, names, config, season_valuer)
+    _print_roster("raw_vorp", r_raw, names, config, season_valuer)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -170,6 +193,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--seeds", type=int, default=400, help="Bot drafts for the calibration estimate."
     )
+    p.add_argument(
+        "--season", type=int, default=2026, help="Target season for the season-metric byes."
+    )
+    p.add_argument(
+        "--n-sims", type=int, default=4000, help="Monte-Carlo seasons per roster (season metric)."
+    )
+    p.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path("data"),
+        help="Store root for the season metric's weekly_stats/schedules/id_map.",
+    )
     args = p.parse_args(argv)
 
     pool = _load_pool(args.vorp_table)
@@ -181,7 +216,17 @@ def main(argv: list[str] | None = None) -> int:
     _calibration(
         pool, config, my_slot=args.my_slot, sigma=sigma, adp_jitter=jitter, seeds=args.seeds
     )
-    _sample_rosters(pool, config, names, my_slot=args.my_slot, sigma=sigma, adp_jitter=jitter)
+    _sample_rosters(
+        pool,
+        config,
+        names,
+        my_slot=args.my_slot,
+        sigma=sigma,
+        adp_jitter=jitter,
+        season=args.season,
+        n_sims=args.n_sims,
+        data_root=args.data_root,
+    )
     return 0
 
 
