@@ -67,6 +67,40 @@ def _factorized_season_value(
     return total
 
 
+def expected_season_points_crn(
+    roster: pd.DataFrame,
+    roster_slots: Mapping[RosterSlot, int],
+    availability: PlayerAvailability,
+    *,
+    draws: np.ndarray,
+    col_of: Mapping[str, int],
+    weeks: Iterable[int] = range(1, 18),
+) -> float:
+    """Expected season points using a shared pre-drawn availability matrix (CRN).
+
+    `draws` is `(n_sims, universe)` uniforms; `col_of` maps gsis_id -> column.
+    Every roster scored against the same `draws` shares per-player draws, so a
+    marginal `V(R+c) - V(R)` cancels the common noise (spec §3.3).
+    """
+    n = len(roster)
+    if n == 0:
+        return 0.0
+    gsis = roster["gsis_id"].astype(str).to_numpy()
+    p_arr = np.array([availability.p_week(g) for g in gsis], dtype=np.float64)
+    cols = np.array([col_of[g] for g in gsis])
+    sub_draws = draws[:, cols]  # (n_sims, n), aligned to roster row order
+    n_sims: int = sub_draws.shape[0]
+
+    def week_value_fn(forced_out: np.ndarray) -> float:
+        acc = 0.0
+        for s in range(n_sims):
+            available = (sub_draws[s] < p_arr) & ~forced_out
+            acc += _week_value(roster, roster_slots, available)
+        return acc / n_sims / _GAMES
+
+    return _factorized_season_value(roster, availability, weeks, week_value_fn)
+
+
 def expected_season_points(
     roster: pd.DataFrame,
     roster_slots: Mapping[RosterSlot, int],

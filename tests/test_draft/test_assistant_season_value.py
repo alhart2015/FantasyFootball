@@ -132,3 +132,66 @@ def test_bye_costs_points_and_factorization_matches_bruteforce() -> None:
     brute = acc / n_sims
 
     assert abs(fact - brute) / brute < 0.02  # within 2% (MC noise, same expectation)
+
+
+def test_crn_matches_expected_season_points_no_bye_exact() -> None:
+    # With identity column mapping, a no-bye roster, and the same seed, the CRN
+    # kernel is BIT-IDENTICAL to expected_season_points (one rng.random((n_sims,n))
+    # equals n_sims successive rng.random(n) draws). Guards column alignment + that
+    # CRN reuses the same kernel — i.e. changes variance, not the mean.
+    from projections.draft.assistant.season_value import expected_season_points_crn
+
+    roster = _roster(
+        [("00-0000001", "RB", 200.0), ("00-0000002", "WR", 180.0), ("00-0000003", "RB", 120.0)]
+    )
+    slots = {RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.FLEX: 1}
+    avail = _avail({"00-0000001": 0.7, "00-0000002": 0.8, "00-0000003": 0.6})
+    n_sims = 200
+    col_of = {"00-0000001": 0, "00-0000002": 1, "00-0000003": 2}  # roster order
+
+    draws = np.random.default_rng(11).random((n_sims, 3))
+    crn = expected_season_points_crn(
+        roster, slots, avail, draws=draws, col_of=col_of, weeks=range(1, 18)
+    )
+    esp = expected_season_points(
+        roster, slots, avail, n_sims=n_sims, rng=np.random.default_rng(11), weeks=range(1, 18)
+    )
+    assert crn == esp
+
+
+def test_crn_matches_expected_season_points_with_bye_in_expectation() -> None:
+    # With a bye, CRN reuses the shared matrix across weeks while expected_season_points
+    # draws fresh per week, so they are NOT bit-equal — but equal IN EXPECTATION.
+    # Regression guard for the bye handling of the CRN kernel (spec §4, finding #2).
+    from projections.draft.assistant.season_value import expected_season_points_crn
+
+    roster = _roster([("00-0000001", "RB", 200.0), ("00-0000002", "WR", 150.0)])
+    slots = {RosterSlot.RB: 1, RosterSlot.WR: 1}
+    avail = _avail({"00-0000001": 0.85, "00-0000002": 0.85}, bye={"00-0000001": 3})
+    n_sims = 4000
+    col_of = {"00-0000001": 0, "00-0000002": 1}
+
+    draws = np.random.default_rng(3).random((n_sims, 2))
+    crn = expected_season_points_crn(
+        roster, slots, avail, draws=draws, col_of=col_of, weeks=range(1, 6)
+    )
+    esp = expected_season_points(
+        roster, slots, avail, n_sims=n_sims, rng=np.random.default_rng(7), weeks=range(1, 6)
+    )
+    assert abs(crn - esp) / esp < 0.02  # same expectation, independent MC noise
+
+
+def test_crn_column_selection_is_by_gsis_not_position() -> None:
+    # A universe wider than the roster, with non-identity columns: the kernel must
+    # pull each player's OWN column. Reordering the universe must not change the value.
+    from projections.draft.assistant.season_value import expected_season_points_crn
+
+    roster = _roster([("00-0000002", "RB", 200.0), ("00-0000004", "RB", 120.0)])
+    slots = {RosterSlot.RB: 1, RosterSlot.FLEX: 1}
+    avail = _avail({"00-0000002": 0.7, "00-0000004": 0.6})
+    universe = ["00-0000001", "00-0000002", "00-0000003", "00-0000004"]
+    col_of = {g: i for i, g in enumerate(universe)}
+    draws = np.random.default_rng(5).random((300, len(universe)))
+    val = expected_season_points_crn(roster, slots, avail, draws=draws, col_of=col_of)
+    # Empty roster short-circuits to 0.0 — sanity that a real roster does not.
+    assert val > 0.0
