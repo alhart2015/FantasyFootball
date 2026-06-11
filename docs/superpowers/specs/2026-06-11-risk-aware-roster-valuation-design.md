@@ -21,9 +21,9 @@ future depth-aware *strategy* a correct target to optimize against.
 ## 2. Scope
 
 ### In scope
-- **`availability.py`** — a per-player season availability model: `p = E[games]/17` from historical
-  `weekly_stats`, with per-position defaults for rookies / no-history, plus the bye week per player from
-  `schedules`.
+- **`availability.py`** — a per-player season availability model: a per-week availability `p` from each
+  player's games-played history in `weekly_stats` (era-normalized — see §3.2), with per-position defaults
+  for rookies / no-history, plus the bye week per player (resolved via `id_map` + `schedules`).
 - **`season_value.py`** — `expected_season_points(...)`: the Monte-Carlo season valuer.
 - **A pluggable `RosterValuer` seam** so the cheap `optimal_lineup_points` and the new
   `expected_season_points` both satisfy one interface; the tournament takes a valuer and can **A/B them**.
@@ -64,6 +64,10 @@ The availability model is derived, not ingested.
 ```
 build_availability(weekly_stats, schedules, id_map, pool, *, season, lo=0.4, hi=0.97) -> PlayerAvailability
 ```
+
+`pool` is the draftable-player set: it scopes which `gsis_id`s to build entries for and supplies each
+player's `position` for the rookie default. `weekly_stats` drives per-player `p`; `id_map` + `schedules`
+drive byes.
 
 `PlayerAvailability` answers two questions per rostered `gsis_id`:
 - **`p_week(gsis_id) -> float`** — per-week probability the player is healthy/active (injury + benching),
@@ -141,6 +145,12 @@ non-bye week, and recompute only the weeks in which a roster player is on bye (t
 This collapses `weeks × n_sims` into roughly `n_sims + (distinct bye weeks among the roster) × n_sims`,
 keeping the tournament in the minutes range with `n_sims ≈ 300`.
 
+The per-week `optimal_lineup_points` call is the hot path; reusing it verbatim is fine at the intended
+scale — validation `compare` (~hundreds of rosters) plus standalone roster scoring, ~minutes. A high-seed
+`tune_sigma` *under the season valuer* would be heavier and could warrant a numpy fast-path for the weekly
+fill — a deferred optimization, not a v1 requirement (σ is tuned under the cheap starters valuer; the
+season valuer is for validation and roster scoring).
+
 The valuer is a **pure function** of `(roster, roster_slots, availability, rng, n_sims)` — fully reproducible
 by seed — so it works both inside the tournament and as a standalone "value this roster" call.
 
@@ -179,7 +189,7 @@ Synthetic fixtures (project norm — no network in unit tests):
   player B plays 9/17; assert `p_A` ≈ 1.0 (clamped to `hi`), `p_B` ≈ 0.53; a rookie (no history) gets the
   position default; a `schedules` fixture pins the bye week.
 - **`expected_season_points` closed form** — a 1-slot roster (`{RB:1}`) with a starter `p=0.5` (no bye, no
-  bench) over `weeks=2` → `E = 2 × 0.5 × per_game`; matches the MC to tolerance. Add a backup RB and assert
+  bench) over a 2-week range (`weeks=range(1, 3)`) → `E = 2 × 0.5 × per_game`; matches the MC to tolerance. Add a backup RB and assert
   the value rises by the backup's expected fill-in contribution (closed-form for a 2-player case).
 - **Reduces to starters-only** — with every `p=1.0`, no byes, and `weeks = range(1, 18)`,
   `expected_season_points` equals `optimal_lineup_points` exactly: 17 weeks × `per_game` (= `season/17`) sums
