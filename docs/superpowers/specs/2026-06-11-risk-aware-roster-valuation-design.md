@@ -45,20 +45,24 @@ future depth-aware *strategy* a correct target to optimize against.
 ### 3.1 Inputs and where the data comes from
 
 - **Roster** — the hero's drafted rows (a `VorpTableSchema` sub-frame): `gsis_id`, `position`,
-  `season_mean_fpts`. The metric needs only those three columns.
+  `season_mean_fpts`. The metric reads only those three columns.
 - **`LeagueConfig.roster_slots`** — the starting-slot shape (league-driven, as everywhere in the Draft Hub).
+- **`id_map`** (already loaded by the assistant CLIs) — supplies each player's **current `team`**
+  (`gsis_id → team`), required to resolve byes; the roster/VORP frame itself carries no `team` column.
 - **Historical `weekly_stats`** (2018–2024, already ingested) — one row per (player, season, week); the
-  count of weeks a player appears in a season is their games played. Source of per-player `E[games]` and the
-  per-position defaults.
-- **Season `schedules`** (already ingested) — a team's **bye** in a given season is the week (1..18) in which
-  the team is neither `home_team` nor `away_team`. Maps to a player via their current team.
+  count of weeks a player appears in a season is their games played. Source of per-player availability and
+  the per-position defaults.
+- **Target-season `schedules`** — a team's **bye** in `season` (e.g. 2026) is the week (1..18) in which the
+  team is neither `home_team` nor `away_team`. This is a dependency on the **target-season partition** (the
+  2026 schedule, not the historical 2018–2024 ones); §3.2 step 4 specifies graceful degradation if absent.
 
-No new ingest source; both tables exist. The availability model is derived, not ingested.
+No new ingest *source*; all tables exist (the target-season schedule must be ingested for the draft year).
+The availability model is derived, not ingested.
 
 ### 3.2 Availability model (`availability.py`)
 
 ```
-build_availability(weekly_stats, schedules, pool, *, season, lo=0.4, hi=0.97) -> PlayerAvailability
+build_availability(weekly_stats, schedules, id_map, pool, *, season, lo=0.4, hi=0.97) -> PlayerAvailability
 ```
 
 `PlayerAvailability` answers two questions per rostered `gsis_id`:
@@ -72,12 +76,18 @@ Construction:
    2021+) so the 16-game and 17-game eras are comparable: `frac_season = games_played / sched_games`. The
    player's `p_raw` is the mean of `frac_season` across their seasons (recency-weighting is a future
    refinement — v1 uses the simple mean).
-2. **Per-position default** — for rookies / players with no history, use that position's mean `p` across all
-   players with history (RB lower, QB higher — derived from the same data, not hardcoded).
+2. **Per-position default** — for rookies / players with no `weekly_stats` history, use that position's mean
+   `p` across all players with history (RB lower, QB higher — derived from the same data, not hardcoded).
+   2026 rookies carry deterministic `99-XXXXXXX` placeholder gsis_ids (per the external-ingest design) that
+   match no `weekly_stats` row, so they fall to this default by construction — the common rookie path, not
+   an edge case.
 3. **Clamp** `p` to `[lo, hi]` so no player is degenerate (0 or 1) — even workhorses miss a game; even the
    injury-prone aren't out half the season in expectation.
-4. **Bye week** — from `schedules` for the player's `team` in `season`; the player is forced out that week.
-   A player with no resolvable team/bye (rare) simply has no forced-out week.
+4. **Bye week** — resolve the player's `team` from `id_map`, then the team's bye in the target-season
+   `schedules` (the week with no game row for that team); the player is forced out that week. A player with
+   no resolvable team or bye simply has no forced-out week. If the target-season `schedules` partition is
+   **absent entirely**, `build_availability` logs a warning and returns availability with **no byes** (the
+   injury model still applies) — a deliberate graceful degradation, not a silent failure.
 
 ### 3.3 Per-game points convention (the key modeling decision)
 
@@ -105,24 +115,34 @@ expected_season_points(
 ) -> float
 ```
 
-`per_game` is computed inside from `roster["season_mean_fpts"] / 17` (§3.3). `weeks` defaults to the
-17-week fantasy season (NFL weeks 1–17; week 18 is typically not a fantasy week — playoff weighting is a
-deferred refinement, §6). Conceptually: `E[ Σ_weeks (best legal lineup from the available players that
-week) ]`. A simulated week draws each player available (not on bye that week, and healthy w.p. `p_week`),
-fills the optimal starting lineup from the available players by `per_game` (the **same greedy slot-fill
-`optimal_lineup_points` already uses** — single-position slots, then FLEX, then SUPER_FLEX), and sums the
-starters' `per_game`. Season value = the sum over weeks, averaged over `n_sims`.
+`weeks` defaults to the 17-week fantasy season (NFL weeks 1–17; week 18 is typically not a fantasy week —
+playoff weighting is a deferred refinement, §6). Conceptually: `E[ Σ_weeks (best legal lineup from the
+available players that week) ]`.
+
+**Reuse `optimal_lineup_points` directly — no fill refactor.** Because `per_game = season_mean_fpts / 17`
+is a *uniform* scaling (the same divisor for every player), the optimal weekly lineup chosen by `per_game`
+is identical to the one `optimal_lineup_points` chooses by `season_mean_fpts`; only the sum scales by 1/17.
+So a simulated week is exactly:
+
+```
+week_points = optimal_lineup_points(available_subset, roster_slots) / 17
+```
+
+where `available_subset` is the roster rows not on bye that week and healthy w.p. `p_week`. No new slot-fill
+code is needed — the existing greedy fill (single-position → FLEX → SUPER_FLEX) is reused verbatim. Season
+value = the average over `n_sims` of `Σ_weeks week_points`.
 
 **Efficiency — the single-week factorization.** Because weekly points are deterministic and availability is
-independent across weeks, **every non-bye week is the same expected sub-problem**. So we Monte-Carlo the
-expected best-lineup for a generic non-bye week *once* (`n_sims` availability draws), and handle only the
-weeks in which a roster player is on bye separately (recompute the per-week expectation with those players
-forced out). Season value ≈ `Σ_weeks E[week]` where most weeks share one MC estimate and the few bye-affected
-weeks get their own. This collapses `weeks × n_sims` into roughly `n_sims + (distinct bye weeks among the
-roster) × n_sims`, keeping the tournament in the minutes range with `n_sims ≈ 300`.
+independent across weeks, **every non-bye week has the identical expected sub-problem**, and by linearity of
+expectation the season value is *exactly* `Σ_weeks E[week]` — the factorization is **exact in expectation**;
+its only error is MC sampling, identical to a brute-force per-week run. So we Monte-Carlo the expected
+best-lineup for a generic non-bye week *once* (`n_sims` availability draws), reuse that estimate for every
+non-bye week, and recompute only the weeks in which a roster player is on bye (those players forced out).
+This collapses `weeks × n_sims` into roughly `n_sims + (distinct bye weeks among the roster) × n_sims`,
+keeping the tournament in the minutes range with `n_sims ≈ 300`.
 
-The valuer is a **pure function** of `(roster, roster_slots, availability, per_game, rng, n_sims)` — fully
-reproducible by seed — so it works both inside the tournament and as a standalone "value this roster" call.
+The valuer is a **pure function** of `(roster, roster_slots, availability, rng, n_sims)` — fully reproducible
+by seed — so it works both inside the tournament and as a standalone "value this roster" call.
 
 ### 3.5 Pluggable `RosterValuer` seam
 
@@ -150,7 +170,7 @@ both metrics live and lets us **measure the difference** rather than silently sw
 - **New modules:** `availability.py`, `season_value.py`, the `RosterValuer` protocol + two impls (co-located
   with `season_value.py` or in a small `valuer.py`).
 - **Touched:** `tournament.py` (`_strategy_values`/`run_tournament`/`tune_sigma` thread a valuer),
-  `tournament_cli.py` (`--valuer`, build the `SeasonValuer` from `weekly_stats`/`schedules`).
+  `tournament_cli.py` (`--valuer`, build the `SeasonValuer` from `weekly_stats` / `schedules` / `id_map`).
 
 ## 4. Testing
 
@@ -164,6 +184,10 @@ Synthetic fixtures (project norm — no network in unit tests):
 - **Reduces to starters-only** — with every `p=1.0`, no byes, and `weeks = range(1, 18)`,
   `expected_season_points` equals `optimal_lineup_points` exactly: 17 weeks × `per_game` (= `season/17`) sums
   back to the season total of the optimal starting lineup. (The metric degenerates correctly.)
+- **Factorization correctness** — on a small roster with at least one bye, the factorized
+  `expected_season_points` equals a brute-force per-week season MC (every week simulated independently with
+  the same availability draws) to MC tolerance. Guards the week-counting and bye-week handling of the
+  optimization (which has no other coverage).
 - **Depth is rewarded / QB hoarding is punished** — a hand-built roster with 3 RBs scores higher than an
   equal-projection roster with 1 RB + 2 spare QBs at the same total projection (the core behavior).
 - **Determinism** — same seed ⇒ same value; different seed ⇒ generally different.
