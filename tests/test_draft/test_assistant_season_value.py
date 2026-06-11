@@ -232,35 +232,47 @@ def test_marginal_matches_closed_form_insurance() -> None:
 
 
 def test_marginal_is_low_variance_under_crn() -> None:
-    # CRN makes the marginal stable even at small n_sims: 60 vs 400 sims agree tightly,
-    # where an independent-seed difference of the two MC estimates would not.
-    # We use 1 week so the per-week marginal (~3.18) is small enough that a tolerance
-    # of 0.5 is meaningful; the key property is that CRN variance-reduces the difference.
+    # The whole point of CRN: a marginal computed under shared draws is far tighter
+    # across seeds than a naive marginal from independent draws, because the base
+    # roster's (shared) availability variance cancels in V(base+c) - V(base) instead
+    # of being carried twice (spec §3.3, §5.2). With a 3-starter base, that shared
+    # variance dominates, so CRN's spread is several times smaller.
     from projections.draft.assistant.season_value import marginal_season_values
 
-    base = _roster([("00-0000001", "RB", 200.0)])
-    cands = _roster([("00-0000002", "RB", 150.0)])
-    avail = _avail({"00-0000001": 0.55, "00-0000002": 0.8})
-    lo = marginal_season_values(
-        base,
-        cands,
-        {RosterSlot.RB: 1},
-        avail,
-        n_sims=60,
-        rng=np.random.default_rng(1),
-        weeks=range(1, 2),
-    )["00-0000002"]
-    hi = marginal_season_values(
-        base,
-        cands,
-        {RosterSlot.RB: 1},
-        avail,
-        n_sims=400,
-        rng=np.random.default_rng(2),
-        weeks=range(1, 2),
-    )["00-0000002"]
-    assert lo > 0.0
-    assert abs(lo - hi) < 0.5  # CRN: small-n already close to the large-n estimate
+    base = _roster(
+        [("00-0000001", "RB", 200.0), ("00-0000002", "RB", 180.0), ("00-0000003", "WR", 170.0)]
+    )
+    cands = _roster([("00-0000004", "RB", 150.0)])
+    full = pd.concat([base, cands], ignore_index=True)
+    avail = _avail(
+        {f"00-000000{i}": p for i, p in zip(range(1, 5), (0.6, 0.6, 0.6, 0.7), strict=True)}
+    )
+    slots = {RosterSlot.RB: 2, RosterSlot.WR: 1, RosterSlot.FLEX: 1}
+    week = range(1, 2)
+    n_sims = 100
+    seeds = 14
+
+    crn = [
+        marginal_season_values(
+            base, cands, slots, avail, n_sims=n_sims, rng=np.random.default_rng(s), weeks=week
+        )["00-0000004"]
+        for s in range(seeds)
+    ]
+    # Naive marginal: score base and base+candidate with INDEPENDENT rngs (no CRN).
+    indep = []
+    for s in range(seeds):
+        b = expected_season_points(
+            base, slots, avail, n_sims=n_sims, rng=np.random.default_rng(100 + s), weeks=week
+        )
+        c = expected_season_points(
+            full, slots, avail, n_sims=n_sims, rng=np.random.default_rng(900 + s), weeks=week
+        )
+        indep.append(c - b)
+
+    assert all(v > 0.0 for v in crn)  # adding a useful backup always helps
+    # True std ratio is ~0.3 (CRN cancels the 3 shared starters' variance); 0.75 leaves
+    # ample margin for sampling noise at this seed count while still pinning the benefit.
+    assert float(np.std(crn)) < 0.75 * float(np.std(indep))
 
 
 def test_marginal_empty_base_is_solo_value() -> None:
