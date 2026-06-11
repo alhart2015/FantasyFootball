@@ -11,6 +11,7 @@ import pytest
 from projections.draft.assistant.cli import generate_recommendation, run
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, RecommendationSchema, RosterSlot, Ruleset
+from projections.store import write_partition
 
 
 def _setup(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -97,11 +98,6 @@ def test_run_prints_table(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
 
 def _season_store(tmp_path: Path, gsis: list[str]) -> Path:
     """Write minimal weekly_stats(2022) + schedules(2026) + id_map; return data_root."""
-    import pandas as pd
-
-    from projections.schemas import _PYARROW_STR
-    from projections.store import write_partition
-
     data_root = tmp_path / "data"
     raw = data_root / "raw"
     n = len(gsis)
@@ -125,7 +121,6 @@ def _season_store(tmp_path: Path, gsis: list[str]) -> Path:
         }
     )
     write_partition(raw, "schedules", sched, season=2026)
-    raw.mkdir(parents=True, exist_ok=True)
     # Full IdMapSchema frame: the live CLI validates --id-map (we point it here), and
     # load_store_availability reads only gsis_id + team from the same file.
     na = pd.array([pd.NA] * n, dtype=_PYARROW_STR)
@@ -145,12 +140,6 @@ def _season_store(tmp_path: Path, gsis: list[str]) -> Path:
 
 def _season_inputs(tmp_path: Path) -> tuple[Path, Path, list[str]]:
     """Write a vorp pool + an empty-draft state file; return (state, vorp, gsis)."""
-    import json
-
-    import pandas as pd
-
-    from projections.schemas import _PYARROW_STR
-
     n = 12
     gsis = [f"00-00000{i:02d}" for i in range(1, n + 1)]
     pool = pd.DataFrame(
@@ -181,8 +170,6 @@ def _season_inputs(tmp_path: Path) -> tuple[Path, Path, list[str]]:
 
 
 def test_cli_season_value_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    from projections.draft.assistant.cli import run
-
     state_path, vorp_path, gsis = _season_inputs(tmp_path)
     data_root = _season_store(tmp_path, gsis)
     id_map = data_root / "raw" / "id_map.parquet"
@@ -205,14 +192,14 @@ def test_cli_season_value_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str
         ]
     )
     assert code == 0
-    assert "PLAYER" in capsys.readouterr().out  # the table header printed
+    out = capsys.readouterr().out
+    assert "PLAYER" in out  # the table header printed
+    assert "Player " in out  # ...and at least one data row rendered (id_map full_name)
 
 
 def test_cli_season_value_missing_weekly_stats_fails_loud(tmp_path: Path) -> None:
     # A valid --id-map (so _load_id_map passes) but an empty --data-root (no
     # weekly_stats) must hard-fail in availability loading, not silently fall back.
-    from projections.draft.assistant.cli import run
-
     state_path, vorp_path, gsis = _season_inputs(tmp_path)
     data_root = _season_store(tmp_path, gsis)  # writes a valid id_map under raw/
     id_map = data_root / "raw" / "id_map.parquet"
