@@ -65,11 +65,10 @@ def _build_season_valuer(
     weekly_stats = pd.concat(frames, ignore_index=True)
     try:
         schedules = read_partition(raw, "schedules", season=season)
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"schedules partition for season={season} not found under {raw}; "
-            f"check --season and --data-root"
-        ) from exc
+    except FileNotFoundError:
+        # Spec §3.2 step 4: a missing target-season schedule degrades to no byes
+        # (build_availability warns and the injury model still applies), not a hard fail.
+        schedules = pd.DataFrame(columns=["season", "week", "home_team", "away_team"])
     # build_availability only reads gsis_id + team, so full IdMapSchema validation is skipped.
     try:
         id_map = pd.read_parquet(raw / "id_map.parquet")
