@@ -86,14 +86,15 @@ def build_availability(
         .agg(games=("week", "count"), first_week=("week", "min"))
         .reset_index()
     )
-    games["sched"] = games["season"].map(_sched_games)
     # Availability is measured over the player's ACTIVE span, not the whole season:
     # weeks before a player's first appearance ("not yet active" -- rookie debut,
     # mid-season signing or trade, call-up) are not missed games, so counting them
     # would conflate roster status with injury risk (spec 3.2: p is "healthy/active").
-    # Denominator = scheduled games from the first week on; clip keeps frac in (0, 1]
-    # (the first_week-1 approximation can over-trim by the pre-debut bye).
-    active = (games["sched"] - (games["first_week"] - 1)).clip(lower=1)
+    # Denominator = scheduled games from the first week through season end
+    # (sched - first_week + 1); clip keeps frac in (0, 1] (the span ignores a
+    # possible pre-debut bye, which can over-trim).
+    sched = games["season"].map(_sched_games)
+    active = (sched - games["first_week"] + 1).clip(lower=1)
     games["frac"] = (games["games"] / active).clip(upper=1.0)
     p_raw = games.groupby("gsis_id")["frac"].mean()
     pos_hist = ws.groupby("gsis_id")["position"].agg(lambda s: str(s.mode().iloc[0]))
