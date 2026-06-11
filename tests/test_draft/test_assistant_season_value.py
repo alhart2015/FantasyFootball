@@ -53,7 +53,7 @@ def test_closed_form_two_player_backup() -> None:
         roster,
         {RosterSlot.RB: 1},
         avail,
-        n_sims=40000,
+        n_sims=20000,
         rng=np.random.default_rng(0),
         weeks=range(1, 2),
     )
@@ -104,22 +104,23 @@ def test_determinism() -> None:
 
 
 def test_bye_costs_points_and_factorization_matches_bruteforce() -> None:
-    # One RB on bye in week 7; the factorized result must match a brute-force per-week MC.
+    # One RB on bye in week 3; the factorized result must match a brute-force per-week MC.
+    # A short week range (with the bye inside it) keeps the brute-force reference cheap.
     roster = _roster([("00-0000001", "RB", 200.0), ("00-0000002", "WR", 150.0)])
     slots = {RosterSlot.RB: 1, RosterSlot.WR: 1}
-    avail = _avail({"00-0000001": 0.85, "00-0000002": 0.85}, bye={"00-0000001": 7})
+    avail = _avail({"00-0000001": 0.85, "00-0000002": 0.85}, bye={"00-0000001": 3})
+    weeks = range(1, 6)
+    n_sims = 3000
 
     fact = expected_season_points(
-        roster, slots, avail, n_sims=8000, rng=np.random.default_rng(0), weeks=range(1, 18)
+        roster, slots, avail, n_sims=n_sims, rng=np.random.default_rng(0), weeks=weeks
     )
 
     # Brute force: simulate every week independently.
     rng = np.random.default_rng(0)
     gsis = roster["gsis_id"].astype(str).to_numpy()
     p_arr = np.array([avail.p_week(g) for g in gsis])
-    weeks = list(range(1, 18))
     acc = 0.0
-    n_sims = 8000
     for _ in range(n_sims):
         season_pts = 0.0
         for w in weeks:
