@@ -4,6 +4,21 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — Slice 2 engine validated on real 2026 data (2026-06-10, on branch `docs/draft-tournament-validation`)
+
+**Status:** First end-to-end run of the strategy tournament (PR #58, merged) against the **real 2026 consensus pool** (458 players, `asof=2026-06-09`, `configs/league_espn_ppr_12team_skill.json`), answering the question Slice 1 couldn't: **does `NowOrNeverStrategy` actually beat best-available?** Full numbers + the now-or-never-vs-VORP explanation in `reports/draft_tournament_validation_2026.md`.
+
+**What now-or-never does vs pure VORP:** `RawVorpStrategy` scores by VORP (static positional scarcity — blind to pick timing). `NowOrNeverStrategy` scores by **VORP − E[best survivor at that position by my next pick]** (the *opportunity cost* of waiting): it reorders **across** positions to attack the spot where waiting is most expensive, takes the un-replaceable player now even at marginally lower raw VORP, leaves within-position order at VORP, and falls back to raw VORP at the last pick. The dynamic-scarcity layer on top of VORP's static scarcity.
+
+**Results (paired-seed bootstrap, winner iff CI excludes 0):**
+- **now_or_never wins from every slot:** slot 1 **+76.5** [73.0, 79.9], slot 6 **+74.6** [70.7, 78.7], slot 12 (the turn) **+9.0** [4.7, 13.5]. The edge **scales with how much pick-timing matters at your seat** — huge on the wing (you wait ~22 picks), nearly gone at the turn (you pick back-to-back) — exactly the dynamic-scarcity signal static VORP can't see.
+- **Determinism verified:** `--adp-jitter 0 --seeds 1` → point CIs (same seed ⇒ identical roster).
+- **σ-tuning:** unimodal peak at **σ ≈ 11**, only +0.4 pts over the default `σ = ⅔·n_teams ≈ 8` → **default left unchanged**.
+
+**Decisions:** harness validated on live data (tight CIs, well-behaved σ curve); now_or_never empirically justified; no default σ change. **Next refinement (now measurable through this harness):** the survival model is *unconditional* (ignores that an available player already lasted to now) — a conditional model is the natural Slice-2+ improvement, A/B-able against the current one. Slice 3 (Streamlit live-draft board over this engine) remains the last Draft Assistant slice.
+
+---
+
 ## Draft Assistant — Strategy Comparison Harness (Slice 2) — shipped (2026-06-10, on branch `feat/draft-strategy-tournament`)
 
 **Status:** Slice 2 of the **Draft Assistant** sub-project done — a headless CLI tournament that finally *measures* the Slice 1 engine. It simulates full snake drafts with a `DraftStrategy` in the hero seat against an ADP-bot field, scores each resulting roster by its optimal starting lineup, and declares an empirical winner via a paired-seed bootstrap — plus a σ-tuning mode that sweeps the survival spread. This closes the two gaps Slice 1 left open: `NowOrNeverStrategy` was analytically motivated but unmeasured, and the survival σ default was a guess flagged for empirical tuning. Spec/plan at `docs/superpowers/specs|plans/2026-06-10-draft-strategy-tournament.*`. Built via subagent-driven development (6 TDD tasks, fresh implementer + two-stage spec-then-quality review each).
