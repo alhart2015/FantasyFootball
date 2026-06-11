@@ -21,6 +21,15 @@ def _sched_games(season: int) -> int:
     return 16 if season <= 2020 else 17
 
 
+def _last_regular_week(season: int) -> int:
+    """Last regular-season calendar week = games + the one bye (17 pre-2021, 18 after).
+
+    Ingested `weekly_stats` and `schedules` partitions both number playoff weeks
+    above this (up to 22), so it is the cutoff for "regular season only" on either.
+    """
+    return _sched_games(season) + 1
+
+
 def _team_byes(schedules: pd.DataFrame, season: int) -> dict[str, int]:
     """Map team -> bye week for `season`: the single week the team has no game row.
 
@@ -31,12 +40,11 @@ def _team_byes(schedules: pd.DataFrame, season: int) -> dict[str, int]:
     if len(sch) == 0:
         warnings.warn(f"no schedules for season {season}; byes will be empty", stacklevel=2)
         return {}
-    # A bye is a regular-season concept (spec 3.1: weeks 1..18). Ingested schedule
-    # partitions also carry playoff weeks (19-22); without this filter a team that
-    # missed the playoffs "misses" every playoff week too, so the single-gap rule
-    # below never fires and no bye is ever detected. Regular-season calendar weeks
-    # = scheduled games + the one bye.
-    sch = sch[sch["week"] <= _sched_games(season) + 1]
+    # A bye is a regular-season concept (spec 3.1: weeks 1..18). Schedule partitions
+    # carry playoff weeks (19-22); without this filter a team that missed the playoffs
+    # "misses" every playoff week too, so the single-gap rule below never fires and no
+    # bye is ever detected.
+    sch = sch[sch["week"] <= _last_regular_week(season)]
     weeks = sorted(int(w) for w in sch["week"].unique())
     teams = pd.unique(pd.concat([sch["home_team"], sch["away_team"]], ignore_index=True))
     byes: dict[str, int] = {}
@@ -80,6 +88,11 @@ def build_availability(
     ws = weekly_stats[["gsis_id", "season", "week", "position"]].copy()
     ws["position"] = ws["position"].astype(str)
     ws["gsis_id"] = ws["gsis_id"].astype(str)
+    # Availability is a regular-season concept, but weekly_stats partitions carry
+    # playoff weeks (19-22). Drop them (same cutoff as the bye filter) so playoff
+    # appearances don't inflate games played or set first_week from a playoff-only
+    # season -- the symmetric half of the _team_byes regular-season restriction.
+    ws = ws[ws["week"] <= ws["season"].map(_last_regular_week)]
 
     games = (
         ws.groupby(["gsis_id", "season"])

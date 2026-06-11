@@ -140,6 +140,30 @@ def test_byes_ignore_playoff_weeks() -> None:
     assert avail.bye_week("00-0000001") == 7  # AA's bye, not lost to the playoff rows
 
 
+def test_playoff_weeks_excluded_from_availability() -> None:
+    # weekly_stats partitions carry playoff weeks (19-22). Availability is a
+    # regular-season concept, so playoff rows must not count as games played
+    # (which inflates the numerator and can mask a regular-season injury) nor set
+    # first_week (a playoff-only season would otherwise collapse to a spurious 1.0).
+    ws = _weekly_stats(
+        # P1: 10 regular-season games (out after wk 10) + 3 playoff games.
+        [("00-0000001", 2023, w, "RB") for w in range(1, 11)]
+        + [("00-0000001", 2023, w, "RB") for w in (19, 20, 21)]
+        # P2: a 9/17 regular 2022 season + a playoff-ONLY 2023 (no reg-season rows).
+        + [("00-0000002", 2022, w, "RB") for w in range(1, 10)]
+        + [("00-0000002", 2023, w, "RB") for w in (19, 20, 21)]
+    )
+    sched = _schedules(2026, {"AA": 7, "BB": 9})
+    id_map = _id_map([("00-0000001", "AA"), ("00-0000002", "BB")])
+    pool = _pool([("00-0000001", "RB"), ("00-0000002", "RB")])
+    avail = build_availability(ws, sched, id_map, pool, season=2026)
+    # P1: only the 10 regular-season games count -> 10/17, not (10+3)/17.
+    assert avail.p_week("00-0000001") == pytest.approx(10 / 17, abs=1e-9)
+    # P2: the playoff-only 2023 season is dropped -> p is the 2022 frac 9/17,
+    # not mean(9/17, 1.0) that a 1-week playoff span would have produced.
+    assert avail.p_week("00-0000002") == pytest.approx(9 / 17, abs=1e-9)
+
+
 def test_midseason_debut_not_penalized_as_injury() -> None:
     # Availability is measured over the player's ACTIVE span, so a mid-season
     # debut (rookie / trade / call-up) is not conflated with injury risk.
