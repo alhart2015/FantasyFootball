@@ -149,3 +149,156 @@ def test_missing_vorp_table_fails_loud(tmp_path: Path) -> None:
                 "compare",
             ]
         )
+
+
+def test_season_valuer_missing_data_fails_loud(tmp_path: Path) -> None:
+    vorp_path, cfg_path = _write_inputs(tmp_path)
+    empty_root = tmp_path / "empty_data"  # no raw/ partitions at all
+    with pytest.raises(FileNotFoundError, match="weekly_stats"):
+        run(
+            [
+                "--vorp-table",
+                str(vorp_path),
+                "--league-config",
+                str(cfg_path),
+                "--my-slot",
+                "2",
+                "--seeds",
+                "4",
+                "--valuer",
+                "season",
+                "--season",
+                "2026",
+                "--n-sims",
+                "10",
+                "--data-root",
+                str(empty_root),
+                "compare",
+            ]
+        )
+
+
+def test_compare_with_season_valuer_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from projections.store import write_partition
+
+    vorp_path, cfg_path = _write_inputs(tmp_path)
+    data_root = tmp_path / "data"
+    raw = data_root / "raw"
+    # minimal weekly_stats (one prior season) + target-season schedules + id_map
+    n = 24
+    gsis = [f"00-00000{i:02d}" for i in range(1, n + 1)]
+    ws = pd.DataFrame(
+        {
+            "gsis_id": pd.array(gsis * 10, dtype=_PYARROW_STR),
+            "season": [2022] * (n * 10),
+            "week": [w for w in range(1, 11) for _ in range(n)],
+            "position": pd.array(
+                (["RB" if i % 2 else "WR" for i in range(n)]) * 10, dtype=_PYARROW_STR
+            ),
+        }
+    )
+    write_partition(raw, "weekly_stats", ws, season=2022)
+    sched = pd.DataFrame(
+        {
+            "season": [2026] * 2,
+            "week": [1, 2],
+            "home_team": pd.array(["AA", "AA"], dtype=_PYARROW_STR),
+            "away_team": pd.array(["BB", "BB"], dtype=_PYARROW_STR),
+        }
+    )
+    write_partition(raw, "schedules", sched, season=2026)
+    id_map = pd.DataFrame(
+        {
+            "gsis_id": pd.array(gsis, dtype=_PYARROW_STR),
+            "team": pd.array(["AA"] * n, dtype=_PYARROW_STR),
+        }
+    )
+    raw.mkdir(parents=True, exist_ok=True)
+    id_map.to_parquet(raw / "id_map.parquet")
+
+    code = run(
+        [
+            "--vorp-table",
+            str(vorp_path),
+            "--league-config",
+            str(cfg_path),
+            "--my-slot",
+            "2",
+            "--seeds",
+            "6",
+            "--seed",
+            "0",
+            "--valuer",
+            "season",
+            "--season",
+            "2026",
+            "--n-sims",
+            "20",
+            "--data-root",
+            str(data_root),
+            "compare",
+        ]
+    )
+    assert code == 0
+    assert "Winner:" in capsys.readouterr().out
+
+
+def test_season_valuer_degrades_without_target_schedule(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from projections.store import write_partition
+
+    vorp_path, cfg_path = _write_inputs(tmp_path)
+    data_root = tmp_path / "data"
+    raw = data_root / "raw"
+    n = 24
+    gsis = [f"00-00000{i:02d}" for i in range(1, n + 1)]
+    ws = pd.DataFrame(
+        {
+            "gsis_id": pd.array(gsis * 10, dtype=_PYARROW_STR),
+            "season": [2022] * (n * 10),
+            "week": [w for w in range(1, 11) for _ in range(n)],
+            "position": pd.array(
+                (["RB" if i % 2 else "WR" for i in range(n)]) * 10, dtype=_PYARROW_STR
+            ),
+        }
+    )
+    write_partition(raw, "weekly_stats", ws, season=2022)
+    # NOTE: no schedules partition for season 2026 is written -> must degrade, not crash.
+    id_map = pd.DataFrame(
+        {
+            "gsis_id": pd.array(gsis, dtype=_PYARROW_STR),
+            "team": pd.array(["AA"] * n, dtype=_PYARROW_STR),
+        }
+    )
+    raw.mkdir(parents=True, exist_ok=True)
+    id_map.to_parquet(raw / "id_map.parquet")
+
+    with pytest.warns(UserWarning, match="no schedules for season 2026"):
+        code = run(
+            [
+                "--vorp-table",
+                str(vorp_path),
+                "--league-config",
+                str(cfg_path),
+                "--my-slot",
+                "2",
+                "--seeds",
+                "6",
+                "--seed",
+                "0",
+                "--valuer",
+                "season",
+                "--season",
+                "2026",
+                "--n-sims",
+                "20",
+                "--data-root",
+                str(data_root),
+                "compare",
+            ]
+        )
+    assert code == 0
+    assert "Winner:" in capsys.readouterr().out

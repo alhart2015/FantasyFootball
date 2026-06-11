@@ -1,10 +1,11 @@
 """Compare draft strategies empirically (spec §3.5-§3.6).
 
 Run each strategy over many seeded drafts against an ADP field, score the hero
-roster by its optimal starting lineup, and declare a winner on the paired
-per-seed difference (percentile bootstrap, mirroring adoption_gate.py). The same
-seed index gives every strategy the same bot field -- the paired counterfactual.
-`tune_sigma` sweeps the survival sigma the same way.
+roster via a `RosterValuer` (default: optimal starting lineup), and declare a
+winner on the paired per-seed difference (percentile bootstrap, mirroring
+adoption_gate.py). The same seed index gives every strategy the same bot field
+-- the paired counterfactual. `tune_sigma` sweeps the survival sigma the same
+way.
 """
 
 from __future__ import annotations
@@ -15,10 +16,10 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from projections.draft.assistant.roster_score import optimal_lineup_points
 from projections.draft.assistant.simulation import simulate_draft
 from projections.draft.assistant.strategy import DraftStrategy, NowOrNeverStrategy
 from projections.draft.assistant.survival import LogisticSurvival
+from projections.draft.assistant.valuer import RosterValuer, StartersValuer
 from projections.draft.league_config import LeagueConfig
 
 _N_BOOTSTRAP = 1000
@@ -36,7 +37,7 @@ class Interval:
 
 @dataclass(frozen=True)
 class TournamentResult:
-    """Per-strategy mean starting-lineup points, the top-two paired diff, the winner."""
+    """Per-strategy mean roster value (per the valuer), the top-two paired diff, the winner."""
 
     summaries: dict[str, Interval]
     diff: Interval | None  # top-vs-second paired difference; None if <2 strategies
@@ -111,13 +112,14 @@ def _strategy_values(
     n_seeds: int,
     adp_jitter: float,
     base_seed: int,
+    valuer: RosterValuer,
 ) -> np.ndarray:
-    """Optimal-lineup points of the hero roster for each paired seed."""
+    """Roster value (per the valuer) of the hero roster for each paired seed."""
     out = np.empty(n_seeds, dtype=np.float64)
     for s in range(n_seeds):
         rng = np.random.default_rng(base_seed + s)
         roster = simulate_draft(strategy, my_slot, pool, config, adp_jitter=adp_jitter, rng=rng)
-        out[s] = optimal_lineup_points(roster, config.roster_slots)
+        out[s] = valuer.value(roster, config.roster_slots)
     return out
 
 
@@ -130,10 +132,12 @@ def run_tournament(
     n_seeds: int,
     adp_jitter: float,
     base_seed: int,
+    valuer: RosterValuer | None = None,
 ) -> TournamentResult:
     """Compare `strategies` over `n_seeds` paired drafts; declare a winner."""
     _validate_pool(pool, config)
     _validate_run_params(config, my_slot=my_slot, n_seeds=n_seeds, adp_jitter=adp_jitter)
+    valuer = valuer if valuer is not None else StartersValuer()
     values = {
         name: _strategy_values(
             strat,
@@ -143,6 +147,7 @@ def run_tournament(
             n_seeds=n_seeds,
             adp_jitter=adp_jitter,
             base_seed=base_seed,
+            valuer=valuer,
         )
         for name, strat in strategies.items()
     }
@@ -176,6 +181,7 @@ def tune_sigma(
     n_seeds: int,
     adp_jitter: float,
     base_seed: int,
+    valuer: RosterValuer | None = None,
 ) -> SigmaTuningResult:
     """Sweep the survival sigma for NowOrNeverStrategy; return the (sigma, mean) grid + argmax."""
     _validate_pool(pool, config)
@@ -186,6 +192,7 @@ def tune_sigma(
         # LogisticSurvival requires sigma > 0; reject the whole grid up front rather
         # than mid-loop at strategy construction (protects every caller, not just the CLI).
         raise ValueError(f"sigma_grid values must all be > 0; got {list(sigma_grid)}")
+    valuer = valuer if valuer is not None else StartersValuer()
     grid: list[tuple[float, float]] = []
     for sigma in sigma_grid:
         strat = NowOrNeverStrategy(LogisticSurvival(sigma=float(sigma)))
@@ -197,6 +204,7 @@ def tune_sigma(
             n_seeds=n_seeds,
             adp_jitter=adp_jitter,
             base_seed=base_seed,
+            valuer=valuer,
         )
         grid.append((float(sigma), float(vals.mean())))
     best_sigma = max(grid, key=lambda r: r[1])[0]

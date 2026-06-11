@@ -4,6 +4,28 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — Risk-Aware Roster Valuation (season availability) — shipped (2026-06-11, on branch `feat/risk-aware-roster-valuation`)
+
+**Status:** The draft tournament's roster metric is no longer blind to the bench. Validation found the position-blind `raw_vorp` strategy drafting **10 quarterbacks** (worthless insurance) yet scoring the same as a balanced roster, because `optimal_lineup_points` only counts the best single-week starting lineup. This slice replaces it with a **risk-aware valuation**: the expected points a roster scores across a full season under per-player availability (injuries + byes), filling the best legal lineup each week from whoever is healthy. Depth now pays for itself, position-weighted (RBs miss more time → RB depth gets used more). Spec/plan at `docs/superpowers/specs|plans/2026-06-11-risk-aware-roster-valuation.*`. Built via subagent-driven development (6 TDD tasks, two-stage review each).
+
+**What shipped (`src/projections/draft/assistant/`):**
+- **`availability.py`** — `build_availability(weekly_stats, schedules, id_map, pool, *, season)` → `PlayerAvailability` (per-week injury `p` + bye). `p` = era-normalized fraction of team games played from `weekly_stats` history (16-game 2018–2020 vs 17-game 2021+), per-position default for rookies / no-history, clamped `[0.4, 0.97]`; byes resolved via `id_map` team → target-season `schedules` (the week a team has no game row). **Graceful degradation** when the target-season schedule is absent (warn + no byes, injury model still applies).
+- **`season_value.py`** — `expected_season_points(...)`: MC a season, each week filling the best lineup from the healthy. KEY simplification: `per_game = projection/17` is a *uniform* scaling, so a week is exactly `optimal_lineup_points(available_subset)/17` — the existing greedy fill is reused verbatim. The **single-week factorization** (MC one generic non-bye week + the few bye weeks) is exact in expectation; guarded by a brute-force equivalence test.
+- **`valuer.py`** — `RosterValuer` Protocol + `StartersValuer` (today's cheap metric) + `SeasonValuer` (risk-aware, deterministic per-roster sha256 seed). The tournament threads a valuer (**default `StartersValuer` → existing behavior byte-identical**); CLI gains `--valuer {starters,season}` (+ `--season`/`--n-sims`/`--data-root`).
+
+**Key decisions:** **metric this slice, depth-aware strategy next** (can't tune a depth strategy without a metric that rewards depth); **availability-only v1** (per-week Bernoulli on mean games — SD/clustering move variance not the *expected* metric; weekly performance variance deferred until real distributions exist); **`per_game = projection/17`, injury via `p`** (ESPN projects healthy seasons per the #52 spike, so applying `p` is the value-add, not double-counting); **pluggable valuer, default unchanged** (A/B, not swap); **single-week factorization** for speed (the per-week `optimal_lineup_points` is the hot path — fine at validation scale, numpy fast-path deferred for high-seed season-metric tuning).
+
+**Validation (real 2026 consensus pool, slot 6):** under the **starters** metric now_or_never beats raw_vorp by **+75** `[68, 83]`; under the **season** metric the margin nearly **quadruples to +286** `[258, 315]` — raw_vorp drops 15% (its 10-QB bench is dead weight) while now_or_never drops only 4.5% (RB/WR depth pays off). The metric does exactly what it was built to: penalize QB hoarding, reward useful depth. **Gates:** `mypy src tests` clean (271 files), `ruff` + `ruff format` clean; full suite 1407 passed / 16 skipped / 2 failed — both failures pre-existing and untouched by this branch (TODO #40 backtest cell; a flaky Windows scipy segfault in `test_ensemble_save_load_round_trip`, zero diff to ensemble/distributions code).
+
+**Data note:** the **2026 NFL `schedules` partition is not ingested** (only 2018–2025 present), so `--valuer season --season 2026` currently degrades to no byes (with a warning). Ingest the 2026 schedule before the real draft to get bye coverage.
+
+**Next directions:**
+1. **Depth-aware strategy** — a `DraftStrategy` that values marginal positional insurance, optimizing directly against this metric. The natural next slice (the metric exists now).
+2. **Weekly performance variance** — unlocks "best-ball" depth value + ceiling/floor scoring; arrives with real per-player distributions.
+3. **Recency-weighted / age-adjusted availability**, **playoff weighting**, and a **numpy fast-path** for the weekly fill (if high-seed season-metric σ-tuning is wanted).
+
+---
+
 ## Draft Assistant — Slice 2 engine validated on real 2026 data (2026-06-10, on branch `docs/draft-tournament-validation`)
 
 **Status:** First end-to-end run of the strategy tournament (PR #58, merged) against the **real 2026 consensus pool** (458 players, `asof=2026-06-09`, `configs/league_espn_ppr_12team_skill.json`), answering the question Slice 1 couldn't: **does `NowOrNeverStrategy` actually beat best-available?** Full numbers + the now-or-never-vs-VORP explanation in `reports/draft_tournament_validation_2026.md`.
