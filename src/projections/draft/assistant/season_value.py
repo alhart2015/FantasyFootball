@@ -37,6 +37,7 @@ def expected_season_points(
         return 0.0
     gsis = roster["gsis_id"].astype(str).to_numpy()
     p_arr = np.array([availability.p_week(g) for g in gsis], dtype=np.float64)
+    # -1 sentinel = "no bye"; never a real week, so it drops out of roster_bye_weeks below.
     bye_arr = np.array([b if (b := availability.bye_week(g)) is not None else -1 for g in gsis])
     weeks = list(weeks)
     roster_bye_weeks = sorted({w for w in bye_arr.tolist() if w in weeks})

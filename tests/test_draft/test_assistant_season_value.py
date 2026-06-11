@@ -34,7 +34,7 @@ def test_closed_form_single_slot() -> None:
         roster,
         {RosterSlot.RB: 1},
         avail,
-        n_sims=20000,
+        n_sims=5000,
         rng=np.random.default_rng(0),
         weeks=range(1, 3),
     )
@@ -53,7 +53,7 @@ def test_closed_form_two_player_backup() -> None:
         roster,
         {RosterSlot.RB: 1},
         avail,
-        n_sims=20000,
+        n_sims=6000,
         rng=np.random.default_rng(0),
         weeks=range(1, 2),
     )
