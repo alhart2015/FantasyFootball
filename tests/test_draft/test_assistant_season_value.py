@@ -55,6 +55,7 @@ def test_vectorized_lineup_matches_optimal_lineup_points() -> None:
         RosterSlot.QB: 1,
         RosterSlot.RB: 2,
         RosterSlot.WR: 2,
+        RosterSlot.TE: 1,  # exercise the TE single-slot path (one TE left over for flex)
         RosterSlot.FLEX: 1,
         RosterSlot.SUPER_FLEX: 1,
     }

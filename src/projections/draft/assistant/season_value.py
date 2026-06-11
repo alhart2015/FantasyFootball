@@ -41,6 +41,9 @@ class _FillMeta:
     sorted by points descending, those points, and the slot count. `flex`: per flex
     tier (FLEX then SUPER_FLEX, narrowest first), the flex-eligible roster columns and
     the slot count. `pts` is every roster player's points in roster-row order.
+
+    The arrays are read-only by contract — `_vectorized_lineup_points` never mutates
+    them (it works on `avail.copy()`), so one `_FillMeta` is safely reused across draws.
     """
 
     pts: np.ndarray
