@@ -182,16 +182,29 @@ def test_crn_matches_expected_season_points_with_bye_in_expectation() -> None:
 
 
 def test_crn_column_selection_is_by_gsis_not_position() -> None:
-    # A universe wider than the roster, with non-identity columns: the kernel must
-    # pull each player's OWN column. Reordering the universe must not change the value.
+    # The kernel must pull each player's OWN column by gsis, so the SAME per-player
+    # draws placed at DIFFERENT universe columns give an identical value. We build the
+    # two players' draws once, then scatter them into two differently-ordered wide
+    # universes; an exact match pins by-gsis selection (a by-position bug would diverge).
     from projections.draft.assistant.season_value import expected_season_points_crn
 
     roster = _roster([("00-0000002", "RB", 200.0), ("00-0000004", "RB", 120.0)])
     slots = {RosterSlot.RB: 1, RosterSlot.FLEX: 1}
     avail = _avail({"00-0000002": 0.7, "00-0000004": 0.6})
-    universe = ["00-0000001", "00-0000002", "00-0000003", "00-0000004"]
-    col_of = {g: i for i, g in enumerate(universe)}
-    draws = np.random.default_rng(5).random((300, len(universe)))
-    val = expected_season_points_crn(roster, slots, avail, draws=draws, col_of=col_of)
-    # Empty roster short-circuits to 0.0 — sanity that a real roster does not.
-    assert val > 0.0
+    player_draws = np.random.default_rng(5).random((300, 2))  # cols: [p2, p4]
+
+    # Universe A: [filler, p2, filler, p4]; Universe B reverses the ordering.
+    universe_a = ["00-0000001", "00-0000002", "00-0000003", "00-0000004"]
+    draws_a = np.zeros((300, 4))
+    draws_a[:, 1], draws_a[:, 3] = player_draws[:, 0], player_draws[:, 1]
+    col_a = {g: i for i, g in enumerate(universe_a)}
+
+    universe_b = ["00-0000004", "00-0000003", "00-0000002", "00-0000001"]
+    draws_b = np.zeros((300, 4))
+    draws_b[:, 2], draws_b[:, 0] = player_draws[:, 0], player_draws[:, 1]
+    col_b = {g: i for i, g in enumerate(universe_b)}
+
+    val_a = expected_season_points_crn(roster, slots, avail, draws=draws_a, col_of=col_a)
+    val_b = expected_season_points_crn(roster, slots, avail, draws=draws_b, col_of=col_b)
+    assert val_a == val_b  # same per-player draws → identical value, regardless of column
+    assert val_a > 0.0  # a real roster does not hit the empty short-circuit
