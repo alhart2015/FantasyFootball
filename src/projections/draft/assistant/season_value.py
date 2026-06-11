@@ -125,3 +125,41 @@ def expected_season_points(
         return acc / n_sims / _GAMES
 
     return _factorized_season_value(roster, availability, weeks, week_value_fn)
+
+
+def marginal_season_values(
+    base_roster: pd.DataFrame,
+    candidates: pd.DataFrame,
+    roster_slots: Mapping[RosterSlot, int],
+    availability: PlayerAvailability,
+    *,
+    n_sims: int,
+    rng: np.random.Generator,
+    weeks: Iterable[int] = range(1, 18),
+) -> dict[str, float]:
+    """CRN marginal expected-season-points of adding each candidate to `base_roster`.
+
+    Returns {candidate gsis_id: V(base + candidate) - V(base)}. All evaluations
+    (base and every candidate) share one pre-drawn availability matrix over the
+    union of base + candidate ids, so the marginal isolates the candidate's own
+    contribution at low variance (spec §3.3). `base_roster` and `candidates` each
+    carry `gsis_id`, `position`, `season_mean_fpts`.
+    """
+    base_ids = [str(g) for g in base_roster["gsis_id"]]
+    cand_ids = [str(g) for g in candidates["gsis_id"]]
+    universe = sorted(set(base_ids) | set(cand_ids))
+    col_of = {g: i for i, g in enumerate(universe)}
+    draws = rng.random((n_sims, len(universe)))
+
+    base_val = expected_season_points_crn(
+        base_roster, roster_slots, availability, draws=draws, col_of=col_of, weeks=weeks
+    )
+    out: dict[str, float] = {}
+    for i in range(len(candidates)):
+        cand_row = candidates.iloc[[i]]
+        cand_roster = pd.concat([base_roster, cand_row], ignore_index=True)
+        val = expected_season_points_crn(
+            cand_roster, roster_slots, availability, draws=draws, col_of=col_of, weeks=weeks
+        )
+        out[str(cand_row["gsis_id"].iloc[0])] = val - base_val
+    return out

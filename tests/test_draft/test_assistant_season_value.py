@@ -208,3 +208,70 @@ def test_crn_column_selection_is_by_gsis_not_position() -> None:
     val_b = expected_season_points_crn(roster, slots, avail, draws=draws_b, col_of=col_b)
     assert val_a == val_b  # same per-player draws → identical value, regardless of column
     assert val_a > 0.0  # a real roster does not hit the empty short-circuit
+
+
+def test_marginal_matches_closed_form_insurance() -> None:
+    # Base = one risky starter S(p=0.6). Candidate backup B(120, p=0.7), {RB:1}, 1 week.
+    # Marginal = points B adds = the insurance term only: (1-p_s)*p_b*B / 17.
+    from projections.draft.assistant.season_value import marginal_season_values
+
+    base = _roster([("00-0000001", "RB", 200.0)])
+    cands = _roster([("00-0000002", "RB", 120.0)])
+    avail = _avail({"00-0000001": 0.6, "00-0000002": 0.7})
+    expected = 0.4 * 0.7 * 120 / 17  # ≈ 1.976
+    out = marginal_season_values(
+        base,
+        cands,
+        {RosterSlot.RB: 1},
+        avail,
+        n_sims=8000,
+        rng=np.random.default_rng(0),
+        weeks=range(1, 2),
+    )
+    assert abs(out["00-0000002"] - expected) < 0.1
+
+
+def test_marginal_is_low_variance_under_crn() -> None:
+    # CRN makes the marginal stable even at small n_sims: 60 vs 400 sims agree tightly,
+    # where an independent-seed difference of the two MC estimates would not.
+    # We use 1 week so the per-week marginal (~3.18) is small enough that a tolerance
+    # of 0.5 is meaningful; the key property is that CRN variance-reduces the difference.
+    from projections.draft.assistant.season_value import marginal_season_values
+
+    base = _roster([("00-0000001", "RB", 200.0)])
+    cands = _roster([("00-0000002", "RB", 150.0)])
+    avail = _avail({"00-0000001": 0.55, "00-0000002": 0.8})
+    lo = marginal_season_values(
+        base,
+        cands,
+        {RosterSlot.RB: 1},
+        avail,
+        n_sims=60,
+        rng=np.random.default_rng(1),
+        weeks=range(1, 2),
+    )["00-0000002"]
+    hi = marginal_season_values(
+        base,
+        cands,
+        {RosterSlot.RB: 1},
+        avail,
+        n_sims=400,
+        rng=np.random.default_rng(2),
+        weeks=range(1, 2),
+    )["00-0000002"]
+    assert lo > 0.0
+    assert abs(lo - hi) < 0.5  # CRN: small-n already close to the large-n estimate
+
+
+def test_marginal_empty_base_is_solo_value() -> None:
+    # With an empty base roster (first pick), the marginal is the candidate's own
+    # expected season points (positive).
+    from projections.draft.assistant.season_value import marginal_season_values
+
+    base = _roster([])
+    cands = _roster([("00-0000002", "RB", 180.0)])
+    avail = _avail({"00-0000002": 0.9})
+    out = marginal_season_values(
+        base, cands, {RosterSlot.RB: 1}, avail, n_sims=300, rng=np.random.default_rng(0)
+    )
+    assert out["00-0000002"] > 0.0
