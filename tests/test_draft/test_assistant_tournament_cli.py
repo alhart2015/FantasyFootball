@@ -112,8 +112,8 @@ def test_tune_sigma_tolerates_trailing_comma(
 
 
 def test_tune_sigma_rejects_non_positive_grid_value(tmp_path: Path) -> None:
-    # A 0 (or negative) sigma must fail at the CLI parse layer, not mid-tune_sigma
-    # loop inside LogisticSurvival after wasted simulation (code-review #2).
+    # A 0 (or negative) sigma must fail fast (the guard lives in tune_sigma so every
+    # caller is covered), not mid-loop inside LogisticSurvival after wasted simulation.
     vorp_path, cfg_path = _write_inputs(tmp_path)
     with pytest.raises(ValueError, match="must all be > 0"):
         run(

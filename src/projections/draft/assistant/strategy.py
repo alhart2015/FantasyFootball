@@ -151,5 +151,7 @@ class NowOrNeverStrategy:
                 prob_all_better_gone *= 1.0 - p_i
             e_best[str(position)] = expected
 
-        df["score"] = df["vorp"].astype(float) - df["position"].map(e_best).astype(float)
+        # score = vorp - E[best survivor at position], reusing the already-extracted
+        # numpy arrays (a pyarrow-string .map(e_best) here is ~30x slower).
+        df["score"] = vorp - np.array([e_best[pos_i] for pos_i in pos], dtype=float)
         return _finalize(df, elig, display_p)
