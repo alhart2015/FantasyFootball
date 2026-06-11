@@ -103,3 +103,28 @@ def test_missing_schedule_degrades_to_no_byes() -> None:
         )
     assert avail.bye_week("00-0000001") is None
     assert avail.p_week("00-0000001") == pytest.approx(11 / 17, abs=1e-9)
+
+
+def test_cross_era_averaging() -> None:
+    # All 16 of a 2019 (16-game) season AND all 17 of a 2022 (17-game) season:
+    # per-season fracs are 1.0 and 1.0 -> mean 1.0 -> clamp hi.
+    ws = _weekly_stats(
+        [("00-0000001", 2019, w, "RB") for w in range(1, 17)]
+        + [("00-0000001", 2022, w, "RB") for w in range(1, 18)]
+    )
+    sched = _schedules(2026, {"AA": 8})
+    avail = build_availability(
+        ws, sched, _id_map([("00-0000001", "AA")]), _pool([("00-0000001", "RB")]), season=2026
+    )
+    assert avail.p_week("00-0000001") == pytest.approx(0.97)
+
+
+def test_pool_player_absent_from_id_map_has_no_bye() -> None:
+    ws = _weekly_stats([("00-0000001", 2022, w, "WR") for w in range(1, 15)])
+    sched = _schedules(2026, {"AA": 9})
+    # id_map does NOT contain 00-0000001
+    avail = build_availability(
+        ws, sched, _id_map([("00-0000099", "AA")]), _pool([("00-0000001", "WR")]), season=2026
+    )
+    assert avail.bye_week("00-0000001") is None
+    assert avail.p_week("00-0000001") == pytest.approx(14 / 17, abs=1e-9)

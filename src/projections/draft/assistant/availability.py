@@ -88,6 +88,7 @@ def build_availability(
         raw = (
             float(p_raw.loc[gid])
             if gid in p_raw.index
+            # position unseen in history falls back to overall_default (the all-players mean)
             else default_by_pos.get(pos, overall_default)
         )
         p[gid] = min(max(raw, lo), hi)
