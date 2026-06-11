@@ -4,6 +4,29 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — Depth-Aware Strategy (SeasonValueStrategy) — shipped selectable; validation negative (2026-06-11, on branch `feat/depth-aware-draft-strategy`)
+
+**Status:** The first strategy that drafts *to* PR #60's risk-aware season metric — `SeasonValueStrategy` ranks each available player by the **marginal expected season points** it adds to the current roster (`V(my_roster + candidate) − V(my_roster)` under common random numbers), prunes to top-k-by-VORP per position, and ranks purely by that marginal. Built + validated end-to-end. **The validation is a clean negative result: greedy marginal-value does NOT beat `now_or_never`, so the default is unchanged — `season_value` ships as a *selectable* strategy, not the default.** Spec/plan at `docs/superpowers/specs|plans/2026-06-11-depth-aware-draft-strategy.*`; full numbers in `reports/depth_aware_strategy_validation_2026.md`. Built via subagent-driven development (11 TDD tasks + an unplanned fast-path, each spec+quality reviewed).
+
+**What shipped (`src/projections/draft/assistant/`):**
+- **`SeasonValueStrategy`** (`strategy.py`) — depth-aware strategy behind the existing `DraftStrategy` protocol; holds `(availability, n_sims, base_seed, top_k)` like `NowOrNeverStrategy` holds a `SurvivalModel`. Ranks by marginal score with the `fills_starting_slot` tier **off** (`_finalize` gained an optional `starting_need_tier`) — the season metric already values open slots.
+- **CRN season-value machinery** (`season_value.py`) — `expected_season_points_crn` (shared pre-drawn availability matrix so a marginal cancels common noise) + `marginal_season_values` (per-candidate marginal under one shared draw). `DraftState.my_pick_ids` (snake-derived) feeds the base roster.
+- **`_vectorized_lineup_points`** (`season_value.py`) — **numpy fast-path** (spec §7, promoted to shipped): vectorizes the weekly lineup fill across all MC draws (restrictive-first greedy: single slots → FLEX → SUPER_FLEX), equivalent to `optimal_lineup_points` per sim up to float summation order. **~125× speedup** (3 seeds × 50 sims × 1 slot: 527s → 4.2s, byte-identical means); pinned by an equivalence test (exhaustively re-verified over all 1,024 masks of a 10-player roster in review). This is what made the tournament validation tractable at all — the spec's §3.7 "minutes" cost estimate was wrong (it ignored the per-pick *strategy* MC, ≈9 hrs/slot before the fast-path).
+- **`load_store_availability`** (`availability_loader.py`) — shared store→`PlayerAvailability` loader, used by both CLIs; `tournament_cli` (`compare --with-season-value`) and the live `cli.py` (`--strategy season_value` + `--season`/`--data-root`/`--n-sims`) wire it in. Default strategy stays `now_or_never` in both; missing `weekly_stats` hard-fails (fail loud).
+
+**Validation (real 2026 pool, 80 seeds, n_sims=200):** under the **season** metric, `season_value` wins **only at slot 12** (the turn: +9.1 `[+1.7,+16.5]`), **loses slot 6** (`now_or_never` +22.8 `[+13,+32]`), and **ties slot 1**. Under the **starters** metric it is the **worst** of the three at slots 1/6 (behind even `raw_vorp`). Determinism ✓ (point CIs). **Primary bar (beat `now_or_never` under the season metric at all three slots) NOT met.**
+
+**Why (the load-bearing finding):** greedy marginal-value is **myopic** — it maximizes the current pick's marginal season points but ignores **pick timing**. `now_or_never`'s opportunity-cost layer (grab the scarce player before my next pick) is the dominant signal in this pool; the edge for `now_or_never` is *largest at slot 6* (longest wait) and vanishes at slot 12 (back-to-back). The season metric fixed `raw_vorp`'s QB-hoarding *blindness*; `now_or_never` was already balanced, so greedily optimizing the metric *without* a scarcity/timing layer drafts a worse roster even by the metric itself. Higher `n_sims` sharpens marginals but can't supply the missing opportunity-cost term — the gap is structural.
+
+**Gates:** full draft suite green (206 `tests/test_draft`); `mypy src tests` clean; `ruff` + `ruff format` clean. Each task spec+quality reviewed; the fast-path got an exhaustive adversarial correctness review (no counterexample found).
+
+**Next direction (now empirically justified, not optional):**
+1. **Opportunity-cost layer in season-value space** (spec §7) — `score = marginal − E[marginal of the best survivor at that position by my next pick]`. The validation shows the timing layer is load-bearing; greedy depth alone is a regression. A/B-able behind the same protocol; tractable now the fast-path exists. **This is the next slice.**
+2. Slice 3 — Streamlit live-draft UI — still the last Draft Assistant UI slice.
+3. Ingest the 2026 `schedules` partition for bye coverage (currently `--season 2026` degrades to no byes).
+
+---
+
 ## Draft Assistant — Risk-Aware Roster Valuation (season availability) — shipped (2026-06-11, on branch `feat/risk-aware-roster-valuation`)
 
 **Status:** The draft tournament's roster metric is no longer blind to the bench. Validation found the position-blind `raw_vorp` strategy drafting **10 quarterbacks** (worthless insurance) yet scoring the same as a balanced roster, because `optimal_lineup_points` only counts the best single-week starting lineup. This slice replaces it with a **risk-aware valuation**: the expected points a roster scores across a full season under per-player availability (injuries + byes), filling the best legal lineup each week from whoever is healthy. Depth now pays for itself, position-weighted (RBs miss more time → RB depth gets used more). Spec/plan at `docs/superpowers/specs|plans/2026-06-11-risk-aware-roster-valuation.*`. Built via subagent-driven development (6 TDD tasks, two-stage review each).
