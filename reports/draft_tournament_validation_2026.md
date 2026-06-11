@@ -67,3 +67,36 @@ The curve is **unimodal** with a peak at **σ ≈ 11**. The optimum is only **+0
 4. **Next refinement, now measurable:** the survival model is *unconditional* (it ignores that an available player has already lasted to now). A conditional survival model is the natural Slice-2+ improvement and can be A/B'd against the current one through this same harness.
 
 *Reproduce:* the two-step recipe in the table setup above; each `compare`/`tune-sigma` run is ~1.5 min on a 32-core box. The generated VORP parquet is gitignored/regenerable.
+
+## Survival-model calibration + sample rosters
+
+`scripts/survival_sanity_check.py` adds two diagnostics: a calibration test of the survival model and a side-by-side of the rosters each strategy drafts.
+
+### Calibration — is `p_available` right?
+
+The model predicts `P(player available at the hero's next pick)`. Over 400 ADP-bot drafts (slot 6 → decide at pick 6, survive to pick 19, σ=8) we measured the empirical availability and binned by prediction:
+
+| model says | actually | n |
+|---|---|---|
+| 0.15 | **0.00** | 6 |
+| 0.26 | **0.02** | 3 |
+| 0.35 | **0.07** | 4 |
+| 0.46 | **0.22** | 2 |
+| 0.56 | 0.48 | 4 |
+| 0.67 | 0.73 | 3 |
+| 0.74 | **0.88** | 6 |
+| 0.81 | **0.95** | 2 |
+| 1.00 | 1.00 | 428 |
+
+The aggregate MAE is a deceptive 0.012 — **428 of 458 players are deep enough to always survive**, swamping the signal. In the ~24 players that actually drive the decision, the σ=8 logistic is **systematically too optimistic**: elite players it gives a 15–46% chance to wheel back essentially never do (0–22%), and "safe" players survive more than predicted. The real ADP-bot field is much **steeper** (more deterministic) than the logistic — so `now_or_never` under-rates the urgency of grabbing top players. (Note the tension: roster-*value* tuning preferred σ≈8–11 while *calibration* wants steeper; a **conditional** survival model — one that conditions on having survived to now — is the principled fix, not just retuning σ.)
+
+### Sample rosters — and the bench problem
+
+Same draft (slot 6, seed 0), each strategy's 17 picks:
+
+- **`raw_vorp` drafted 10 quarterbacks** (QB 10 / RB 3 / WR 3 / TE 1), incl. Geno Smith and Aaron Rodgers at ADP ~584. QBs carry the highest raw VORP (only one starts → huge value-over-replacement), so once the starting slots are filled, position-blind best-available hoards QBs onto the bench. Textbook VORP pathology.
+- **`now_or_never` built balanced depth** (QB 4 / RB 6 / WR 5 / TE 2) — it knows a 2nd-plus QB has ≈0 opportunity cost (great QBs always survive), so it pivots to scarce RB/WR.
+
+Both fill a legal starting lineup (2025.1 vs 1971.1 pts), but **the scoring metric (`optimal_lineup_points`) only counts starters** — so neither strategy is rewarded for *useful* bench depth, and the 10-QB bench costs raw_vorp nothing in the metric even though it's worthless in a real season.
+
+**This exposes the next real problem.** A roster needs RB/WR bench depth to cover injuries, benchings, busts, and byes — and that need is **position-dependent**: your QB1 is far more likely to play all season than your RB1, so you need *more* RB depth to cover the higher chance of missing time. The starters-only metric is blind to all of this. The next slice should make roster value **risk- and depth-aware** (expected season points under per-position availability + byes), which would correctly penalize QB hoarding and reward RB/WR depth — and give a depth-aware strategy something to optimize against.
