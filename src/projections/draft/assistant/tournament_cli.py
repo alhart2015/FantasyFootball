@@ -10,6 +10,7 @@ The --league-config MUST match the ruleset the VORP table was built under
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -157,7 +158,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     cmp_p.add_argument(
         "--with-season-value",
         action="store_true",
-        help="Also run the depth-aware SeasonValueStrategy (requires --valuer season data).",
+        help="Also run the depth-aware SeasonValueStrategy alongside the two core strategies. "
+        "Uses --season / --data-root / --n-sims to build availability (reuses the data already "
+        "loaded when --valuer season is set; loads it separately otherwise).",
     )
     tune_p = sub.add_parser("tune-sigma", help="Sweep survival sigma for now_or_never.")
     tune_p.add_argument(
@@ -202,11 +205,17 @@ def run(argv: list[str] | None = None) -> int:
             # Reuse the valuer's availability when --valuer season (the validation path)
             # so partitions are read once; only load separately for the rare
             # starters-valuer + season-strategy combo.
-            availability = (
-                valuer.availability
-                if isinstance(valuer, SeasonValuer)
-                else load_store_availability(pool, season=args.season, data_root=args.data_root)
-            )
+            if isinstance(valuer, SeasonValuer):
+                availability = valuer.availability
+            else:
+                warnings.warn(
+                    "--with-season-value without --valuer season loads availability "
+                    "partitions separately; pass --valuer season to share the load.",
+                    stacklevel=1,
+                )
+                availability = load_store_availability(
+                    pool, season=args.season, data_root=args.data_root
+                )
             strategies["season_value"] = SeasonValueStrategy(
                 availability, n_sims=args.n_sims, base_seed=args.seed
             )
