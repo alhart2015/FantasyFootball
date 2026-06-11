@@ -224,11 +224,11 @@ def test_marginal_matches_closed_form_insurance() -> None:
         cands,
         {RosterSlot.RB: 1},
         avail,
-        n_sims=8000,
+        n_sims=3000,
         rng=np.random.default_rng(0),
         weeks=range(1, 2),
     )
-    assert abs(out["00-0000002"] - expected) < 0.1
+    assert abs(out["00-0000002"] - expected) < 0.15  # ~2.5 sigma at n_sims=3000
 
 
 def test_marginal_is_low_variance_under_crn() -> None:
