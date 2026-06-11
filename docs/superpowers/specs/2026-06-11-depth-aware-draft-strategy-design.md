@@ -36,8 +36,9 @@ season-value space (the `now_or_never` analog) is a named follow-up, not this sl
   the deep-bench long-shots (marginal ≈ 0) get a deterministic fallback rank.
 - **A finalize path that ranks purely by marginal score** — without `_finalize`'s `fills_starting_slot`
   hard tier (the season metric already encodes starting-slot value; the tier would distort it).
-- **CLI wiring** — `season_value` selectable in `tournament_cli.py` (reusing `_build_season_valuer`'s
-  partition loading for availability) and in the live assistant `cli.py` (`scripts/draft_assistant.py`).
+- **CLI wiring** — `season_value` selectable in `tournament_cli.py` and the live assistant `cli.py`
+  (`scripts/draft_assistant.py`), both building availability via a shared `_load_availability` helper factored
+  out of `_build_season_valuer` (§3.8).
 - **Validation** — a `reports/` writeup: tournament under the **season** valuer comparing `season_value`
   vs `now_or_never` vs `raw_vorp` at slots 1/6/12 on the real 2026 consensus pool.
 
@@ -237,6 +238,11 @@ Synthetic fixtures (project norm — no network in unit tests):
 - **CRN low-variance** — the marginal of adding a clearly-useful player is positive and **stable across
   `n_sims`** (e.g. `n_sims=50` vs `200` agree to a tight tolerance), where an independent-seed difference of
   the same two MC estimates would not. Guards that CRN is actually in effect.
+- **CRN mean-equivalence (refactor regression guard)** — on a multi-player roster with at least one bye, the
+  CRN kernel's season value for a *fixed roster* equals the existing independent-RNG `expected_season_points`
+  to MC tolerance. CRN must change only the *variance* of the marginal, not the *expected value* of either
+  roster; this catches a consistent bias (mis-aligned shared matrix, double-counted bye week) that the
+  low-variance and single hand-computed tests would miss.
 - **Hand-computed marginal** — on a tiny roster (1 starting slot, a starter with `p<1`, no bye, `weeks`
   short), the marginal of adding a backup matches the closed-form 2-player fill-in contribution to MC
   tolerance.
@@ -297,8 +303,18 @@ slots 1 / 6 / 12.
   acceptable and not disqualifying. A *large* starters regression is a flag to investigate.
 - **Determinism:** `--adp-jitter 0 --seeds 1` ⇒ point CIs (same seed ⇒ identical roster).
 
-If the primary bar is met, flip the live-assistant default to `season_value`; if not, ship it as a selectable
-strategy and write up the slot-by-slot behavior for a follow-up decision.
+If the primary bar is met, make `season_value` the live-assistant CLI's **argparse default** (replacing
+`now_or_never`); if not, ship it as a selectable strategy and write up the slot-by-slot behavior for a
+follow-up decision.
+
+**Default-flip data dependency (deliberate hard fail).** Making `season_value` the default means the
+zero-config live-CLI invocation now loads availability, so a **missing `weekly_stats` partition raises**
+(`_load_availability` / `_build_season_valuer` already `FileNotFoundError`s when no history is present). This
+is intended: the default should **blow up loudly on missing data rather than silently fall back** to a
+different strategy. The softer, already-established degradation still holds for the *target-season `schedules`*
+partition only — absent schedule warns and proceeds with **no byes** (a logged, visible degradation, not a
+silent wrong answer; the injury model still applies). So: missing `weekly_stats` → hard error; missing
+target-season schedule → warning + no byes. No silent strategy substitution in either case.
 
 ## 7. Open questions / future slices
 
