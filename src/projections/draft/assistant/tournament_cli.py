@@ -58,10 +58,25 @@ def _build_season_valuer(
         except FileNotFoundError:
             continue
     if not frames:
-        raise FileNotFoundError(f"no weekly_stats partitions under {raw} for {_HISTORY_SEASONS}")
+        raise FileNotFoundError(
+            f"no weekly_stats partitions under {raw} for seasons "
+            f"{_HISTORY_SEASONS.start}-{_HISTORY_SEASONS.stop - 1}; check --data-root"
+        )
     weekly_stats = pd.concat(frames, ignore_index=True)
-    schedules = read_partition(raw, "schedules", season=season)
-    id_map = pd.read_parquet(raw / "id_map.parquet")
+    try:
+        schedules = read_partition(raw, "schedules", season=season)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"schedules partition for season={season} not found under {raw}; "
+            f"check --season and --data-root"
+        ) from exc
+    # build_availability only reads gsis_id + team, so full IdMapSchema validation is skipped.
+    try:
+        id_map = pd.read_parquet(raw / "id_map.parquet")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"id_map.parquet not found at {raw / 'id_map.parquet'}; check --data-root"
+        ) from exc
     availability = build_availability(weekly_stats, schedules, id_map, pool, season=season)
     return SeasonValuer(availability=availability, n_sims=n_sims, base_seed=base_seed)
 
@@ -180,6 +195,9 @@ def run(argv: list[str] | None = None) -> int:
     pool = _load_pool(args.vorp_table)
     config = _load_config(args.league_config)
     jitter = default_sigma(config.n_teams) if args.adp_jitter is None else args.adp_jitter
+
+    if args.valuer == "season" and args.n_sims < 1:
+        raise ValueError(f"--n-sims must be >= 1; got {args.n_sims}")
 
     valuer: RosterValuer = (
         StartersValuer()

@@ -151,6 +151,33 @@ def test_missing_vorp_table_fails_loud(tmp_path: Path) -> None:
         )
 
 
+def test_season_valuer_missing_data_fails_loud(tmp_path: Path) -> None:
+    vorp_path, cfg_path = _write_inputs(tmp_path)
+    empty_root = tmp_path / "empty_data"  # no raw/ partitions at all
+    with pytest.raises(FileNotFoundError, match="weekly_stats"):
+        run(
+            [
+                "--vorp-table",
+                str(vorp_path),
+                "--league-config",
+                str(cfg_path),
+                "--my-slot",
+                "2",
+                "--seeds",
+                "4",
+                "--valuer",
+                "season",
+                "--season",
+                "2026",
+                "--n-sims",
+                "10",
+                "--data-root",
+                str(empty_root),
+                "compare",
+            ]
+        )
+
+
 def test_compare_with_season_valuer_runs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
