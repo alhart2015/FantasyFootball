@@ -1,10 +1,11 @@
 """Compare draft strategies empirically (spec §3.5-§3.6).
 
 Run each strategy over many seeded drafts against an ADP field, score the hero
-roster by its optimal starting lineup, and declare a winner on the paired
-per-seed difference (percentile bootstrap, mirroring adoption_gate.py). The same
-seed index gives every strategy the same bot field -- the paired counterfactual.
-`tune_sigma` sweeps the survival sigma the same way.
+roster via a `RosterValuer` (default: optimal starting lineup), and declare a
+winner on the paired per-seed difference (percentile bootstrap, mirroring
+adoption_gate.py). The same seed index gives every strategy the same bot field
+-- the paired counterfactual. `tune_sigma` sweeps the survival sigma the same
+way.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ class Interval:
 
 @dataclass(frozen=True)
 class TournamentResult:
-    """Per-strategy mean starting-lineup points, the top-two paired diff, the winner."""
+    """Per-strategy mean roster value (per the valuer), the top-two paired diff, the winner."""
 
     summaries: dict[str, Interval]
     diff: Interval | None  # top-vs-second paired difference; None if <2 strategies
