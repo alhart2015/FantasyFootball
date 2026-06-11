@@ -263,6 +263,44 @@ def test_sigma_changes_now_or_never_top_pick() -> None:
     assert top_tight != top_loose
 
 
+def test_default_valuer_matches_optimal_lineup_points() -> None:
+    # The default-valuer tournament must equal the pre-change behavior: StartersValuer
+    # is optimal_lineup_points, so run_tournament's numbers are unchanged.
+    from projections.draft.assistant.valuer import StartersValuer
+
+    kwargs = dict(
+        pool=_pool(), config=_config(), my_slot=1, n_seeds=20, adp_jitter=2.0, base_seed=0
+    )
+    default_run = run_tournament({"best": _BestFpts(), "worst": _WorstFpts()}, **kwargs)
+    explicit = run_tournament(
+        {"best": _BestFpts(), "worst": _WorstFpts()}, valuer=StartersValuer(), **kwargs
+    )
+    assert default_run.summaries["best"].point == explicit.summaries["best"].point
+    assert default_run.summaries["worst"].point == explicit.summaries["worst"].point
+
+
+def test_season_valuer_runs_in_tournament() -> None:
+    # A tournament scored by the season valuer produces a valid result (smoke + shape).
+    from projections.draft.assistant.availability import PlayerAvailability
+    from projections.draft.assistant.valuer import SeasonValuer
+
+    pool = _pool()
+    avail = PlayerAvailability(p={str(g): 0.8 for g in pool["gsis_id"]}, bye={})
+    valuer = SeasonValuer(availability=avail, n_sims=50, base_seed=0)
+    result = run_tournament(
+        {"best": _BestFpts(), "worst": _WorstFpts()},
+        pool=pool,
+        config=_config(),
+        my_slot=1,
+        n_seeds=10,
+        adp_jitter=2.0,
+        base_seed=0,
+        valuer=valuer,
+    )
+    assert set(result.summaries) == {"best", "worst"}
+    assert all(ci.point > 0 for ci in result.summaries.values())
+
+
 def test_league_driven_two_roster_shapes_same_pool() -> None:
     # Same pool, two different roster shapes (FLEX vs SUPER_FLEX) -- the harness must
     # run off LeagueConfig alone, with no hardcoded slots. We assert it produces valid
