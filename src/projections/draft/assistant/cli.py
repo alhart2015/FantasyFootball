@@ -11,11 +11,13 @@ from pathlib import Path
 
 import pandas as pd
 
+from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.state import load_draft_state
 from projections.draft.assistant.strategy import (
     DraftStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
+    SeasonValueStrategy,
 )
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
@@ -50,6 +52,9 @@ def generate_recommendation(
     id_map_path: Path,
     strategy_name: str,
     sigma: float | None,
+    season: int = 2026,
+    n_sims: int = 300,
+    data_root: Path = Path("data"),
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load inputs, run the chosen strategy.
 
@@ -63,7 +68,12 @@ def generate_recommendation(
     vorp["gsis_id"] = vorp["gsis_id"].astype(_PYARROW_STR)
     vorp = VorpTableSchema.validate(vorp)
 
-    strategy = _build_strategy(strategy_name, league.n_teams, sigma)
+    strategy: DraftStrategy
+    if strategy_name == "season_value":
+        availability = load_store_availability(vorp, season=season, data_root=data_root)
+        strategy = SeasonValueStrategy(availability, n_sims=n_sims, base_seed=0)
+    else:
+        strategy = _build_strategy(strategy_name, league.n_teams, sigma)
     return strategy.recommend(state, vorp, league), id_map
 
 
@@ -104,7 +114,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--strategy",
-        choices=["now_or_never", "raw_vorp"],
+        choices=["now_or_never", "raw_vorp", "season_value"],
         default="now_or_never",
         help="Recommendation strategy (default now_or_never).",
     )
@@ -114,6 +124,24 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=float,
         default=None,
         help="Survival spread in picks (default ~ 2/3 of a round).",
+    )
+    p.add_argument(
+        "--season",
+        type=int,
+        default=2026,
+        help="[--strategy season_value] target season for byes + availability.",
+    )
+    p.add_argument(
+        "--n-sims",
+        type=int,
+        default=300,
+        help="[--strategy season_value] Monte-Carlo seasons per candidate.",
+    )
+    p.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path("data"),
+        help="[--strategy season_value] store root for weekly_stats/schedules/id_map.",
     )
     return p.parse_args(argv)
 
@@ -126,6 +154,9 @@ def run(argv: list[str] | None = None) -> int:
         id_map_path=args.id_map,
         strategy_name=args.strategy,
         sigma=args.sigma,
+        season=args.season,
+        n_sims=args.n_sims,
+        data_root=args.data_root,
     )
     print(format_table(rec, id_map, int(args.top)))
     return 0
