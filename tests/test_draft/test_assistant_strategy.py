@@ -205,6 +205,25 @@ def test_missing_consensus_adp_degrades_gracefully() -> None:
     assert rec["p_available_next"].isna().all()  # no ADP → null display
 
 
+def test_finalize_without_starting_tier_orders_by_score() -> None:
+    # With starting_need_tier=False, a higher-score row outranks a starting-slot
+    # filler with a lower score (the tier is NOT a sort key). fills_starting_slot is
+    # still computed/emitted.
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0000050", "00-0000051"], dtype=_PYARROW_STR),
+            "position": pd.array(["RB", "WR"], dtype=_PYARROW_STR),
+            "vorp": [10.0, 20.0],
+            "consensus_adp": pd.array([3.0, 4.0], dtype=pd.Float64Dtype()),
+            "score": [9.0, 1.0],  # RB has the higher score
+        }
+    )
+    p_na: pd.Series[float] = pd.Series(pd.NA, index=df.index, dtype=pd.Float64Dtype())
+    out = _finalize(df, {Position.RB: True, Position.WR: True}, p_na, starting_need_tier=False)
+    assert list(out["gsis_id"]) == ["00-0000050", "00-0000051"]  # score desc, tier ignored
+    assert set(out.columns) >= {"fills_starting_slot"}  # still emitted
+
+
 def test_finalize_fails_loud_on_position_outside_eligibility() -> None:
     # Invariant: _eligible_subset filters to elig's keyset before _finalize, so a
     # position absent from elig must never reach here. If it does, fail loud

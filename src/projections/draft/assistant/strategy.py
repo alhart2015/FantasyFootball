@@ -51,7 +51,11 @@ def _eligible_subset(
 
 
 def _finalize(
-    df: pd.DataFrame, elig: dict[Position, bool], p_available: pd.Series[float]
+    df: pd.DataFrame,
+    elig: dict[Position, bool],
+    p_available: pd.Series[float],
+    *,
+    starting_need_tier: bool = True,
 ) -> pd.DataFrame:
     """Attach the starting-need tier, order deterministically, validate.
 
@@ -77,10 +81,17 @@ def _finalize(
     out["consensus_adp"] = out["consensus_adp"].astype(pd.Float64Dtype())
     out["gsis_id"] = out["gsis_id"].astype(_PYARROW_STR)
     out["position"] = out["position"].astype(_PYARROW_STR)
-    out = out.sort_values(
-        ["fills_starting_slot", "score", "vorp", "gsis_id"],
-        ascending=[False, False, False, True],
-    ).reset_index(drop=True)
+    if starting_need_tier:
+        out = out.sort_values(
+            ["fills_starting_slot", "score", "vorp", "gsis_id"],
+            ascending=[False, False, False, True],
+        )
+    else:
+        out = out.sort_values(
+            ["score", "vorp", "gsis_id"],
+            ascending=[False, False, True],
+        )
+    out = out.reset_index(drop=True)
     out["rank"] = pd.array(range(1, len(out) + 1), dtype=pd.Int64Dtype())
     cols = list(RecommendationSchema.to_schema().columns)
     return RecommendationSchema.validate(out[cols])
