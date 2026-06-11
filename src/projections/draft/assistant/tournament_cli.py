@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from projections.draft.assistant.availability import build_availability
 from projections.draft.assistant.strategy import NowOrNeverStrategy, RawVorpStrategy
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.assistant.tournament import (
@@ -22,8 +23,10 @@ from projections.draft.assistant.tournament import (
     run_tournament,
     tune_sigma,
 )
+from projections.draft.assistant.valuer import RosterValuer, SeasonValuer, StartersValuer
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, VorpTableSchema
+from projections.store import read_partition
 
 
 def _load_pool(path: Path) -> pd.DataFrame:
@@ -39,6 +42,28 @@ def _load_config(path: Path) -> LeagueConfig:
 def _default_sigma_grid(n_teams: int) -> list[float]:
     base = default_sigma(n_teams)
     return [round(f * base, 3) for f in (1 / 3, 1 / 2, 2 / 3, 1.0, 4 / 3)]
+
+
+_HISTORY_SEASONS = range(2018, 2025)  # weekly_stats coverage for the availability model
+
+
+def _build_season_valuer(
+    pool: pd.DataFrame, *, season: int, n_sims: int, base_seed: int, data_root: Path
+) -> SeasonValuer:
+    raw = data_root / "raw"
+    frames: list[pd.DataFrame] = []
+    for yr in _HISTORY_SEASONS:
+        try:
+            frames.append(read_partition(raw, "weekly_stats", season=yr))
+        except FileNotFoundError:
+            continue
+    if not frames:
+        raise FileNotFoundError(f"no weekly_stats partitions under {raw} for {_HISTORY_SEASONS}")
+    weekly_stats = pd.concat(frames, ignore_index=True)
+    schedules = read_partition(raw, "schedules", season=season)
+    id_map = pd.read_parquet(raw / "id_map.parquet")
+    availability = build_availability(weekly_stats, schedules, id_map, pool, season=season)
+    return SeasonValuer(availability=availability, n_sims=n_sims, base_seed=base_seed)
 
 
 def _parse_sigma_grid(raw: str) -> list[float]:
@@ -107,6 +132,31 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Bot ADP noise SD in picks (default ~2/3 of a draft round, i.e. 2/3*n_teams).",
     )
     p.add_argument("--seed", type=int, default=0, help="Base RNG seed (reproducibility).")
+    p.add_argument(
+        "--valuer",
+        choices=["starters", "season"],
+        default="starters",
+        help="Roster metric: 'starters' (optimal single-week lineup) or "
+        "'season' (expected points under availability + byes).",
+    )
+    p.add_argument(
+        "--season",
+        type=int,
+        default=2026,
+        help="[--valuer season] target season for byes + availability.",
+    )
+    p.add_argument(
+        "--n-sims",
+        type=int,
+        default=300,
+        help="[--valuer season] Monte-Carlo seasons per roster.",
+    )
+    p.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path("data"),
+        help="[--valuer season] store root for weekly_stats/schedules/id_map.",
+    )
     sub = p.add_subparsers(dest="mode", required=True)
     cmp_p = sub.add_parser("compare", help="Compare now_or_never vs raw_vorp.")
     cmp_p.add_argument(
@@ -131,6 +181,18 @@ def run(argv: list[str] | None = None) -> int:
     config = _load_config(args.league_config)
     jitter = default_sigma(config.n_teams) if args.adp_jitter is None else args.adp_jitter
 
+    valuer: RosterValuer = (
+        StartersValuer()
+        if args.valuer == "starters"
+        else _build_season_valuer(
+            pool,
+            season=args.season,
+            n_sims=args.n_sims,
+            base_seed=args.seed,
+            data_root=args.data_root,
+        )
+    )
+
     if args.mode == "compare":
         sigma = (
             default_sigma(config.n_teams) if args.strategy_sigma is None else args.strategy_sigma
@@ -146,6 +208,7 @@ def run(argv: list[str] | None = None) -> int:
             n_seeds=args.seeds,
             adp_jitter=jitter,
             base_seed=args.seed,
+            valuer=valuer,
         )
         print(format_compare(result))
         return 0
@@ -163,6 +226,7 @@ def run(argv: list[str] | None = None) -> int:
         n_seeds=args.seeds,
         adp_jitter=jitter,
         base_seed=args.seed,
+        valuer=valuer,
     )
     print(format_tune(tuned))
     return 0
