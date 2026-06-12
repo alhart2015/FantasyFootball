@@ -97,7 +97,7 @@ def run(argv: list[str] | None = None) -> int:
     proj_df = WeeklyProjectionSchema.validate(
         read_partition(data_root / "processed", "espn_weekly_projections", season=args.season)
     )
-    weekly_stats = read_partition(data_root / "processed", "weekly_stats", season=args.season)
+    weekly_stats = read_partition(data_root / "raw", "weekly_stats", season=args.season)
     actual_df = build_weekly_actuals(weekly_stats, ruleset=config.ruleset)
 
     proj_lookup = {
