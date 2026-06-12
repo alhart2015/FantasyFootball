@@ -28,7 +28,8 @@
 | `src/projections/backtest/draft_field.py` | constrained ADP-bot draft loop (promoted from scratch) + mixed-field seat layout |
 | `src/projections/backtest/league.py` | `simulate_league` — draft → weekly points → standings → playoffs → `LeagueResult` |
 | `src/projections/backtest/harness.py` | `run_backtest` — mirrored seeds, per-strategy aggregation + bootstrap CIs |
-| `scripts/h2h_backtest.py` | CLI over `harness` |
+| `src/projections/backtest/cli.py` | CLI core (`_parse_args`, `format_result`, `run`) — mirrors `tournament_cli.py` |
+| `scripts/h2h_backtest.py` | 3-line wrapper calling `cli.run` |
 | `tests/test_backtest/test_*.py` | one test module per source module |
 
 **Reuse (do not re-implement):** `projections.scoring.score` (integer `StatLine`) for actuals; `projections.scoring.expected_points` (fractional) for projections; `projections.draft.assistant.roster_score.optimal_lineup_points` as the structural template for `weekly_lineup_points`; `projections.draft.roster_eligibility` (`POSITION_SLOTS`, `FLEX_ELIGIBLE`, `SUPER_FLEX_ELIGIBLE`); `projections.draft.assistant.strategy` (`NowOrNeverStrategy`/`SeasonValueStrategy`/`RawVorpStrategy`); `projections.draft.assistant.opponent.bot_pick`; `projections.draft.assistant.tournament._bootstrap_mean` + `Interval`; `projections.draft.vorp.generate_vorp_table`; `projections.store` partition I/O; `id_map` for espn_id→gsis_id.
@@ -628,6 +629,13 @@ def build_draft_basis(external: pd.DataFrame, *, league_config: LeagueConfig, se
     return VorpTableSchema.validate(table)
 ```
 
+In `build_draft_basis`, select schema columns with `list(...)` (a `KeysView` won't index a DataFrame):
+
+```python
+    schema_cols = list(ProjectionSeasonSchema.to_schema().columns.keys())
+    table = generate_vorp_table(proj[schema_cols], league_config)
+```
+
 Note: `generate_vorp_table` validates `ProjectionSeasonSchema` (which has no `consensus_adp`), so pass it the schema columns only and attach `consensus_adp` after — mirroring `scripts/generate_vorp_table.py:179-183`. Confirm `ProjectionSeasonSchema` column list and the `generated_at` dtype against `consensus_source.py:59-73` (already in-repo).
 
 - [ ] **Step 5: Run to verify it passes**
@@ -1039,9 +1047,19 @@ def _synthetic_pool(n_per_pos=30):
     return VorpTableSchema.validate(df)
 
 
+def _config_16_half():
+    from projections.schemas import RosterSlot
+    return LeagueConfig(
+        name="test16half", n_teams=16, budget=200, min_bid=1,
+        roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 2, RosterSlot.WR: 2,
+                      RosterSlot.TE: 1, RosterSlot.FLEX: 1, RosterSlot.BENCH: 4},
+        ruleset="espn_half",
+    )
+
+
 def test_draft_fills_every_roster_without_dupes():
     from projections.draft.assistant.strategy import RawVorpStrategy
-    cfg = LeagueConfig.model_validate_json(open("_league_16_half.json").read())
+    cfg = _config_16_half()  # inline — no dependency on the scratch _league_16_half.json
     pool = _synthetic_pool()
     seats = {s: (RawVorpStrategy() if s in (2, 4) else None) for s in range(1, 17)}
     rosters = draft_mixed_field(seats, pool, cfg, rng=np.random.default_rng(0), jitter=8.0)
@@ -1049,8 +1067,6 @@ def test_draft_fills_every_roster_without_dupes():
     assert len(allp) == len(set(allp))  # no dupes
     assert all(len(r) == cfg.roster_size for r in rosters.values())
 ```
-
-(If `_league_16_half.json` isn't a stable test fixture, copy its content into a tmp file in the test. Prefer constructing a `LeagueConfig` inline to avoid depending on a scratch file.)
 
 - [ ] **Step 5: Run to verify both pass**
 
@@ -1076,16 +1092,54 @@ git commit -m "feat(backtest): mixed-field constrained-bot draft + mirrored seat
 
 - [ ] **Step 1: Write the failing test** (tiny hand-checkable league)
 
-```python
-# tests/test_backtest/test_league.py — 4-team, 2 regular weeks, deterministic
-# Build a 4-team config, 2 rosters that always outscore the other 2, assert standings + champion.
-# (Full code: construct LeagueConfig(n_teams=4, roster QB1/RB1/BENCH1), a draft_basis pool,
-#  projection/actual lookups where team A players always project & score highest, run
-#  simulate_league with playoff_weeks/regular_weeks shrunk via the calendar arg, assert the
-#  always-best seat is champion and has the best record.)
-```
+The playoff bracket (Task 8) requires exactly 6 seeds, so use a 6-team league (1 strategy seat + 5 bots) over 5 regular weeks; the playoff is the whole field. Make one seat's players always project highest and score most so it is the deterministic champion.
 
-Write this test concretely against the final `simulate_league` signature you choose in Step 3 (calendar = dataclass with `regular_weeks`, `playoff_weeks`, `playoff_size`). Keep it ≤4 teams and ≤3 weeks so standings are hand-verifiable. Assert: (a) the dominant seat is `is_champion`; (b) per-seat `wins + losses == len(regular_weeks)`; (c) `points_for` matches the summed weekly lineup points.
+```python
+# tests/test_backtest/test_league.py
+import numpy as np
+import pandas as pd
+from projections.schemas import RosterSlot, _PYARROW_STR, VorpTableSchema
+from projections.draft.league_config import LeagueConfig
+from projections.draft.assistant.strategy import RawVorpStrategy
+from projections.backtest.league import Calendar, simulate_league
+
+
+def _cfg6():
+    return LeagueConfig(name="t6", n_teams=6, budget=200, min_bid=1,
+                        roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.BENCH: 1},
+                        ruleset="espn_half")
+
+
+def _pool6():
+    rows = []
+    for pos in ("QB", "RB"):
+        for i in range(20):
+            rows.append({"gsis_id": f"00-{pos}{i:05d}", "position": pos,
+                         "season_mean_fpts": 300.0 - i, "vorp": 200.0 - i,
+                         "replacement_fpts": 100.0, "consensus_adp": float(i * 6 + (0 if pos == "RB" else 3))})
+    df = pd.DataFrame(rows)
+    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
+    return VorpTableSchema.validate(df)
+
+
+def test_dominant_seat_is_champion_and_top_record():
+    cfg, pool = _cfg6(), _pool6()
+    cal = Calendar(regular_weeks=tuple(range(1, 6)), playoff_weeks=(6, 7, 8), playoff_size=6)
+    # Seat 1 runs a strategy; the rest are bots. Seat 1 will draft the top RawVorp players.
+    seat_strategies = {1: RawVorpStrategy(), **{s: None for s in range(2, 7)}}
+    labels = {1: "now_or_never", **{s: "bot" for s in range(2, 7)}}
+    # Projection == actual == the player's season_mean_fpts every week (so seat 1's roster always wins).
+    proj = {(g, wk): float(m) for g, m in zip(pool["gsis_id"], pool["season_mean_fpts"]) for wk in range(1, 9)}
+    actual = dict(proj)
+    results = simulate_league(0, seat_strategies=seat_strategies, strategy_labels=labels,
+                              pool=pool, config=cfg, proj_lookup=proj, actual_lookup=actual,
+                              calendar=cal, jitter=8.0)
+    by_seat = {r.seat: r for r in results}
+    assert by_seat[1].is_champion                       # (a) dominant seat wins it all
+    assert by_seat[1].wins == 5 and by_seat[1].losses == 0  # (b) record sums to regular weeks
+    assert all(r.wins + r.losses == 5 for r in results)
+    assert by_seat[1].points_for > 0                    # (c) points accumulate
+```
 
 - [ ] **Step 2: Run to verify it fails.** Expected: FAIL (module undefined).
 
@@ -1176,15 +1230,48 @@ git commit -m "feat(backtest): simulate_league — draft -> weekly -> standings 
 
 `run_backtest(...)`: for `seed in range(n_seeds)`, build `seat_strategies` from `seat_layout(seed)` (nn → `NowOrNeverStrategy`, sv → `SeasonValueStrategy(..., n_sims=strategy_n_sims)`, bot → None), call `simulate_league`, collect `LeagueResult`s. Aggregate per strategy label across all seats×seeds: championship rate (mean `is_champion`), playoff rate, regular-season win% (`wins/(wins+losses)`), mean points-for — each with `_bootstrap_mean` CI. Reuse `tournament.Interval`/`_bootstrap_mean`.
 
-- [ ] **Step 1: Write the failing test** (small `n_seeds`, assert structure + rate bounds)
+- [ ] **Step 1: Write the failing test** (small `n_seeds`, assert structure + the correct seat-weighted identity)
 
 ```python
 # tests/test_backtest/test_harness.py
-# Run run_backtest with a tiny pool + projection/actual lookups (a couple seeds, strategy_n_sims=5),
-# assert: result has one entry per strategy in {now_or_never, season_value, bot}; every rate in [0,1];
-# championship rates across strategies sum to ~1.0 (exactly one champion per league, pooled correctly);
-# CIs have lo<=point<=hi.
+import numpy as np
+import pandas as pd
+from projections.schemas import RosterSlot, _PYARROW_STR, VorpTableSchema
+from projections.draft.league_config import LeagueConfig
+from projections.backtest.league import Calendar
+from projections.backtest.harness import run_backtest
+# reuse the 6-team helpers' shape but at 16 teams to exercise the real seat layout
+from tests.test_backtest.test_draft_field import _synthetic_pool
+from tests.test_backtest.test_availability_stub import stub_availability  # see note
+
+
+def _cfg16():
+    return LeagueConfig(name="t16", n_teams=16, budget=200, min_bid=1,
+                        roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 2, RosterSlot.WR: 2,
+                                      RosterSlot.TE: 1, RosterSlot.FLEX: 1, RosterSlot.BENCH: 4},
+                        ruleset="espn_half")
+
+
+def test_rates_bounded_and_seat_weighted_champions_sum_to_one():
+    cfg, pool = _cfg16(), _synthetic_pool()
+    cal = Calendar(regular_weeks=tuple(range(1, 6)), playoff_weeks=(6, 7, 8), playoff_size=6)
+    proj = {(g, wk): float(m) for g, m in zip(pool["gsis_id"], pool["season_mean_fpts"]) for wk in range(1, 9)}
+    actual = dict(proj)
+    res = run_backtest(n_seeds=4, pool=pool, config=cfg, availability=stub_availability(pool),
+                       proj_lookup=proj, actual_lookup=actual, calendar=cal,
+                       jitter=8.0, strategy_n_sims=5, base_seed=0)
+    assert set(res.by_strategy) == {"now_or_never", "season_value", "bot"}
+    for m in res.by_strategy.values():
+        for iv in (m.championship, m.playoff, m.win_pct):
+            assert 0.0 <= iv.lo_95 <= iv.point <= iv.hi_95 <= 1.0
+    # Exactly one champion per league. nn/sv occupy 4 seats each, bots 8 -> seat-weighted identity:
+    r = res.by_strategy
+    weighted = 4 * r["now_or_never"].championship.point + 4 * r["season_value"].championship.point \
+        + 8 * r["bot"].championship.point
+    assert abs(weighted - 1.0) < 1e-9
 ```
+
+Note: `stub_availability(pool)` returns a minimal `PlayerAvailability` (every player `p≈0.95`, no byes) so `SeasonValueStrategy` runs without store I/O; define it once in `tests/test_backtest/test_availability_stub.py` by constructing `PlayerAvailability` per its real constructor (read `availability.py` for the exact fields). The win_pct CI upper bound may equal 1.0 only if a strategy wins every game in every sampled bootstrap — keep `<= 1.0`.
 
 - [ ] **Step 2: Run to verify it fails.** Expected: FAIL (module undefined).
 
@@ -1269,9 +1356,34 @@ git commit -m "feat(backtest): run_backtest — mirrored seeds, per-strategy rat
 
 CLI wires the real 2025 tables: load the draft basis (`build_draft_basis` over the ingested 2025 external snapshot), `read_partition` the ESPN weekly projections + build weekly actuals from `weekly_stats 2025`, build availability via the existing `load_store_availability`, pivot projections/actuals to `(gsis_id, week)->float` lookups, then `run_backtest`. Flags: `--n-seeds` (default 200), `--strategy-n-sims` (default 200), `--jitter` (default 8.0), `--data-root`, `--season` (default 2025). Print a per-strategy table (championship%, playoff%, win%, PF + CIs).
 
-- [ ] **Step 1: Write the failing test** (parse args + smoke `run` on a monkeypatched tiny dataset). Run; verify FAIL.
-- [ ] **Step 2: Implement** the `argparse` + `run(argv)` returning 0, mirroring `tournament_cli.py`'s structure (load → build lookups → `run_backtest` → `format`/print).
+- [ ] **Step 1: Write the failing test** (arg defaults + the formatter)
+
+```python
+# tests/test_backtest/test_cli.py
+from projections.backtest.cli import _parse_args, format_result
+from projections.backtest.harness import BacktestResult, StrategyMetrics
+from projections.draft.assistant.tournament import Interval
+
+
+def test_arg_defaults():
+    args = _parse_args(["--season", "2025"])
+    assert args.n_seeds == 200 and args.strategy_n_sims == 200 and args.jitter == 8.0
+
+
+def test_format_lists_every_strategy():
+    iv = Interval(point=0.1, lo_95=0.05, hi_95=0.15)
+    m = StrategyMetrics(championship=iv, playoff=iv, win_pct=iv, points_for=Interval(1400, 1380, 1420))
+    res = BacktestResult(by_strategy={"now_or_never": m, "season_value": m, "bot": m}, n_seeds=200)
+    text = format_result(res)
+    assert "now_or_never" in text and "season_value" in text and "champ" in text.lower()
+```
+
+Put the CLI core in `src/projections/backtest/cli.py` (`_parse_args`, `format_result`, `run(argv)`) and make `scripts/h2h_backtest.py` a 3-line wrapper that calls `cli.run` — exactly the `tournament_cli.py` / `scripts/draft_tournament.py` split.
+
+- [ ] **Step 2: Implement** `cli.py` mirroring `src/projections/draft/assistant/tournament_cli.py` structure: `_parse_args` (flags `--season` default 2025, `--n-seeds` 200, `--strategy-n-sims` 200, `--jitter` 8.0, `--data-root` `data`); `run(argv)` = load draft basis via `build_draft_basis` over the ingested 2025 external snapshot, `read_partition` the espn_weekly projections + `build_weekly_actuals` from `weekly_stats`, pivot both to `{(gsis_id, week): float}` dicts, build availability via `load_store_availability(pool, season, data_root)`, call `run_backtest`, `print(format_result(res))`, return 0. `format_result` renders a per-strategy table (championship%, playoff%, win%, PF with CIs), mirroring `tournament_cli.format_compare`.
 - [ ] **Step 3: Run; verify PASS.**
+
+Run: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest tests/test_backtest/test_cli.py -q`
 - [ ] **Step 4: Full-suite gate**
 
 Run: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest tests/test_backtest -q && python -m mypy src/projections/backtest tests/test_backtest && python -m ruff check src/projections/backtest tests/test_backtest scripts/h2h_backtest.py && python -m ruff format --check src/projections/backtest`
@@ -1295,12 +1407,19 @@ git commit -m "feat(backtest): h2h_backtest CLI over the harness"
 
 - [ ] **Step 1: Ingest the 2025 draft basis + weekly projections**
 
+First confirm the real `id_map` load path: `grep -rn "id_map" scripts/draft_assistant.py src/projections/draft/assistant/state.py` and use exactly that (the cheat-sheet / assistant CLIs already load it — likely `pd.read_parquet("data/id_map.parquet")` then `IdMapSchema.validate`). Then:
+
 ```bash
 OMP_NUM_THREADS=1 python -m projections.ingest.external_projections --season 2025
-OMP_NUM_THREADS=1 python -c "from pathlib import Path; from projections.backtest.espn_weekly import refresh_espn_weekly_projections; from projections.schemas import Ruleset; from projections.store import read_latest_partition; idm=read_latest_partition(Path('data/processed'),'id_map',season=2025) if False else __import__('pandas').read_parquet('data/id_map.parquet'); refresh_espn_weekly_projections(season=2025, ruleset=Ruleset.espn_half(), id_map=idm, data_root=Path('data'))"
+OMP_NUM_THREADS=1 python - <<'PY'
+from pathlib import Path
+import pandas as pd
+from projections.backtest.espn_weekly import refresh_espn_weekly_projections
+from projections.schemas import IdMapSchema, Ruleset
+id_map = IdMapSchema.validate(pd.read_parquet("data/id_map.parquet"))  # match the real path confirmed above
+refresh_espn_weekly_projections(season=2025, ruleset=Ruleset.espn_half(), id_map=id_map, data_root=Path("data"))
+PY
 ```
-
-(Use the repo's real `id_map` load path — match how `tournament_cli`/`state.py` load it.)
 
 - [ ] **Step 2: Run the backtest (default 200 seeds × 200 sims)**
 
