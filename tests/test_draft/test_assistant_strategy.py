@@ -326,6 +326,15 @@ def test_season_value_satisfies_protocol() -> None:
     assert isinstance(strat, DraftStrategy)
 
 
+def test_season_value_rejects_degenerate_config() -> None:
+    # n_sims < 1 → empty MC draw matrix → nan marginals → silent VORP fallback.
+    # top_k < 1 → no candidate ever scored. Both must fail loud at construction.
+    with pytest.raises(ValueError, match="n_sims"):
+        SeasonValueStrategy(_depth_avail(), n_sims=0, base_seed=0)
+    with pytest.raises(ValueError, match="top_k"):
+        SeasonValueStrategy(_depth_avail(), n_sims=10, base_seed=0, top_k=0)
+
+
 def test_season_value_takes_insurance_where_now_or_never_takes_vorp() -> None:
     state, pool, config = _depth_state(), _depth_pool(), _depth_config()
     season = SeasonValueStrategy(_depth_avail(), n_sims=4000, base_seed=0).recommend(

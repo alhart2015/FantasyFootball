@@ -209,6 +209,7 @@ def marginal_season_values(
     contribution at low variance (spec §3.3). `base_roster` and `candidates` each
     carry `gsis_id`, `position`, `season_mean_fpts`.
     """
+    weeks = list(weeks)  # materialize: it is consumed once per candidate evaluation below
     base_ids = [str(g) for g in base_roster["gsis_id"]]
     cand_ids = [str(g) for g in candidates["gsis_id"]]
     universe = sorted(set(base_ids) | set(cand_ids))

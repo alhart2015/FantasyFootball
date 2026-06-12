@@ -331,3 +331,28 @@ def test_marginal_empty_base_is_solo_value() -> None:
         base, cands, {RosterSlot.RB: 1}, avail, n_sims=300, rng=np.random.default_rng(0)
     )
     assert out["00-0000002"] > 0.0
+
+
+def test_marginal_weeks_accepts_a_one_shot_generator() -> None:
+    # `weeks` is consumed once per candidate evaluation; a one-shot generator (allowed
+    # by the Iterable[int] annotation) must not be exhausted after the base evaluation,
+    # which would collapse every candidate marginal to -base_val.
+    from projections.draft.assistant.season_value import marginal_season_values
+
+    base = _roster([("00-0000001", "RB", 200.0)])
+    cands = _roster([("00-0000002", "RB", 150.0), ("00-0000003", "RB", 140.0)])
+    avail = _avail({"00-0000001": 0.6, "00-0000002": 0.7, "00-0000003": 0.7})
+    slots = {RosterSlot.RB: 1}
+    via_range = marginal_season_values(
+        base, cands, slots, avail, n_sims=200, rng=np.random.default_rng(0), weeks=range(1, 3)
+    )
+    via_gen = marginal_season_values(
+        base,
+        cands,
+        slots,
+        avail,
+        n_sims=200,
+        rng=np.random.default_rng(0),
+        weeks=(w for w in range(1, 3)),
+    )
+    assert via_gen == via_range  # generator not exhausted → both candidates evaluated

@@ -190,6 +190,15 @@ class SeasonValueStrategy:
     base_seed: int
     top_k: int = 8
 
+    def __post_init__(self) -> None:
+        # Fail loud at construction so neither CLI can build a degenerate strategy:
+        # n_sims < 1 makes the MC mean a nan (empty draw matrix), which would silently
+        # collapse every marginal to nan -> 0.0 and rank purely by VORP.
+        if self.n_sims < 1:
+            raise ValueError(f"n_sims must be >= 1; got {self.n_sims}")
+        if self.top_k < 1:
+            raise ValueError(f"top_k must be >= 1; got {self.top_k}")
+
     def recommend(
         self, state: DraftState, pool: pd.DataFrame, config: LeagueConfig
     ) -> pd.DataFrame:
