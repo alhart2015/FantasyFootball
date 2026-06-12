@@ -256,6 +256,42 @@ def test_super_flex_deepens_qb_replacement() -> None:
     assert repl_with_sf[Position.QB.value] <= repl_no_sf[Position.QB.value]
 
 
+def test_qb_replacement_independent_of_bench_depth() -> None:
+    """Bench depth must NOT deepen QB replacement (the bench-flood bug).
+
+    Replacement tracks starter demand + a fixed cushion, so adding bench slots
+    leaves it unchanged. Before the fix, the uncapped BENCH pass floods QBs into
+    the pool (highest raw points), pushing the best-non-pool QB ever deeper as
+    the bench grows.
+    """
+    base = {RosterSlot.QB: 1, RosterSlot.RB: 1}
+    rows = _bulk_rows(Position.QB, count=12, base_fpts=400.0)  # QB#k = 401 - k (400..389)
+    rows += _bulk_rows(Position.RB, count=12, base_fpts=200.0)  # RB#k = 201 - k (200..189)
+    inputs = _make_season_projections(rows)
+    cfg_thin = _make_config(n_teams=2, roster_slots={**base, RosterSlot.BENCH: 2})
+    cfg_deep = _make_config(n_teams=2, roster_slots={**base, RosterSlot.BENCH: 6})
+    repl_thin = _replacement_by_position(generate_vorp_table(inputs, cfg_thin))
+    repl_deep = _replacement_by_position(generate_vorp_table(inputs, cfg_deep))
+    assert repl_thin[Position.QB.value] == repl_deep[Position.QB.value]
+
+
+def test_qb_replacement_at_cushioned_starter_demand() -> None:
+    """QB replacement sits at round(cushion * starter_demand), not the bench tail.
+
+    2 teams x 1 QB => starter demand 2; round(1.3 * 2) = 3 => the 3rd-best QB
+    (400, 399, 398) => 398. The uncapped-bench bug would instead report a much
+    deeper QB (the best QB left after the bench swallowed QB#3..QB#N).
+    """
+    rows = _bulk_rows(Position.QB, count=12, base_fpts=400.0)
+    rows += _bulk_rows(Position.RB, count=12, base_fpts=200.0)
+    inputs = _make_season_projections(rows)
+    cfg = _make_config(
+        n_teams=2, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.BENCH: 4}
+    )
+    repl = _replacement_by_position(generate_vorp_table(inputs, cfg))
+    assert repl[Position.QB.value] == 398.0
+
+
 def test_ruleset_mismatch_raises() -> None:
     cfg = _make_config(ruleset=Ruleset.espn_ppr())
     rows = _bulk_rows(Position.QB, count=10, ruleset_name="STANDARD")
