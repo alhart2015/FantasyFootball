@@ -94,17 +94,11 @@ def _finalize(
     out["consensus_adp"] = out["consensus_adp"].astype(pd.Float64Dtype())
     out["gsis_id"] = out["gsis_id"].astype(_PYARROW_STR)
     out["position"] = out["position"].astype(_PYARROW_STR)
-    if starting_need_tier:
-        out = out.sort_values(
-            ["fills_starting_slot", "score", "vorp", "gsis_id"],
-            ascending=[False, False, False, True],
-        )
-    else:
-        out = out.sort_values(
-            ["score", "vorp", "gsis_id"],
-            ascending=[False, False, True],
-        )
-    out = out.reset_index(drop=True)
+    # `fills_starting_slot` is just prepended as the primary key when the tier is on.
+    tier = ["fills_starting_slot"] if starting_need_tier else []
+    sort_cols = [*tier, "score", "vorp", "gsis_id"]
+    ascending = [*([False] * len(tier)), False, False, True]
+    out = out.sort_values(sort_cols, ascending=ascending).reset_index(drop=True)
     out["rank"] = pd.array(range(1, len(out) + 1), dtype=pd.Int64Dtype())
     cols = list(RecommendationSchema.to_schema().columns)
     return RecommendationSchema.validate(out[cols])
@@ -205,7 +199,7 @@ class SeasonValueStrategy:
         pool_ids = pool["gsis_id"].astype(str)
         present = pool_ids.isin(my_ids)
         base_roster = pool.loc[present, ["gsis_id", "position", "season_mean_fpts"]].copy()
-        missing = sorted(my_ids - set(pool_ids[present]))
+        missing = sorted(my_ids - set(pool_ids))
         if missing:
             warnings.warn(
                 f"{len(missing)} rostered player(s) absent from the VORP pool; "

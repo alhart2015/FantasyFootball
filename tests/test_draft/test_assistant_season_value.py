@@ -31,7 +31,6 @@ def test_vectorized_lineup_matches_optimal_lineup_points() -> None:
     # optimal_lineup_points on the same available subset, for every mask. Cover a
     # multi-position roster with single-slot counts, FLEX, and SUPER_FLEX, over 200
     # random availability masks (incl. all-out / all-in by chance at the extremes).
-    from projections.draft.assistant.roster_score import optimal_lineup_points
     from projections.draft.assistant.season_value import (
         _roster_fill_meta,
         _vectorized_lineup_points,

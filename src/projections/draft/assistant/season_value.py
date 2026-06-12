@@ -20,11 +20,8 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
-from projections.draft.roster_eligibility import (
-    FLEX_ELIGIBLE,
-    POSITION_SLOTS,
-    SUPER_FLEX_ELIGIBLE,
-)
+from projections.draft.assistant.roster_score import _FLEX_SLOTS
+from projections.draft.roster_eligibility import POSITION_SLOTS
 from projections.schemas import RosterSlot
 
 # Healthy-season denominator: a full season projection divided into per-game points
@@ -67,10 +64,7 @@ def _roster_fill_meta(roster: pd.DataFrame, roster_slots: Mapping[RosterSlot, in
         sorted_cols = cols[order]
         single.append((sorted_cols, pts[sorted_cols], count))
     flex: list[tuple[np.ndarray, int]] = []
-    for slot, eligible in (
-        (RosterSlot.FLEX, FLEX_ELIGIBLE),
-        (RosterSlot.SUPER_FLEX, SUPER_FLEX_ELIGIBLE),
-    ):
+    for slot, eligible in _FLEX_SLOTS:  # same flex tiers/order as optimal_lineup_points
         count = roster_slots.get(slot, 0)
         if count <= 0:
             continue
@@ -225,11 +219,10 @@ def marginal_season_values(
         base_roster, roster_slots, availability, draws=draws, col_of=col_of, weeks=weeks
     )
     out: dict[str, float] = {}
-    for i in range(len(candidates)):
-        cand_row = candidates.iloc[[i]]
-        cand_roster = pd.concat([base_roster, cand_row], ignore_index=True)
+    for i, cand_id in enumerate(cand_ids):
+        cand_roster = pd.concat([base_roster, candidates.iloc[[i]]], ignore_index=True)
         val = expected_season_points_crn(
             cand_roster, roster_slots, availability, draws=draws, col_of=col_of, weeks=weeks
         )
-        out[str(cand_row["gsis_id"].iloc[0])] = val - base_val
+        out[cand_id] = val - base_val
     return out

@@ -13,6 +13,7 @@ from projections.draft.assistant.strategy import (
     DraftStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
+    SeasonValueStrategy,
     _finalize,
 )
 from projections.draft.assistant.survival import LogisticSurvival
@@ -321,15 +322,11 @@ def _depth_avail() -> PlayerAvailability:
 
 
 def test_season_value_satisfies_protocol() -> None:
-    from projections.draft.assistant.strategy import SeasonValueStrategy
-
     strat = SeasonValueStrategy(_depth_avail(), n_sims=200, base_seed=0)
     assert isinstance(strat, DraftStrategy)
 
 
 def test_season_value_takes_insurance_where_now_or_never_takes_vorp() -> None:
-    from projections.draft.assistant.strategy import SeasonValueStrategy
-
     state, pool, config = _depth_state(), _depth_pool(), _depth_config()
     season = SeasonValueStrategy(_depth_avail(), n_sims=4000, base_seed=0).recommend(
         state, pool, config
@@ -342,8 +339,6 @@ def test_season_value_takes_insurance_where_now_or_never_takes_vorp() -> None:
 
 
 def test_season_value_is_deterministic() -> None:
-    from projections.draft.assistant.strategy import SeasonValueStrategy
-
     state, pool, config = _depth_state(), _depth_pool(), _depth_config()
     a = SeasonValueStrategy(_depth_avail(), n_sims=300, base_seed=7).recommend(state, pool, config)
     b = SeasonValueStrategy(_depth_avail(), n_sims=300, base_seed=7).recommend(state, pool, config)
@@ -357,9 +352,6 @@ def test_season_value_pruning_keeps_argmax_but_prunes_tail() -> None:
     # all. The #1 pick (argmax) is identical — within a position the best add is the
     # highest-VORP one (monotonic in points) — while the tail differs, proving pruning
     # is genuinely active (not a degenerate same==same).
-    from projections.draft.assistant.availability import PlayerAvailability
-    from projections.draft.assistant.strategy import SeasonValueStrategy
-
     ids = ["00-0000401", "00-0000402", "00-0000403"]
     pool = pd.DataFrame(
         {
@@ -395,8 +387,6 @@ def test_season_value_pruning_keeps_argmax_but_prunes_tail() -> None:
 
 def test_season_value_warns_on_roster_player_missing_from_pool() -> None:
     # A rostered id absent from the pool is dropped from the valued base, with a warning.
-    from projections.draft.assistant.strategy import SeasonValueStrategy
-
     pool = _depth_pool()
     pool = pool[pool["gsis_id"] != "00-0000301"].copy()  # drop rostered RB_a from the pool
     state, config = _depth_state(), _depth_config()
@@ -410,8 +400,6 @@ def test_season_value_warns_on_roster_player_missing_from_pool() -> None:
 def test_season_value_empty_eligible_returns_valid_empty_frame() -> None:
     # Every pool player is already drafted → no eligible candidates. recommend must
     # return a valid, empty RecommendationSchema frame, not raise (spec §4 edge).
-    from projections.draft.assistant.strategy import SeasonValueStrategy
-
     pool = _depth_pool()
     state = DraftState(
         my_slot=1,
