@@ -23,7 +23,7 @@ Output: per-strategy **championship %**, **regular-season win %**, **playoff-mak
 **In scope (v1):**
 - One real season: **2025**.
 - One league shape: **16 teams, half-PPR**, `_league_16_half.json` roster (`QB1/RB2/WR2/TE1/FLEX1/BENCH4`).
-- **Mixed field:** each league = 4 `now_or_never` + 4 `season_value` + 8 constrained ADP-bots.
+- **Mixed field:** each league = 4 `now_or_never` + 4 `season_value` + 8 constrained ADP-bots. **Seat layout (load-bearing — seat position swings the nn↔sv gap +11→+120 in the seat sweep):** strategies are *interleaved* so each spans the seat spectrum, not clustered. Concretely, seat `k` (1-based) is `now_or_never` if `k % 4 == 2`, `season_value` if `k % 4 == 0`, else a bot → nn at {2,6,10,14}, sv at {4,8,12,16}, bots elsewhere. **Paired-seed mirroring:** odd seeds use this layout; the paired even seed swaps the nn and sv seat sets (sv at {2,6,10,14}, nn at {4,8,12,16}), so pooled over paired seeds each strategy occupies an identical set of seats — the seat-position confound cancels exactly (same technique as Test 4 / the seat sweep).
 - **Draft-and-hold:** no in-season transactions.
 - **Weeks 1–17 only. Week 18 is excluded entirely** — never ingested, scored, or matched. (Regular season weeks 1–14; playoffs weeks 15–17.) The week window is a single config constant so a future league with a different playoff schedule can extend it.
 
@@ -68,17 +68,22 @@ scripts/h2h_backtest.py   CLI over harness
 
 ### 5.1 `espn_weekly.py`
 - `refresh_espn_weekly_projections(season, *, weeks=range(1,18), ruleset)` → writes a store partition.
-- Fetch: `_ESPN_URL.format(season) + "&scoringPeriodId={wk}"`, parse the per-player weekly projected stat line (statSourceId=1, statSplitTypeId=1, scoringPeriodId=wk), crosswalk espn_id→gsis_id, score the stat line under the ruleset → `projected_points`.
+- Fetch: `_ESPN_URL.format(season) + "&scoringPeriodId={wk}"`, parse the per-player weekly projected stat line (statSourceId=1, statSplitTypeId=1, scoringPeriodId=wk), crosswalk espn_id→gsis_id, score the (fractional) stat line via **`scoring.expected_points(statline, Ruleset.espn_half())`** → `projected_points`. (Projections are fractional, so `expected_points`, not the integer `score`.)
 - Output `WeeklyProjectionSchema`: `gsis_id, season, week, position, projected_points` (nullable — absent ⇒ bye/inactive). **Week 18 excluded by the `weeks` range.**
 
 ### 5.2 `weekly_actuals.py`
-- `build_weekly_actuals(weekly_stats, *, ruleset, weeks=range(1,18))` → `WeeklyActualSchema`: `gsis_id, season, week, actual_points` (half-PPR), one row per player-week that has a `weekly_stats` row. Reuses the scoring layer; **does not re-implement scoring**.
+- `build_weekly_actuals(weekly_stats, *, ruleset, weeks=range(1,18))` → `WeeklyActualSchema`: `gsis_id, season, week, actual_points` (half-PPR), one row per player-week that has a `weekly_stats` row. `weekly_stats` rows are **integer** stat lines, so score via **`scoring.score(StatLine, Ruleset.espn_half())`** (the integer scorer), not `expected_points`. **Does not re-implement scoring.**
 
 ### 5.3 `draft_basis.py`
 - `build_2025_draft_basis(*, ruleset, league_config, data_root)` → a `VorpTableSchema` frame: ESPN half-PPR projections → season projection → `generate_vorp_table` (fixed VORP) with **Sleeper ADP** attached as `consensus_adp`. Mirrors `_make_half_vorp.py` but Sleeper-ADP-sourced.
 
 ### 5.4 `lineup.py`
-- `weekly_lineup_points(roster_positions, projections_wk, actuals_wk, roster_slots) -> float`: greedily assign roster slots **by projection** (restrictive-slot-first, the proven optimal order for laminar eligibility), dropping players with no projection that week; **sum the assigned players' ACTUAL points**. The fill-by-X / score-by-Y split is the one genuinely new bit vs `optimal_lineup_points` (which fills and scores by the same value) — covered by dedicated tests.
+- `weekly_lineup_points(roster_positions, projections_wk, actuals_wk, roster_slots) -> float`: greedily assign roster slots **by projection** (restrictive-slot-first — the order that maximizes *projected* points for laminar eligibility, i.e. the lineup a rational manager sets), then **sum the assigned players' ACTUAL points**. The fill-by-projection / score-by-actual split is the one genuinely new bit vs `optimal_lineup_points` (fills and scores by the same value).
+- **Required edge-case behavior** (not just tested — load-bearing for correctness):
+  - A player with **no projection that week** (bye/inactive) is **not startable** — excluded from the fill.
+  - A player who is started (had a projection) but has **no actual** that week (didn't play / scratched) **scores 0** — the manager's lineup decision stands, the points don't.
+  - If too few startable players exist to fill every slot, **unfilled slots score 0** (a real manager left a hole).
+  - A drafted player who has **no projection in any week** is permanently unstartable (accepted — a dead-weight bench pick, which is itself signal about draft quality).
 
 ### 5.5 `schedule.py`
 - `regular_season_schedule(n_teams, n_weeks, rng) -> list[list[(seat,seat)]]`: a balanced rotating pairing (each week the 16 teams split into 8 matchups), deterministic given rng.
@@ -90,10 +95,11 @@ scripts/h2h_backtest.py   CLI over harness
   2. Weekly points weeks 1–17 via `weekly_lineup_points`.
   3. Regular-season standings (weeks 1–14): W/L per matchup, tiebreak points-for.
   4. Playoffs (weeks 15–17): seed by standings, run the bracket, crown champion.
-  - `LeagueResult`: per-seat strategy label, record, points-for, made_playoffs, finish, is_champion.
+  - `LeagueResult`: per-seat `strategy` label, `wins`/`losses`, `points_for`, `made_playoffs` (bool), `is_champion` (bool). **No `finish` field in v1** — the headline metrics (champion / playoff / win%) don't need a full 1–16 ordering of non-playoff teams, which would require an arbitrary consolation-bracket rule. Defer if a finish distribution is ever wanted.
 
 ### 5.7 `harness.py`
-- `run_backtest(n_seeds, ...) -> BacktestResult`: for each seed run `simulate_league` with **mirrored seat assignments** (swap the nn/sv seat sets across paired seeds so each strategy sees identical seat exposure). Aggregate per strategy: championship %, playoff %, regular-season win %, mean points-for — each with a percentile-bootstrap CI (mirrors `tournament._bootstrap_mean`). Headline: championship % and win %.
+- `run_backtest(*, n_seeds, strategy_n_sims, ...) -> BacktestResult`: for each seed run `simulate_league` with the §3 **mirrored seat layout** (odd seed = base layout, paired even seed = nn↔sv swapped) so each strategy sees identical seat exposure. Aggregate per strategy: championship %, playoff %, regular-season win %, mean points-for — each with a percentile-bootstrap CI (mirrors `tournament._bootstrap_mean`). Headline: championship % and win %.
+- **`strategy_n_sims`** (default **200**) is the season_value seats' per-pick Monte-Carlo depth; it **must use the vectorized fast-path** (`_vectorized_lineup_points`) or the draft is intractable. Runtime is dominated by the season_value seats' draft MC: ~`2 × n_seeds × 4` sv-seat-drafts (≈1,600 at 200 paired seeds) — comparable to the ~20-min seat sweep, so **default 200 seeds × 200 sims is tractable (~tens of minutes)**. `n_seeds` and `strategy_n_sims` are CLI flags; the weekly-sim and nn/raw_vorp seats are cheap by comparison.
 
 ## 6. Determinism, randomness & confidence
 
