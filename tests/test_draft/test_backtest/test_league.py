@@ -3,7 +3,7 @@
 import pandas as pd
 
 from projections.draft.assistant.strategy import RawVorpStrategy
-from projections.draft.backtest.league import Calendar, simulate_league
+from projections.draft.backtest.league import Calendar, LeagueOutcome, simulate_league
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, RosterSlot, VorpTableSchema
 
@@ -87,7 +87,7 @@ def test_dominant_seat_is_champion_and_top_record() -> None:
         for wk in range(1, 9)
     }
     actual = dict(proj)
-    results = simulate_league(
+    outcome = simulate_league(
         0,
         seat_strategies=seat_strategies,  # type: ignore[arg-type]  # dict[int,object] not Mapping[int,DraftStrategy|None]
         strategy_labels=labels,
@@ -98,8 +98,46 @@ def test_dominant_seat_is_champion_and_top_record() -> None:
         calendar=cal,
         jitter=8.0,
     )
-    by_seat = {r.seat: r for r in results}
+    assert isinstance(outcome, LeagueOutcome)
+    by_seat = {r.seat: r for r in outcome.actual}
     assert by_seat[1].is_champion  # dominant seat wins it all
     assert by_seat[1].wins == 5 and by_seat[1].losses == 0  # record sums to regular weeks
-    assert all(r.wins + r.losses == 5 for r in results)
+    assert all(r.wins + r.losses == 5 for r in outcome.actual)
     assert by_seat[1].points_for > 0
+
+
+def test_outcome_scores_projected_and_actual_independently() -> None:
+    """One draft, two scorings: a seat can win the projected title but lose every real game.
+
+    Seat 1 (RawVorpStrategy) drafts the three elite players (proj=1000 each, so it always
+    starts them) but their ACTUAL points are 1.0. Bot-fodder projects ~10 and scores ~10
+    actual. So under PROJECTED scoring seat 1 dominates (champion); under ACTUAL scoring its
+    started lineup collapses to ~2 pts/wk and it loses every matchup.
+    """
+    cfg, pool = _cfg6(), _pool6()
+    cal = Calendar(regular_weeks=tuple(range(1, 6)), playoff_weeks=(6, 7, 8), playoff_size=6)
+    seat_strategies: dict[int, object] = {1: RawVorpStrategy(), **{s: None for s in range(2, 7)}}
+    labels = {1: "now_or_never", **{s: "bot" for s in range(2, 7)}}
+    proj = {
+        (g, wk): float(m)
+        for g, m in zip(pool["gsis_id"], pool["season_mean_fpts"], strict=False)
+        for wk in range(1, 9)
+    }
+    # Elite players (season_mean_fpts == 1000) score ~nothing in reality; fodder scores its proj.
+    actual = {k: (1.0 if v >= 1000.0 else v) for k, v in proj.items()}
+    outcome = simulate_league(
+        0,
+        seat_strategies=seat_strategies,  # type: ignore[arg-type]
+        strategy_labels=labels,
+        pool=pool,
+        config=cfg,
+        proj_lookup=proj,
+        actual_lookup=actual,
+        calendar=cal,
+        jitter=8.0,
+    )
+    proj_by_seat = {r.seat: r for r in outcome.projected}
+    act_by_seat = {r.seat: r for r in outcome.actual}
+    # Projected: seat 1 wins it all. Actual: seat 1 loses every game and is not champion.
+    assert proj_by_seat[1].is_champion and proj_by_seat[1].wins == 5
+    assert not act_by_seat[1].is_champion and act_by_seat[1].wins == 0

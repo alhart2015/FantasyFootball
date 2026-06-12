@@ -36,6 +36,18 @@ class LeagueResult:
     is_champion: bool
 
 
+@dataclass(frozen=True)
+class LeagueOutcome:
+    """One league simulated once, scored two ways from the same drafted rosters.
+
+    ``actual`` scores matchups by realized points (real fantasy); ``projected`` scores
+    by the started lineup's projected points (draft quality under shared beliefs).
+    """
+
+    actual: list[LeagueResult]
+    projected: list[LeagueResult]
+
+
 def simulate_league(
     seed: int,
     *,
@@ -47,19 +59,20 @@ def simulate_league(
     actual_lookup: Mapping[tuple[str, int], float],
     calendar: Calendar,
     jitter: float,
-) -> list[LeagueResult]:
-    """Run a full league simulation and return per-seat results.
+) -> LeagueOutcome:
+    """Run a full league simulation once and score it both ways.
 
     Draft order: seat_strategies drives the draft via draft_mixed_field (None => bot).
-    Weekly scoring: weekly_lineup_points using proj for lineup decisions, actual for scoring.
-    Regular season: round-robin via regular_season_schedule.
-    Playoffs: top playoff_size seeds into single-elimination via playoff_champion.
+    The drafted rosters and the regular-season schedule are shared; the league is then
+    scored independently by actual points and by projected points (each gets its own
+    standings, playoff seeding, and champion). Lineups are always set by projection.
+    Returns a LeagueOutcome carrying both per-seat result lists.
     """
     rng = np.random.default_rng(seed)
     rosters = draft_mixed_field(dict(seat_strategies), pool, config, rng=rng, jitter=jitter)
     pos_by_id = {str(g): str(p) for g, p in zip(pool["gsis_id"], pool["position"], strict=False)}
 
-    def week_points(seat: int, wk: int) -> float:
+    def week_points(seat: int, wk: int, score_by: str) -> float:
         roster = [
             {
                 "position": pos_by_id[g],
@@ -68,16 +81,39 @@ def simulate_league(
             }
             for g in rosters[seat]
         ]
-        return weekly_lineup_points(roster, config.roster_slots)
+        return weekly_lineup_points(roster, config.roster_slots, score_by=score_by)
 
     all_weeks = set(calendar.regular_weeks) | set(calendar.playoff_weeks)
-    pts: dict[int, dict[int, float]] = {
-        wk: {s: week_points(s, wk) for s in rosters} for wk in all_weeks
+    pts_actual: dict[int, dict[int, float]] = {
+        wk: {s: week_points(s, wk, "actual") for s in rosters} for wk in all_weeks
+    }
+    pts_proj: dict[int, dict[int, float]] = {
+        wk: {s: week_points(s, wk, "projected") for s in rosters} for wk in all_weeks
     }
 
+    # One schedule (one rng draw) shared by both scorings.
     sched = regular_season_schedule(
         n_teams=config.n_teams, n_weeks=len(calendar.regular_weeks), rng=rng
     )
+
+    return LeagueOutcome(
+        actual=_standings_and_playoffs(rosters, pts_actual, sched, strategy_labels, calendar),
+        projected=_standings_and_playoffs(rosters, pts_proj, sched, strategy_labels, calendar),
+    )
+
+
+def _standings_and_playoffs(
+    rosters: Mapping[int, list[str]],
+    pts: Mapping[int, Mapping[int, float]],
+    sched: list[list[tuple[int, int]]],
+    strategy_labels: Mapping[int, str],
+    calendar: Calendar,
+) -> list[LeagueResult]:
+    """Score one weekly points table into per-seat W/L, standings, playoffs, champion.
+
+    Higher weekly points wins each matchup (ties break to the lower seat index); standings
+    sort by wins then points-for; the top ``playoff_size`` seeds run the bracket.
+    """
     wins: dict[int, int] = {s: 0 for s in rosters}
     losses: dict[int, int] = {s: 0 for s in rosters}
     pf: dict[int, float] = {s: 0.0 for s in rosters}

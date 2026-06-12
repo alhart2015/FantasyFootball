@@ -20,13 +20,22 @@ _FLEX_SLOTS: tuple[tuple[RosterSlot, frozenset[Position]], ...] = (
 
 
 def weekly_lineup_points(
-    roster: Sequence[Mapping[str, Any]], roster_slots: Mapping[RosterSlot, int]
+    roster: Sequence[Mapping[str, Any]],
+    roster_slots: Mapping[RosterSlot, int],
+    *,
+    score_by: str = "actual",
 ) -> float:
-    """Sum the `actual` points of the lineup chosen by highest `projected` values.
+    """Score the lineup chosen by highest `projected` values, summing the `score_by` field.
+
+    The lineup is always *set* by projection (the no-hindsight manager decision). The
+    points *summed* are taken from `score_by`:
+      - ``"actual"`` (default): real outcome points — the realistic fantasy objective.
+      - ``"projected"``: the projected points of the started lineup — "who drafted better"
+        under the shared projections, with outcome luck and projection error removed.
 
     Fill order: single-position slots (restrictive first), then FLEX, then SUPER_FLEX.
-    Players with a null `projected` are unstartable. A started player whose `actual`
-    is null contributes 0. Slots with no eligible player also contribute 0.
+    Players with a null `projected` are unstartable. A started player whose `score_by`
+    value is null contributes 0. Slots with no eligible player also contribute 0.
     """
     startable = [p for p in roster if p.get("projected") is not None]
 
@@ -38,9 +47,9 @@ def weekly_lineup_points(
 
     cursor: dict[Position, int] = {pos: 0 for pos in Position}
 
-    def _actual(p: Mapping[str, Any]) -> float:
-        a = p.get("actual")
-        return 0.0 if a is None else float(a)
+    def _score(p: Mapping[str, Any]) -> float:
+        v = p.get(score_by)
+        return 0.0 if v is None else float(v)
 
     total = 0.0
 
@@ -49,7 +58,7 @@ def weekly_lineup_points(
         pos = Position(slot.value)
         for _ in range(roster_slots.get(slot, 0)):
             if cursor[pos] < len(by_pos[pos]):
-                total += _actual(by_pos[pos][cursor[pos]])
+                total += _score(by_pos[pos][cursor[pos]])
                 cursor[pos] += 1
 
     # 2) Flex tiers, narrowest eligibility first; each takes the highest-projected
@@ -64,7 +73,7 @@ def weekly_lineup_points(
                     if proj > best_proj:
                         best_pos, best_proj = pos, proj
             if best_pos is not None:
-                total += _actual(by_pos[best_pos][cursor[best_pos]])
+                total += _score(by_pos[best_pos][cursor[best_pos]])
                 cursor[best_pos] += 1
 
     return total

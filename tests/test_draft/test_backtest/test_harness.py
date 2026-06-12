@@ -47,14 +47,16 @@ def test_rates_bounded_and_seat_weighted_champions_sum_to_one() -> None:
         strategy_n_sims=5,
         base_seed=0,
     )
-    assert set(res.by_strategy) == {"now_or_never", "season_value", "bot"}
-    for m in res.by_strategy.values():
-        for iv in (m.championship, m.playoff, m.win_pct):
-            assert 0.0 <= iv.lo_95 <= iv.point <= iv.hi_95 <= 1.0
-    r = res.by_strategy
-    weighted = (
-        4 * r["now_or_never"].championship.point
-        + 4 * r["season_value"].championship.point
-        + 8 * r["bot"].championship.point
-    )
-    assert abs(weighted - 1.0) < 1e-9
+    # Both metric tables are present with the same strategy keys.
+    for table in (res.by_strategy_actual, res.by_strategy_projected):
+        assert set(table) == {"now_or_never", "season_value", "bot"}
+        for m in table.values():
+            for iv in (m.championship, m.playoff, m.win_pct):
+                assert 0.0 <= iv.lo_95 <= iv.point <= iv.hi_95 <= 1.0
+        # Exactly one champion per league => seat-weighted championship rates sum to 1.
+        weighted = (
+            4 * table["now_or_never"].championship.point
+            + 4 * table["season_value"].championship.point
+            + 8 * table["bot"].championship.point
+        )
+        assert abs(weighted - 1.0) < 1e-9

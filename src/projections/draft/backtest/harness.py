@@ -34,7 +34,8 @@ class StrategyMetrics:
 
 @dataclass(frozen=True)
 class BacktestResult:
-    by_strategy: dict[str, StrategyMetrics]
+    by_strategy_actual: dict[str, StrategyMetrics]
+    by_strategy_projected: dict[str, StrategyMetrics]
     n_seeds: int
 
 
@@ -59,11 +60,12 @@ def run_backtest(
         "season_value": sv,
         "bot": None,
     }
-    results: list[LeagueResult] = []
+    results_actual: list[LeagueResult] = []
+    results_projected: list[LeagueResult] = []
     for s in range(n_seeds):
         layout = seat_layout(s)
         seat_strategies = {seat: label_to_strategy[label] for seat, label in layout.items()}
-        results += simulate_league(
+        outcome = simulate_league(
             base_seed + s,
             seat_strategies=seat_strategies,
             strategy_labels=layout,
@@ -74,8 +76,10 @@ def run_backtest(
             calendar=calendar,
             jitter=jitter,
         )
+        results_actual += outcome.actual
+        results_projected += outcome.projected
 
-    def _metrics(label: str) -> StrategyMetrics:
+    def _metrics(results: list[LeagueResult], label: str) -> StrategyMetrics:
         rs = [r for r in results if r.strategy == label]
         champ = np.array([1.0 if r.is_champion else 0.0 for r in rs])
         playoff = np.array([1.0 if r.made_playoffs else 0.0 for r in rs])
@@ -88,7 +92,13 @@ def run_backtest(
             points_for=_bootstrap_mean(pf, seed=base_seed),
         )
 
+    labels = ("now_or_never", "season_value", "bot")
+
+    def _table(results: list[LeagueResult]) -> dict[str, StrategyMetrics]:
+        return {label: _metrics(results, label) for label in labels}
+
     return BacktestResult(
-        by_strategy={label: _metrics(label) for label in ("now_or_never", "season_value", "bot")},
+        by_strategy_actual=_table(results_actual),
+        by_strategy_projected=_table(results_projected),
         n_seeds=n_seeds,
     )

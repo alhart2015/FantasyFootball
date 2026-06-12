@@ -14,7 +14,7 @@ import pandas as pd
 from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.tournament import Interval
 from projections.draft.backtest.draft_basis import build_draft_basis
-from projections.draft.backtest.harness import BacktestResult, run_backtest
+from projections.draft.backtest.harness import BacktestResult, StrategyMetrics, run_backtest
 from projections.draft.backtest.league import Calendar
 from projections.draft.backtest.weekly_actuals import build_weekly_actuals
 from projections.draft.league_config import LeagueConfig
@@ -65,20 +65,33 @@ def _fmt_interval(iv: Interval, *, pct: bool = False) -> str:
     return f"{iv.point:8.1f}  [{iv.lo_95:.1f}, {iv.hi_95:.1f}]"
 
 
-def format_result(result: BacktestResult) -> str:
-    """Render a per-strategy table showing champ%, playoff%, win%, points_for with CIs."""
-    header = (
-        f"H2H Backtest -- {result.n_seeds} seeds\n"
-        f"{'STRATEGY':<16} {'CHAMP%':>14} {'PLAYOFF%':>20} {'WIN%':>16} {'PTS FOR':>24}"
-    )
-    rows: list[str] = [header]
-    for name, m in sorted(result.by_strategy.items()):
+def _format_table(title: str, by_strategy: dict[str, StrategyMetrics]) -> str:
+    """Render one metric's per-strategy table (champ%, playoff%, win%, points_for + CIs)."""
+    rows: list[str] = [
+        title,
+        f"{'STRATEGY':<16} {'CHAMP%':>14} {'PLAYOFF%':>20} {'WIN%':>16} {'PTS FOR':>24}",
+    ]
+    for name, m in sorted(by_strategy.items()):
         champ = _fmt_interval(m.championship, pct=True)
         playoff = _fmt_interval(m.playoff, pct=True)
         winp = _fmt_interval(m.win_pct, pct=True)
         pts = _fmt_interval(m.points_for, pct=False)
         rows.append(f"{name:<16} {champ:>20} {playoff:>26} {winp:>22} {pts:>28}")
     return "\n".join(rows)
+
+
+def format_result(result: BacktestResult) -> str:
+    """Render both scorings: PROJECTED (who drafted better) and ACTUAL (real outcomes)."""
+    header = f"H2H Backtest -- {result.n_seeds} seeds"
+    projected = _format_table(
+        "[PROJECTED points -- draft quality under shared projections]",
+        result.by_strategy_projected,
+    )
+    actual = _format_table(
+        "[ACTUAL points -- realized outcomes (also reflects projection error/luck)]",
+        result.by_strategy_actual,
+    )
+    return f"{header}\n\n{projected}\n\n{actual}"
 
 
 def run(argv: list[str] | None = None) -> int:

@@ -23,7 +23,10 @@ def test_format_lists_every_strategy() -> None:
         win_pct=iv,
         points_for=Interval(point=1400.0, lo_95=1380.0, hi_95=1420.0),
     )
-    res = BacktestResult(by_strategy={"now_or_never": m, "season_value": m, "bot": m}, n_seeds=200)
+    table = {"now_or_never": m, "season_value": m, "bot": m}
+    res = BacktestResult(by_strategy_actual=table, by_strategy_projected=table, n_seeds=200)
     text = format_result(res)
     assert "now_or_never" in text and "season_value" in text and "bot" in text
     assert "champ" in text.lower()
+    # Both scorings are rendered.
+    assert "PROJECTED" in text and "ACTUAL" in text
