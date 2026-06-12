@@ -4,6 +4,24 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — H2H 2025 Backtest Harness + Test F1 result (2026-06-12, on branch `feat/h2h-backtest-harness`)
+
+**Status:** Shipped the head-to-head backtest harness (`src/projections/draft/backtest/`) and ran **Test F1** — the first strategy comparison on a metric that is **not `season_value`'s own objective**, replaying real 2025 outcomes. Built spec→plan→subagent (12 TDD tasks, all committed) in the prior session; this session implemented the dual-metric extension + a resumable runner and executed the run. Spec/plan at `docs/superpowers/specs|plans/2026-06-12-h2h-backtest-harness.*`; full numbers in `reports/draft_strategy_tests.md` (Test 7/F1).
+
+**What the harness does:** drafts a 16-team half-PPR mixed field (4 now_or_never + 4 season_value + 8 constrained-ADP bots; interleaved, **mirror-paired** seats so the nn↔sv seat confound cancels), sets each week's lineup from **ESPN weekly projections (no hindsight)**, scores vs **`weekly_stats 2025` half-PPR actuals**, runs a 14-week schedule → top-6 playoff → champion. Draft basis = ESPN preseason half-PPR projections + **Sleeper-only ADP** → fixed VORP (ESPN ADP is the dead 170 sentinel for past seasons). Weeks 1–17 (week 18 excluded).
+
+**Dual metric (this session, committed `ee07b08`):** each league is drafted **once** and scored **two independent ways** — **projected** (started lineup's projected points → *who drafted better* under shared beliefs, no outcome luck) and **actual** (realized points → real fantasy, also absorbs projection error/luck). `weekly_lineup_points(score_by=...)`, `simulate_league → LeagueOutcome(actual, projected)`, `run_backtest → by_strategy_{actual,projected}`.
+
+**Test F1 result (200 seeds × 200 sims):** **season_value beats now_or_never on the regular-season axis but not on championships.** In *both* scorings sv wins more games (win% proj 53.6 vs 50.0; actual 54.1 vs 47.7 — CI-separated) and makes the playoffs more (proj 43.0 vs 34.8; actual 48.2 vs 32.6), with higher points-for. **Championship% is a statistical tie** (nn/sv CIs overlap both metrics). Interpretation: sv's expected-points dominance converts to *wins and playoff berths* but the 3-week single-elim playoff rewards ceiling/variance, which sv's high-floor rosters don't supply more of — *sv gets to the dance more, doesn't win it more*. Projected and actual agree on the ordering ⟹ not a projection-error artifact. **No overall verdict yet** — that's the end-of-investigation call across all tests.
+
+**Resumable runner (committed `3d04695`):** long single-process runs hit flaky native BLAS/OpenMP **access violations** on this box (the machine BSOD'd mid-run in the prior session). `scripts/h2h_backtest_chunked.py` runs seed-chunks as isolated subprocesses, retries crashed chunks, and skips completed checkpoints so a re-run resumes after any crash/reboot — byte-identical to a monolithic run (pinned equivalence test). The F1 run completed with **20 of ~60 chunk-attempts crashing and auto-recovering**. See memory `h2h-backtest-native-crash`. Always run via the chunked script in **PowerShell** with `KMP_DUPLICATE_LIB_OK=TRUE` + single-thread BLAS.
+
+**Gates:** `tests/test_draft/test_backtest` 34 passed (serial; the equivalence test can flake under pytest-xdist parallel load — the same native crash, not a logic bug); `mypy src tests` clean (297 files); ruff + format clean.
+
+**Caveats / next:** single season (2025 outcome luck) → **2024 H2H backtest** is the cross-season check (harness is season-parameterized); F1 CIs are marginal (a paired-diff would tighten the nn-vs-sv championship contrast); bot↔strategy seat confound (only nn-vs-sv mirror-controlled).
+
+---
+
 ## Draft Assistant — Depth-Aware Strategy (SeasonValueStrategy) — shipped selectable; validation negative (2026-06-11, on branch `feat/depth-aware-draft-strategy`)
 
 **Status:** The first strategy that drafts *to* PR #60's risk-aware season metric — `SeasonValueStrategy` ranks each available player by the **marginal expected season points** it adds to the current roster (`V(my_roster + candidate) − V(my_roster)` under common random numbers), prunes to top-k-by-VORP per position, and ranks purely by that marginal. Built + validated end-to-end. **The validation is a clean negative result: greedy marginal-value does NOT beat `now_or_never`, so the default is unchanged — `season_value` ships as a *selectable* strategy, not the default.** Spec/plan at `docs/superpowers/specs|plans/2026-06-11-depth-aware-draft-strategy.*`; full numbers in `reports/depth_aware_strategy_validation_2026.md`. Built via subagent-driven development (11 TDD tasks + an unplanned fast-path, each spec+quality reviewed).
