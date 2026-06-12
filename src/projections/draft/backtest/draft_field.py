@@ -6,6 +6,8 @@ Seat layout per spec: nn {2,6,10,14}, sv {4,8,12,16}, bots elsewhere; paired eve
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -85,6 +87,13 @@ def draft_mixed_field(
             elig = _bot_eligible(counts[seat], rs - len(rosters[seat]))
             sub = pool[avail & pos_str.isin(elig)]
             if sub.empty:
+                warnings.warn(
+                    f"draft_mixed_field: bot at seat {seat}, pick {pick}: "
+                    f"no available player at required positions {sorted(elig)}; "
+                    f"picking best available — this bot roster will miss a positional minimum "
+                    f"(pool is too thin at that position).",
+                    stacklevel=2,
+                )
                 sub = pool[avail]
             gid = validate_gsis_id(str(bot_pick(sub, rng, adp_jitter=jitter)))
             counts[seat][pos_by_id[gid]] = counts[seat].get(pos_by_id[gid], 0) + 1

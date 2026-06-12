@@ -73,3 +73,18 @@ def test_draft_fills_every_roster_without_dupes() -> None:
     allp = [g for r in rosters.values() for g in r]
     assert len(allp) == len(set(allp))  # no dupes
     assert all(len(r) == cfg.roster_size for r in rosters.values())
+
+
+def test_bots_satisfy_position_minimums() -> None:
+    cfg = _config_16_half()
+    pool = _synthetic_pool(n_per_pos=60)  # 240 players, deeper than 16 * MAXP per position
+    seats: dict[int, object] = {s: None for s in range(1, 17)}  # all-bot field
+    rosters = draft_mixed_field(seats, pool, cfg, rng=np.random.default_rng(0), jitter=8.0)  # type: ignore[arg-type]
+    pos_by_id = {str(g): str(p) for g, p in zip(pool["gsis_id"], pool["position"], strict=False)}
+    minp = {"QB": 1, "RB": 3, "WR": 3, "TE": 1}
+    for seat, roster in rosters.items():
+        counts = {pos: 0 for pos in minp}
+        for g in roster:
+            counts[pos_by_id[g]] = counts.get(pos_by_id[g], 0) + 1
+        for pos, lo in minp.items():
+            assert counts[pos] >= lo, f"seat {seat} has {counts[pos]} {pos}, need >= {lo}"
