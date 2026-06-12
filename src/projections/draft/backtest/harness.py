@@ -39,9 +39,10 @@ class BacktestResult:
     n_seeds: int
 
 
-def run_backtest(
+def collect_results(
     *,
-    n_seeds: int,
+    seed_lo: int,
+    seed_hi: int,
     pool: pd.DataFrame,
     config: LeagueConfig,
     availability: PlayerAvailability,
@@ -51,7 +52,13 @@ def run_backtest(
     jitter: float = 8.0,
     strategy_n_sims: int = 200,
     base_seed: int = 0,
-) -> BacktestResult:
+) -> tuple[list[LeagueResult], list[LeagueResult]]:
+    """Simulate seed indices [seed_lo, seed_hi) and return raw (actual, projected) results.
+
+    Seed index ``s`` uses ``seat_layout(s)`` and league seed ``base_seed + s`` — identical to
+    the slice run_backtest would produce for those indices, so disjoint chunks pooled in order
+    reconstruct a monolithic run exactly. This is the unit the resumable chunk-runner serializes.
+    """
     sigma = default_sigma(config.n_teams)
     nn = NowOrNeverStrategy(LogisticSurvival(sigma=sigma))
     sv = SeasonValueStrategy(availability, n_sims=strategy_n_sims, base_seed=base_seed)
@@ -62,7 +69,7 @@ def run_backtest(
     }
     results_actual: list[LeagueResult] = []
     results_projected: list[LeagueResult] = []
-    for s in range(n_seeds):
+    for s in range(seed_lo, seed_hi):
         layout = seat_layout(s)
         seat_strategies = {seat: label_to_strategy[label] for seat, label in layout.items()}
         outcome = simulate_league(
@@ -78,6 +85,17 @@ def run_backtest(
         )
         results_actual += outcome.actual
         results_projected += outcome.projected
+    return results_actual, results_projected
+
+
+def aggregate(
+    results_actual: list[LeagueResult],
+    results_projected: list[LeagueResult],
+    *,
+    n_seeds: int,
+    base_seed: int = 0,
+) -> BacktestResult:
+    """Aggregate raw per-seed results into per-strategy bootstrap metrics for both scorings."""
 
     def _metrics(results: list[LeagueResult], label: str) -> StrategyMetrics:
         rs = [r for r in results if r.strategy == label]
@@ -102,3 +120,33 @@ def run_backtest(
         by_strategy_projected=_table(results_projected),
         n_seeds=n_seeds,
     )
+
+
+def run_backtest(
+    *,
+    n_seeds: int,
+    pool: pd.DataFrame,
+    config: LeagueConfig,
+    availability: PlayerAvailability,
+    proj_lookup: Mapping[tuple[str, int], float],
+    actual_lookup: Mapping[tuple[str, int], float],
+    calendar: Calendar,
+    jitter: float = 8.0,
+    strategy_n_sims: int = 200,
+    base_seed: int = 0,
+) -> BacktestResult:
+    """Run all n_seeds in one process and aggregate. See collect_results for chunked runs."""
+    results_actual, results_projected = collect_results(
+        seed_lo=0,
+        seed_hi=n_seeds,
+        pool=pool,
+        config=config,
+        availability=availability,
+        proj_lookup=proj_lookup,
+        actual_lookup=actual_lookup,
+        calendar=calendar,
+        jitter=jitter,
+        strategy_n_sims=strategy_n_sims,
+        base_seed=base_seed,
+    )
+    return aggregate(results_actual, results_projected, n_seeds=n_seeds, base_seed=base_seed)

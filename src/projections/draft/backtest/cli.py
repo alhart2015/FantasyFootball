@@ -9,17 +9,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import pandas as pd
-
-from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.tournament import Interval
-from projections.draft.backtest.draft_basis import build_draft_basis
 from projections.draft.backtest.harness import BacktestResult, StrategyMetrics, run_backtest
-from projections.draft.backtest.league import Calendar
-from projections.draft.backtest.weekly_actuals import build_weekly_actuals
+from projections.draft.backtest.inputs import load_inputs
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import ExternalProjectionSchema, WeeklyProjectionSchema
-from projections.store import read_latest_partition, read_partition
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -97,46 +90,16 @@ def format_result(result: BacktestResult) -> str:
 def run(argv: list[str] | None = None) -> int:
     """Entry point for the H2H backtest CLI. Not unit-tested (requires 2025 data partitions)."""
     args = _parse_args(argv)
-    data_root: Path = args.data_root
     config = LeagueConfig.model_validate_json(args.league_config.read_text())
-
-    # Draft basis from the ingested external snapshot (Sleeper-ADP half-PPR fixed VORP).
-    external = ExternalProjectionSchema.validate(
-        read_latest_partition(data_root / "raw", "external_projections", season=args.season)
-    )
-    pool = build_draft_basis(external, league_config=config)
-
-    # Weekly projections (start/sit) + actuals, pivoted to {(gsis_id, week): float}.
-    proj_df = WeeklyProjectionSchema.validate(
-        read_partition(data_root / "processed", "espn_weekly_projections", season=args.season)
-    )
-    weekly_stats = read_partition(data_root / "raw", "weekly_stats", season=args.season)
-    actual_df = build_weekly_actuals(weekly_stats, ruleset=config.ruleset)
-
-    proj_lookup = {
-        (str(r.gsis_id), int(r.week)): float(r.projected_points)
-        for r in proj_df.itertuples(index=False)
-        if pd.notna(r.projected_points)
-    }
-    actual_lookup = {
-        (str(r.gsis_id), int(r.week)): float(r.actual_points)
-        for r in actual_df.itertuples(index=False)
-    }
-
-    availability = load_store_availability(pool, season=args.season, data_root=data_root)
-    calendar = Calendar(
-        regular_weeks=tuple(range(1, 15)),
-        playoff_weeks=(15, 16, 17),
-        playoff_size=6,
-    )
+    inputs = load_inputs(season=args.season, config=config, data_root=args.data_root)
     result = run_backtest(
         n_seeds=args.n_seeds,
-        pool=pool,
+        pool=inputs.pool,
         config=config,
-        availability=availability,
-        proj_lookup=proj_lookup,
-        actual_lookup=actual_lookup,
-        calendar=calendar,
+        availability=inputs.availability,
+        proj_lookup=inputs.proj_lookup,
+        actual_lookup=inputs.actual_lookup,
+        calendar=inputs.calendar,
         jitter=args.jitter,
         strategy_n_sims=args.strategy_n_sims,
     )
