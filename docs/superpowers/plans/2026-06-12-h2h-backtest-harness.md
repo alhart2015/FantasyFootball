@@ -4,7 +4,7 @@
 
 **Goal:** Build a headless backtest that replays a 16-team half-PPR fantasy league on real 2025 outcomes — draft from 2025 ESPN preseason projections + Sleeper ADP, set weekly lineups from ESPN weekly projections, score against real 2025 results, play a head-to-head season (weeks 1–17), and report each draft strategy's championship / win / playoff rates — the first metric that isn't a strategy's own objective.
 
-**Architecture:** New sub-package `src/projections/backtest/` with one module per responsibility (data pull → draft basis → lineup → schedule → league → harness). Reuses the existing `DraftStrategy` strategies, constrained ADP-bot draft loop, `roster_eligibility`, the scoring layer, `store`, and `generate_vorp_table` (with the QB-replacement fix). All player projections/actuals are fixed real-2025 tables; only draft order (bot ADP jitter) and the matchup schedule vary per seed.
+**Architecture:** New sub-package `src/projections/draft/backtest/` with one module per responsibility (data pull → draft basis → lineup → schedule → league → harness). Reuses the existing `DraftStrategy` strategies, constrained ADP-bot draft loop, `roster_eligibility`, the scoring layer, `store`, and `generate_vorp_table` (with the QB-replacement fix). All player projections/actuals are fixed real-2025 tables; only draft order (bot ADP jitter) and the matchup schedule vary per seed.
 
 **Tech Stack:** Python 3.11, pandas + pyarrow, pandera (boundary validation), pydantic (`StatLine`/`LeagueConfig`), numpy (RNG/MC), pytest. `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` on every test/run command (a known scipy segfault on this box).
 
@@ -18,19 +18,19 @@
 
 | File | Responsibility |
 |---|---|
-| `src/projections/backtest/__init__.py` | package marker |
+| `src/projections/draft/backtest/__init__.py` | package marker |
 | `src/projections/schemas.py` (modify) | add `WeeklyProjectionSchema`, `WeeklyActualSchema` |
-| `src/projections/backtest/weekly_actuals.py` | score `weekly_stats` → per-(gsis_id, week) half-PPR actual points |
-| `src/projections/backtest/espn_weekly.py` | pull + parse ESPN weekly projected stat lines → half-PPR weekly projection table |
-| `src/projections/backtest/draft_basis.py` | build the 2025 Sleeper-ADP half-PPR fixed-VORP draft table |
-| `src/projections/backtest/lineup.py` | `weekly_lineup_points` — fill lineup by projection, score by actual |
-| `src/projections/backtest/schedule.py` | regular-season schedule (circle method) + single-elim playoff bracket |
-| `src/projections/backtest/draft_field.py` | constrained ADP-bot draft loop (promoted from scratch) + mixed-field seat layout |
-| `src/projections/backtest/league.py` | `simulate_league` — draft → weekly points → standings → playoffs → `LeagueResult` |
-| `src/projections/backtest/harness.py` | `run_backtest` — mirrored seeds, per-strategy aggregation + bootstrap CIs |
-| `src/projections/backtest/cli.py` | CLI core (`_parse_args`, `format_result`, `run`) — mirrors `tournament_cli.py` |
+| `src/projections/draft/backtest/weekly_actuals.py` | score `weekly_stats` → per-(gsis_id, week) half-PPR actual points |
+| `src/projections/draft/backtest/espn_weekly.py` | pull + parse ESPN weekly projected stat lines → half-PPR weekly projection table |
+| `src/projections/draft/backtest/draft_basis.py` | build the 2025 Sleeper-ADP half-PPR fixed-VORP draft table |
+| `src/projections/draft/backtest/lineup.py` | `weekly_lineup_points` — fill lineup by projection, score by actual |
+| `src/projections/draft/backtest/schedule.py` | regular-season schedule (circle method) + single-elim playoff bracket |
+| `src/projections/draft/backtest/draft_field.py` | constrained ADP-bot draft loop (promoted from scratch) + mixed-field seat layout |
+| `src/projections/draft/backtest/league.py` | `simulate_league` — draft → weekly points → standings → playoffs → `LeagueResult` |
+| `src/projections/draft/backtest/harness.py` | `run_backtest` — mirrored seeds, per-strategy aggregation + bootstrap CIs |
+| `src/projections/draft/backtest/cli.py` | CLI core (`_parse_args`, `format_result`, `run`) — mirrors `tournament_cli.py` |
 | `scripts/h2h_backtest.py` | 3-line wrapper calling `cli.run` |
-| `tests/test_backtest/test_*.py` | one test module per source module |
+| `tests/test_draft/test_backtest/test_*.py` | one test module per source module |
 
 **Reuse (do not re-implement):** `projections.scoring.score` (integer `StatLine`) for actuals; `projections.scoring.expected_points` (fractional) for projections; `projections.draft.assistant.roster_score.optimal_lineup_points` as the structural template for `weekly_lineup_points`; `projections.draft.roster_eligibility` (`POSITION_SLOTS`, `FLEX_ELIGIBLE`, `SUPER_FLEX_ELIGIBLE`); `projections.draft.assistant.strategy` (`NowOrNeverStrategy`/`SeasonValueStrategy`/`RawVorpStrategy`); `projections.draft.assistant.opponent.bot_pick`; `projections.draft.assistant.tournament._bootstrap_mean` + `Interval`; `projections.draft.vorp.generate_vorp_table`; `projections.store` partition I/O; `id_map` for espn_id→gsis_id.
 
@@ -41,15 +41,15 @@
 ### Task 1: Backtest package + weekly schemas
 
 **Files:**
-- Create: `src/projections/backtest/__init__.py` (empty)
-- Create: `tests/test_backtest/__init__.py` (empty)
+- Create: `src/projections/draft/backtest/__init__.py` (empty)
+- Create: `tests/test_draft/test_backtest/__init__.py` (empty)
 - Modify: `src/projections/schemas.py` (append two schemas near the other projection schemas)
-- Test: `tests/test_backtest/test_schemas.py`
+- Test: `tests/test_draft/test_backtest/test_schemas.py`
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_backtest/test_schemas.py
+# tests/test_draft/test_backtest/test_schemas.py
 import pandas as pd
 import pytest
 from projections.schemas import WeeklyProjectionSchema, WeeklyActualSchema, _PYARROW_STR
@@ -95,7 +95,7 @@ def test_weekly_actual_schema_accepts_valid_frame():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_schemas.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_schemas.py -q`
 Expected: FAIL — `ImportError: cannot import name 'WeeklyProjectionSchema'`.
 
 - [ ] **Step 3: Add the schemas**
@@ -138,13 +138,13 @@ Note: confirm the `gsis_id`/`position` string-dtype declaration matches the conv
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_schemas.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_schemas.py -q`
 Expected: PASS (4 passed).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/projections/schemas.py src/projections/backtest/__init__.py tests/test_backtest/
+git add src/projections/schemas.py src/projections/draft/backtest/__init__.py tests/test_draft/test_backtest/
 git commit -m "feat(backtest): WeeklyProjection/WeeklyActual schemas + package scaffold"
 ```
 
@@ -155,18 +155,18 @@ git commit -m "feat(backtest): WeeklyProjection/WeeklyActual schemas + package s
 ### Task 2: `weekly_actuals.py` — score weekly_stats per week
 
 **Files:**
-- Create: `src/projections/backtest/weekly_actuals.py`
-- Test: `tests/test_backtest/test_weekly_actuals.py`
+- Create: `src/projections/draft/backtest/weekly_actuals.py`
+- Test: `tests/test_draft/test_backtest/test_weekly_actuals.py`
 
 Reuse: the `StatLine`→`score` row pattern from `src/projections/scoring/actuals.py:30-43` (the canonical scorer; do not re-implement scoring). Difference: keep **per-(gsis_id, week)** rows instead of season totals, and filter to weeks 1–17.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_backtest/test_weekly_actuals.py
+# tests/test_draft/test_backtest/test_weekly_actuals.py
 import pandas as pd
 from projections.schemas import Ruleset, WeeklyActualSchema
-from projections.backtest.weekly_actuals import build_weekly_actuals
+from projections.draft.backtest.weekly_actuals import build_weekly_actuals
 
 
 def _ws_row(gsis, week, receptions=0, rec_yds=0.0, rush_yds=0.0, rush_td=0):
@@ -201,13 +201,13 @@ def test_one_row_per_player_week():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_weekly_actuals.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_weekly_actuals.py -q`
 Expected: FAIL — module `weekly_actuals` not found.
 
 - [ ] **Step 3: Implement**
 
 ```python
-# src/projections/backtest/weekly_actuals.py
+# src/projections/draft/backtest/weekly_actuals.py
 """Score a weekly_stats frame to per-(gsis_id, week) half-PPR actual points (weeks 1-17)."""
 from __future__ import annotations
 
@@ -246,13 +246,13 @@ def build_weekly_actuals(weekly_stats: pd.DataFrame, *, ruleset: Ruleset) -> pd.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_weekly_actuals.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_weekly_actuals.py -q`
 Expected: PASS (3 passed).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/projections/backtest/weekly_actuals.py tests/test_backtest/test_weekly_actuals.py
+git add src/projections/draft/backtest/weekly_actuals.py tests/test_draft/test_backtest/test_weekly_actuals.py
 git commit -m "feat(backtest): weekly_actuals — half-PPR points per player-week"
 ```
 
@@ -261,9 +261,9 @@ git commit -m "feat(backtest): weekly_actuals — half-PPR points per player-wee
 ### Task 3: `espn_weekly.py` — parse a captured weekly payload (no network)
 
 **Files:**
-- Create: `src/projections/backtest/espn_weekly.py`
-- Create: `tests/test_backtest/fixtures/espn_weekly_wk5_sample.json` (captured below)
-- Test: `tests/test_backtest/test_espn_weekly.py`
+- Create: `src/projections/draft/backtest/espn_weekly.py`
+- Create: `tests/test_draft/test_backtest/fixtures/espn_weekly_wk5_sample.json` (captured below)
+- Test: `tests/test_draft/test_backtest/test_espn_weekly.py`
 
 Capture-first TDD: save one real ESPN weekly payload (trimmed to ~3 players) as a fixture so the parser is tested against the true shape, with no network in unit tests. The parse mirrors `scripts/pull_external_projections.py::parse_espn_players` but reads the **weekly** stat entry (`statSourceId==1, statSplitTypeId==1, scoringPeriodId==wk`) and scores via `expected_points` (fractional).
 
@@ -286,8 +286,8 @@ for pl in payload['players'][:3]:
     trimmed['players'].append({'player':{'id':p['id'],'fullName':p.get('fullName'),
         'defaultPositionId':p.get('defaultPositionId'),
         'stats':[s for s in p.get('stats',[]) if s.get('scoringPeriodId')==5]}})
-import os; os.makedirs('tests/test_backtest/fixtures', exist_ok=True)
-json.dump(trimmed, open('tests/test_backtest/fixtures/espn_weekly_wk5_sample.json','w'), indent=2)
+import os; os.makedirs('tests/test_draft/test_backtest/fixtures', exist_ok=True)
+json.dump(trimmed, open('tests/test_draft/test_backtest/fixtures/espn_weekly_wk5_sample.json','w'), indent=2)
 print('saved', len(trimmed['players']), 'players')
 PY
 ```
@@ -297,12 +297,12 @@ Inspect the saved file; confirm each player has a `stats` entry with `statSource
 - [ ] **Step 2: Write the failing test**
 
 ```python
-# tests/test_backtest/test_espn_weekly.py
+# tests/test_draft/test_backtest/test_espn_weekly.py
 import json
 from pathlib import Path
 import pandas as pd
 from projections.schemas import Ruleset, WeeklyProjectionSchema
-from projections.backtest.espn_weekly import parse_espn_weekly
+from projections.draft.backtest.espn_weekly import parse_espn_weekly
 
 _FIX = Path(__file__).parent / "fixtures" / "espn_weekly_wk5_sample.json"
 
@@ -325,13 +325,13 @@ def test_projected_points_are_half_ppr_nonnegative():
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_espn_weekly.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_espn_weekly.py -q`
 Expected: FAIL — `parse_espn_weekly` undefined.
 
 - [ ] **Step 4: Implement the parser**
 
 ```python
-# src/projections/backtest/espn_weekly.py
+# src/projections/draft/backtest/espn_weekly.py
 """Pull + parse ESPN weekly projected stat lines (weeks 1-17) -> half-PPR weekly projection table.
 
 Mirrors scripts/pull_external_projections.py's ESPN parse but reads the single-week
@@ -392,13 +392,13 @@ Note: `ESPN_STAT_IDS` / `ESPN_POSITIONS` are imported from the ingest module (co
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_espn_weekly.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_espn_weekly.py -q`
 Expected: PASS (2 passed).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/projections/backtest/espn_weekly.py tests/test_backtest/test_espn_weekly.py tests/test_backtest/fixtures/
+git add src/projections/draft/backtest/espn_weekly.py tests/test_draft/test_backtest/test_espn_weekly.py tests/test_draft/test_backtest/fixtures/
 git commit -m "feat(backtest): parse ESPN weekly projections -> half-PPR (fixture-tested)"
 ```
 
@@ -407,8 +407,8 @@ git commit -m "feat(backtest): parse ESPN weekly projections -> half-PPR (fixtur
 ### Task 4: `espn_weekly.py` — refresh orchestrator + crosswalk + store + network smoke
 
 **Files:**
-- Modify: `src/projections/backtest/espn_weekly.py` (add `refresh_espn_weekly_projections`)
-- Modify: `tests/test_backtest/test_espn_weekly.py` (add crosswalk test + opt-in network smoke)
+- Modify: `src/projections/draft/backtest/espn_weekly.py` (add `refresh_espn_weekly_projections`)
+- Modify: `tests/test_draft/test_backtest/test_espn_weekly.py` (add crosswalk test + opt-in network smoke)
 
 `refresh_espn_weekly_projections(season, *, weeks, ruleset, id_map, data_root)`: for each week, fetch (reuse the season-pull `fetch_espn` URL + `&scoringPeriodId`), `parse_espn_weekly`, crosswalk `espn_id`→`gsis_id` via `id_map`, drop unmatched, validate `WeeklyProjectionSchema`, concat all weeks, `store.write_partition`.
 
@@ -418,7 +418,7 @@ git commit -m "feat(backtest): parse ESPN weekly projections -> half-PPR (fixtur
 def test_crosswalk_espn_to_gsis(monkeypatch):
     import json
     from pathlib import Path
-    from projections.backtest import espn_weekly as ew
+    from projections.draft.backtest import espn_weekly as ew
     payload = json.loads((Path(__file__).parent / "fixtures" / "espn_weekly_wk5_sample.json").read_text())
     # stub the network fetch to return the fixture for any week
     monkeypatch.setattr(ew, "_fetch_espn_week", lambda season, week, limit=800: payload)
@@ -438,13 +438,13 @@ def test_crosswalk_espn_to_gsis(monkeypatch):
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_espn_weekly.py::test_crosswalk_espn_to_gsis -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_espn_weekly.py::test_crosswalk_espn_to_gsis -q`
 Expected: FAIL — `weekly_projections_for_weeks` / `_fetch_espn_week` undefined.
 
 - [ ] **Step 3: Implement**
 
 ```python
-# add to src/projections/backtest/espn_weekly.py
+# add to src/projections/draft/backtest/espn_weekly.py
 import json
 import urllib.request
 from collections.abc import Iterable
@@ -488,7 +488,7 @@ Note: confirm `write_partition`'s exact signature against `src/projections/store
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_espn_weekly.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_espn_weekly.py -q`
 Expected: PASS.
 
 - [ ] **Step 5: Add an opt-in network smoke (guards ESPN payload drift)**
@@ -499,7 +499,7 @@ import pytest
 @pytest.mark.skipif("not config.getoption('--run-network', default=False)",
                     reason="hits ESPN; opt in with --run-network")
 def test_espn_weekly_live_shape():
-    from projections.backtest.espn_weekly import _fetch_espn_week, parse_espn_weekly
+    from projections.draft.backtest.espn_weekly import _fetch_espn_week, parse_espn_weekly
     payload = _fetch_espn_week(2025, 5)
     df = parse_espn_weekly(payload, season=2025, week=5, ruleset=Ruleset.espn_half())
     assert df["projected_points"].notna().sum() > 100  # wk5 had 621 projected players
@@ -510,7 +510,7 @@ def test_espn_weekly_live_shape():
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/projections/backtest/espn_weekly.py tests/test_backtest/test_espn_weekly.py
+git add src/projections/draft/backtest/espn_weekly.py tests/test_draft/test_backtest/test_espn_weekly.py
 git commit -m "feat(backtest): refresh ESPN weekly projections (crosswalk + store + network smoke)"
 ```
 
@@ -521,8 +521,8 @@ git commit -m "feat(backtest): refresh ESPN weekly projections (crosswalk + stor
 ### Task 5: `draft_basis.py` — 2025 Sleeper-ADP half-PPR fixed-VORP table
 
 **Files:**
-- Create: `src/projections/backtest/draft_basis.py`
-- Test: `tests/test_backtest/test_draft_basis.py`
+- Create: `src/projections/draft/backtest/draft_basis.py`
+- Test: `tests/test_draft/test_backtest/test_draft_basis.py`
 
 The live consensus blend averages ESPN+Sleeper ADP; ESPN ADP is dead for 2025 (sentinel 170). This builds a **backtest-specific** season-projection frame (ESPN half-PPR projected season points) with **Sleeper ADP only** as `consensus_adp`, then `generate_vorp_table` (carrying the QB-replacement fix). Input is the already-ingested 2025 external snapshot (`ExternalProjectionSchema`) — read its columns first and adapt the field names below to match.
 
@@ -534,11 +534,11 @@ Run: `OMP_NUM_THREADS=1 python -c "from projections.store import read_latest_par
 - [ ] **Step 2: Write the failing test** (pure builder over a synthetic external frame)
 
 ```python
-# tests/test_backtest/test_draft_basis.py
+# tests/test_draft/test_backtest/test_draft_basis.py
 import pandas as pd
 from projections.schemas import Ruleset, VorpTableSchema, _PYARROW_STR
 from projections.draft.league_config import LeagueConfig
-from projections.backtest.draft_basis import season_projection_from_external
+from projections.draft.backtest.draft_basis import season_projection_from_external
 
 
 def _ext():
@@ -566,13 +566,13 @@ def test_season_projection_is_half_ppr_with_sleeper_adp():
 
 - [ ] **Step 3: Run to verify it fails**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_draft_basis.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_draft_basis.py -q`
 Expected: FAIL — function undefined.
 
 - [ ] **Step 4: Implement**
 
 ```python
-# src/projections/backtest/draft_basis.py
+# src/projections/draft/backtest/draft_basis.py
 """Build the 2025 backtest draft basis: ESPN half-PPR season projection + Sleeper-only ADP
 -> fixed-VORP table. ESPN ADP is unusable for past seasons (sentinel 170), so consensus_adp
 comes from Sleeper alone."""
@@ -640,13 +640,13 @@ Note: `generate_vorp_table` validates `ProjectionSeasonSchema` (which has no `co
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_draft_basis.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_draft_basis.py -q`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/projections/backtest/draft_basis.py tests/test_backtest/test_draft_basis.py
+git add src/projections/draft/backtest/draft_basis.py tests/test_draft/test_backtest/test_draft_basis.py
 git commit -m "feat(backtest): 2025 Sleeper-ADP half-PPR fixed-VORP draft basis"
 ```
 
@@ -657,17 +657,17 @@ git commit -m "feat(backtest): 2025 Sleeper-ADP half-PPR fixed-VORP draft basis"
 ### Task 6: `lineup.py` — fill by projection, score by actual
 
 **Files:**
-- Create: `src/projections/backtest/lineup.py`
-- Test: `tests/test_backtest/test_lineup.py`
+- Create: `src/projections/draft/backtest/lineup.py`
+- Test: `tests/test_draft/test_backtest/test_lineup.py`
 
 Structural template: `roster_score.optimal_lineup_points` (restrictive-slot-first greedy over laminar eligibility). Difference: rank/assign by a **projection** value, then sum the assigned players' **actual** value. Edge cases (spec §5.4): no projection ⇒ unstartable; projected-but-no-actual ⇒ contributes 0; unfilled slot ⇒ 0.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_backtest/test_lineup.py
+# tests/test_draft/test_backtest/test_lineup.py
 from projections.schemas import Position, RosterSlot
-from projections.backtest.lineup import weekly_lineup_points
+from projections.draft.backtest.lineup import weekly_lineup_points
 
 SLOTS = {RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.FLEX: 1, RosterSlot.BENCH: 2}
 
@@ -705,13 +705,13 @@ def test_unfilled_slot_scores_zero():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_lineup.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_lineup.py -q`
 Expected: FAIL — module undefined.
 
 - [ ] **Step 3: Implement**
 
 ```python
-# src/projections/backtest/lineup.py
+# src/projections/draft/backtest/lineup.py
 """Set a weekly lineup by PROJECTION (the manager's decision), score it by ACTUAL points.
 
 Mirrors roster_score.optimal_lineup_points' restrictive-slot-first greedy, but assigns by
@@ -764,13 +764,13 @@ def weekly_lineup_points(roster: Sequence[Mapping[str, Any]], roster_slots: Mapp
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_lineup.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_lineup.py -q`
 Expected: PASS (4 passed).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/projections/backtest/lineup.py tests/test_backtest/test_lineup.py
+git add src/projections/draft/backtest/lineup.py tests/test_draft/test_backtest/test_lineup.py
 git commit -m "feat(backtest): weekly_lineup_points — fill by projection, score by actual"
 ```
 
@@ -779,15 +779,15 @@ git commit -m "feat(backtest): weekly_lineup_points — fill by projection, scor
 ### Task 7: `schedule.py` — regular-season schedule (circle method)
 
 **Files:**
-- Create: `src/projections/backtest/schedule.py`
-- Test: `tests/test_backtest/test_schedule.py`
+- Create: `src/projections/draft/backtest/schedule.py`
+- Test: `tests/test_draft/test_backtest/test_schedule.py`
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_backtest/test_schedule.py
+# tests/test_draft/test_backtest/test_schedule.py
 import numpy as np
-from projections.backtest.schedule import regular_season_schedule
+from projections.draft.backtest.schedule import regular_season_schedule
 
 
 def test_every_team_plays_once_per_week_no_self_match():
@@ -809,13 +809,13 @@ def test_deterministic_given_rng():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_schedule.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_schedule.py -q`
 Expected: FAIL — module undefined.
 
 - [ ] **Step 3: Implement (circle method)**
 
 ```python
-# src/projections/backtest/schedule.py
+# src/projections/draft/backtest/schedule.py
 """Round-robin regular-season schedule (circle method) + single-elimination playoff bracket."""
 from __future__ import annotations
 
@@ -843,13 +843,13 @@ def regular_season_schedule(*, n_teams: int, n_weeks: int, rng: np.random.Genera
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_schedule.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_schedule.py -q`
 Expected: PASS (2 passed).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/projections/backtest/schedule.py tests/test_backtest/test_schedule.py
+git add src/projections/draft/backtest/schedule.py tests/test_draft/test_backtest/test_schedule.py
 git commit -m "feat(backtest): round-robin regular-season schedule (circle method)"
 ```
 
@@ -858,8 +858,8 @@ git commit -m "feat(backtest): round-robin regular-season schedule (circle metho
 ### Task 8: `schedule.py` — playoff bracket
 
 **Files:**
-- Modify: `src/projections/backtest/schedule.py` (add `playoff_champion`)
-- Modify: `tests/test_backtest/test_schedule.py`
+- Modify: `src/projections/draft/backtest/schedule.py` (add `playoff_champion`)
+- Modify: `tests/test_draft/test_backtest/test_schedule.py`
 
 Single-elimination over the top-6 seeds, top-2 byes: week 15 = (seed3 v seed6, seed4 v seed5); week 16 = (seed1 v lowest-remaining, seed2 v other); week 17 = final. Each matchup decided by that week's lineup points (passed in as a `week -> {seat: points}` callable/table).
 
@@ -867,7 +867,7 @@ Single-elimination over the top-6 seeds, top-2 byes: week 15 = (seed3 v seed6, s
 
 ```python
 def test_top_seed_wins_when_always_highest():
-    from projections.backtest.schedule import playoff_champion
+    from projections.draft.backtest.schedule import playoff_champion
     seeds = [3, 1, 4, 5, 9, 2]  # arbitrary seat ids in seed order 1..6
     # seat 1 is seed #2 here; make seat 3 (seed #1) always score most
     points = {15: {s: 10.0 for s in seeds}, 16: {s: 10.0 for s in seeds}, 17: {s: 10.0 for s in seeds}}
@@ -879,13 +879,13 @@ def test_top_seed_wins_when_always_highest():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_schedule.py::test_top_seed_wins_when_always_highest -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_schedule.py::test_top_seed_wins_when_always_highest -q`
 Expected: FAIL — `playoff_champion` undefined.
 
 - [ ] **Step 3: Implement**
 
 ```python
-# add to src/projections/backtest/schedule.py
+# add to src/projections/draft/backtest/schedule.py
 from collections.abc import Mapping, Sequence
 
 
@@ -912,13 +912,13 @@ def playoff_champion(seeds: Sequence[int], points: Mapping[int, Mapping[int, flo
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_schedule.py -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_schedule.py -q`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/projections/backtest/schedule.py tests/test_backtest/test_schedule.py
+git add src/projections/draft/backtest/schedule.py tests/test_draft/test_backtest/test_schedule.py
 git commit -m "feat(backtest): 6-team single-elim playoff bracket"
 ```
 
@@ -929,20 +929,20 @@ git commit -m "feat(backtest): 6-team single-elim playoff bracket"
 ### Task 9: `draft_field.py` — constrained-bot mixed-field draft
 
 **Files:**
-- Create: `src/projections/backtest/draft_field.py`
-- Test: `tests/test_backtest/test_draft_field.py`
+- Create: `src/projections/draft/backtest/draft_field.py`
+- Test: `tests/test_draft/test_backtest/test_draft_field.py`
 
 Promote the validated scratch constrained-draft loop (`_seatsweep.py`/`_mixed_sim.py`) into a reusable function. `draft_mixed_field(seat_controllers, pool, config, *, rng, jitter)` → `{seat: [gsis_id,...]}`. Strategy seats call `strategy.recommend(DraftState, pool, config)`; bot seats use `bot_pick` over a position-min/max-eligible subset. Also a pure `seat_layout(seed)` helper for the §3 mirrored assignment.
 
 - [ ] **Step 1: Write the failing test (seat layout + small draft)**
 
 ```python
-# tests/test_backtest/test_draft_field.py
+# tests/test_draft/test_backtest/test_draft_field.py
 import numpy as np
 import pandas as pd
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 from projections.draft.league_config import LeagueConfig
-from projections.backtest.draft_field import seat_layout, draft_mixed_field
+from projections.draft.backtest.draft_field import seat_layout, draft_mixed_field
 
 
 def test_seat_layout_mirrors_on_paired_seeds():
@@ -958,13 +958,13 @@ def test_seat_layout_mirrors_on_paired_seeds():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_backtest/test_draft_field.py::test_seat_layout_mirrors_on_paired_seeds -q`
+Run: `OMP_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_draft_field.py::test_seat_layout_mirrors_on_paired_seeds -q`
 Expected: FAIL — undefined.
 
 - [ ] **Step 3: Implement `seat_layout`** (and stub `draft_mixed_field` signature)
 
 ```python
-# src/projections/backtest/draft_field.py
+# src/projections/draft/backtest/draft_field.py
 """Mixed-field constrained-bot draft for the H2H backtest (promoted from the validated
 scratch sims). Seat layout per spec §3: nn {2,6,10,14}, sv {4,8,12,16}, bots elsewhere;
 paired even seeds mirror (swap nn<->sv) so seat exposure cancels."""
@@ -1070,13 +1070,13 @@ def test_draft_fills_every_roster_without_dupes():
 
 - [ ] **Step 5: Run to verify both pass**
 
-Run: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest tests/test_backtest/test_draft_field.py -q`
+Run: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_draft_field.py -q`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/projections/backtest/draft_field.py tests/test_backtest/test_draft_field.py
+git add src/projections/draft/backtest/draft_field.py tests/test_draft/test_backtest/test_draft_field.py
 git commit -m "feat(backtest): mixed-field constrained-bot draft + mirrored seat layout"
 ```
 
@@ -1085,8 +1085,8 @@ git commit -m "feat(backtest): mixed-field constrained-bot draft + mirrored seat
 ### Task 10: `league.py` — simulate one full league season
 
 **Files:**
-- Create: `src/projections/backtest/league.py`
-- Test: `tests/test_backtest/test_league.py`
+- Create: `src/projections/draft/backtest/league.py`
+- Test: `tests/test_draft/test_backtest/test_league.py`
 
 `simulate_league(...)` ties it together: draft → per-week lineup points (weeks 1–17) → regular-season standings (weeks 1–14, W/L, tiebreak points-for) → seed top-6 → `playoff_champion` → `LeagueResult` list (one per seat: strategy, wins, losses, points_for, made_playoffs, is_champion). Weekly points use `weekly_lineup_points` with each rostered player's `{projected, actual}` for that week (projections/actuals frames pivoted to `(gsis_id, week) -> value`).
 
@@ -1095,13 +1095,13 @@ git commit -m "feat(backtest): mixed-field constrained-bot draft + mirrored seat
 The playoff bracket (Task 8) requires exactly 6 seeds, so use a 6-team league (1 strategy seat + 5 bots) over 5 regular weeks; the playoff is the whole field. Make one seat's players always project highest and score most so it is the deterministic champion.
 
 ```python
-# tests/test_backtest/test_league.py
+# tests/test_draft/test_backtest/test_league.py
 import numpy as np
 import pandas as pd
 from projections.schemas import RosterSlot, _PYARROW_STR, VorpTableSchema
 from projections.draft.league_config import LeagueConfig
 from projections.draft.assistant.strategy import RawVorpStrategy
-from projections.backtest.league import Calendar, simulate_league
+from projections.draft.backtest.league import Calendar, simulate_league
 
 
 def _cfg6():
@@ -1146,15 +1146,15 @@ def test_dominant_seat_is_champion_and_top_record():
 - [ ] **Step 3: Implement `simulate_league` + `LeagueResult` + `Calendar`.**
 
 ```python
-# src/projections/backtest/league.py — sketch (fill in to satisfy the Step-1 test)
+# src/projections/draft/backtest/league.py — sketch (fill in to satisfy the Step-1 test)
 from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import numpy as np
 import pandas as pd
-from projections.backtest.draft_field import draft_mixed_field, seat_layout
-from projections.backtest.lineup import weekly_lineup_points
-from projections.backtest.schedule import playoff_champion, regular_season_schedule
+from projections.draft.backtest.draft_field import draft_mixed_field, seat_layout
+from projections.draft.backtest.lineup import weekly_lineup_points
+from projections.draft.backtest.schedule import playoff_champion, regular_season_schedule
 from projections.draft.league_config import LeagueConfig
 from projections.draft.assistant.strategy import DraftStrategy
 
@@ -1216,7 +1216,7 @@ def simulate_league(seed: int, *, seat_strategies: Mapping[int, DraftStrategy | 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add src/projections/backtest/league.py tests/test_backtest/test_league.py
+git add src/projections/draft/backtest/league.py tests/test_draft/test_backtest/test_league.py
 git commit -m "feat(backtest): simulate_league — draft -> weekly -> standings -> playoffs"
 ```
 
@@ -1225,24 +1225,24 @@ git commit -m "feat(backtest): simulate_league — draft -> weekly -> standings 
 ### Task 11: `harness.py` — run many seeds + aggregate per strategy
 
 **Files:**
-- Create: `src/projections/backtest/harness.py`
-- Test: `tests/test_backtest/test_harness.py`
+- Create: `src/projections/draft/backtest/harness.py`
+- Test: `tests/test_draft/test_backtest/test_harness.py`
 
 `run_backtest(...)`: for `seed in range(n_seeds)`, build `seat_strategies` from `seat_layout(seed)` (nn → `NowOrNeverStrategy`, sv → `SeasonValueStrategy(..., n_sims=strategy_n_sims)`, bot → None), call `simulate_league`, collect `LeagueResult`s. Aggregate per strategy label across all seats×seeds: championship rate (mean `is_champion`), playoff rate, regular-season win% (`wins/(wins+losses)`), mean points-for — each with `_bootstrap_mean` CI. Reuse `tournament.Interval`/`_bootstrap_mean`.
 
 - [ ] **Step 1: Write the failing test** (small `n_seeds`, assert structure + the correct seat-weighted identity)
 
 ```python
-# tests/test_backtest/test_harness.py
+# tests/test_draft/test_backtest/test_harness.py
 import numpy as np
 import pandas as pd
 from projections.schemas import RosterSlot, _PYARROW_STR, VorpTableSchema
 from projections.draft.league_config import LeagueConfig
-from projections.backtest.league import Calendar
-from projections.backtest.harness import run_backtest
+from projections.draft.backtest.league import Calendar
+from projections.draft.backtest.harness import run_backtest
 # reuse the 6-team helpers' shape but at 16 teams to exercise the real seat layout
-from tests.test_backtest.test_draft_field import _synthetic_pool
-from tests.test_backtest.test_availability_stub import stub_availability  # see note
+from tests.test_draft.test_backtest.test_draft_field import _synthetic_pool
+from tests.test_draft.test_backtest.test_availability_stub import stub_availability  # see note
 
 
 def _cfg16():
@@ -1271,21 +1271,21 @@ def test_rates_bounded_and_seat_weighted_champions_sum_to_one():
     assert abs(weighted - 1.0) < 1e-9
 ```
 
-Note: `stub_availability(pool)` returns a minimal `PlayerAvailability` (every player `p≈0.95`, no byes) so `SeasonValueStrategy` runs without store I/O; define it once in `tests/test_backtest/test_availability_stub.py` by constructing `PlayerAvailability` per its real constructor (read `availability.py` for the exact fields). The win_pct CI upper bound may equal 1.0 only if a strategy wins every game in every sampled bootstrap — keep `<= 1.0`.
+Note: `stub_availability(pool)` returns a minimal `PlayerAvailability` (every player `p≈0.95`, no byes) so `SeasonValueStrategy` runs without store I/O; define it once in `tests/test_draft/test_backtest/test_availability_stub.py` by constructing `PlayerAvailability` per its real constructor (read `availability.py` for the exact fields). The win_pct CI upper bound may equal 1.0 only if a strategy wins every game in every sampled bootstrap — keep `<= 1.0`.
 
 - [ ] **Step 2: Run to verify it fails.** Expected: FAIL (module undefined).
 
 - [ ] **Step 3: Implement**
 
 ```python
-# src/projections/backtest/harness.py — sketch
+# src/projections/draft/backtest/harness.py — sketch
 from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import numpy as np
 import pandas as pd
-from projections.backtest.draft_field import seat_layout
-from projections.backtest.league import Calendar, LeagueResult, simulate_league
+from projections.draft.backtest.draft_field import seat_layout
+from projections.draft.backtest.league import Calendar, LeagueResult, simulate_league
 from projections.draft.assistant.strategy import NowOrNeverStrategy, SeasonValueStrategy
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.assistant.availability import PlayerAvailability
@@ -1342,7 +1342,7 @@ def run_backtest(*, n_seeds: int, pool: pd.DataFrame, config: LeagueConfig,
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add src/projections/backtest/harness.py tests/test_backtest/test_harness.py
+git add src/projections/draft/backtest/harness.py tests/test_draft/test_backtest/test_harness.py
 git commit -m "feat(backtest): run_backtest — mirrored seeds, per-strategy rates + CIs"
 ```
 
@@ -1352,16 +1352,16 @@ git commit -m "feat(backtest): run_backtest — mirrored seeds, per-strategy rat
 
 **Files:**
 - Create: `scripts/h2h_backtest.py`
-- Test: `tests/test_backtest/test_cli.py` (argument parsing + a tiny end-to-end smoke on synthetic tables)
+- Test: `tests/test_draft/test_backtest/test_cli.py` (argument parsing + a tiny end-to-end smoke on synthetic tables)
 
 CLI wires the real 2025 tables: load the draft basis (`build_draft_basis` over the ingested 2025 external snapshot), `read_partition` the ESPN weekly projections + build weekly actuals from `weekly_stats 2025`, build availability via the existing `load_store_availability`, pivot projections/actuals to `(gsis_id, week)->float` lookups, then `run_backtest`. Flags: `--n-seeds` (default 200), `--strategy-n-sims` (default 200), `--jitter` (default 8.0), `--data-root`, `--season` (default 2025). Print a per-strategy table (championship%, playoff%, win%, PF + CIs).
 
 - [ ] **Step 1: Write the failing test** (arg defaults + the formatter)
 
 ```python
-# tests/test_backtest/test_cli.py
-from projections.backtest.cli import _parse_args, format_result
-from projections.backtest.harness import BacktestResult, StrategyMetrics
+# tests/test_draft/test_backtest/test_cli.py
+from projections.draft.backtest.cli import _parse_args, format_result
+from projections.draft.backtest.harness import BacktestResult, StrategyMetrics
 from projections.draft.assistant.tournament import Interval
 
 
@@ -1378,21 +1378,21 @@ def test_format_lists_every_strategy():
     assert "now_or_never" in text and "season_value" in text and "champ" in text.lower()
 ```
 
-Put the CLI core in `src/projections/backtest/cli.py` (`_parse_args`, `format_result`, `run(argv)`) and make `scripts/h2h_backtest.py` a 3-line wrapper that calls `cli.run` — exactly the `tournament_cli.py` / `scripts/draft_tournament.py` split.
+Put the CLI core in `src/projections/draft/backtest/cli.py` (`_parse_args`, `format_result`, `run(argv)`) and make `scripts/h2h_backtest.py` a 3-line wrapper that calls `cli.run` — exactly the `tournament_cli.py` / `scripts/draft_tournament.py` split.
 
 - [ ] **Step 2: Implement** `cli.py` mirroring `src/projections/draft/assistant/tournament_cli.py` structure: `_parse_args` (flags `--season` default 2025, `--n-seeds` 200, `--strategy-n-sims` 200, `--jitter` 8.0, `--data-root` `data`); `run(argv)` = load draft basis via `build_draft_basis` over the ingested 2025 external snapshot, `read_partition` the espn_weekly projections + `build_weekly_actuals` from `weekly_stats`, pivot both to `{(gsis_id, week): float}` dicts, build availability via `load_store_availability(pool, season, data_root)`, call `run_backtest`, `print(format_result(res))`, return 0. `format_result` renders a per-strategy table (championship%, playoff%, win%, PF with CIs), mirroring `tournament_cli.format_compare`.
 - [ ] **Step 3: Run; verify PASS.**
 
-Run: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest tests/test_backtest/test_cli.py -q`
+Run: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest/test_cli.py -q`
 - [ ] **Step 4: Full-suite gate**
 
-Run: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest tests/test_backtest -q && python -m mypy src/projections/backtest tests/test_backtest && python -m ruff check src/projections/backtest tests/test_backtest scripts/h2h_backtest.py && python -m ruff format --check src/projections/backtest`
+Run: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest tests/test_draft/test_backtest -q && python -m mypy src/projections/draft/backtest tests/test_draft/test_backtest && python -m ruff check src/projections/draft/backtest tests/test_draft/test_backtest scripts/h2h_backtest.py && python -m ruff format --check src/projections/draft/backtest`
 Expected: all green.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add scripts/h2h_backtest.py tests/test_backtest/test_cli.py
+git add scripts/h2h_backtest.py tests/test_draft/test_backtest/test_cli.py
 git commit -m "feat(backtest): h2h_backtest CLI over the harness"
 ```
 
@@ -1414,7 +1414,7 @@ OMP_NUM_THREADS=1 python -m projections.ingest.external_projections --season 202
 OMP_NUM_THREADS=1 python - <<'PY'
 from pathlib import Path
 import pandas as pd
-from projections.backtest.espn_weekly import refresh_espn_weekly_projections
+from projections.draft.backtest.espn_weekly import refresh_espn_weekly_projections
 from projections.schemas import IdMapSchema, Ruleset
 id_map = IdMapSchema.validate(pd.read_parquet("data/id_map.parquet"))  # match the real path confirmed above
 refresh_espn_weekly_projections(season=2025, ruleset=Ruleset.espn_half(), id_map=id_map, data_root=Path("data"))

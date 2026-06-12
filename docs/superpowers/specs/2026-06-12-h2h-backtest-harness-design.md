@@ -48,12 +48,12 @@ Output: per-strategy **championship %**, **regular-season win %**, **playoff-mak
 
 **Fixed-VORP dependency.** The 2025 VORP table is built with the corrected starter-demand replacement (`fix/vorp-replacement-calibration`, commit `462e8c5`); the QB-inflation bug must not be present or the bot field and `raw_vorp` are distorted.
 
-## 5. Architecture — `src/projections/backtest/`
+## 5. Architecture — `src/projections/draft/backtest/`
 
 A new durable sub-package (reusable for future projection/strategy evaluation), each module one clear purpose, communicating through validated frames / small dataclasses.
 
 ```
-backtest/
+draft/backtest/
   espn_weekly.py     pull + store ESPN weekly projected stat lines (wk 1-17) -> half-PPR weekly projection table
   weekly_actuals.py  score weekly_stats 2025 -> half-PPR actual points per (gsis_id, week)
   draft_basis.py     build the 2025 Sleeper-ADP consensus VORP table (fixed VORP, half-PPR)
