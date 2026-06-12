@@ -26,6 +26,50 @@ def _avail(p: dict[str, float], bye: dict[str, int] | None = None) -> PlayerAvai
     return PlayerAvailability(p=p, bye=bye or {})
 
 
+def test_vectorized_lineup_matches_optimal_lineup_points() -> None:
+    # The fast-path is correct iff its per-sim lineup sum equals the canonical
+    # optimal_lineup_points on the same available subset, for every mask. Cover a
+    # multi-position roster with single-slot counts, FLEX, and SUPER_FLEX, over 200
+    # random availability masks (incl. all-out / all-in by chance at the extremes).
+    from projections.draft.assistant.season_value import (
+        _roster_fill_meta,
+        _vectorized_lineup_points,
+    )
+
+    roster = _roster(
+        [
+            ("00-0000001", "QB", 300.0),
+            ("00-0000002", "QB", 250.0),
+            ("00-0000003", "RB", 220.0),
+            ("00-0000004", "RB", 180.0),
+            ("00-0000005", "RB", 140.0),
+            ("00-0000006", "WR", 210.0),
+            ("00-0000007", "WR", 190.0),
+            ("00-0000008", "WR", 150.0),
+            ("00-0000009", "TE", 160.0),
+            ("00-0000010", "TE", 120.0),
+        ]
+    )
+    slots = {
+        RosterSlot.QB: 1,
+        RosterSlot.RB: 2,
+        RosterSlot.WR: 2,
+        RosterSlot.TE: 1,  # exercise the TE single-slot path (one TE left over for flex)
+        RosterSlot.FLEX: 1,
+        RosterSlot.SUPER_FLEX: 1,
+    }
+    meta = _roster_fill_meta(roster, slots)
+    n = len(roster)
+    rng = np.random.default_rng(0)
+    avail = rng.random((200, n)) < 0.6
+    avail[0, :] = False  # force an all-unavailable sim (lineup scores 0)
+    avail[1, :] = True  # force an all-available sim (full optimal lineup)
+    vec = _vectorized_lineup_points(avail, meta)
+    for s in range(avail.shape[0]):
+        sub = roster.iloc[np.flatnonzero(avail[s])]
+        assert abs(vec[s] - optimal_lineup_points(sub, slots)) < 1e-9
+
+
 def test_closed_form_single_slot() -> None:
     # 1 RB, p=0.5, no bye, 2 weeks. per_game = 170/17 = 10. E = 2 * 0.5 * 10 = 10.
     roster = _roster([("00-0000001", "RB", 170.0)])
@@ -132,3 +176,183 @@ def test_bye_costs_points_and_factorization_matches_bruteforce() -> None:
     brute = acc / n_sims
 
     assert abs(fact - brute) / brute < 0.02  # within 2% (MC noise, same expectation)
+
+
+def test_crn_matches_expected_season_points_no_bye_exact() -> None:
+    # With identity column mapping, a no-bye roster, and the same seed, the CRN
+    # kernel is BIT-IDENTICAL to expected_season_points (one rng.random((n_sims,n))
+    # equals n_sims successive rng.random(n) draws). Guards column alignment + that
+    # CRN reuses the same kernel — i.e. changes variance, not the mean.
+    from projections.draft.assistant.season_value import expected_season_points_crn
+
+    roster = _roster(
+        [("00-0000001", "RB", 200.0), ("00-0000002", "WR", 180.0), ("00-0000003", "RB", 120.0)]
+    )
+    slots = {RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.FLEX: 1}
+    avail = _avail({"00-0000001": 0.7, "00-0000002": 0.8, "00-0000003": 0.6})
+    n_sims = 200
+    col_of = {"00-0000001": 0, "00-0000002": 1, "00-0000003": 2}  # roster order
+
+    draws = np.random.default_rng(11).random((n_sims, 3))
+    crn = expected_season_points_crn(
+        roster, slots, avail, draws=draws, col_of=col_of, weeks=range(1, 18)
+    )
+    esp = expected_season_points(
+        roster, slots, avail, n_sims=n_sims, rng=np.random.default_rng(11), weeks=range(1, 18)
+    )
+    assert crn == esp
+
+
+def test_crn_matches_expected_season_points_with_bye_in_expectation() -> None:
+    # With a bye, CRN reuses the shared matrix across weeks while expected_season_points
+    # draws fresh per week, so they are NOT bit-equal — but equal IN EXPECTATION.
+    # Regression guard for the bye handling of the CRN kernel (spec §4, finding #2).
+    from projections.draft.assistant.season_value import expected_season_points_crn
+
+    roster = _roster([("00-0000001", "RB", 200.0), ("00-0000002", "WR", 150.0)])
+    slots = {RosterSlot.RB: 1, RosterSlot.WR: 1}
+    avail = _avail({"00-0000001": 0.85, "00-0000002": 0.85}, bye={"00-0000001": 3})
+    n_sims = 4000
+    col_of = {"00-0000001": 0, "00-0000002": 1}
+
+    draws = np.random.default_rng(3).random((n_sims, 2))
+    crn = expected_season_points_crn(
+        roster, slots, avail, draws=draws, col_of=col_of, weeks=range(1, 6)
+    )
+    esp = expected_season_points(
+        roster, slots, avail, n_sims=n_sims, rng=np.random.default_rng(7), weeks=range(1, 6)
+    )
+    assert abs(crn - esp) / esp < 0.02  # same expectation, independent MC noise
+
+
+def test_crn_column_selection_is_by_gsis_not_position() -> None:
+    # The kernel must pull each player's OWN column by gsis, so the SAME per-player
+    # draws placed at DIFFERENT universe columns give an identical value. We build the
+    # two players' draws once, then scatter them into two differently-ordered wide
+    # universes; an exact match pins by-gsis selection (a by-position bug would diverge).
+    from projections.draft.assistant.season_value import expected_season_points_crn
+
+    roster = _roster([("00-0000002", "RB", 200.0), ("00-0000004", "RB", 120.0)])
+    slots = {RosterSlot.RB: 1, RosterSlot.FLEX: 1}
+    avail = _avail({"00-0000002": 0.7, "00-0000004": 0.6})
+    player_draws = np.random.default_rng(5).random((300, 2))  # cols: [p2, p4]
+
+    # Universe A: [filler, p2, filler, p4]; Universe B reverses the ordering.
+    universe_a = ["00-0000001", "00-0000002", "00-0000003", "00-0000004"]
+    draws_a = np.zeros((300, 4))
+    draws_a[:, 1], draws_a[:, 3] = player_draws[:, 0], player_draws[:, 1]
+    col_a = {g: i for i, g in enumerate(universe_a)}
+
+    universe_b = ["00-0000004", "00-0000003", "00-0000002", "00-0000001"]
+    draws_b = np.zeros((300, 4))
+    draws_b[:, 2], draws_b[:, 0] = player_draws[:, 0], player_draws[:, 1]
+    col_b = {g: i for i, g in enumerate(universe_b)}
+
+    val_a = expected_season_points_crn(roster, slots, avail, draws=draws_a, col_of=col_a)
+    val_b = expected_season_points_crn(roster, slots, avail, draws=draws_b, col_of=col_b)
+    assert val_a == val_b  # same per-player draws → identical value, regardless of column
+    assert val_a > 0.0  # a real roster does not hit the empty short-circuit
+
+
+def test_marginal_matches_closed_form_insurance() -> None:
+    # Base = one risky starter S(p=0.6). Candidate backup B(120, p=0.7), {RB:1}, 1 week.
+    # Marginal = points B adds = the insurance term only: (1-p_s)*p_b*B / 17.
+    from projections.draft.assistant.season_value import marginal_season_values
+
+    base = _roster([("00-0000001", "RB", 200.0)])
+    cands = _roster([("00-0000002", "RB", 120.0)])
+    avail = _avail({"00-0000001": 0.6, "00-0000002": 0.7})
+    expected = 0.4 * 0.7 * 120 / 17  # ≈ 1.976
+    out = marginal_season_values(
+        base,
+        cands,
+        {RosterSlot.RB: 1},
+        avail,
+        n_sims=3000,
+        rng=np.random.default_rng(0),
+        weeks=range(1, 2),
+    )
+    assert abs(out["00-0000002"] - expected) < 0.15  # ~2.5 sigma at n_sims=3000
+
+
+def test_marginal_is_low_variance_under_crn() -> None:
+    # The whole point of CRN: a marginal computed under shared draws is far tighter
+    # across seeds than a naive marginal from independent draws, because the base
+    # roster's (shared) availability variance cancels in V(base+c) - V(base) instead
+    # of being carried twice (spec §3.3, §5.2). With a 3-starter base, that shared
+    # variance dominates, so CRN's spread is several times smaller.
+    from projections.draft.assistant.season_value import marginal_season_values
+
+    base = _roster(
+        [("00-0000001", "RB", 200.0), ("00-0000002", "RB", 180.0), ("00-0000003", "WR", 170.0)]
+    )
+    cands = _roster([("00-0000004", "RB", 150.0)])
+    full = pd.concat([base, cands], ignore_index=True)
+    avail = _avail(
+        {f"00-000000{i}": p for i, p in zip(range(1, 5), (0.6, 0.6, 0.6, 0.7), strict=True)}
+    )
+    slots = {RosterSlot.RB: 2, RosterSlot.WR: 1, RosterSlot.FLEX: 1}
+    week = range(1, 2)
+    n_sims = 100
+    seeds = 14
+
+    crn = [
+        marginal_season_values(
+            base, cands, slots, avail, n_sims=n_sims, rng=np.random.default_rng(s), weeks=week
+        )["00-0000004"]
+        for s in range(seeds)
+    ]
+    # Naive marginal: score base and base+candidate with INDEPENDENT rngs (no CRN).
+    indep = []
+    for s in range(seeds):
+        b = expected_season_points(
+            base, slots, avail, n_sims=n_sims, rng=np.random.default_rng(100 + s), weeks=week
+        )
+        c = expected_season_points(
+            full, slots, avail, n_sims=n_sims, rng=np.random.default_rng(900 + s), weeks=week
+        )
+        indep.append(c - b)
+
+    assert all(v > 0.0 for v in crn)  # adding a useful backup always helps
+    # True std ratio is ~0.3 (CRN cancels the 3 shared starters' variance); 0.75 leaves
+    # ample margin for sampling noise at this seed count while still pinning the benefit.
+    assert float(np.std(crn)) < 0.75 * float(np.std(indep))
+
+
+def test_marginal_empty_base_is_solo_value() -> None:
+    # With an empty base roster (first pick), the marginal is the candidate's own
+    # expected season points (positive).
+    from projections.draft.assistant.season_value import marginal_season_values
+
+    base = _roster([])
+    cands = _roster([("00-0000002", "RB", 180.0)])
+    avail = _avail({"00-0000002": 0.9})
+    out = marginal_season_values(
+        base, cands, {RosterSlot.RB: 1}, avail, n_sims=300, rng=np.random.default_rng(0)
+    )
+    assert out["00-0000002"] > 0.0
+
+
+def test_marginal_weeks_accepts_a_one_shot_generator() -> None:
+    # `weeks` is consumed once per candidate evaluation; a one-shot generator (allowed
+    # by the Iterable[int] annotation) must not be exhausted after the base evaluation,
+    # which would collapse every candidate marginal to -base_val.
+    from projections.draft.assistant.season_value import marginal_season_values
+
+    base = _roster([("00-0000001", "RB", 200.0)])
+    cands = _roster([("00-0000002", "RB", 150.0), ("00-0000003", "RB", 140.0)])
+    avail = _avail({"00-0000001": 0.6, "00-0000002": 0.7, "00-0000003": 0.7})
+    slots = {RosterSlot.RB: 1}
+    via_range = marginal_season_values(
+        base, cands, slots, avail, n_sims=200, rng=np.random.default_rng(0), weeks=range(1, 3)
+    )
+    via_gen = marginal_season_values(
+        base,
+        cands,
+        slots,
+        avail,
+        n_sims=200,
+        rng=np.random.default_rng(0),
+        weeks=(w for w in range(1, 3)),
+    )
+    assert via_gen == via_range  # generator not exhausted → both candidates evaluated

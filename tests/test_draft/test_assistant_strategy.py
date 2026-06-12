@@ -7,11 +7,13 @@ from typing import ClassVar
 import pandas as pd
 import pytest
 
+from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.strategy import (
     DraftStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
+    SeasonValueStrategy,
     _finalize,
 )
 from projections.draft.assistant.survival import LogisticSurvival
@@ -205,6 +207,33 @@ def test_missing_consensus_adp_degrades_gracefully() -> None:
     assert rec["p_available_next"].isna().all()  # no ADP → null display
 
 
+def test_finalize_starting_tier_toggle_changes_order() -> None:
+    # Discriminating fixture: the RB FILLS a starting slot but has the LOWER score;
+    # the WR is a non-filler with the HIGHER score. The two branches must DISAGREE —
+    # tier-on lifts the low-score filler to the top, tier-off ranks purely by score.
+    df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0000050", "00-0000051"], dtype=_PYARROW_STR),
+            "position": pd.array(["RB", "WR"], dtype=_PYARROW_STR),
+            "vorp": [10.0, 20.0],
+            "consensus_adp": pd.array([3.0, 4.0], dtype=pd.Float64Dtype()),
+            "score": [1.0, 9.0],  # RB (the filler) is the LOWER score
+        }
+    )
+    elig = {Position.RB: True, Position.WR: False}  # RB fills a slot, WR does not
+
+    def order(*, tier: bool) -> list[str]:
+        p_na: pd.Series[float] = pd.Series(pd.NA, index=df.index, dtype=pd.Float64Dtype())
+        out = _finalize(df, elig, p_na, starting_need_tier=tier)
+        assert set(out.columns) >= {"fills_starting_slot"}  # emitted regardless of the tier
+        return list(out["gsis_id"])
+
+    # Tier on: the starting-slot filler bubbles up despite its lower score.
+    assert order(tier=True) == ["00-0000050", "00-0000051"]
+    # Tier off: pure score order — the higher-score non-filler wins.
+    assert order(tier=False) == ["00-0000051", "00-0000050"]
+
+
 def test_finalize_fails_loud_on_position_outside_eligibility() -> None:
     # Invariant: _eligible_subset filters to elig's keyset before _finalize, so a
     # position absent from elig must never reach here. If it does, fail loud
@@ -221,3 +250,175 @@ def test_finalize_fails_loud_on_position_outside_eligibility() -> None:
     p_na: pd.Series[float] = pd.Series(pd.NA, index=df.index, dtype=pd.Float64Dtype())
     with pytest.raises(KeyError, match="eligibility keyset"):
         _finalize(df, {Position.RB: True}, p_na)
+
+
+# ---------------------------------------------------------------------------
+# SeasonValueStrategy helpers
+# ---------------------------------------------------------------------------
+
+
+def _depth_pool() -> pd.DataFrame:
+    # My roster will be {WR_a safe, WR_b safe, RB_a RISKY}. Candidates: WR_c (high VORP,
+    # saturated WR room) vs RB_b (insurance for the risky RB). season_value must take
+    # the insurance; now_or_never takes the higher VORP.
+    return pd.DataFrame(
+        {
+            "gsis_id": pd.array(
+                ["00-0000201", "00-0000202", "00-0000301", "00-0000203", "00-0000302"],
+                dtype=_PYARROW_STR,
+            ),
+            "position": pd.array(["WR", "WR", "RB", "WR", "RB"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [200.0, 195.0, 200.0, 190.0, 185.0],
+            "vorp": [60.0, 50.0, 58.0, 55.0, 45.0],
+            "replacement_fpts": [140.0, 140.0, 140.0, 140.0, 140.0],
+            "consensus_adp": pd.array([3.0, 4.0, 5.0, 20.0, 20.0], dtype=pd.Float64Dtype()),
+        }
+    )
+
+
+def _depth_state() -> DraftState:
+    # 4 teams, my_slot=1 → my picks at #1, #8, #9. Place WR_a, WR_b, RB_a there;
+    # fillers (not in pool) elsewhere. current_pick = 10.
+    picks = (
+        GsisId("00-0000201"),  # #1 mine (WR_a)
+        GsisId("00-9000002"),
+        GsisId("00-9000003"),
+        GsisId("00-9000004"),
+        GsisId("00-9000005"),
+        GsisId("00-9000006"),
+        GsisId("00-9000007"),
+        GsisId("00-0000202"),  # #8 mine (WR_b)
+        GsisId("00-0000301"),  # #9 mine (RB_a)
+    )
+    return DraftState(
+        my_slot=1,
+        n_teams=4,
+        rounds=5,  # == roster_size (RB+WR+FLEX+2*BENCH)
+        picks=picks,
+        my_roster=(Position.WR, Position.WR, Position.RB),
+    )
+
+
+def _depth_config() -> LeagueConfig:
+    return LeagueConfig(
+        name="t",
+        n_teams=4,
+        roster_slots={RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.FLEX: 1, RosterSlot.BENCH: 2},
+        ruleset=Ruleset.espn_ppr(),
+    )
+
+
+def _depth_avail() -> PlayerAvailability:
+    return PlayerAvailability(
+        p={
+            "00-0000201": 0.97,  # WR_a (safe)
+            "00-0000202": 0.97,  # WR_b (safe)
+            "00-0000301": 0.40,  # RB_a (risky starter — depth at RB pays off)
+            "00-0000203": 0.97,  # WR_c (candidate, redundant WR)
+            "00-0000302": 0.95,  # RB_b (candidate, RB insurance)
+        },
+        bye={},
+    )
+
+
+def test_season_value_satisfies_protocol() -> None:
+    strat = SeasonValueStrategy(_depth_avail(), n_sims=200, base_seed=0)
+    assert isinstance(strat, DraftStrategy)
+
+
+def test_season_value_rejects_degenerate_config() -> None:
+    # n_sims < 1 → empty MC draw matrix → nan marginals → silent VORP fallback.
+    # top_k < 1 → no candidate ever scored. Both must fail loud at construction.
+    with pytest.raises(ValueError, match="n_sims"):
+        SeasonValueStrategy(_depth_avail(), n_sims=0, base_seed=0)
+    with pytest.raises(ValueError, match="top_k"):
+        SeasonValueStrategy(_depth_avail(), n_sims=10, base_seed=0, top_k=0)
+
+
+def test_season_value_takes_insurance_where_now_or_never_takes_vorp() -> None:
+    state, pool, config = _depth_state(), _depth_pool(), _depth_config()
+    season = SeasonValueStrategy(_depth_avail(), n_sims=4000, base_seed=0).recommend(
+        state, pool, config
+    )
+    RecommendationSchema.validate(season)
+    assert season.iloc[0]["gsis_id"] == "00-0000302"  # RB_b, the RB insurance pick
+
+    non = NowOrNeverStrategy(LogisticSurvival(sigma=8.0)).recommend(state, pool, config)
+    assert non.iloc[0]["gsis_id"] == "00-0000203"  # WR_c, the higher-VORP redundant WR
+
+
+def test_season_value_is_deterministic() -> None:
+    state, pool, config = _depth_state(), _depth_pool(), _depth_config()
+    a = SeasonValueStrategy(_depth_avail(), n_sims=300, base_seed=7).recommend(state, pool, config)
+    b = SeasonValueStrategy(_depth_avail(), n_sims=300, base_seed=7).recommend(state, pool, config)
+    assert list(a["gsis_id"]) == list(b["gsis_id"])
+    assert list(a["score"]) == list(b["score"])
+
+
+def test_season_value_pruning_keeps_argmax_but_prunes_tail() -> None:
+    # Three WR candidates at one position so top_k ACTUALLY prunes. top_k=1 evaluates
+    # only the top-VORP WR (the other two fall to the 0.0 pruned tail); top_k=3 evaluates
+    # all. The #1 pick (argmax) is identical — within a position the best add is the
+    # highest-VORP one (monotonic in points) — while the tail differs, proving pruning
+    # is genuinely active (not a degenerate same==same).
+    ids = ["00-0000401", "00-0000402", "00-0000403"]
+    pool = pd.DataFrame(
+        {
+            "gsis_id": pd.array(ids, dtype=_PYARROW_STR),
+            "position": pd.array(["WR", "WR", "WR"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [210.0, 195.0, 180.0],
+            "vorp": [70.0, 55.0, 40.0],
+            "replacement_fpts": [140.0, 140.0, 140.0],
+            "consensus_adp": pd.array([3.0, 4.0, 5.0], dtype=pd.Float64Dtype()),
+        }
+    )
+    avail = PlayerAvailability(p=dict.fromkeys(ids, 0.95), bye={})
+    config = LeagueConfig(
+        name="t",
+        n_teams=4,
+        roster_slots={RosterSlot.WR: 1, RosterSlot.FLEX: 1, RosterSlot.BENCH: 3},
+        ruleset=Ruleset.espn_ppr(),
+    )
+    state = DraftState(my_slot=1, n_teams=4, rounds=5, picks=(), my_roster=())
+
+    k1 = SeasonValueStrategy(avail, n_sims=300, base_seed=2, top_k=1).recommend(state, pool, config)
+    k3 = SeasonValueStrategy(avail, n_sims=300, base_seed=2, top_k=3).recommend(state, pool, config)
+
+    # Argmax invariant: the highest-VORP WR wins under both top_k.
+    assert k1.iloc[0]["gsis_id"] == k3.iloc[0]["gsis_id"] == "00-0000401"
+    # Pruning is active: the lowest WR is pruned (score 0.0) at top_k=1 but evaluated
+    # to a real positive marginal at top_k=3.
+    k1_score = dict(zip(k1["gsis_id"], k1["score"], strict=True))
+    k3_score = dict(zip(k3["gsis_id"], k3["score"], strict=True))
+    assert k1_score["00-0000403"] == 0.0
+    assert k3_score["00-0000403"] > 0.0
+
+
+def test_season_value_warns_on_roster_player_missing_from_pool() -> None:
+    # A rostered id absent from the pool is dropped from the valued base, with a warning.
+    pool = _depth_pool()
+    pool = pool[pool["gsis_id"] != "00-0000301"].copy()  # drop rostered RB_a from the pool
+    state, config = _depth_state(), _depth_config()
+    with pytest.warns(UserWarning, match="absent from the VORP pool"):
+        rec = SeasonValueStrategy(_depth_avail(), n_sims=200, base_seed=0).recommend(
+            state, pool, config
+        )
+    RecommendationSchema.validate(rec)
+
+
+def test_season_value_empty_eligible_returns_valid_empty_frame() -> None:
+    # Every pool player is already drafted → no eligible candidates. recommend must
+    # return a valid, empty RecommendationSchema frame, not raise (spec §4 edge).
+    pool = _depth_pool()
+    state = DraftState(
+        my_slot=1,
+        n_teams=4,
+        rounds=5,
+        picks=tuple(GsisId(g) for g in pool["gsis_id"].astype(str)),  # all drafted
+        my_roster=(),
+    )
+    rec = SeasonValueStrategy(_depth_avail(), n_sims=50, base_seed=0).recommend(
+        state, pool, _depth_config()
+    )
+    RecommendationSchema.validate(rec)
+    assert len(rec) == 0

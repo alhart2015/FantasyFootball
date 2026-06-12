@@ -1,14 +1,18 @@
-"""Draft strategies: the substitution seam + two concrete implementations.
+"""Draft strategies: the substitution seam + three concrete implementations.
 
 `RawVorpStrategy` is the best-available control. `NowOrNeverStrategy` is the
 analytic opportunity-cost strategy (spec §3.5): rank by value locked in over the
-expected best survivor at the same position by my next pick. Both share
-`_finalize`, which filters to roster-eligible positions, tags the scale-free
-starting-need tier, and applies the deterministic final ordering.
+expected best survivor at the same position by my next pick. `SeasonValueStrategy`
+is the depth-aware strategy (spec §3.2): rank by the marginal expected season points
+a pick adds to the current roster, under common random numbers. All share `_finalize`,
+which filters to roster-eligible positions, tags the starting-need tier, and applies
+the deterministic final ordering (the season-marginal strategy opts out of the tier
+as a sort key — its score already values open slots).
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from itertools import groupby
 from typing import Protocol, runtime_checkable
@@ -16,7 +20,9 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 import pandas as pd
 
+from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.pick_timing import my_next_pick
+from projections.draft.assistant.season_value import marginal_season_values
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.survival import SurvivalModel
 from projections.draft.league_config import LeagueConfig
@@ -51,12 +57,23 @@ def _eligible_subset(
 
 
 def _finalize(
-    df: pd.DataFrame, elig: dict[Position, bool], p_available: pd.Series[float]
+    df: pd.DataFrame,
+    elig: dict[Position, bool],
+    p_available: pd.Series[float],
+    *,
+    starting_need_tier: bool = True,
 ) -> pd.DataFrame:
     """Attach the starting-need tier, order deterministically, validate.
 
     `df` must already carry `score`. `p_available` is index-aligned (Float64,
     null where unknown).
+
+    `starting_need_tier`: when True (default), `fills_starting_slot` is the primary
+    sort key so players filling an unmet starting slot bubble above bench-only adds.
+    Pass False when `score` already encodes roster-construction value (e.g. the
+    season-marginal strategy, whose score is the expected season points a pick adds)
+    and the tier promotion would double-count starting-slot value. `fills_starting_slot`
+    is still computed and emitted either way — only its use as a sort key is gated.
     """
     out = df.copy()
     # `score` is a difference of float sums (vorp - E[best survivor]); strip the
@@ -77,10 +94,11 @@ def _finalize(
     out["consensus_adp"] = out["consensus_adp"].astype(pd.Float64Dtype())
     out["gsis_id"] = out["gsis_id"].astype(_PYARROW_STR)
     out["position"] = out["position"].astype(_PYARROW_STR)
-    out = out.sort_values(
-        ["fills_starting_slot", "score", "vorp", "gsis_id"],
-        ascending=[False, False, False, True],
-    ).reset_index(drop=True)
+    # `fills_starting_slot` is just prepended as the primary key when the tier is on.
+    tier = ["fills_starting_slot"] if starting_need_tier else []
+    sort_cols = [*tier, "score", "vorp", "gsis_id"]
+    ascending = [*([False] * len(tier)), False, False, True]
+    out = out.sort_values(sort_cols, ascending=ascending).reset_index(drop=True)
     out["rank"] = pd.array(range(1, len(out) + 1), dtype=pd.Int64Dtype())
     cols = list(RecommendationSchema.to_schema().columns)
     return RecommendationSchema.validate(out[cols])
@@ -155,3 +173,70 @@ class NowOrNeverStrategy:
         # numpy arrays (a pyarrow-string .map(e_best) here is ~30x slower).
         df["score"] = vorp - np.array([e_best[pos_i] for pos_i in pos], dtype=float)
         return _finalize(df, elig, display_p)
+
+
+@dataclass(frozen=True)
+class SeasonValueStrategy:
+    """Depth-aware: rank by marginal expected season points (spec §3.2).
+
+    Scores each candidate by V(my_roster + candidate) - V(my_roster) under common
+    random numbers, prunes to top_k-by-VORP per position, ranks purely by that
+    marginal (no fills_starting_slot tier — the season metric already values open
+    slots). Holds the MC config like NowOrNeverStrategy holds a SurvivalModel.
+    """
+
+    availability: PlayerAvailability
+    n_sims: int
+    base_seed: int
+    top_k: int = 8
+
+    def __post_init__(self) -> None:
+        # Fail loud at construction so neither CLI can build a degenerate strategy:
+        # n_sims < 1 makes the MC mean a nan (empty draw matrix), which would silently
+        # collapse every marginal to nan -> 0.0 and rank purely by VORP.
+        if self.n_sims < 1:
+            raise ValueError(f"n_sims must be >= 1; got {self.n_sims}")
+        if self.top_k < 1:
+            raise ValueError(f"top_k must be >= 1; got {self.top_k}")
+
+    def recommend(
+        self, state: DraftState, pool: pd.DataFrame, config: LeagueConfig
+    ) -> pd.DataFrame:
+        df, elig = _eligible_subset(state, pool, config)
+
+        my_ids = {str(g) for g in state.my_pick_ids}
+        pool_ids = pool["gsis_id"].astype(str)
+        present = pool_ids.isin(my_ids)
+        base_roster = pool.loc[present, ["gsis_id", "position", "season_mean_fpts"]].copy()
+        missing = sorted(my_ids - set(pool_ids))
+        if missing:
+            warnings.warn(
+                f"{len(missing)} rostered player(s) absent from the VORP pool; "
+                f"excluded from season valuation: {missing}",
+                stacklevel=2,
+            )
+
+        pruned = (
+            df.sort_values(["position", "vorp"], ascending=[True, False])
+            .groupby("position", sort=False)
+            .head(self.top_k)
+        )
+        rng = np.random.default_rng([self.base_seed, state.current_pick])
+        marginals = marginal_season_values(
+            base_roster,
+            pruned[["gsis_id", "position", "season_mean_fpts"]],
+            config.roster_slots,
+            self.availability,
+            n_sims=self.n_sims,
+            rng=rng,
+        )
+
+        out = df.copy()
+        # Evaluated candidates carry their real marginal; pruned-out get 0.0. Marginal
+        # is always >= 0 and the argmax (the actual pick) is always an evaluated
+        # candidate, so the pick is unaffected. A 0-marginal evaluated candidate (one
+        # that never cracks the lineup) may interleave with the 0.0 pruned tail by VORP
+        # — acceptable per spec §3.5's cosmetic-tail clause (only the head drives a pick).
+        out["score"] = out["gsis_id"].astype(str).map(marginals).fillna(0.0).astype(float)
+        p_na: pd.Series[float] = pd.Series(pd.NA, index=out.index, dtype=pd.Float64Dtype())
+        return _finalize(out, elig, p_na, starting_need_tier=False)

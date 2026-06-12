@@ -37,6 +37,19 @@ class DraftState:
     def current_pick(self) -> int:
         return len(self.picks) + 1
 
+    @property
+    def my_pick_ids(self) -> tuple[GsisId, ...]:
+        """The gsis_ids of *my* picks (snake-slot-derived), in pick order.
+
+        Mirrors load_draft_state's roster derivation: pick #k is mine iff its
+        snake slot equals my_slot. Parallel to my_roster (positions) but ids.
+        """
+        return tuple(
+            gid
+            for index, gid in enumerate(self.picks)
+            if slot_for(index + 1, self.n_teams) == self.my_slot
+        )
+
 
 def load_draft_state(state_path: Path, id_map: pd.DataFrame) -> tuple[DraftState, LeagueConfig]:
     """Parse a draft-state JSON file into a `DraftState` + its `LeagueConfig`.

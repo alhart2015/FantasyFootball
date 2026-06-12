@@ -5,6 +5,7 @@ from projections.draft.assistant.strategy import (
     DraftStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
+    SeasonValueStrategy,
 )
 from projections.draft.assistant.survival import (
     LogisticSurvival,
@@ -18,6 +19,7 @@ __all__ = [
     "LogisticSurvival",
     "NowOrNeverStrategy",
     "RawVorpStrategy",
+    "SeasonValueStrategy",
     "SurvivalModel",
     "default_sigma",
     "load_draft_state",

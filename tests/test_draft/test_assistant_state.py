@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from projections.draft.assistant.state import DraftState, load_draft_state
-from projections.schemas import _PYARROW_STR, Position, RosterSlot, Ruleset
+from projections.schemas import _PYARROW_STR, GsisId, Position, RosterSlot, Ruleset
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -110,3 +110,34 @@ def test_non_object_json_raises(tmp_path: Path) -> None:
     p.write_text(json.dumps(["league_config", "my_slot", "picks"]))
     with pytest.raises(ValueError, match="object"):
         load_draft_state(p, _id_map())
+
+
+def test_my_pick_ids_picks_out_my_snake_slots() -> None:
+    # 4 teams, my_slot=1 → my picks are #1, #8, #9 (snake).
+    picks = tuple(
+        GsisId(g)
+        for g in [
+            "00-0000001",  # #1 mine
+            "00-0000002",
+            "00-0000003",
+            "00-0000004",
+            "00-0000005",
+            "00-0000006",
+            "00-0000007",
+            "00-0000008",  # #8 mine
+            "00-0000009",  # #9 mine
+        ]
+    )
+    state = DraftState(
+        my_slot=1,
+        n_teams=4,
+        rounds=5,
+        picks=picks,
+        my_roster=(Position.RB, Position.WR, Position.RB),
+    )
+    assert state.my_pick_ids == ("00-0000001", "00-0000008", "00-0000009")
+
+
+def test_my_pick_ids_empty_when_no_picks() -> None:
+    state = DraftState(my_slot=1, n_teams=4, rounds=5, picks=(), my_roster=())
+    assert state.my_pick_ids == ()
