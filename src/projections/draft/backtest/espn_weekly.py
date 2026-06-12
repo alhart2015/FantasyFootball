@@ -3,18 +3,30 @@
 Mirrors scripts/pull_external_projections.py's ESPN parse but reads the single-week projection
 entry (statSourceId=1, statSplitTypeId=1, scoringPeriodId=wk) and scores the fractional stat
 line via scoring.expected_points. The espn_id->gsis_id crosswalk + store write live in
-refresh_espn_weekly_projections (a later task).
+refresh_espn_weekly_projections.
 """
 
 from __future__ import annotations
 
+import json
+import urllib.request
+from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from projections.ingest.external_projections import ESPN_POSITIONS, ESPN_STAT_IDS
-from projections.schemas import Ruleset
+from projections.ingest.external_projections import (
+    _ESPN_URL,
+    _UA,
+    ESPN_POSITIONS,
+    ESPN_STAT_IDS,
+)
+from projections.schemas import _PYARROW_STR, Ruleset, WeeklyProjectionSchema
 from projections.scoring.score import expected_points
+from projections.store import write_partition
+
+_DEFAULT_WEEKS: range = range(1, 18)
 
 
 def _weekly_proj_stats(player: dict[str, Any], week: int) -> dict[str, float] | None:
@@ -72,3 +84,67 @@ def parse_espn_weekly(
             }
         )
     return pd.DataFrame(rows)
+
+
+def _fetch_espn_week(season: int, week: int, *, limit: int = 800) -> dict[str, Any]:
+    """Fetch the ESPN kona_player_info payload for a single scoring period.
+
+    Network-only; monkeypatched in tests. The URL is built from trusted int args
+    only — no user input is interpolated.
+    """
+    flt = {
+        "players": {
+            "limit": limit,
+            "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+        }
+    }
+    url = _ESPN_URL.format(season=season) + f"&scoringPeriodId={week}"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": _UA, "X-Fantasy-Filter": json.dumps(flt)},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.load(resp)  # type: ignore[no-any-return]
+
+
+def weekly_projections_for_weeks(
+    *,
+    season: int,
+    weeks: Iterable[int],
+    ruleset: Ruleset,
+    id_map: pd.DataFrame,
+) -> pd.DataFrame:
+    """Assemble weekly projections across multiple weeks with espn_id -> gsis_id crosswalk.
+
+    Parses each week via parse_espn_weekly, inner-joins on espn_id, and returns a
+    WeeklyProjectionSchema-validated DataFrame. Players not present in id_map are dropped.
+    """
+    cross = id_map[["espn_id", "gsis_id"]].dropna().astype({"espn_id": str})
+    frames: list[pd.DataFrame] = []
+    for wk in weeks:
+        parsed = parse_espn_weekly(
+            _fetch_espn_week(season, wk), season=season, week=wk, ruleset=ruleset
+        )
+        merged = parsed.merge(cross, on="espn_id", how="inner")
+        frames.append(merged[["gsis_id", "season", "week", "position", "projected_points"]])
+    out = pd.concat(frames, ignore_index=True)
+    out["gsis_id"] = out["gsis_id"].astype(_PYARROW_STR)
+    return WeeklyProjectionSchema.validate(out)
+
+
+def refresh_espn_weekly_projections(
+    *,
+    season: int,
+    ruleset: Ruleset,
+    id_map: pd.DataFrame,
+    data_root: Path,
+    weeks: Iterable[int] = _DEFAULT_WEEKS,
+) -> pd.DataFrame:
+    """Fetch, crosswalk, validate, and persist ESPN weekly projections for all requested weeks.
+
+    Writes to data_root/processed/espn_weekly_projections/season=YYYY/.
+    Returns the validated DataFrame.
+    """
+    out = weekly_projections_for_weeks(season=season, weeks=weeks, ruleset=ruleset, id_map=id_map)
+    write_partition(data_root / "processed", "espn_weekly_projections", out, season=season)
+    return out
