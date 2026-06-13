@@ -29,7 +29,7 @@ from pathlib import Path
 
 from projections.draft.backtest.checkpoint import dump_results, load_results, plan_chunks
 from projections.draft.backtest.cli import format_result
-from projections.draft.backtest.harness import aggregate, collect_results
+from projections.draft.backtest.harness import STRATEGY_KEYS, aggregate, collect_results
 from projections.draft.backtest.inputs import load_inputs
 from projections.draft.backtest.league import LeagueResult
 from projections.draft.league_config import LeagueConfig
@@ -55,6 +55,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--checkpoint-dir", type=Path, default=Path("_h2h_ckpt"))
     p.add_argument("--data-root", type=Path, default=Path("data"))
     p.add_argument("--max-retries", type=int, default=5)
+    p.add_argument(
+        "--strategy-a",
+        choices=list(STRATEGY_KEYS),
+        default="now_or_never",
+        help="Draft strategy for seat-role A (default now_or_never).",
+    )
+    p.add_argument(
+        "--strategy-b",
+        choices=list(STRATEGY_KEYS),
+        default="season_value",
+        help="Draft strategy for seat-role B (default season_value).",
+    )
     # Worker-only flags (the driver sets these when spawning a chunk subprocess):
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--chunk-lo", type=int)
@@ -92,6 +104,8 @@ def _run_worker(args: argparse.Namespace) -> int:
         calendar=inputs.calendar,
         jitter=args.jitter,
         strategy_n_sims=args.strategy_n_sims,
+        strategy_a=args.strategy_a,
+        strategy_b=args.strategy_b,
         base_seed=0,
     )
     out: Path = args.out
@@ -119,6 +133,7 @@ def _run_driver(args: argparse.Namespace) -> int:
             "--worker", "--chunk-lo", str(lo), "--chunk-hi", str(hi), "--out", str(out),
             "--season", str(args.season), "--league-config", str(args.league_config),
             "--strategy-n-sims", str(args.strategy_n_sims), "--jitter", str(args.jitter),
+            "--strategy-a", args.strategy_a, "--strategy-b", args.strategy_b,
             "--data-root", str(args.data_root),
         ]  # fmt: skip
         for attempt in range(1, args.max_retries + 1):

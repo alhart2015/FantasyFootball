@@ -30,3 +30,21 @@ def test_format_lists_every_strategy() -> None:
     assert "champ" in text.lower()
     # Both scorings are rendered.
     assert "PROJECTED" in text and "ACTUAL" in text
+
+
+def test_arg_strategy_ab_defaults_and_override() -> None:
+    args = _parse_args(["--league-config", "x.json"])
+    assert args.strategy_a == "now_or_never"
+    assert args.strategy_b == "season_value"
+    args2 = _parse_args(
+        [
+            "--league-config",
+            "x.json",
+            "--strategy-a",
+            "season_value_timing",
+            "--strategy-b",
+            "season_value",
+        ]
+    )
+    assert args2.strategy_a == "season_value_timing"
+    assert args2.strategy_b == "season_value"

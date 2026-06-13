@@ -1,6 +1,6 @@
 """CLI core for the H2H backtest harness. scripts/h2h_backtest.py wraps this.
 
-Runs a full season backtest over three fixed strategies (now_or_never, season_value, bot)
+Runs a full season backtest over a configurable A/B strategy pair plus a constrained-bot field
 and prints a per-strategy championship/playoff/win-pct/points-for table with 95% CIs.
 """
 
@@ -10,7 +10,12 @@ import argparse
 from pathlib import Path
 
 from projections.draft.assistant.tournament import Interval
-from projections.draft.backtest.harness import BacktestResult, StrategyMetrics, run_backtest
+from projections.draft.backtest.harness import (
+    STRATEGY_KEYS,
+    BacktestResult,
+    StrategyMetrics,
+    run_backtest,
+)
 from projections.draft.backtest.inputs import load_inputs
 from projections.draft.league_config import LeagueConfig
 
@@ -47,6 +52,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=Path("data"),
         help="Store root for partitioned parquet tables (default data/).",
+    )
+    p.add_argument(
+        "--strategy-a",
+        choices=list(STRATEGY_KEYS),
+        default="now_or_never",
+        help="Draft strategy for seat-role A (default now_or_never).",
+    )
+    p.add_argument(
+        "--strategy-b",
+        choices=list(STRATEGY_KEYS),
+        default="season_value",
+        help="Draft strategy for seat-role B (default season_value).",
     )
     return p.parse_args(argv)
 
@@ -102,6 +119,8 @@ def run(argv: list[str] | None = None) -> int:
         calendar=inputs.calendar,
         jitter=args.jitter,
         strategy_n_sims=args.strategy_n_sims,
+        strategy_a=args.strategy_a,
+        strategy_b=args.strategy_b,
     )
     print(format_result(result))
     return 0
