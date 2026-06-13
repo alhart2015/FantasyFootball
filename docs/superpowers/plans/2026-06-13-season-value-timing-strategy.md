@@ -291,6 +291,62 @@ def test_timing_promotes_scarce_position_over_safer_higher_marginal() -> None:
     timing_top = _timing(pool).recommend(state, pool, cfg).iloc[0]
     assert sv_top["gsis_id"] == "00-0000020"  # season_value: highest marginal (wr1)
     assert timing_top["gsis_id"] == "00-0000010"  # timing: scarce rb1 promoted
+
+
+def test_timing_last_pick_fallback_equals_season_value() -> None:
+    # Seat 7's final pick in a 2-round/12-team draft (pick 18) -> no next pick ->
+    # timing falls back to ranking by raw marginal, identical to season_value.
+    pool, cfg = _pool(), _config()
+    state = _state(current_pick=18, rounds=2)
+    sv = SeasonValueStrategy(_flat_availability(pool), n_sims=20, base_seed=0)
+    pd.testing.assert_frame_equal(
+        _timing(pool).recommend(state, pool, cfg), sv.recommend(state, pool, cfg)
+    )
+
+
+def test_timing_prunes_to_top_k_and_zeros_the_tail() -> None:
+    # 10 RBs, top_k=2: only the top-2 by VORP are MC-evaluated; the other 8 get
+    # marginal 0 (cosmetic tail) -> identical score (0 - opp_cost[RB]) and never the pick.
+    n = 10
+    pool = pd.DataFrame(
+        {
+            "gsis_id": pd.array([f"00-00000{i:02d}" for i in range(n)], dtype=_PYARROW_STR),
+            "position": pd.array(["RB"] * n, dtype=_PYARROW_STR),
+            "season_mean_fpts": [250.0 - i * 5 for i in range(n)],
+            "vorp": [50.0 - i * 5 for i in range(n)],
+            "replacement_fpts": [200.0] * n,
+            "consensus_adp": pd.array([float(i + 1) for i in range(n)], dtype=pd.Float64Dtype()),
+        }
+    )
+    state, cfg = _state(), _config()
+    strat = SeasonValueTimingStrategy(
+        _flat_availability(pool), n_sims=20, base_seed=0, survival=LogisticSurvival(sigma=8.0), top_k=2
+    )
+    rec = strat.recommend(state, pool, cfg)
+    evaluated = {"00-0000000", "00-0000001"}
+    assert rec.iloc[0]["gsis_id"] in evaluated  # the pick is an evaluated candidate
+    tail = rec[~rec["gsis_id"].isin(evaluated)]["score"]
+    assert tail.nunique() == 1  # the 8 pruned-out share the cosmetic 0-marginal score
+
+
+def test_timing_null_adp_treated_as_surviving() -> None:
+    # WR alone at its position with null ADP -> p=1 (certain to survive). With
+    # self-inclusion, opp_cost[WR] == its own marginal -> score == 0; display p is null.
+    pool = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0000010", "00-0000020"], dtype=_PYARROW_STR),
+            "position": pd.array(["RB", "WR"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [250.0, 250.0],
+            "vorp": [50.0, 50.0],
+            "replacement_fpts": [200.0, 200.0],
+            "consensus_adp": pd.array([5.0, pd.NA], dtype=pd.Float64Dtype()),
+        }
+    )
+    state, cfg = _state(), _config()
+    rec = _timing(pool).recommend(state, pool, cfg)
+    wr = rec[rec["gsis_id"] == "00-0000020"].iloc[0]
+    assert pd.isna(wr["p_available_next"])  # null ADP -> null display
+    assert abs(float(wr["score"])) < 1e-9  # p=1 surviving + self-inclusion -> opp == marginal
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -393,7 +449,7 @@ class SeasonValueTimingStrategy:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_draft/test_assistant_strategy.py -k timing -q`
-Expected: PASS (4 passed). If `test_timing_promotes_scarce_position...` does not flip, widen the ADP gap (e.g. rb1 `consensus_adp=1`, wr `consensus_adp=400`) and/or the season_mean gap so the opp_cost contrast is starker, then re-run — the flip is the behavior under test, not the exact fixture numbers.
+Expected: PASS (7 passed). If `test_timing_promotes_scarce_position...` does not flip, widen the ADP gap (e.g. rb1 `consensus_adp=1`, wr `consensus_adp=400`) and/or the season_mean gap so the opp_cost contrast is starker, then re-run — the flip is the behavior under test, not the exact fixture numbers.
 
 - [ ] **Step 5: Commit**
 
