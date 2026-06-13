@@ -225,3 +225,91 @@ class SeasonValueStrategy:
         out["score"] = out["gsis_id"].astype(str).map(marginals).fillna(0.0).astype(float)
         p_na: pd.Series[float] = pd.Series(pd.NA, index=out.index, dtype=pd.Float64Dtype())
         return _finalize(out, elig, p_na, starting_need_tier=False)
+
+
+@dataclass(frozen=True)
+class SeasonValueTimingStrategy:
+    """Depth-aware + pick-timing: season_value's marginal minus the opportunity cost
+    of waiting, in season-value units.
+
+    score = marginal_season_value(c) - E[best surviving marginal at pos(c) by my next pick].
+    Same per-pick cost as SeasonValueStrategy (one marginal MC); the timing term reuses
+    the already-computed marginals + the ADP survival model (no extra MC). Last pick ->
+    rank by raw marginal (today's season_value), mirroring nn's raw-VORP fallback.
+    """
+
+    availability: PlayerAvailability
+    n_sims: int
+    base_seed: int
+    survival: SurvivalModel
+    top_k: int = 8
+
+    def __post_init__(self) -> None:
+        if self.n_sims < 1:
+            raise ValueError(f"n_sims must be >= 1; got {self.n_sims}")
+        if self.top_k < 1:
+            raise ValueError(f"top_k must be >= 1; got {self.top_k}")
+
+    def recommend(
+        self, state: DraftState, pool: pd.DataFrame, config: LeagueConfig
+    ) -> pd.DataFrame:
+        df, elig = _eligible_subset(state, pool, config)
+
+        my_ids = {str(g) for g in state.my_pick_ids}
+        pool_ids = pool["gsis_id"].astype(str)
+        base_roster = pool.loc[
+            pool_ids.isin(my_ids), ["gsis_id", "position", "season_mean_fpts"]
+        ].copy()
+        missing = sorted(my_ids - set(pool_ids))
+        if missing:
+            warnings.warn(
+                f"{len(missing)} rostered player(s) absent from the VORP pool; "
+                f"excluded from season valuation: {missing}",
+                stacklevel=2,
+            )
+
+        pruned = (
+            df.sort_values(["position", "vorp"], ascending=[True, False])
+            .groupby("position", sort=False)
+            .head(self.top_k)
+        )
+        rng = np.random.default_rng([self.base_seed, state.current_pick])
+        marginals = marginal_season_values(
+            base_roster,
+            pruned[["gsis_id", "position", "season_mean_fpts"]],
+            config.roster_slots,
+            self.availability,
+            n_sims=self.n_sims,
+            rng=rng,
+        )
+
+        out = df.copy()
+        # marginal per row: evaluated candidates carry their real marginal, the pruned
+        # tail gets marginal 0.0 here (its final score becomes -opp_cost[pos] after the
+        # timing term below) -- cosmetic, never the argmax.
+        out["score"] = out["gsis_id"].astype(str).map(marginals).fillna(0.0).astype(float)
+
+        next_pick = my_next_pick(state.current_pick, state.my_slot, state.n_teams, state.rounds)
+        if next_pick is None:
+            # Last pick: no timing signal -> rank by raw marginal (today's season_value).
+            p_na: pd.Series[float] = pd.Series(pd.NA, index=out.index, dtype=pd.Float64Dtype())
+            return _finalize(out, elig, p_na, starting_need_tier=False)
+
+        adp = out["consensus_adp"]
+        internal_p = adp.map(
+            lambda a: self.survival.p_available(
+                float(a) if pd.notna(a) else float("nan"), next_pick
+            )
+        ).astype(float)
+        display_p = internal_p.where(adp.notna(), other=pd.NA)
+
+        # opp_cost[pos] = E[best surviving marginal at pos]. Computed over `out`: the tail's
+        # marginal is 0 and sorts last (by value desc), so it contributes nothing -- equivalent
+        # to computing over the pruned set only.
+        pos = out["position"].to_numpy()
+        marg = out["score"].to_numpy(dtype=float)
+        p = internal_p.to_numpy(dtype=float)
+        gsis = out["gsis_id"].to_numpy()
+        opp = expected_best_by_position(pos, marg, p, gsis)
+        out["score"] = marg - np.array([opp[pos_i] for pos_i in pos], dtype=float)
+        return _finalize(out, elig, display_p, starting_need_tier=False)
