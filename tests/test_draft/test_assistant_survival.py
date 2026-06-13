@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 
 from projections.draft.assistant.survival import (
     LogisticSurvival,
     SurvivalModel,
     default_sigma,
+    expected_best_by_position,
 )
 
 
@@ -46,3 +48,35 @@ def test_null_adp_survives() -> None:
 
 def test_default_sigma_scales_with_teams() -> None:
     assert default_sigma(12) == 8.0  # two-thirds of a 12-team round
+
+
+def test_expected_best_by_position_hand_computed() -> None:
+    # RB: values [50, 40], survival [0.5, 0.5] -> 50*0.5*1 + 40*0.5*(1-0.5) = 35
+    # WR: value 52, survival 0.5 -> 52*0.5 = 26
+    positions = np.array(["RB", "RB", "WR"])
+    values = np.array([50.0, 40.0, 52.0])
+    probs = np.array([0.5, 0.5, 0.5])
+    tiebreak = np.array(["00-0000001", "00-0000002", "00-0000003"])
+    out = expected_best_by_position(positions, values, probs, tiebreak)
+    assert out == {"RB": 35.0, "WR": 26.0}
+
+
+def test_expected_best_by_position_sorts_by_value_then_tiebreak() -> None:
+    # Unsorted input: the higher value is consumed first regardless of row order.
+    positions = np.array(["RB", "RB"])
+    values = np.array([40.0, 50.0])
+    probs = np.array([0.5, 0.5])
+    tiebreak = np.array(["00-0000002", "00-0000001"])
+    out = expected_best_by_position(positions, values, probs, tiebreak)
+    assert out["RB"] == 35.0
+
+
+def test_expected_best_by_position_zero_prob_best_player() -> None:
+    # Best player (value 50) is certain to be GONE (p=0) -> contributes 0; the
+    # second-best (40, p=0.5) is then the best survivor: 40 * 0.5 * (1 - 0) = 20.
+    positions = np.array(["RB", "RB"])
+    values = np.array([50.0, 40.0])
+    probs = np.array([0.0, 0.5])
+    tiebreak = np.array(["00-0000001", "00-0000002"])
+    out = expected_best_by_position(positions, values, probs, tiebreak)
+    assert out["RB"] == 20.0
