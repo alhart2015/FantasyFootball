@@ -22,20 +22,20 @@ _MINP = {"QB": 1, "RB": 3, "WR": 3, "TE": 1}
 _MAXP = {"QB": 3, "RB": 6, "WR": 6, "TE": 3}
 
 
-def seat_layout(seed: int) -> dict[int, str]:
-    """Return a {seat: strategy_name} map for a 16-team snake draft.
+def seat_layout(
+    seed: int, label_a: str = "now_or_never", label_b: str = "season_value"
+) -> dict[int, str]:
+    """Return a {seat: strategy_label} map for a 16-team snake draft.
 
-    Odd seeds: now_or_never at {2,6,10,14}, season_value at {4,8,12,16}.
-    Even seeds: mirrored — exposures cancel when summed over paired seeds.
-    Remaining 8 seats are bots.
+    Odd seeds: role A at {2,6,10,14}, role B at {4,8,12,16}. Even seeds mirror
+    (A<->B swap) so exposures cancel when summed over paired seeds. The other 8
+    seats are bots. Defaults reproduce the historical now_or_never / season_value
+    field byte-identically.
     """
-    nn, sv = {2, 6, 10, 14}, {4, 8, 12, 16}
+    a, b = {2, 6, 10, 14}, {4, 8, 12, 16}
     if seed % 2 == 0:  # paired mirror
-        nn, sv = sv, nn
-    return {
-        s: ("now_or_never" if s in nn else "season_value" if s in sv else "bot")
-        for s in range(1, 17)
-    }
+        a, b = b, a
+    return {s: (label_a if s in a else label_b if s in b else "bot") for s in range(1, 17)}
 
 
 def _bot_eligible(counts: dict[str, int], picks_left: int) -> set[str]:
