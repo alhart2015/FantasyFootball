@@ -255,9 +255,13 @@ Does raising sv's strategy n_sims (sharper marginals) change Test 1's slot-6 los
 ### F7 — positional-cap strategies (QB cap, TE cap, both) — **three separate strategies**
 **Motivation:** Test 9's round-by-round (the seat-3 draft) showed the scarcity/opportunity-cost layer over-drafting premium 1-starter positions — `season_value_timing` ended **3 QB / 3 TE** (two QBs + two TEs benchable in a 1-QB/1-TE league) and only **2 RB**, starving the RB/WR volume that wins weekly matchups. A draft-time positional cap directly tests whether removing that overreach recovers regular-season win% while keeping any championship-ceiling benefit.
 
-**Three variants to build + test (own spec/plan; A/B-able behind the `DraftStrategy` protocol, validated on the H2H real-outcome metric, 2024+2025):**
-1. **QB cap ≤ 2** — never draft a 3rd QB.
-2. **TE cap ≤ 2** — never draft a 3rd TE.
-3. **Both caps (QB ≤ 2 and TE ≤ 2)**.
+**Base strategy = `season_value_timing`** (decided 2026-06-13). `season_value` needs no cap — it has no explicit positional cap but **self-limits** to ~2 QB / 2 TE because a 3rd QB/TE adds ~0 marginal in a 1-starter slot, so its valuation never reaches for one (Test 9: sv drafted 2 QB / 2 TE). It's `season_value_timing`'s **scarcity/opportunity-cost layer** that over-reaches (3/3), so the hard cap goes on timing.
 
-**Implementation note:** cleanest as a thin *positional-cap decorator/wrapper* over an existing strategy — drop capped positions from the candidate pool when the roster already holds the cap, then defer to the inner strategy's ranking. Reusable across base strategies. User framed these as **`season_value`** caps (`sv` is the current best); note that **plain `season_value` already self-limits to ~2 QB / 2 TE** (Test 9: sv was 2 QB / 2 TE), so the cap mostly **bites the scarcity strategies** — applying it to **`season_value_timing`** is where it'd actually change picks, and is the more informative test of "does capping the QB/TE overreach recover the win% it lost?" Build the `sv`-capped variants as the user requested (clean controls) AND a timing-capped variant. Related: TODO #42 (nn scarcity-floor) attacks the same overreach from the value side rather than a hard cap.
+**Three variants to build + test (own spec/plan; A/B-able behind the `DraftStrategy` protocol, validated on the H2H real-outcome metric, 2024+2025):**
+1. **`season_value_timing` + QB cap ≤ 2** — never draft a 3rd QB.
+2. **`season_value_timing` + TE cap ≤ 2** — never draft a 3rd TE.
+3. **`season_value_timing` + both caps (QB ≤ 2 and TE ≤ 2)**.
+
+**The question each answers:** does hard-capping the QB/TE overreach recover the regular-season win% `season_value_timing` lost to `season_value` (Test 9) while keeping its championship-ceiling edge?
+
+**Implementation note:** cleanest as a thin *positional-cap decorator/wrapper* over `season_value_timing` — drop capped positions from the candidate pool once the roster holds the cap, then defer to the inner strategy's ranking (reusable across any base strategy if wanted later). Related: TODO #42 (nn scarcity-floor) attacks the same overreach from the value side rather than a hard cap.
