@@ -135,8 +135,17 @@ def _run_driver(args: argparse.Namespace) -> int:
     all_actual: list[LeagueResult] = []
     all_projected: list[LeagueResult] = []
     for lo, hi in chunks:
-        payload = json.loads(_chunk_file(args.checkpoint_dir, lo, hi).read_text())
-        actual, projected = load_results(payload)
+        out = _chunk_file(args.checkpoint_dir, lo, hi)
+        # Re-validate at pool time: a checkpoint can vanish/truncate between the run loop and
+        # here (concurrent run, AV, disk hiccup). Fail loud with a re-run hint, not a raw crash.
+        if not _valid_chunk_file(out, (hi - lo) * n_teams):
+            print(
+                f"[ERROR] chunk {lo}-{hi} checkpoint missing/corrupt at pool time; "
+                f"re-run to resume.",
+                flush=True,
+            )
+            return 1
+        actual, projected = load_results(json.loads(out.read_text()))
         all_actual += actual
         all_projected += projected
     result = aggregate(all_actual, all_projected, n_seeds=args.n_seeds, base_seed=0)

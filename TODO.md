@@ -4,6 +4,10 @@ Running project management list. Add items as they come up; remove or check off 
 
 ## Open
 
+### 43. H2H chunk-runner — stamp checkpoint provenance (from `/code-review` of PR #64)
+
+`scripts/h2h_backtest_chunked.py` checkpoints carry no provenance, and `_valid_chunk_file`'s row-count gate is self-fulfilling (both sides derive from `n_teams`). So **reusing a checkpoint dir across a different `--season` / `--strategy-n-sims` / league config silently pools mismatched chunks** with no error. Mitigated today only by using a fresh `--checkpoint-dir` per run (e.g. `_h2h_ckpt`, `_h2h_ckpt_2024`). Fix: write `{season, n_teams, jitter, strategy_n_sims, n_seeds}` into each checkpoint payload and validate it in `_valid_chunk_file` (mismatch → treat as invalid / fail loud). Low-ish priority while the fresh-dir habit holds, but it's the deep fix that closes the silent-corruption path. (Other `/code-review` findings — 16-team `seat_layout` guard, `regular_weeks`/win% div-by-zero guard, pool-loop TOCTOU, `score_by`↔key coupling comment — were fixed inline in the review commit.)
+
 ### 42. `now_or_never` — scarcity vs raw-value re-weighting with an absolute floor (from the H2H backtest dig)
 
 The 2025 H2H backtest (Test 7/F1, `reports/draft_strategy_tests.md`) found `now_or_never` has **no meaningful edge over a noisy-ADP bot** on real outcomes, while `season_value` clearly wins. Root-caused (not injuries / variance / QB-stash / TE-replacement — all ruled out): nn's opportunity-cost layer `score = vorp − E[best survivor at position by next pick]` **over-invests draft capital in scarce positions (23% on TE vs bots' 7%)** because the wait-cost term has **no absolute floor** — when a position is thin it inflates the score of a *mediocre* player at that position, so nn reaches for the best-of-a-bad-tier instead of a better player elsewhere. In H2H, raw weekly RB/WR volume beats positional scarcity (the "elite" TE projected 207, scored 142 like a mid WR).

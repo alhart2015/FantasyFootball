@@ -59,6 +59,17 @@ def collect_results(
     the slice run_backtest would produce for those indices, so disjoint chunks pooled in order
     reconstruct a monolithic run exactly. This is the unit the resumable chunk-runner serializes.
     """
+    if config.n_teams != 16:
+        raise ValueError(
+            f"collect_results uses the 16-team seat_layout (now_or_never at {{2,6,10,14}}, "
+            f"season_value at {{4,8,12,16}}); config.n_teams={config.n_teams}. Generalize "
+            "seat_layout to the team count before running other league sizes (e.g. the "
+            "planned 12-team F2/F6 tests) — otherwise the mirrored-seat pairing silently breaks."
+        )
+    if not calendar.regular_weeks:
+        raise ValueError(
+            "collect_results requires a non-empty calendar.regular_weeks (win% needs games)."
+        )
     sigma = default_sigma(config.n_teams)
     nn = NowOrNeverStrategy(LogisticSurvival(sigma=sigma))
     sv = SeasonValueStrategy(availability, n_sims=strategy_n_sims, base_seed=base_seed)

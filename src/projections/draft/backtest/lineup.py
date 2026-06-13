@@ -48,6 +48,10 @@ def weekly_lineup_points(
     cursor: dict[Position, int] = {pos: 0 for pos in Position}
 
     def _score(p: Mapping[str, Any]) -> float:
+        # NOTE: score_by must be a key present in each roster dict ("projected"/"actual").
+        # This coupling is by convention, not type-checked — a missing key reads as 0.0 (None),
+        # silently zeroing every player. If you rename the roster dict keys, update the
+        # score_by Literal in this signature to match.
         v = p.get(score_by)
         return 0.0 if v is None else float(v)
 
