@@ -251,3 +251,13 @@ The committed 12-team validation (Test 1) used rejected pure-ADP bots. Re-run it
 
 ### F5 — n_sims sensitivity
 Does raising sv's strategy n_sims (sharper marginals) change Test 1's slot-6 loss? Probes whether that loss is MC noise or structural (PM claims structural).
+
+### F7 — positional-cap strategies (QB cap, TE cap, both) — **three separate strategies**
+**Motivation:** Test 9's round-by-round (the seat-3 draft) showed the scarcity/opportunity-cost layer over-drafting premium 1-starter positions — `season_value_timing` ended **3 QB / 3 TE** (two QBs + two TEs benchable in a 1-QB/1-TE league) and only **2 RB**, starving the RB/WR volume that wins weekly matchups. A draft-time positional cap directly tests whether removing that overreach recovers regular-season win% while keeping any championship-ceiling benefit.
+
+**Three variants to build + test (own spec/plan; A/B-able behind the `DraftStrategy` protocol, validated on the H2H real-outcome metric, 2024+2025):**
+1. **QB cap ≤ 2** — never draft a 3rd QB.
+2. **TE cap ≤ 2** — never draft a 3rd TE.
+3. **Both caps (QB ≤ 2 and TE ≤ 2)**.
+
+**Implementation note:** cleanest as a thin *positional-cap decorator/wrapper* over an existing strategy — drop capped positions from the candidate pool when the roster already holds the cap, then defer to the inner strategy's ranking. Reusable across base strategies. User framed these as **`season_value`** caps (`sv` is the current best); note that **plain `season_value` already self-limits to ~2 QB / 2 TE** (Test 9: sv was 2 QB / 2 TE), so the cap mostly **bites the scarcity strategies** — applying it to **`season_value_timing`** is where it'd actually change picks, and is the more informative test of "does capping the QB/TE overreach recover the win% it lost?" Build the `sv`-capped variants as the user requested (clean controls) AND a timing-capped variant. Related: TODO #42 (nn scarcity-floor) attacks the same overreach from the value side rather than a hard cap.
