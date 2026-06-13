@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from itertools import pairwise
+from pathlib import Path
 
 from projections.draft.backtest.checkpoint import dump_results, load_results, plan_chunks
 from projections.draft.backtest.league import LeagueResult
@@ -29,3 +30,21 @@ def test_results_round_trip_preserves_values() -> None:
     restored_a, restored_p = load_results(dump_results(actual, projected))
     assert restored_a == actual
     assert restored_p == projected
+
+
+def test_verify_or_write_manifest_writes_then_matches(tmp_path: Path) -> None:
+    from projections.draft.backtest.checkpoint import verify_or_write_manifest
+
+    key = {"season": 2025, "strategy_a": "season_value_timing", "strategy_b": "season_value"}
+    verify_or_write_manifest(tmp_path, key)  # first call writes the manifest
+    verify_or_write_manifest(tmp_path, key)  # identical run_key -> no raise
+
+
+def test_verify_or_write_manifest_rejects_mismatch(tmp_path: Path) -> None:
+    import pytest
+
+    from projections.draft.backtest.checkpoint import verify_or_write_manifest
+
+    verify_or_write_manifest(tmp_path, {"season": 2025, "strategy_a": "now_or_never"})
+    with pytest.raises(ValueError, match="fresh"):
+        verify_or_write_manifest(tmp_path, {"season": 2024, "strategy_a": "now_or_never"})

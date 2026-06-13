@@ -9,6 +9,8 @@ in scripts/h2h_backtest_chunked.py.
 from __future__ import annotations
 
 import dataclasses
+import json
+from pathlib import Path
 from typing import Any
 
 from projections.draft.backtest.league import LeagueResult
@@ -43,3 +45,22 @@ def load_results(
     actual = [LeagueResult(**r) for r in payload["actual"]]
     projected = [LeagueResult(**r) for r in payload["projected"]]
     return actual, projected
+
+
+def verify_or_write_manifest(checkpoint_dir: Path, run_key: dict[str, object]) -> None:
+    """Pin a checkpoint dir to the run identity that produced its chunks.
+
+    Writes a manifest.json on first use; on resume, raises if `run_key` differs, so a
+    reused dir built with a different strategy pair / season / MC params can't silently
+    pool mismatched chunks (the per-chunk row-count check alone can't catch that).
+    """
+    manifest = checkpoint_dir / "manifest.json"
+    if manifest.exists():
+        prior = json.loads(manifest.read_text())
+        if prior != run_key:
+            raise ValueError(
+                f"checkpoint dir {checkpoint_dir} was built with params {prior}, but this "
+                f"run is {run_key}. Use a fresh --checkpoint-dir."
+            )
+    else:
+        manifest.write_text(json.dumps(run_key, sort_keys=True))

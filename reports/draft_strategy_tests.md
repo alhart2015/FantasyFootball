@@ -177,6 +177,19 @@ Bots in fact *edge* nn on actual win% (paired −1.40 [−2.67, −0.11]); the s
   2. **`nn ≈ bots` was 2025-specific.** In 2024 nn **clearly beats the field** (+5.7 win%, +13.5 playoff%, +3.8 champ%, all CI-separated). So nn *does* add value over best-available-ADP on average — it's **positive-but-variable** across seasons, not a coin-flip. 2025 was a down year where its projection-chasing/TE-tilt didn't realize.
 - **Corrected ranking (2-season): sv > nn > bot** — the **sv-over-nn gap is rock-solid**; the **nn-over-bot gap is real but season-dependent.** Reframes TODO #42: nn isn't broken (won 2024), but a scarcity-floor would make it *reliably* beat ADP instead of only sometimes. (Still single-format/2-season; outcome luck not fully averaged.)
 
+### Test 9 — `season_value_timing` vs `season_value` (H2H, 2024 + 2025) — **the pick-timing layer**
+- **Source:** `_h2h_ckpt_timing_{2024,2025}/`, `_h2h_timing_{2024,2025}.txt`, `_diag_timing.py`. New strategy `SeasonValueTimingStrategy` (spec/plan `docs/superpowers/specs|plans/2026-06-13-season-value-timing-strategy.*`): `score = marginal_season_value − E[best surviving marginal at position by my next pick]` — `now_or_never`'s opportunity-cost/scarcity layer expressed in season-value units (no extra MC; live-draft-fast). Built to fix `season_value`'s **myopia** (it has no pick-timing signal).
+- **Setup:** identical harness to Test 7/8, mirror-paired field **`season_value_timing` (A) vs `season_value` (B) + 8 bots**, 200 seeds × 200 sims, half-PPR, real 2024 & 2025 data. Paired bootstrap, per-seed `timing − sv` (ACTUAL):
+
+  | metric (actual) | 2025 | 2024 |
+  |---|---|---|
+  | win% | **−2.6 [−4.2, −1.0]** (timing worse) | tied (−1.0 [−2.3, +0.4]) |
+  | playoff% | **−8.0 [−12.5, −3.4]** (timing worse) | tied (−1.5 [−6.1, +3.0]) |
+  | **champ%** | +1.9 [−0.6, +4.4] (noise, timing↑) | **+7.0 [+4.3, +9.8]** (timing ~2× sv) |
+
+- **Favors (isolated):** **split — `season_value` on the regular-season axis, `season_value_timing` on championships.** The timing layer did **not** beat `season_value` on win%/playoff-make (its intended target): tied-or-worse both seasons. But it **wins more championships** — CI-separated +7 champ% in 2024, same direction (+1.9, ns) in 2025.
+- **Finding:** the scarcity/opportunity-cost grab builds higher-**ceiling** rosters that spike in the 3-week single-elim playoff (more titles) at the cost of slightly lower regular-season consistency. Mirrors Test 7's lesson that **championships are a ceiling/variance game, not a floor game** — and shows that adding a timing layer trades floor for ceiling rather than strictly improving `season_value`. (Projected metric: timing projects *better* than sv in 2024 (+8 win%) but *worse* in 2025 (−3.8) — the projected edge doesn't convert to actual win%, same season-dependence seen throughout.) Single-format / 2-season; outcome luck not averaged out.
+
 ---
 
 ## Standing tally (no verdict yet)
@@ -191,6 +204,7 @@ Bots in fact *edge* nn on actual win% (paired −1.40 [−2.67, −0.11]); the s
 | **6** | **16-team half-PPR + fixed VORP** | constrained | season (paired, all seats) | **season_value (14/16 seats, 2 ties)** — corrected baseline |
 | **7 (F1)** | **16-team half-PPR, real 2025** | constrained (mixed field) | **H2H real outcomes (projected + actual)** | **season_value on win% + playoff-make% (both scorings, CI-separated); championship% a wash (nn ≈ sv); nn ≈ ADP bots (no edge)** — first non-sv-objective metric |
 | **8 (F1-2024)** | **16-team half-PPR, real 2024** | constrained (mixed field) | **H2H real outcomes** | **season_value** (replicates: sv−nn +5.7 win% / +16 playoff%, ~identical to 2025); **nn clearly beats bots here** (+5.7 win%) — so nn≈bots was 2025-specific |
+| **9** | **16-team half-PPR, real 2024+2025** | constrained (mixed field) | **H2H real outcomes (timing vs sv)** | **split: `season_value` on win%/playoff-make (tied-or-better both yrs); `season_value_timing` on championship% (+7 in 2024 CI-sep, +1.9 in 2025)** — timing trades floor for ceiling |
 
 > **⚠️ Season-metric confound (root-caused by Test 7/F1, 2026-06-12).** Tests 1–6 all score by the **season metric**, which values rosters by the pool's **preseason** `season_mean_fpts` — the *same projections the strategies draft from* (circular), and *optimistically biased* (preseason hype the in-season weekly model later marks down). It **overrates VORP/preseason-chasing strategies, now_or_never most** (+13% phantom roster value vs bots that vanishes under weekly projections / actuals). **Robust across the confound:** `season_value > now_or_never` (sv won even when the metric flattered nn). **Killed by the confound:** `now_or_never ≫ bots` (Tests 2/4) — under real outcomes nn has **no meaningful edge over a noisy-ADP bot**. Use F1's real-outcome scoring as the honest yardstick. See the Test 7 diagnostic.
 
@@ -237,3 +251,17 @@ The committed 12-team validation (Test 1) used rejected pure-ADP bots. Re-run it
 
 ### F5 — n_sims sensitivity
 Does raising sv's strategy n_sims (sharper marginals) change Test 1's slot-6 loss? Probes whether that loss is MC noise or structural (PM claims structural).
+
+### F7 — positional-cap strategies (QB cap, TE cap, both) — **three separate strategies**
+**Motivation:** Test 9's round-by-round (the seat-3 draft) showed the scarcity/opportunity-cost layer over-drafting premium 1-starter positions — `season_value_timing` ended **3 QB / 3 TE** (two QBs + two TEs benchable in a 1-QB/1-TE league) and only **2 RB**, starving the RB/WR volume that wins weekly matchups. A draft-time positional cap directly tests whether removing that overreach recovers regular-season win% while keeping any championship-ceiling benefit.
+
+**Base strategy = `season_value_timing`** (decided 2026-06-13). `season_value` needs no cap — it has no explicit positional cap but **self-limits** to ~2 QB / 2 TE because a 3rd QB/TE adds ~0 marginal in a 1-starter slot, so its valuation never reaches for one (Test 9: sv drafted 2 QB / 2 TE). It's `season_value_timing`'s **scarcity/opportunity-cost layer** that over-reaches (3/3), so the hard cap goes on timing.
+
+**Three variants to build + test (own spec/plan; A/B-able behind the `DraftStrategy` protocol, validated on the H2H real-outcome metric, 2024+2025):**
+1. **`season_value_timing` + QB cap ≤ 2** — never draft a 3rd QB.
+2. **`season_value_timing` + TE cap ≤ 2** — never draft a 3rd TE.
+3. **`season_value_timing` + both caps (QB ≤ 2 and TE ≤ 2)**.
+
+**The question each answers:** does hard-capping the QB/TE overreach recover the regular-season win% `season_value_timing` lost to `season_value` (Test 9) while keeping its championship-ceiling edge?
+
+**Implementation note:** cleanest as a thin *positional-cap decorator/wrapper* over `season_value_timing` — drop capped positions from the candidate pool once the roster holds the cap, then defer to the inner strategy's ranking (reusable across any base strategy if wanted later). Related: TODO #42 (nn scarcity-floor) attacks the same overreach from the value side rather than a hard cap.

@@ -4,6 +4,20 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — `SeasonValueTimingStrategy` (pick-timing layer) + Test 9 (2026-06-13, on branch `feat/season-value-timing-strategy`)
+
+**Status:** Shipped a new draft strategy `season_value_timing` and generalized the H2H harness to test any strategy pair. Built spec→spec-review→plan→plan-review→subagent execution (7 TDD tasks + the run, each two-stage reviewed; final whole-impl review). Spec/plan at `docs/superpowers/specs|plans/2026-06-13-season-value-timing-strategy.*`; result in `reports/draft_strategy_tests.md` (Test 9). **No verdict** (decide-at-end rule).
+
+**What it is:** `score = marginal_season_value(c) − E[best surviving marginal at c's position by my next pick]` — `now_or_never`'s opportunity-cost/scarcity layer expressed in **season-value units** instead of VORP, reusing `season_value`'s marginal MC (the only MC — live-draft-fast, no extra cost) + the shared `expected_best_by_position` helper (extracted from nn, which is now refactored onto it, bit-identical). Built to fix `season_value`'s **myopia** (no pick-timing signal; it lost the long-wait seat in earlier tests).
+
+**What shipped (`src/projections/draft/assistant/` + `backtest/`):** `expected_best_by_position` (shared survivor accumulation, `survival.py`); `SeasonValueTimingStrategy` (`strategy.py`, behind the `DraftStrategy` protocol; last-pick fallback to raw marginal; cosmetic 0-tail); **harness A/B generalization** — `seat_layout(seed, label_a, label_b)`, `STRATEGY_KEYS` + `_build_strategy` registry, `collect_results`/`run_backtest` take A/B keys, `aggregate` derives labels dynamically (default `(nn,sv)` byte-identical, fail-loud on empty results); `--strategy-a/-b` on both H2H runners; `--strategy season_value_timing` in the live assistant CLI; a checkpoint **manifest guard** (resume with mismatched params/strategy pair now fails loud, closing the configurable-A/B version of TODO #43).
+
+**Test 9 result (timing vs `season_value`, real 2024+2025, 200×200, paired bootstrap, ACTUAL):** **split — and the timing layer did NOT achieve its goal.** It is **tied-or-worse vs `season_value` on the regular-season axis** (win% −2.6 [−4.2,−1.0] in 2025, tied in 2024; playoff% −8.0 in 2025, tied in 2024) — i.e. it did not fix sv's win-rate. BUT it **wins more championships** (+7.0 champ% [+4.3,+9.8] in 2024 CI-separated ~2× sv; +1.9 ns same-direction in 2025). Interpretation: the scarcity grab builds higher-**ceiling** rosters that spike in the 3-week single-elim (more titles) but bank slightly fewer regular-season wins — trades floor for ceiling, mirroring Test 7's "championships = ceiling, not floor." Projected metric: timing projects better in 2024, worse in 2025; the projected edge doesn't convert to actual win%.
+
+**Gates:** `tests/test_draft` 263+ passed (serial); `mypy src tests` clean (297 files); ruff + format clean. Each task spec+quality reviewed; final whole-impl review (one Important finding — checkpoint provenance — fixed). Known follow-ups: variance/ceiling-aware value function (would directly target the championship axis; needs per-player distributions), opportunity-cost against the *future* roster (current is single-pick vs current roster), TODO #42 nn scarcity-floor.
+
+---
+
 ## Draft Assistant — H2H 2025 Backtest Harness + Test F1 result (2026-06-12, on branch `feat/h2h-backtest-harness`)
 
 **Status:** Shipped the head-to-head backtest harness (`src/projections/draft/backtest/`) and ran **Test F1** — the first strategy comparison on a metric that is **not `season_value`'s own objective**, replaying real 2025 outcomes. Built spec→plan→subagent (12 TDD tasks, all committed) in the prior session; this session implemented the dual-metric extension + a resumable runner and executed the run. Spec/plan at `docs/superpowers/specs|plans/2026-06-12-h2h-backtest-harness.*`; full numbers in `reports/draft_strategy_tests.md` (Test 7/F1).

@@ -223,3 +223,46 @@ def test_cli_season_value_missing_weekly_stats_fails_loud(tmp_path: Path) -> Non
                 str(empty_root),
             ]
         )
+
+
+def test_cli_season_value_timing_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Mirror of test_cli_season_value_runs for the season_value_timing strategy.
+
+    Exercises generate_recommendation's season_value_timing branch end-to-end:
+    load_store_availability + SeasonValueTimingStrategy construction + recommend.
+    A future constructor drift (missing arg, wrong type) will be caught here.
+    """
+    state_path, vorp_path, gsis = _season_inputs(tmp_path)
+    data_root = _season_store(tmp_path, gsis)
+    id_map = data_root / "raw" / "id_map.parquet"
+    code = run(
+        [
+            "--state",
+            str(state_path),
+            "--vorp-table",
+            str(vorp_path),
+            "--id-map",
+            str(id_map),
+            "--strategy",
+            "season_value_timing",
+            "--season",
+            "2026",
+            "--n-sims",
+            "15",
+            "--data-root",
+            str(data_root),
+        ]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "PLAYER" in out  # the table header printed
+    assert "Player " in out  # ...and at least one data row rendered (id_map full_name)
+
+
+def test_parse_args_accepts_season_value_timing() -> None:
+    from projections.draft.assistant.cli import _parse_args
+
+    args = _parse_args(
+        ["--state", "s.json", "--vorp-table", "v.parquet", "--strategy", "season_value_timing"]
+    )
+    assert args.strategy == "season_value_timing"

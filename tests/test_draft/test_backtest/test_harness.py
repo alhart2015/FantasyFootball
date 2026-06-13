@@ -93,3 +93,39 @@ def test_chunked_collection_matches_monolithic() -> None:
     chunked = aggregate(a1 + a2, p1 + p2, n_seeds=4, base_seed=0)
     assert chunked.by_strategy_actual == full.by_strategy_actual
     assert chunked.by_strategy_projected == full.by_strategy_projected
+
+
+def test_collect_results_ab_roles_relabel() -> None:
+    cfg, pool = _cfg16(), _synthetic_pool(n_per_pos=60)
+    cal = Calendar(regular_weeks=tuple(range(1, 6)), playoff_weeks=(6, 7, 8), playoff_size=6)
+    proj = {
+        (g, wk): float(m)
+        for g, m in zip(pool["gsis_id"], pool["season_mean_fpts"], strict=False)
+        for wk in range(1, 9)
+    }
+    a, _p = collect_results(
+        seed_lo=0,
+        seed_hi=2,
+        pool=pool,
+        config=cfg,
+        availability=stub_availability(pool),
+        proj_lookup=proj,
+        actual_lookup=dict(proj),
+        calendar=cal,
+        jitter=8.0,
+        strategy_n_sims=5,
+        base_seed=0,
+        strategy_a="season_value_timing",
+        strategy_b="season_value",
+    )
+    labels = {r.strategy for r in a}
+    assert labels == {"season_value_timing", "season_value", "bot"}
+    res = aggregate(a, _p, n_seeds=2, base_seed=0)
+    assert set(res.by_strategy_actual) == {"season_value_timing", "season_value", "bot"}
+
+
+def test_aggregate_rejects_empty_results() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="non-empty"):
+        aggregate([], [], n_seeds=0, base_seed=0)

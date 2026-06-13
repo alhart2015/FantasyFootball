@@ -88,3 +88,19 @@ def test_bots_satisfy_position_minimums() -> None:
             counts[pos_by_id[g]] = counts.get(pos_by_id[g], 0) + 1
         for pos, lo in minp.items():
             assert counts[pos] >= lo, f"seat {seat} has {counts[pos]} {pos}, need >= {lo}"
+
+
+def test_seat_layout_defaults_unchanged() -> None:
+    # Default labels reproduce the historical nn/sv layout exactly.
+    odd = seat_layout(1)
+    assert {s for s, lab in odd.items() if lab == "now_or_never"} == {2, 6, 10, 14}
+    assert {s for s, lab in odd.items() if lab == "season_value"} == {4, 8, 12, 16}
+    even = seat_layout(0)  # paired mirror swaps nn<->sv
+    assert {s for s, lab in even.items() if lab == "now_or_never"} == {4, 8, 12, 16}
+
+
+def test_seat_layout_custom_labels() -> None:
+    lay = seat_layout(1, label_a="season_value_timing", label_b="season_value")
+    assert {s for s, lab in lay.items() if lab == "season_value_timing"} == {2, 6, 10, 14}
+    assert {s for s, lab in lay.items() if lab == "season_value"} == {4, 8, 12, 16}
+    assert {s for s, lab in lay.items() if lab == "bot"} == {1, 3, 5, 7, 9, 11, 13, 15}

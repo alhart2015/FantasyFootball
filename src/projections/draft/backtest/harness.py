@@ -13,9 +13,14 @@ import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.strategy import (
+    STRATEGY_KEYS as STRATEGY_KEYS,
+)
+from projections.draft.assistant.strategy import (
     DraftStrategy,
     NowOrNeverStrategy,
+    RawVorpStrategy,
     SeasonValueStrategy,
+    SeasonValueTimingStrategy,
 )
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.assistant.tournament import Interval, _bootstrap_mean
@@ -39,6 +44,33 @@ class BacktestResult:
     n_seeds: int
 
 
+def _build_strategy(
+    key: str,
+    *,
+    availability: PlayerAvailability,
+    n_teams: int,
+    strategy_n_sims: int,
+    base_seed: int,
+) -> DraftStrategy | None:
+    """Construct a strategy by key from the inputs the harness already has."""
+    if key == "bot":
+        return None
+    if key == "raw_vorp":
+        return RawVorpStrategy()
+    if key == "now_or_never":
+        return NowOrNeverStrategy(LogisticSurvival(sigma=default_sigma(n_teams)))
+    if key == "season_value":
+        return SeasonValueStrategy(availability, n_sims=strategy_n_sims, base_seed=base_seed)
+    if key == "season_value_timing":
+        return SeasonValueTimingStrategy(
+            availability,
+            n_sims=strategy_n_sims,
+            base_seed=base_seed,
+            survival=LogisticSurvival(sigma=default_sigma(n_teams)),
+        )
+    raise ValueError(f"unknown strategy key {key!r}")
+
+
 def collect_results(
     *,
     seed_lo: int,
@@ -52,6 +84,8 @@ def collect_results(
     jitter: float = 8.0,
     strategy_n_sims: int = 200,
     base_seed: int = 0,
+    strategy_a: str = "now_or_never",
+    strategy_b: str = "season_value",
 ) -> tuple[list[LeagueResult], list[LeagueResult]]:
     """Simulate seed indices [seed_lo, seed_hi) and return raw (actual, projected) results.
 
@@ -70,18 +104,29 @@ def collect_results(
         raise ValueError(
             "collect_results requires a non-empty calendar.regular_weeks (win% needs games)."
         )
-    sigma = default_sigma(config.n_teams)
-    nn = NowOrNeverStrategy(LogisticSurvival(sigma=sigma))
-    sv = SeasonValueStrategy(availability, n_sims=strategy_n_sims, base_seed=base_seed)
+    if strategy_a == strategy_b:
+        raise ValueError(f"strategy_a and strategy_b must differ; both were {strategy_a!r}")
     label_to_strategy: dict[str, DraftStrategy | None] = {
-        "now_or_never": nn,
-        "season_value": sv,
+        strategy_a: _build_strategy(
+            strategy_a,
+            availability=availability,
+            n_teams=config.n_teams,
+            strategy_n_sims=strategy_n_sims,
+            base_seed=base_seed,
+        ),
+        strategy_b: _build_strategy(
+            strategy_b,
+            availability=availability,
+            n_teams=config.n_teams,
+            strategy_n_sims=strategy_n_sims,
+            base_seed=base_seed,
+        ),
         "bot": None,
     }
     results_actual: list[LeagueResult] = []
     results_projected: list[LeagueResult] = []
     for s in range(seed_lo, seed_hi):
-        layout = seat_layout(s)
+        layout = seat_layout(s, strategy_a, strategy_b)
         seat_strategies = {seat: label_to_strategy[label] for seat, label in layout.items()}
         outcome = simulate_league(
             base_seed + s,
@@ -108,6 +153,9 @@ def aggregate(
 ) -> BacktestResult:
     """Aggregate raw per-seed results into per-strategy bootstrap metrics for both scorings."""
 
+    if not results_actual:
+        raise ValueError("aggregate requires non-empty results_actual (no leagues to aggregate).")
+
     def _metrics(results: list[LeagueResult], label: str) -> StrategyMetrics:
         rs = [r for r in results if r.strategy == label]
         champ = np.array([1.0 if r.is_champion else 0.0 for r in rs])
@@ -121,7 +169,7 @@ def aggregate(
             points_for=_bootstrap_mean(pf, seed=base_seed),
         )
 
-    labels = ("now_or_never", "season_value", "bot")
+    labels = sorted({r.strategy for r in results_actual})
 
     def _table(results: list[LeagueResult]) -> dict[str, StrategyMetrics]:
         return {label: _metrics(results, label) for label in labels}
@@ -145,6 +193,8 @@ def run_backtest(
     jitter: float = 8.0,
     strategy_n_sims: int = 200,
     base_seed: int = 0,
+    strategy_a: str = "now_or_never",
+    strategy_b: str = "season_value",
 ) -> BacktestResult:
     """Run all n_seeds in one process and aggregate. See collect_results for chunked runs."""
     results_actual, results_projected = collect_results(
@@ -159,5 +209,7 @@ def run_backtest(
         jitter=jitter,
         strategy_n_sims=strategy_n_sims,
         base_seed=base_seed,
+        strategy_a=strategy_a,
+        strategy_b=strategy_b,
     )
     return aggregate(results_actual, results_projected, n_seeds=n_seeds, base_seed=base_seed)

@@ -4,19 +4,23 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.pick_timing import my_next_pick
+from projections.draft.assistant.season_value import marginal_season_values
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.strategy import (
     DraftStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
     SeasonValueStrategy,
+    SeasonValueTimingStrategy,
     _finalize,
 )
-from projections.draft.assistant.survival import LogisticSurvival
+from projections.draft.assistant.survival import LogisticSurvival, expected_best_by_position
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import (
     _PYARROW_STR,
@@ -422,3 +426,161 @@ def test_season_value_empty_eligible_returns_valid_empty_frame() -> None:
     )
     RecommendationSchema.validate(rec)
     assert len(rec) == 0
+
+
+def _flat_availability(pool: pd.DataFrame) -> PlayerAvailability:
+    # Every player available every week, no byes -> deterministic, MC-stable marginals.
+    # PlayerAvailability is the (p, bye) dataclass from availability.py.
+    return PlayerAvailability(p={str(g): 0.95 for g in pool["gsis_id"]}, bye={})
+
+
+def _timing(pool: pd.DataFrame, sigma: float = 8.0) -> SeasonValueTimingStrategy:
+    return SeasonValueTimingStrategy(
+        _flat_availability(pool), n_sims=20, base_seed=0, survival=LogisticSurvival(sigma=sigma)
+    )
+
+
+def test_timing_validates_construction() -> None:
+    av = _flat_availability(_pool())
+    with pytest.raises(ValueError):
+        SeasonValueTimingStrategy(av, n_sims=0, base_seed=0, survival=LogisticSurvival(sigma=8.0))
+    with pytest.raises(ValueError):
+        SeasonValueTimingStrategy(
+            av, n_sims=20, base_seed=0, survival=LogisticSurvival(sigma=8.0), top_k=0
+        )
+
+
+def test_timing_is_deterministic() -> None:
+    pool, state, cfg = _pool(), _state(), _config()
+    r1 = _timing(pool).recommend(state, pool, cfg)
+    r2 = _timing(pool).recommend(state, pool, cfg)
+    pd.testing.assert_frame_equal(r1, r2)
+
+
+def test_timing_score_equals_marginal_minus_opp_cost() -> None:
+    # score must be exactly marginal - E[best surviving marginal at pos], no fudge factor.
+    pool, state, cfg = _pool(), _state(), _config()
+    rec = _timing(pool).recommend(state, pool, cfg)
+
+    df = pool[~pool["gsis_id"].isin(state.drafted_ids)].copy()
+    pruned = (
+        df.sort_values(["position", "vorp"], ascending=[True, False])
+        .groupby("position", sort=False)
+        .head(8)
+    )
+    rng = np.random.default_rng([0, state.current_pick])
+    base = pool.loc[pool["gsis_id"].isin([str(g) for g in state.my_pick_ids])]
+    marg = marginal_season_values(
+        base[["gsis_id", "position", "season_mean_fpts"]],
+        pruned[["gsis_id", "position", "season_mean_fpts"]],
+        cfg.roster_slots,
+        _flat_availability(pool),
+        n_sims=20,
+        rng=rng,
+    )
+    nxt = my_next_pick(state.current_pick, state.my_slot, state.n_teams, state.rounds)
+    assert nxt is not None
+    surv = LogisticSurvival(sigma=8.0)
+    pos = np.array([str(r.position) for r in rec.itertuples(index=False)])
+    m = np.array([float(marg.get(str(r.gsis_id), 0.0)) for r in rec.itertuples(index=False)])
+    p = np.array(
+        [
+            surv.p_available(
+                float(r.consensus_adp) if pd.notna(r.consensus_adp) else float("nan"), nxt
+            )
+            for r in rec.itertuples(index=False)
+        ]
+    )
+    gid = np.array([str(r.gsis_id) for r in rec.itertuples(index=False)])
+    opp = expected_best_by_position(pos, m, p, gid)
+    for i, r in enumerate(rec.itertuples(index=False)):
+        expected = round(m[i] - opp[str(r.position)], 10)
+        assert abs(float(r.score) - expected) < 1e-9
+
+
+def test_timing_promotes_scarce_position_over_safer_higher_marginal() -> None:
+    # rb1 scarce (adp 1 -> ~0 survival) -> opp_cost[RB] ~ 0 -> keeps ~full marginal.
+    # wr1 highest marginal but safe (adp 200) -> opp_cost[WR] ~ its own marginal -> score ~ 0.
+    # season_value ranks wr1 #1 (highest marginal); timing flips rb1 to the top.
+    pool = pd.DataFrame(
+        {
+            "gsis_id": pd.array(
+                ["00-0000010", "00-0000011", "00-0000020", "00-0000021"], dtype=_PYARROW_STR
+            ),
+            "position": pd.array(["RB", "RB", "WR", "WR"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [220.0, 100.0, 350.0, 150.0],
+            "vorp": [50.0, 20.0, 80.0, 30.0],
+            "replacement_fpts": [170.0, 80.0, 270.0, 120.0],
+            "consensus_adp": pd.array([1.0, 90.0, 400.0, 400.0], dtype=pd.Float64Dtype()),
+        }
+    )
+    state, cfg = _state(), _config()
+    sv = SeasonValueStrategy(_flat_availability(pool), n_sims=20, base_seed=0)
+    sv_top = sv.recommend(state, pool, cfg).iloc[0]
+    timing_top = _timing(pool).recommend(state, pool, cfg).iloc[0]
+    assert sv_top["gsis_id"] == "00-0000020"  # season_value: highest marginal (wr1)
+    assert timing_top["gsis_id"] == "00-0000010"  # timing: scarce rb1 promoted
+
+
+def test_timing_last_pick_fallback_equals_season_value() -> None:
+    # Seat 7's final pick in a 2-round/12-team draft (pick 18) -> no next pick ->
+    # timing falls back to ranking by raw marginal, identical to season_value.
+    pool, cfg = _pool(), _config()
+    state = _state(current_pick=18, rounds=2)
+    sv = SeasonValueStrategy(_flat_availability(pool), n_sims=20, base_seed=0)
+    pd.testing.assert_frame_equal(
+        _timing(pool).recommend(state, pool, cfg), sv.recommend(state, pool, cfg)
+    )
+
+
+def test_timing_prunes_to_top_k_and_zeros_the_tail() -> None:
+    # 10 RBs, top_k=2: only the top-2 by VORP are MC-evaluated; the other 8 get
+    # marginal 0 (cosmetic tail) -> identical score (0 - opp_cost[RB]) and never the pick.
+    n = 10
+    pool = pd.DataFrame(
+        {
+            "gsis_id": pd.array([f"00-00000{i:02d}" for i in range(n)], dtype=_PYARROW_STR),
+            "position": pd.array(["RB"] * n, dtype=_PYARROW_STR),
+            "season_mean_fpts": [250.0 - i * 5 for i in range(n)],
+            "vorp": [50.0 - i * 5 for i in range(n)],
+            "replacement_fpts": [200.0] * n,
+            "consensus_adp": pd.array([float(i + 1) for i in range(n)], dtype=pd.Float64Dtype()),
+        }
+    )
+    state, cfg = _state(), _config()
+    strat = SeasonValueTimingStrategy(
+        _flat_availability(pool),
+        n_sims=20,
+        base_seed=0,
+        survival=LogisticSurvival(sigma=8.0),
+        top_k=2,
+    )
+    rec = strat.recommend(state, pool, cfg)
+    evaluated = {"00-0000000", "00-0000001"}
+    assert rec.iloc[0]["gsis_id"] in evaluated  # the pick is an evaluated candidate
+    tail = rec[~rec["gsis_id"].isin(evaluated)]["score"]
+    assert tail.nunique() == 1  # the 8 pruned-out share the cosmetic 0-marginal score
+
+
+def test_timing_null_adp_treated_as_surviving() -> None:
+    # WR alone at its position with null ADP -> p=1 (certain to survive). With
+    # self-inclusion, opp_cost[WR] == its own marginal -> score == 0; display p is null.
+    pool = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0000010", "00-0000020"], dtype=_PYARROW_STR),
+            "position": pd.array(["RB", "WR"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [250.0, 250.0],
+            "vorp": [50.0, 50.0],
+            "replacement_fpts": [200.0, 200.0],
+            "consensus_adp": pd.array([5.0, pd.NA], dtype=pd.Float64Dtype()),
+        }
+    )
+    state, cfg = _state(), _config()
+    rec = _timing(pool).recommend(state, pool, cfg)
+    wr = rec[rec["gsis_id"] == "00-0000020"].iloc[0]
+    assert pd.isna(wr["p_available_next"])  # null ADP -> null display
+    assert abs(float(wr["score"])) < 1e-9  # p=1 surviving + self-inclusion -> opp == marginal
+
+
+def test_timing_satisfies_protocol() -> None:
+    assert isinstance(_timing(_pool()), DraftStrategy)
