@@ -159,6 +159,24 @@ Bots in fact *edge* nn on actual win% (paired −1.40 [−2.67, −0.11]); the s
 
 **The actual lever — scarcity vs raw points.** Draft-capital allocation (capital = 176−pick): nn spends **23% on TE (217)** vs bots' 7% (70) / sv's 10% (101), funded by less RB/WR. nn's opportunity-cost layer (`vorp − E[best survivor]`) shifts capital toward TE because the TE talent cliff makes the wait-cost large — *exactly what now-or-never is built to do*. But in H2H/raw weekly points, RB/WR **volume** beats positional scarcity: the "elite" TE projected 207 and scored **142 (like a mid WR)**, so nn pays premium capital for scarcity that doesn't score. **Next lever (own slice): re-weight scarcity vs raw value in now-or-never, with an absolute value floor — below a quality bar a player isn't worth taking *no matter the wait-cost*** (the opportunity-cost term currently has no floor, so it over-recommends the best-of-a-thin-tier). Distinct from the two dead leads (injury discount ❌, QB cap ❌). See TODO #42.
 
+### Test 8 (F1-2024) — cross-season replication of F1 (real 2024 outcomes)
+- **Source:** `_h2h_ckpt_2024/`, `_h2h_run_2024.txt`. Identical harness/config to Test 7, `--season 2024` (ESPN 2024 preseason + Sleeper ADP draft basis; ESPN 2024 weekly start/sit; `weekly_stats 2024` actuals). 200 seeds × 200 sims; 40/40 chunks, 2 crash-retries.
+- **Paired bootstrap (per-seed, ACTUAL), 2024 vs 2025 side by side:**
+
+  | comparison (actual win%) | 2025 | 2024 |
+  |---|---|---|
+  | **sv − nn** | **+6.38 [+5.1, +7.7]** | **+5.70 [+4.3, +7.1]** |
+  | **sv − nn (playoff%)** | **+15.6 [+11.5, +19.9]** | **+16.0 [+11.8, +20.3]** |
+  | sv − bot | +4.99 [+3.9, +6.1] | +11.40 [+10.2, +12.6] |
+  | nn − bot | −1.40 [−2.7, −0.1] (bot ahead) | +5.71 [+4.4, +7.0] (nn ahead) |
+  | nn − bot (playoff%) | −1.94 (noise) | +13.50 [+9.8, +17.2] |
+
+- **Favors (isolated):** **season_value** — clearly best in 2024 too (win% 57.1, playoff 56.2; beats nn and bots, CI-separated).
+- **Two findings:**
+  1. **`sv > nn` REPLICATES almost exactly** — win-gap +6.38 (2025) vs +5.70 (2024); playoff-gap +15.6 vs +16.0. Two independent seasons, near-identical. This is the robust, bankable result: **sv is decisively the best strategy.**
+  2. **`nn ≈ bots` was 2025-specific.** In 2024 nn **clearly beats the field** (+5.7 win%, +13.5 playoff%, +3.8 champ%, all CI-separated). So nn *does* add value over best-available-ADP on average — it's **positive-but-variable** across seasons, not a coin-flip. 2025 was a down year where its projection-chasing/TE-tilt didn't realize.
+- **Corrected ranking (2-season): sv > nn > bot** — the **sv-over-nn gap is rock-solid**; the **nn-over-bot gap is real but season-dependent.** Reframes TODO #42: nn isn't broken (won 2024), but a scarcity-floor would make it *reliably* beat ADP instead of only sometimes. (Still single-format/2-season; outcome luck not fully averaged.)
+
 ---
 
 ## Standing tally (no verdict yet)
@@ -172,6 +190,7 @@ Bots in fact *edge* nn on actual win% (paired −1.40 [−2.67, −0.11]); the s
 | 5 (F4) | 16-team | constrained | season (paired) | season_value (2/3 seats) — retires Test 3 |
 | **6** | **16-team half-PPR + fixed VORP** | constrained | season (paired, all seats) | **season_value (14/16 seats, 2 ties)** — corrected baseline |
 | **7 (F1)** | **16-team half-PPR, real 2025** | constrained (mixed field) | **H2H real outcomes (projected + actual)** | **season_value on win% + playoff-make% (both scorings, CI-separated); championship% a wash (nn ≈ sv); nn ≈ ADP bots (no edge)** — first non-sv-objective metric |
+| **8 (F1-2024)** | **16-team half-PPR, real 2024** | constrained (mixed field) | **H2H real outcomes** | **season_value** (replicates: sv−nn +5.7 win% / +16 playoff%, ~identical to 2025); **nn clearly beats bots here** (+5.7 win%) — so nn≈bots was 2025-specific |
 
 > **⚠️ Season-metric confound (root-caused by Test 7/F1, 2026-06-12).** Tests 1–6 all score by the **season metric**, which values rosters by the pool's **preseason** `season_mean_fpts` — the *same projections the strategies draft from* (circular), and *optimistically biased* (preseason hype the in-season weekly model later marks down). It **overrates VORP/preseason-chasing strategies, now_or_never most** (+13% phantom roster value vs bots that vanishes under weekly projections / actuals). **Robust across the confound:** `season_value > now_or_never` (sv won even when the metric flattered nn). **Killed by the confound:** `now_or_never ≫ bots` (Tests 2/4) — under real outcomes nn has **no meaningful edge over a noisy-ADP bot**. Use F1's real-outcome scoring as the honest yardstick. See the Test 7 diagnostic.
 

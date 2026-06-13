@@ -20,7 +20,9 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 **Gates:** `tests/test_draft/test_backtest` 34 passed (serial; the equivalence test can flake under pytest-xdist parallel load — the same native crash, not a logic bug); `mypy src tests` clean (297 files); ruff + format clean.
 
-**Caveats / next:** single season (2025 outcome luck) → **2024 H2H backtest** is the cross-season check (harness is season-parameterized); F1 CIs are marginal (a paired-diff would tighten the nn-vs-sv championship contrast); bot↔strategy seat confound (only nn-vs-sv mirror-controlled).
+**Cross-season check — Test 8 (F1-2024), DONE (2026-06-13):** re-ran the identical harness on real **2024** data (ESPN 2024 preseason + Sleeper ADP + ESPN 2024 weekly + `weekly_stats 2024`). **`season_value > now_or_never` REPLICATES almost exactly** — actual win-gap +5.70 [+4.3,+7.1] (2024) vs +6.38 (2025); playoff-gap +16.0 vs +15.6. **sv is decisively the best strategy across two seasons.** BUT **`nn ≈ bots` was 2025-specific**: in 2024 nn clearly beats the field (+5.71 win%, +13.5 playoff%, +3.8 champ%, CI-separated). Corrected 2-season ranking **sv > nn > bot** — sv-over-nn gap rock-solid, nn-over-bot gap real but season-variable. Reframes TODO #42 (nn isn't broken — won 2024 — but a scarcity-floor would make it *reliably* beat ADP). Both runs committed/documented in `reports/draft_strategy_tests.md` (Tests 7–8).
+
+**Caveats / next:** two seasons (2024–25), one format/league — outcome luck not fully averaged; F1 CIs are marginal-bootstrap (not paired-diff for sv-vs-nn champ); bot↔strategy seat confound (only nn-vs-sv mirror-controlled); TODO #42 (nn scarcity-floor) is the next strategy slice.
 
 ---
 
