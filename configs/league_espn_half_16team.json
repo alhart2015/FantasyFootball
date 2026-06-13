@@ -1,0 +1,8 @@
+{
+  "name": "ppr_half_16team_2026_tight",
+  "n_teams": 16,
+  "budget": 200,
+  "min_bid": 1,
+  "roster_slots": {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "BENCH": 4},
+  "ruleset": "espn_half"
+}

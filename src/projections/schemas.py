@@ -1266,3 +1266,34 @@ class PreseasonBacktestSchema(pa.DataFrameModel):
     class Config:
         strict = "filter"
         coerce = True
+
+
+class WeeklyProjectionSchema(pa.DataFrameModel):
+    """Per-(player, week) preseason-source weekly projection, scored to a ruleset.
+
+    `projected_points` is nullable: a player with no ESPN weekly entry that week
+    (bye / inactive) carries NULL and cannot be started.
+    """
+
+    gsis_id: Series[str]
+    season: Series[pd.Int64Dtype] = pa.Field(ge=2000, le=2100)
+    week: Series[pd.Int64Dtype] = pa.Field(ge=1, le=17)
+    position: Series[str]
+    projected_points: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
+class WeeklyActualSchema(pa.DataFrameModel):
+    """Per-(player, week) realized fantasy points under a ruleset."""
+
+    gsis_id: Series[str]
+    season: Series[pd.Int64Dtype] = pa.Field(ge=2000, le=2100)
+    week: Series[pd.Int64Dtype] = pa.Field(ge=1, le=17)
+    actual_points: Series[pd.Float64Dtype]
+
+    class Config:
+        strict = "filter"
+        coerce = True
