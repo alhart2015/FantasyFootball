@@ -14,6 +14,7 @@ import pandas as pd
 from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.state import load_draft_state
 from projections.draft.assistant.strategy import (
+    STRATEGY_KEYS,
     DraftStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
@@ -70,15 +71,15 @@ def generate_recommendation(
     vorp = VorpTableSchema.validate(vorp)
 
     strategy: DraftStrategy
-    if strategy_name == "season_value":
+    if strategy_name in ("season_value", "season_value_timing"):
         availability = load_store_availability(vorp, season=season, data_root=data_root)
-        strategy = SeasonValueStrategy(availability, n_sims=n_sims, base_seed=0)
-    elif strategy_name == "season_value_timing":
-        availability = load_store_availability(vorp, season=season, data_root=data_root)
-        spread = default_sigma(league.n_teams) if sigma is None else sigma
-        strategy = SeasonValueTimingStrategy(
-            availability, n_sims=n_sims, base_seed=0, survival=LogisticSurvival(sigma=spread)
-        )
+        if strategy_name == "season_value":
+            strategy = SeasonValueStrategy(availability, n_sims=n_sims, base_seed=0)
+        else:
+            spread = default_sigma(league.n_teams) if sigma is None else sigma
+            strategy = SeasonValueTimingStrategy(
+                availability, n_sims=n_sims, base_seed=0, survival=LogisticSurvival(sigma=spread)
+            )
     else:
         strategy = _build_strategy(strategy_name, league.n_teams, sigma)
     return strategy.recommend(state, vorp, league), id_map
@@ -121,7 +122,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--strategy",
-        choices=["now_or_never", "raw_vorp", "season_value", "season_value_timing"],
+        choices=list(STRATEGY_KEYS),
         default="now_or_never",
         help="Recommendation strategy (default now_or_never).",
     )

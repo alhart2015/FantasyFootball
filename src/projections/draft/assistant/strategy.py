@@ -28,6 +28,10 @@ from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import eligible_positions
 from projections.schemas import _PYARROW_STR, Position, RecommendationSchema
 
+# Single source of truth for the valid strategy identifiers used by the assistant
+# CLI, the backtest harness, and any other caller that needs to enumerate strategies.
+STRATEGY_KEYS = ("now_or_never", "season_value", "season_value_timing", "raw_vorp")
+
 
 @runtime_checkable
 class DraftStrategy(Protocol):
@@ -111,6 +115,67 @@ def _raw_vorp_result(df: pd.DataFrame, elig: dict[Position, bool]) -> pd.DataFra
     return _finalize(df, elig, p_na)
 
 
+def _validate_mc_params(n_sims: int, top_k: int) -> None:
+    """Fail loud on degenerate Monte-Carlo parameters.
+
+    n_sims < 1 produces an empty draw matrix (nan marginals -> silent VORP fallback).
+    top_k < 1 means no candidate is ever MC-evaluated. Both must be rejected at
+    construction time by any strategy that uses season marginals.
+    """
+    if n_sims < 1:
+        raise ValueError(f"n_sims must be >= 1; got {n_sims}")
+    if top_k < 1:
+        raise ValueError(f"top_k must be >= 1; got {top_k}")
+
+
+def _season_marginals(
+    state: DraftState,
+    df: pd.DataFrame,
+    pool: pd.DataFrame,
+    config: LeagueConfig,
+    availability: PlayerAvailability,
+    *,
+    n_sims: int,
+    base_seed: int,
+    top_k: int,
+) -> pd.DataFrame:
+    """Return df with ``score`` = each candidate's marginal expected season points.
+
+    Evaluated (top-k-by-VORP-per-position) candidates carry their real marginal;
+    pruned-out rows get 0.0 (cosmetic tail). Shared by SeasonValueStrategy and
+    SeasonValueTimingStrategy.
+    """
+    my_ids = {str(g) for g in state.my_pick_ids}
+    pool_ids = pool["gsis_id"].astype(str)
+    base_roster = pool.loc[
+        pool_ids.isin(my_ids), ["gsis_id", "position", "season_mean_fpts"]
+    ].copy()
+    missing = sorted(my_ids - set(base_roster["gsis_id"].astype(str)))
+    if missing:
+        warnings.warn(
+            f"{len(missing)} rostered player(s) absent from the VORP pool; "
+            f"excluded from season valuation: {missing}",
+            stacklevel=2,
+        )
+    pruned = (
+        df.sort_values(["position", "vorp"], ascending=[True, False])
+        .groupby("position", sort=False)
+        .head(top_k)
+    )
+    rng = np.random.default_rng([base_seed, state.current_pick])
+    marginals = marginal_season_values(
+        base_roster,
+        pruned[["gsis_id", "position", "season_mean_fpts"]],
+        config.roster_slots,
+        availability,
+        n_sims=n_sims,
+        rng=rng,
+    )
+    out = df.copy()
+    out["score"] = out["gsis_id"].astype(str).map(marginals).fillna(0.0).astype(float)
+    return out
+
+
 @dataclass(frozen=True)
 class RawVorpStrategy:
     """Best available by VORP (roster-eligible), no timing. The control."""
@@ -179,50 +244,22 @@ class SeasonValueStrategy:
         # Fail loud at construction so neither CLI can build a degenerate strategy:
         # n_sims < 1 makes the MC mean a nan (empty draw matrix), which would silently
         # collapse every marginal to nan -> 0.0 and rank purely by VORP.
-        if self.n_sims < 1:
-            raise ValueError(f"n_sims must be >= 1; got {self.n_sims}")
-        if self.top_k < 1:
-            raise ValueError(f"top_k must be >= 1; got {self.top_k}")
+        _validate_mc_params(self.n_sims, self.top_k)
 
     def recommend(
         self, state: DraftState, pool: pd.DataFrame, config: LeagueConfig
     ) -> pd.DataFrame:
         df, elig = _eligible_subset(state, pool, config)
-
-        my_ids = {str(g) for g in state.my_pick_ids}
-        pool_ids = pool["gsis_id"].astype(str)
-        present = pool_ids.isin(my_ids)
-        base_roster = pool.loc[present, ["gsis_id", "position", "season_mean_fpts"]].copy()
-        missing = sorted(my_ids - set(pool_ids))
-        if missing:
-            warnings.warn(
-                f"{len(missing)} rostered player(s) absent from the VORP pool; "
-                f"excluded from season valuation: {missing}",
-                stacklevel=2,
-            )
-
-        pruned = (
-            df.sort_values(["position", "vorp"], ascending=[True, False])
-            .groupby("position", sort=False)
-            .head(self.top_k)
-        )
-        rng = np.random.default_rng([self.base_seed, state.current_pick])
-        marginals = marginal_season_values(
-            base_roster,
-            pruned[["gsis_id", "position", "season_mean_fpts"]],
-            config.roster_slots,
+        out = _season_marginals(
+            state,
+            df,
+            pool,
+            config,
             self.availability,
             n_sims=self.n_sims,
-            rng=rng,
+            base_seed=self.base_seed,
+            top_k=self.top_k,
         )
-
-        out = df.copy()
-        # Evaluated candidates carry their real marginal; pruned-out get 0.0. Marginal
-        # is always >= 0 and the argmax (the actual pick) is always an evaluated
-        # candidate, so the pick is unaffected. A 0-marginal evaluated candidate (one
-        # that never cracks the lineup) may interleave with the 0.0 pruned tail by VORP
-        # — acceptable per spec §3.5's cosmetic-tail clause (only the head drives a pick).
-        out["score"] = out["gsis_id"].astype(str).map(marginals).fillna(0.0).astype(float)
         p_na: pd.Series[float] = pd.Series(pd.NA, index=out.index, dtype=pd.Float64Dtype())
         return _finalize(out, elig, p_na, starting_need_tier=False)
 
@@ -245,49 +282,22 @@ class SeasonValueTimingStrategy:
     top_k: int = 8
 
     def __post_init__(self) -> None:
-        if self.n_sims < 1:
-            raise ValueError(f"n_sims must be >= 1; got {self.n_sims}")
-        if self.top_k < 1:
-            raise ValueError(f"top_k must be >= 1; got {self.top_k}")
+        _validate_mc_params(self.n_sims, self.top_k)
 
     def recommend(
         self, state: DraftState, pool: pd.DataFrame, config: LeagueConfig
     ) -> pd.DataFrame:
         df, elig = _eligible_subset(state, pool, config)
-
-        my_ids = {str(g) for g in state.my_pick_ids}
-        pool_ids = pool["gsis_id"].astype(str)
-        base_roster = pool.loc[
-            pool_ids.isin(my_ids), ["gsis_id", "position", "season_mean_fpts"]
-        ].copy()
-        missing = sorted(my_ids - set(pool_ids))
-        if missing:
-            warnings.warn(
-                f"{len(missing)} rostered player(s) absent from the VORP pool; "
-                f"excluded from season valuation: {missing}",
-                stacklevel=2,
-            )
-
-        pruned = (
-            df.sort_values(["position", "vorp"], ascending=[True, False])
-            .groupby("position", sort=False)
-            .head(self.top_k)
-        )
-        rng = np.random.default_rng([self.base_seed, state.current_pick])
-        marginals = marginal_season_values(
-            base_roster,
-            pruned[["gsis_id", "position", "season_mean_fpts"]],
-            config.roster_slots,
+        out = _season_marginals(
+            state,
+            df,
+            pool,
+            config,
             self.availability,
             n_sims=self.n_sims,
-            rng=rng,
+            base_seed=self.base_seed,
+            top_k=self.top_k,
         )
-
-        out = df.copy()
-        # marginal per row: evaluated candidates carry their real marginal, the pruned
-        # tail gets marginal 0.0 here (its final score becomes -opp_cost[pos] after the
-        # timing term below) -- cosmetic, never the argmax.
-        out["score"] = out["gsis_id"].astype(str).map(marginals).fillna(0.0).astype(float)
 
         next_pick = my_next_pick(state.current_pick, state.my_slot, state.n_teams, state.rounds)
         if next_pick is None:

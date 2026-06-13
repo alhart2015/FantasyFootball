@@ -13,6 +13,9 @@ import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.strategy import (
+    STRATEGY_KEYS as STRATEGY_KEYS,
+)
+from projections.draft.assistant.strategy import (
     DraftStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
@@ -24,9 +27,6 @@ from projections.draft.assistant.tournament import Interval, _bootstrap_mean
 from projections.draft.backtest.draft_field import seat_layout
 from projections.draft.backtest.league import Calendar, LeagueResult, simulate_league
 from projections.draft.league_config import LeagueConfig
-
-# Strategy keys accepted by _build_strategy and the harness CLIs.
-STRATEGY_KEYS = ("now_or_never", "season_value", "season_value_timing", "raw_vorp")
 
 
 @dataclass(frozen=True)

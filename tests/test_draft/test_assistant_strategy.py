@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.pick_timing import my_next_pick
 from projections.draft.assistant.season_value import marginal_season_values
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.strategy import (
@@ -19,7 +20,7 @@ from projections.draft.assistant.strategy import (
     SeasonValueTimingStrategy,
     _finalize,
 )
-from projections.draft.assistant.survival import LogisticSurvival
+from projections.draft.assistant.survival import LogisticSurvival, expected_best_by_position
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import (
     _PYARROW_STR,
@@ -477,9 +478,6 @@ def test_timing_score_equals_marginal_minus_opp_cost() -> None:
         n_sims=20,
         rng=rng,
     )
-    from projections.draft.assistant.pick_timing import my_next_pick
-    from projections.draft.assistant.survival import LogisticSurvival, expected_best_by_position
-
     nxt = my_next_pick(state.current_pick, state.my_slot, state.n_teams, state.rounds)
     assert nxt is not None
     surv = LogisticSurvival(sigma=8.0)
