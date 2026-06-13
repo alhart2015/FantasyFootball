@@ -18,6 +18,7 @@ from projections.draft.assistant.strategy import (
     NowOrNeverStrategy,
     RawVorpStrategy,
     SeasonValueStrategy,
+    SeasonValueTimingStrategy,
 )
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
@@ -72,6 +73,12 @@ def generate_recommendation(
     if strategy_name == "season_value":
         availability = load_store_availability(vorp, season=season, data_root=data_root)
         strategy = SeasonValueStrategy(availability, n_sims=n_sims, base_seed=0)
+    elif strategy_name == "season_value_timing":
+        availability = load_store_availability(vorp, season=season, data_root=data_root)
+        spread = default_sigma(league.n_teams) if sigma is None else sigma
+        strategy = SeasonValueTimingStrategy(
+            availability, n_sims=n_sims, base_seed=0, survival=LogisticSurvival(sigma=spread)
+        )
     else:
         strategy = _build_strategy(strategy_name, league.n_teams, sigma)
     return strategy.recommend(state, vorp, league), id_map
@@ -114,7 +121,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--strategy",
-        choices=["now_or_never", "raw_vorp", "season_value"],
+        choices=["now_or_never", "raw_vorp", "season_value", "season_value_timing"],
         default="now_or_never",
         help="Recommendation strategy (default now_or_never).",
     )
@@ -129,19 +136,24 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--season",
         type=int,
         default=2026,
-        help="[--strategy season_value] target season for byes + availability.",
+        help=(
+            "[--strategy season_value / season_value_timing] target season for byes + availability."
+        ),
     )
     p.add_argument(
         "--n-sims",
         type=int,
         default=300,
-        help="[--strategy season_value] Monte-Carlo seasons per candidate.",
+        help="[--strategy season_value / season_value_timing] Monte-Carlo seasons per candidate.",
     )
     p.add_argument(
         "--data-root",
         type=Path,
         default=Path("data"),
-        help="[--strategy season_value] store root for weekly_stats/schedules/id_map.",
+        help=(
+            "[--strategy season_value / season_value_timing]"
+            " store root for weekly_stats/schedules/id_map."
+        ),
     )
     return p.parse_args(argv)
 
