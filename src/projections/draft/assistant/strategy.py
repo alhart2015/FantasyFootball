@@ -155,7 +155,9 @@ def _season_marginals(
         warnings.warn(
             f"{len(missing)} rostered player(s) absent from the VORP pool; "
             f"excluded from season valuation: {missing}",
-            stacklevel=2,
+            # 3, not 2: this helper adds a frame, so the warning points at the
+            # strategy's caller (the CLI/harness), preserving the pre-extraction behavior.
+            stacklevel=3,
         )
     pruned = (
         df.sort_values(["position", "vorp"], ascending=[True, False])
