@@ -7,6 +7,9 @@ results to a JSON checkpoint, and retries a crashed chunk. On a fresh invocation
 checkpoints are skipped — so after a reboot you just re-run the same command and it resumes.
 Once every chunk is present, results are pooled in seed order and aggregated once, which is
 byte-identical to a monolithic run_backtest (pinned by test_chunked_collection_matches_monolithic).
+On first use a manifest.json is written to the checkpoint dir recording the season, strategy
+pair, strategy-n-sims, and jitter; resuming with mismatched params fails loud instead of
+silently pooling incompatible chunks.
 
 Driver (what you run):
     python scripts/h2h_backtest_chunked.py --season 2025 \
@@ -27,7 +30,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from projections.draft.backtest.checkpoint import dump_results, load_results, plan_chunks
+from projections.draft.backtest.checkpoint import (
+    dump_results,
+    load_results,
+    plan_chunks,
+    verify_or_write_manifest,
+)
 from projections.draft.backtest.cli import format_result
 from projections.draft.backtest.harness import STRATEGY_KEYS, aggregate, collect_results
 from projections.draft.backtest.inputs import load_inputs
@@ -119,6 +127,22 @@ def _run_driver(args: argparse.Namespace) -> int:
     config = LeagueConfig.model_validate_json(args.league_config.read_text())
     n_teams = config.n_teams
     args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    if args.strategy_a == args.strategy_b:
+        print(
+            f"[ERROR] --strategy-a and --strategy-b must differ; both were {args.strategy_a!r}",
+            flush=True,
+        )
+        return 1
+    verify_or_write_manifest(
+        args.checkpoint_dir,
+        {
+            "season": args.season,
+            "strategy_a": args.strategy_a,
+            "strategy_b": args.strategy_b,
+            "strategy_n_sims": args.strategy_n_sims,
+            "jitter": args.jitter,
+        },
+    )
     chunks = plan_chunks(n_seeds=args.n_seeds, chunk_size=args.chunk_size)
     env = {**os.environ, **_WORKER_ENV}
 
