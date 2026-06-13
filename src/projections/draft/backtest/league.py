@@ -72,24 +72,25 @@ def simulate_league(
     rosters = draft_mixed_field(dict(seat_strategies), pool, config, rng=rng, jitter=jitter)
     pos_by_id = {str(g): str(p) for g, p in zip(pool["gsis_id"], pool["position"], strict=False)}
 
-    def week_points(seat: int, wk: int, score_by: str) -> float:
-        roster = [
-            {
-                "position": pos_by_id[g],
-                "projected": proj_lookup.get((g, wk)),
-                "actual": actual_lookup.get((g, wk)),
-            }
-            for g in rosters[seat]
-        ]
-        return weekly_lineup_points(roster, config.roster_slots, score_by=score_by)
-
+    # Build each (week, seat) roster once; both scorings start the same lineup (by
+    # projection) and only differ in which field they sum, so the roster is shared.
     all_weeks = set(calendar.regular_weeks) | set(calendar.playoff_weeks)
-    pts_actual: dict[int, dict[int, float]] = {
-        wk: {s: week_points(s, wk, "actual") for s in rosters} for wk in all_weeks
-    }
-    pts_proj: dict[int, dict[int, float]] = {
-        wk: {s: week_points(s, wk, "projected") for s in rosters} for wk in all_weeks
-    }
+    pts_actual: dict[int, dict[int, float]] = {wk: {} for wk in all_weeks}
+    pts_proj: dict[int, dict[int, float]] = {wk: {} for wk in all_weeks}
+    for wk in all_weeks:
+        for s in rosters:
+            roster = [
+                {
+                    "position": pos_by_id[g],
+                    "projected": proj_lookup.get((g, wk)),
+                    "actual": actual_lookup.get((g, wk)),
+                }
+                for g in rosters[s]
+            ]
+            pts_actual[wk][s] = weekly_lineup_points(roster, config.roster_slots, score_by="actual")
+            pts_proj[wk][s] = weekly_lineup_points(
+                roster, config.roster_slots, score_by="projected"
+            )
 
     # One schedule (one rng draw) shared by both scorings.
     sched = regular_season_schedule(

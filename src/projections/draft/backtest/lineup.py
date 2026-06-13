@@ -8,7 +8,7 @@ a started player with a null actual contributes 0; unfilled slots contribute 0.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from projections.draft.roster_eligibility import FLEX_ELIGIBLE, POSITION_SLOTS, SUPER_FLEX_ELIGIBLE
 from projections.schemas import Position, RosterSlot
@@ -23,7 +23,7 @@ def weekly_lineup_points(
     roster: Sequence[Mapping[str, Any]],
     roster_slots: Mapping[RosterSlot, int],
     *,
-    score_by: str = "actual",
+    score_by: Literal["actual", "projected"] = "actual",
 ) -> float:
     """Score the lineup chosen by highest `projected` values, summing the `score_by` field.
 
