@@ -147,7 +147,7 @@ In `strategy.py`, add `expected_best_by_position` to the survival import:
 from projections.draft.assistant.survival import SurvivalModel, expected_best_by_position
 ```
 
-In `NowOrNeverStrategy.recommend`, replace the block from `# E[best survivor at each position]:` through the `for position, group in groupby(...)` loop (the `e_best` construction) — keep the surrounding `pos`/`vorp`/`p`/`gsis` extraction and the final `df["score"] = vorp - ...` line — with:
+In `NowOrNeverStrategy.recommend`, replace the **entire region from the `pos = df["position"].to_numpy()` extraction line through the final `return _finalize(df, elig, display_p)`** — that is the original `pos`/`vorp`/`p`/`gsis` extraction, the `order = np.lexsort(...)` + `e_best` + `rows = zip(...)` + `for position, group in groupby(...)` accumulation, **and** the `df["score"] = ...` + `return` lines — with the following. The extraction and score lines are reproduced below, so **delete the originals — do not keep duplicates or the old `order`/`groupby` lines**:
 
 ```python
         # E[best survivor at each position], shared with the season-value timing
@@ -190,14 +190,19 @@ git commit -m "refactor(draft): now_or_never uses the shared expected_best_by_po
 Append to `tests/test_draft/test_assistant_strategy.py` (reuses the file's existing `_config`, `_pool`, `_state` and imports `PlayerAvailability`, `LogisticSurvival`):
 
 ```python
+import numpy as np
+
 from projections.draft.assistant.season_value import marginal_season_values
 from projections.draft.assistant.strategy import SeasonValueTimingStrategy
+
+# Place `import numpy as np` and the two imports above with the module's existing imports
+# (ruff orders them). `PlayerAvailability` and `LogisticSurvival` are already imported here.
 
 
 def _flat_availability(pool: pd.DataFrame) -> PlayerAvailability:
     # Every player available every week, no byes -> deterministic, MC-stable marginals.
-    p = {str(g): 0.95 for g in pool["gsis_id"]}
-    return PlayerAvailability(p_by_gsis=p, byes_by_gsis={}, default_p_by_position={})
+    # PlayerAvailability is the (p, bye) dataclass from availability.py.
+    return PlayerAvailability(p={str(g): 0.95 for g in pool["gsis_id"]}, bye={})
 
 
 def _timing(pool: pd.DataFrame, sigma: float = 8.0) -> SeasonValueTimingStrategy:
