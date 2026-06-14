@@ -58,20 +58,24 @@ Two surgical changes; **no schema change, no `build_draft_basis` change, no draf
   | `rec_td` | `receiving_tds` |
   | `fum_lost` | `fumbles_lost` |
 
-  All nine `STAT_FIELDS` are covered. Reference enums, never raw strings (CLAUDE.md): the mapping values are `Stat`/`STAT_FIELDS` members.
-- Add `_sleeper_stats_to_statline(stats: dict[str, float]) -> dict[str, float]` mirroring the existing `_espn_stats_to_statline`: it maps present Sleeper keys to canonical fields and defaults absent fields to 0.0. It stores the **raw fractional values, with no rounding** — exactly as `_espn_stats_to_statline` does (that function deliberately keeps ESPN's raw fractional projections; per its own comment, "Rounding here is irreversible and biases season totals; the scoring layer is the only place that decides how a projected stat becomes points"). `round_count`/`COUNT_FIELDS` are NOT used here; they are retained only for the frozen benchmark spike. Storing Sleeper raw (no rounding) is what makes the two sources' stat lines directly comparable before averaging.
-- In the Sleeper parse path, populate the `STAT_FIELDS` columns from `_sleeper_stats_to_statline(...)` and flip the Sleeper source spec from `has_stats=False` to `has_stats=True`. Sleeper rows in the snapshot stop being all-NA on stat columns.
-- **Side effect (intended):** the all-NA-column `pd.concat` FutureWarning at the source frame assembly disappears because Sleeper now carries real stat columns. (If any source still legitimately lacks stats, set the stat columns' dtype explicitly before `concat` so no all-NA inference warning remains.)
+  All nine `STAT_FIELDS` are covered. Reference the canonical `STAT_FIELDS` field-name constants (matching the existing `ESPN_STAT_IDS` value convention in the same module), never bare ad-hoc strings.
+- Add `_sleeper_stats_to_statline(stats: dict[str, float]) -> dict[str, float] | None` mirroring the existing `_espn_stats_to_statline`. Behavior:
+  - **Returns `None` when the Sleeper `stats` dict contains none of the mapped keys** (an ADP-only Sleeper row with no real projection). The caller then leaves that row's stat columns as `NA` — honest "no projection" rather than a fabricated all-zero line. (Mirrors the spirit of ESPN's `if not proj_stats: continue`, except Sleeper keeps the row for its ADP / union coverage.)
+  - **Otherwise** maps present mapped keys to canonical fields and defaults absent mapped fields to 0.0, storing the **raw fractional values, with no rounding** — exactly as `_espn_stats_to_statline` does (that function deliberately keeps ESPN's raw fractional projections; per its own comment, "Rounding here is irreversible and biases season totals; the scoring layer is the only place that decides how a projected stat becomes points"). `round_count`/`COUNT_FIELDS` are NOT used here; they are retained only for the frozen benchmark spike. Storing Sleeper raw (no rounding) is what makes the two sources' stat lines directly comparable before averaging.
+- In the Sleeper parse path, when `_sleeper_stats_to_statline(...)` returns a dict, add those `STAT_FIELDS` keys to the row; when it returns `None`, omit them (the column becomes `NaN` for that row). Flip the Sleeper source spec from `has_stats=False` to `has_stats=True` so `_to_canonical` carries the parsed stat columns through (real values for stat-bearing rows, `NA` for ADP-only rows).
+- **Side effect (intended):** the all-NA-column `pd.concat` FutureWarning disappears once Sleeper's stat columns carry real values. **Caveat:** `espn_draft_rank` is still all-`NA` on the Sleeper frame (Sleeper has no draft rank), so populating stats alone may not fully silence the warning. R6 is verified empirically; if a residual all-NA-column warning remains, set the offending column's dtype explicitly (the `null_col` is already `Float64`) or otherwise make the `concat` dtype-unambiguous so no warning is emitted.
 
 ### Change 2 — `src/projections/consensus/blend.py` (`build_consensus`): stat-bearing gate
 
-- Add a predicate `_is_stat_bearing(row, *, min_fields: int = 2) -> bool`: a single source row qualifies iff it has **≥ `min_fields` non-null values among the scoring `STAT_FIELDS`**.
+- Add a predicate `_is_stat_bearing(row, *, min_fields: int = 2) -> bool`: a single source row qualifies iff it has **≥ `min_fields` `STAT_FIELDS` values that are both non-null AND non-zero (`> 0`)**. The non-zero condition is essential (see below).
 - Change the per-player stat aggregation so the per-field mean ranges over **stat-bearing source rows only**, not all rows in the `gsis_id` group. `has_points` becomes "≥1 stat-bearing source row exists." The identity-row preference for a stat-bearing row is retained.
 - The ADP aggregation is **unchanged** (still mean over all rows with `adp > 0`); ADP and points gating are independent.
 
-### Why `min_fields = 2`
+### Why the gate tests non-null AND non-zero, with `min_fields = 2`
 
-A degenerate ESPN 2023 stub maps to 0–1 scoring fields. A real skill-position projection always has several: QB ≥4 (`passing_yards`, `passing_tds`, `interceptions`, `rushing_yards`), RB ≥4, WR/TE ≥3 (`receptions`, `receiving_yards`, `receiving_tds`). `min_fields = 2` cleanly separates stubs from real lines with margin against false-exclusion of a thin-but-real projection. The threshold is a named constant so it is easy to audit/tune.
+Both statline constructors **zero-fill absent fields** (`out = {f: 0.0 for f in STAT_FIELDS}`; verified in `_espn_stats_to_statline`). So a degenerate ESPN 2023 stub — whose projection block has 1 field, usually a *non-scoring* one — is stored as an **all-`0.0`, fully non-null** row. A "≥2 non-null" gate would therefore count every stub as stat-bearing and exclude nothing. The gate must test **non-zero**: a real projection has several positive stats (QB ≥4: `passing_yards`/`passing_tds`/`interceptions`/`rushing_yards`; RB ≥2–4; WR/TE ≥3 via `receptions`/`receiving_yards`/`receiving_tds`), while a stub has 0 positive fields (or, for the rare ~9% with a scoring stub, 1). `min_fields = 2` non-zero fields cleanly separates real lines from stubs, with margin against false-exclusion of a thin-but-real projection. (This also subsumes any ADP-only Sleeper row that slipped through as all-zero: 0 non-zero fields → excluded.) The threshold and the `> 0` test are a named constant + documented predicate so they are easy to audit/tune.
+
+**Accepted limitation (absent-vs-zero):** because absent fields are stored as 0.0, if a *stat-bearing* source omits a position-relevant scoring field that the other source reports, the per-field mean averages a real value against a spurious 0, biasing that field low. In practice each source reports the fields relevant to a player's position (a WR's passing stays 0 in both; a WR's receiving is present in both), so collisions land on cross-position-irrelevant zeros. R8's cross-source value-sanity gate (r ≥ 0.85, median ratio ∈ [0.85, 1.15]) would catch any systematic distortion from this. A per-field source-presence model (distinguishing absent from zero) is out of scope (would require schema changes) — YAGNI.
 
 ### Net behavioral result
 
@@ -81,9 +85,9 @@ A degenerate ESPN 2023 stub maps to 0–1 scoring fields. A real skill-position 
 
 ## Requirements
 
-R1. The Sleeper parse populates all nine `STAT_FIELDS` from `SLEEPER_STAT_FIELDS` for rows whose Sleeper payload carries those keys; absent keys default to 0.0; the count-rounding convention matches ESPN's.
-R2. After re-ingest, Sleeper rows in an `external_projections` snapshot are **not** all-NA on stat columns, and the snapshot still validates against `ExternalProjectionSchema` (no schema change; existing columns populated).
-R3. `build_consensus` includes a source row's stat values in the per-field mean **iff** that row is stat-bearing (≥2 non-null scoring fields). A `gsis_id` group with one stub row and one full row blends to the full row's line only. A group with two full rows blends to their per-field mean. A group with only stub/no-stat rows yields `has_points=False`, `projected_points_ppr=None`.
+R1. `_sleeper_stats_to_statline` returns a stat line (raw fractional values, no rounding, absent mapped fields defaulted to 0.0) when the Sleeper `stats` dict carries ≥1 mapped key, and returns `None` (→ stat columns left `NA`) when it carries none. The Sleeper parse stores those columns accordingly; values are stored **raw, with no rounding** (matching `_espn_stats_to_statline`).
+R2. After re-ingest, a stat-bearing Sleeper row in an `external_projections` snapshot carries real (non-NA) stat values, and the snapshot still validates against `ExternalProjectionSchema` (no schema change; existing columns populated).
+R3. `build_consensus` includes a source row's stat values in the per-field mean **iff** that row is stat-bearing (**≥2 `STAT_FIELDS` values that are non-null AND non-zero**). A `gsis_id` group with one all-zero/stub row and one full row blends to the full row's line only. A group with two full rows blends to their per-field mean. A group with only stub/all-zero/no-stat rows yields `has_points=False`, `projected_points_ppr=None`.
 R4. The existing ESPN-only behavior is preserved: a group containing a single full ESPN row (no Sleeper stats) produces the same projection as before this change (regression guard).
 R5. `consensus_adp` and `consensus_rank` are unaffected by the points change (ADP aggregation untouched).
 R6. No all-NA `pd.concat` FutureWarning is emitted during ingest.
@@ -93,10 +97,11 @@ R8. **Cross-source value sanity (definition of done):** on 2024 and 2025 (both s
 
 ## Edge cases / failure modes
 
-- **ADP-only player** (no source stat-bearing): `has_points=False`, `projected_points_ppr=None` — unchanged; such players are ADP-only bot fodder, already tolerated by `generate_vorp_table` / `consensus_to_season_projections` (they receive no VORP and are not draftable by the value strategies). No new handling required; covered by R3/R4 regression.
+- **ADP-only player** (no source stat-bearing): `_sleeper_stats_to_statline` returns `None` → stat columns `NA`; the gate excludes the row → `has_points=False`, `projected_points_ppr=None` — unchanged downstream; such players are ADP-only bot fodder, already tolerated by `generate_vorp_table` / `consensus_to_season_projections` (no VORP, not draftable by value strategies). Covered by R3/R4 regression.
 - **Sleeper-only player** (deep roster, no ESPN row): blended from Sleeper alone — correct.
 - **ESPN-only player** (in ESPN, missing from Sleeper): blended from ESPN alone — correct, matches today.
-- **Fractional Sleeper counts** (e.g. `rec = 105.0`, or fractional first-down stats): handled by the shared rounding convention at statline construction + `expected_points` (fractional-safe). Non-`STAT_FIELDS` Sleeper keys (`gp`, `cmp_pct`, `pass_fd`, `bonus_rec_wr`, `*_2pt`, all `adp_*`) are ignored by the mapping.
+- **All-zero / stub row** (ESPN 2023 stub, or any fabricated all-zero line): non-zero field count 0–1 < 2 → not stat-bearing → excluded from the blend. This is the core mechanism, not an exception.
+- **Fractional Sleeper counts** (e.g. `rec = 105.0`): stored raw (no rounding) and scored by `expected_points` (fractional-safe). Non-`STAT_FIELDS` Sleeper keys (`gp`, `cmp_pct`, `pass_fd`, `rush_fd`, `rec_fd`, `bonus_rec_wr`, `*_2pt`, `rec_0_4`/`rec_5_9`/…, all `adp_*`) are ignored by the mapping.
 - **Ruleset correctness:** both sources' **raw stat lines** are scored under `league_config.ruleset`; Sleeper's pre-scored `pts_half_ppr`/`pts_ppr`/`pts_std` are **never** used. The blend is therefore correct for any ruleset, not locked to half-PPR.
 - **Source disagreement** (ESPN and Sleeper differ on a stat): resolved by the per-field mean — the intended consensus behavior; no special handling.
 
@@ -104,10 +109,10 @@ R8. **Cross-source value sanity (definition of done):** on 2024 and 2025 (both s
 
 TDD; each unit gets a failing test first. Tests use synthetic payloads (no network), following the existing ESPN parser tests as the template.
 
-- `_sleeper_stats_to_statline`: synthetic Sleeper `stats` dict → correct canonical `StatLine` for all nine fields, storing **raw fractional values (no rounding), matching `_espn_stats_to_statline`**, and ignoring non-mapped keys (`gp`, `cmp_pct`, `pass_fd`, `bonus_rec_wr`, `*_2pt`, `adp_*`).
-- Sleeper parse: emits populated `STAT_FIELDS` columns (assert not all-NA); ESPN parse output unchanged.
-- `_is_stat_bearing`: 0/1 non-null scoring fields → False; ≥2 → True.
-- `build_consensus` stub guard (the four R3/R4 cases): (a) full + stub → full only; (b) two full → per-field mean then scored once; (c) two stub/no-stat → `has_points=False`; (d) single full ESPN row → byte-identical to pre-change projection (regression).
+- `_sleeper_stats_to_statline`: (a) a `stats` dict with mapped keys → correct canonical stat line for all nine fields, **raw fractional values (no rounding), matching `_espn_stats_to_statline`**, ignoring non-mapped keys (`gp`, `cmp_pct`, `pass_fd`, `rush_fd`, `rec_fd`, `bonus_rec_wr`, `*_2pt`, `rec_0_4`…, `adp_*`); (b) a `stats` dict with **no** mapped keys (only `adp_*`) → returns `None`.
+- Sleeper parse: a row with mapped stats emits populated (non-NA) `STAT_FIELDS`; an ADP-only row leaves them `NA`; ESPN parse output unchanged.
+- `_is_stat_bearing`: all-zero row (0 non-zero fields) → False; 1 non-zero field → False; ≥2 non-zero fields → True; an all-NA row → False.
+- `build_consensus` stub guard (the four R3/R4 cases): (a) full + all-zero(stub) → full only; (b) two full → per-field mean then scored once; (c) two all-zero/no-stat → `has_points=False`, `projected_points_ppr=None`; (d) single full ESPN row (Sleeper no stats) → byte-identical to pre-change projection (regression).
 - `build_consensus` ADP unaffected (R5): a group's `consensus_adp`/`consensus_rank` unchanged by adding/removing Sleeper stats.
 - No all-NA concat FutureWarning during ingest assembly (R6): assert via `warnings.catch_warnings(record=True)` or equivalent.
 - Run the CLAUDE.md ingest/schema integration gate: `pytest -v -k "ingest or store or schemas"` (this change touches an ingest path and exercises a stored-snapshot boundary).
