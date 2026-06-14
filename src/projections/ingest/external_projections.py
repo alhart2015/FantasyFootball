@@ -84,16 +84,21 @@ def round_count(value: float) -> int:
     return max(0, int(value + 0.5))
 
 
-def _espn_stats_to_statline(stats: dict[str, float]) -> dict[str, float]:
-    # Store ESPN's RAW fractional projection (e.g. 8.4 receiving TDs), not a rounded count.
-    # Rounding here is irreversible and biases season totals; the scoring layer is the only
-    # place that decides how a projected stat becomes points. (round_count/COUNT_FIELDS are
-    # retained for the benchmark spike, which rounds for a different, frozen purpose.)
-    out: dict[str, float] = {f: 0.0 for f in STAT_FIELDS}
-    for sid, field in ESPN_STAT_IDS.items():
-        if sid in stats:
-            out[field] = float(stats[sid])
+def _map_stats(raw: dict[str, float], mapping: dict[str, str]) -> dict[str, float]:
+    """Map a source's raw stat dict to the canonical STAT_FIELDS via `mapping` (source key ->
+    canonical field), zero-filling absent fields. Stores RAW fractional values (e.g. 8.4 receiving
+    TDs), never rounded — rounding is irreversible and biases season totals; the scoring layer is
+    the only place that turns a projected stat into points. (round_count/COUNT_FIELDS are retained
+    for the benchmark spike, which rounds for a different, frozen purpose.)"""
+    out: dict[str, float] = {field: 0.0 for field in STAT_FIELDS}
+    for key, field in mapping.items():
+        if key in raw:
+            out[field] = float(raw[key])
     return out
+
+
+def _espn_stats_to_statline(stats: dict[str, float]) -> dict[str, float]:
+    return _map_stats(stats, ESPN_STAT_IDS)
 
 
 # Sleeper's raw projected stat keys -> canonical STAT_FIELDS. Verified live against the Sleeper
@@ -119,11 +124,7 @@ def _sleeper_stats_to_statline(stats: dict[str, float]) -> dict[str, float] | No
     ignored."""
     if not any(key in stats for key in SLEEPER_STAT_FIELDS):
         return None
-    out: dict[str, float] = {field: 0.0 for field in STAT_FIELDS}
-    for key, field in SLEEPER_STAT_FIELDS.items():
-        if key in stats:
-            out[field] = float(stats[key])
-    return out
+    return _map_stats(stats, SLEEPER_STAT_FIELDS)
 
 
 def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
@@ -218,13 +219,11 @@ def parse_sleeper_projections(payload: list[dict[str, Any]]) -> pd.DataFrame:
         if statline is not None:
             row.update(statline)
         rows.append(row)
-    df = pd.DataFrame(rows)
-    # Guarantee the canonical stat columns exist even if NO row carried a projection, so the
-    # has_stats=True path in _to_canonical can read them (absent -> NA).
-    for field in STAT_FIELDS:
-        if field not in df.columns:
-            df[field] = pd.NA
-    return df
+    # Fixed column set so the STAT_FIELDS columns exist (NA) even for ADP-only rows / an empty
+    # pull — the has_stats=True path in _to_canonical reads them unconditionally.
+    return pd.DataFrame(
+        rows, columns=["sleeper_id", "full_name", "position", "sleeper_adp", *STAT_FIELDS]
+    )
 
 
 def _make_placeholder_gsis(full_name: str, position: str) -> str:
