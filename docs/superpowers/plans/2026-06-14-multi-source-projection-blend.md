@@ -308,6 +308,8 @@ Also update the stale docstring on `parse_sleeper_projections` — change "Sleep
     return _finish_canonical(out, season=season, asof=asof)
 ```
 
+**Fallback for R6 if the Float64 cast alone does not silence the warning:** the cast makes every source frame carry identical columns AND identical `Float64` dtypes, which removes the dtype-inference-over-all-NA-columns path the FutureWarning is about — this should be sufficient. If `test_refresh_emits_no_all_na_concat_futurewarning` still fails, do NOT silence it with a warning filter. Instead, in `refresh_external_projections`, build the result as `frame = pd.concat([f for f in frames], ignore_index=True)` where each `f` already has the full identical column set (it does, via `_to_canonical`), and add `sort=False` to the `pd.concat(...)` call; if a warning still persists it is from a genuinely all-NA column (`espn_draft_rank` on a Sleeper-only pull) — in that case construct the empty result schema first: `frame = pd.concat(frames, ignore_index=True).astype({c: "Float64" for c in ("adp", "espn_draft_rank", *STAT_FIELDS)})` is a no-op if already cast; the durable fix is the per-frame `Float64` uniformity from Step 3c. If a separate, UNRELATED FutureWarning surfaces (not from the concat), narrow the test's `simplefilter("error", FutureWarning)` to assert specifically that no warning whose message contains "all-NA" is raised, and note why in the test.
+
 - [ ] **Step 4: Run to verify pass**
 
 Run: `pytest tests/test_ingest/test_external_projections.py -v`
