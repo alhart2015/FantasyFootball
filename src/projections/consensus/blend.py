@@ -13,6 +13,18 @@ import pandas as pd
 from projections.schemas import STAT_FIELDS, Ruleset
 from projections.scoring import expected_points
 
+MIN_STAT_FIELDS = 2  # a source row must have >= this many non-null, non-zero STAT_FIELDS to count
+
+
+def _stat_bearing_mask(df: pd.DataFrame) -> pd.Series:
+    """Boolean mask: True for rows with >= MIN_STAT_FIELDS STAT_FIELDS values that are non-null
+    AND non-zero. Both source statline constructors zero-fill absent fields, so a degenerate stub
+    arrives as an all-0.0 (fully non-null) row; testing non-zero is what keeps it out of the blend.
+    Computed in one vectorized pass over the whole frame (not per-row)."""
+    vals = df[list(STAT_FIELDS)].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    return (vals != 0).sum(axis=1) >= MIN_STAT_FIELDS
+
+
 _OUTPUT_COLUMNS: tuple[str, ...] = (
     "gsis_id",
     "season",
@@ -43,8 +55,19 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
     if external.empty:
         return _empty_output()
 
+    # Normalize to a unique RangeIndex: the per-group `bearing_mask.loc[grp.index]` lookup below
+    # would mis-align (or raise) on a caller-supplied non-unique index (pandera validate does not
+    # reset it). groupby preserves whatever index we set here, so doing this once keeps the
+    # vectorized mask index-safe regardless of caller.
+    external = external.reset_index(drop=True)
+
     season = int(external["season"].iloc[0])
     asof = str(external["asof"].iloc[0])
+
+    # Stat-bearing rows (>= MIN_STAT_FIELDS non-null, non-zero STAT_FIELDS) — computed once,
+    # vectorized, over the whole frame; degenerate all-zero stubs (e.g. ESPN's 2023 historical
+    # season projection) are excluded so they can't pull the per-field blend mean toward zero.
+    bearing_mask = _stat_bearing_mask(external)
 
     records: list[dict[str, object]] = []
     for gsis_id, grp in external.groupby("gsis_id", sort=False):
@@ -56,14 +79,15 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
         n_adp_sources = int(adp_vals.shape[0])
         consensus_adp: float | None = float(adp_vals.mean()) if n_adp_sources > 0 else None
 
+        bearing = grp[bearing_mask.loc[grp.index]]
+
         # Prefer a stat-bearing row for identity (full_name/position); fall back to the first row.
-        stat_mask = grp[list(STAT_FIELDS)].notna().any(axis=1)
-        identity_row = grp[stat_mask].iloc[0] if stat_mask.any() else grp.iloc[0]
+        identity_row = bearing.iloc[0] if not bearing.empty else grp.iloc[0]
 
         statline: dict[str, float] = {}
         has_points = False
         for field in STAT_FIELDS:
-            vals = grp[field].dropna()
+            vals = bearing[field].dropna()
             if not vals.empty:
                 statline[field] = float(vals.mean())
                 has_points = True

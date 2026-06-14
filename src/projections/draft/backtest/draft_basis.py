@@ -1,6 +1,8 @@
-"""2025 backtest draft basis: ESPN half-PPR season projection + Sleeper-only ADP -> fixed-VORP.
+"""Backtest draft basis: blended ESPN+Sleeper season projection + Sleeper-only ADP -> fixed-VORP.
 
-Reuses build_consensus (scores the ESPN stat line under the league ruleset). ESPN ADP is a
+Reuses build_consensus, which scores the per-field mean of each source's stat line under the
+league ruleset (ESPN + Sleeper where both are stat-bearing; whichever is present otherwise — so
+seasons where ESPN's historical season projection is missing fall back to Sleeper). ESPN ADP is a
 useless sentinel for past seasons (~170 for unranked players), so consensus_adp comes from
 Sleeper alone.
 """
@@ -34,9 +36,9 @@ def sleeper_adp(external: pd.DataFrame) -> pd.Series:
 def build_draft_basis(external: pd.DataFrame, *, league_config: LeagueConfig) -> pd.DataFrame:
     """Build the fixed-VORP draft basis table from one external_projections snapshot.
 
-    Scores the ESPN stat line under `league_config.ruleset` (half-PPR when configured),
-    then attaches Sleeper-only ADP as `consensus_adp`. Returns a VorpTableSchema-validated
-    DataFrame with the extra `consensus_adp` column (allowed as Optional by the schema).
+    Scores the blended ESPN+Sleeper stat line under `league_config.ruleset` (half-PPR when
+    configured) via build_consensus, then attaches Sleeper-only ADP as `consensus_adp`. Returns a
+    VorpTableSchema-validated DataFrame with the extra `consensus_adp` column (Optional in schema).
 
     Args:
         external: ExternalProjectionSchema-validated DataFrame (one snapshot: one season/asof).

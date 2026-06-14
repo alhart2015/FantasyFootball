@@ -85,6 +85,215 @@ def test_two_source_veteran_blends_adp_and_scores_points() -> None:
     assert r["consensus_rank"] == 1
 
 
+def test_two_full_sources_blend_per_field_mean() -> None:
+    espn = {c: 0.0 for c in _STAT_COLS} | {
+        "receptions": 100.0,
+        "receiving_yards": 1400.0,
+        "receiving_tds": 8.0,
+    }
+    sleeper = {c: 0.0 for c in _STAT_COLS} | {
+        "receptions": 110.0,
+        "receiving_yards": 1500.0,
+        "receiving_tds": 10.0,
+    }
+    ext = _external(
+        [
+            _row(
+                "ESPN",
+                "00-0036900",
+                adp=4.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=espn,
+            ),
+            _row(
+                "SLEEPER",
+                "00-0036900",
+                adp=3.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=sleeper,
+            ),
+        ]
+    )
+    r = build_consensus(ext, Ruleset()).iloc[0]
+    assert r["receptions"] == 105.0  # mean(100, 110)
+    assert r["receiving_yards"] == 1450.0
+    assert r["receiving_tds"] == 9.0
+    assert bool(r["has_points"]) is True
+    # Ruleset() default scores 1.0/reception: 105 + 1450/10 + 9*6 = 105 + 145 + 54 = 304
+    assert round(float(r["projected_points_ppr"]), 1) == 304.0
+
+
+def test_stub_row_excluded_from_blend() -> None:
+    # ESPN "stub": an all-zero stat line (the 2023 degenerate case). Sleeper has a real line.
+    stub = {c: 0.0 for c in _STAT_COLS}
+    sleeper = {c: 0.0 for c in _STAT_COLS} | {
+        "receptions": 110.0,
+        "receiving_yards": 1500.0,
+        "receiving_tds": 10.0,
+    }
+    ext = _external(
+        [
+            _row(
+                "ESPN",
+                "00-0036900",
+                adp=4.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=stub,
+            ),
+            _row(
+                "SLEEPER",
+                "00-0036900",
+                adp=3.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=sleeper,
+            ),
+        ]
+    )
+    r = build_consensus(ext, Ruleset()).iloc[0]
+    # Sleeper-only, NOT mean(0, 110) = 55:
+    assert (
+        r["receptions"] == 110.0 and r["receiving_yards"] == 1500.0 and r["receiving_tds"] == 10.0
+    )
+
+
+def test_all_zero_rows_yield_no_points() -> None:
+    stub = {c: 0.0 for c in _STAT_COLS}
+    ext = _external(
+        [
+            _row(
+                "ESPN",
+                "00-0036900",
+                adp=4.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=stub,
+            ),
+            _row(
+                "SLEEPER",
+                "00-0036900",
+                adp=3.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=stub,
+            ),
+        ]
+    )
+    r = build_consensus(ext, Ruleset()).iloc[0]
+    assert bool(r["has_points"]) is False
+    assert pd.isna(r["projected_points_ppr"])
+
+
+def test_one_nonzero_field_is_not_stat_bearing() -> None:
+    # A single non-zero field (the rare 2023 scoring stub) is below MIN_STAT_FIELDS=2 -> excluded.
+    one = {c: 0.0 for c in _STAT_COLS} | {"rushing_yards": 50.0}
+    full = {c: 0.0 for c in _STAT_COLS} | {
+        "receptions": 80.0,
+        "receiving_yards": 900.0,
+        "receiving_tds": 5.0,
+    }
+    ext = _external(
+        [
+            _row(
+                "ESPN",
+                "00-0036900",
+                adp=4.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=one,
+            ),
+            _row(
+                "SLEEPER",
+                "00-0036900",
+                adp=3.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=full,
+            ),
+        ]
+    )
+    r = build_consensus(ext, Ruleset()).iloc[0]
+    assert r["rushing_yards"] == 0.0  # the 1-field stub did NOT contribute
+    assert r["receptions"] == 80.0
+
+
+def test_adp_unaffected_by_stat_gating() -> None:
+    # consensus_adp/rank come from ADP regardless of whether the stat line is gated out.
+    stub = {c: 0.0 for c in _STAT_COLS}
+    ext = _external(
+        [
+            _row(
+                "ESPN",
+                "00-0036900",
+                adp=4.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=stub,
+            ),
+            _row("SLEEPER", "00-0036900", adp=2.0, full_name="X", position="WR", placeholder=False),
+        ]
+    )
+    r = build_consensus(ext, Ruleset()).iloc[0]
+    assert r["consensus_adp"] == 3.0  # mean(4, 2), unaffected by stat gating
+    assert r["n_adp_sources"] == 2
+
+
+def test_handles_non_unique_index_without_misblending() -> None:
+    # build_consensus must tolerate a caller-supplied non-unique index (it resets internally):
+    # the per-group stat-bearing mask must not pull a different player's stats into the blend.
+    a_stats = {c: 0.0 for c in _STAT_COLS} | {
+        "receptions": 80.0,
+        "receiving_yards": 900.0,
+        "receiving_tds": 5.0,
+    }
+    b_stats = {c: 0.0 for c in _STAT_COLS} | {"rushing_yards": 1000.0, "rushing_tds": 8.0}
+    ext = _external(
+        [
+            _row(
+                "ESPN",
+                "00-0000001",
+                adp=5.0,
+                full_name="A",
+                position="WR",
+                placeholder=False,
+                stats=a_stats,
+            ),
+            _row(
+                "ESPN",
+                "00-0000002",
+                adp=6.0,
+                full_name="B",
+                position="RB",
+                placeholder=False,
+                stats=b_stats,
+            ),
+        ]
+    )
+    ext.index = [0, 0]  # duplicate labels — the scenario that broke the .loc[grp.index] lookup
+    out = build_consensus(ext, Ruleset()).set_index("gsis_id")
+    assert len(out) == 2
+    assert (
+        out.loc["00-0000001", "receptions"] == 80.0
+        and out.loc["00-0000001", "rushing_yards"] == 0.0
+    )
+    assert (
+        out.loc["00-0000002", "rushing_yards"] == 1000.0
+        and out.loc["00-0000002", "receptions"] == 0.0
+    )
+
+
 def test_sleeper_only_player_has_adp_no_points() -> None:
     ext = _external(
         [
@@ -164,7 +373,8 @@ def test_player_with_points_but_no_adp_gets_null_rank() -> None:
     assert pd.isna(r["consensus_adp"])
     assert pd.isna(r["consensus_rank"])
     assert r["n_adp_sources"] == 0
-    assert bool(r["has_points"]) is True
+    # all-zero stat line is not a real projection -> not stat-bearing -> has_points False
+    assert bool(r["has_points"]) is False
 
 
 def test_placeholder_rookie_carried_through() -> None:
@@ -245,7 +455,8 @@ def test_only_nonpositive_adp_yields_null_adp_and_rank() -> None:
     assert pd.isna(r["consensus_adp"])
     assert pd.isna(r["consensus_rank"])
     assert r["n_adp_sources"] == 0
-    assert bool(r["has_points"]) is True  # still appears (union coverage)
+    # all-zero stat line is not a projection; row still appears via ADP union coverage
+    assert bool(r["has_points"]) is False
 
 
 def test_empty_input_returns_empty_conforming_frame() -> None:

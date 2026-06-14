@@ -134,7 +134,9 @@ def test_build_draft_basis_half_ppr_and_sleeper_adp() -> None:
                 "passing_tds": float(ptd or 0.0),
             }
         else:
-            stats = {"rushing_yards": 200.0}
+            # >=2 non-zero fields so the filler is stat-bearing (build_consensus excludes
+            # degenerate <2-field lines; real RB/WR/TE projections always have several).
+            stats = {"rushing_yards": 200.0, "rushing_tds": 2.0}
         rows += [
             (_ESPN, gid, pos, 170.0, stats),
             (_SLEEPER, gid, pos, float(i + 5), {}),
