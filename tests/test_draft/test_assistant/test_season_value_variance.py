@@ -44,3 +44,70 @@ def test_sampled_fill_starts_the_weekly_best() -> None:
     avail = np.ones((2, 2), bool)
     out = _lineup_points_sampled(pts, avail, pos, slots)
     assert out[0] == 20.0 and out[1] == 30.0
+
+
+def _avail_all(gsis: list[str]):
+    from projections.draft.assistant.availability import PlayerAvailability
+
+    return PlayerAvailability(p={g: 1.0 for g in gsis}, bye={})
+
+
+def _vp_zero():
+    from projections.draft.assistant.performance_variance import VarianceParams
+
+    return VarianceParams(
+        {"default": {"a": 0.0, "b": 1e-7}},
+        {"default|veteran": 1e-7, "default|rookie": 1e-7},
+    )
+
+
+def test_var_reduces_to_deterministic_at_zero_variance() -> None:
+    from projections.draft.assistant.season_value import expected_season_points_var
+
+    roster = pd.DataFrame(
+        {
+            "gsis_id": ["a", "b", "c"],
+            "position": ["QB", "RB", "WR"],
+            "season_mean_fpts": [300.0, 250.0, 200.0],
+            "is_rookie": [False, False, False],
+        }
+    )
+    slots = {RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.WR: 1}
+    v = expected_season_points_var(
+        roster,
+        slots,
+        _avail_all(["a", "b", "c"]),
+        _vp_zero(),
+        n_sims=200,
+        rng=np.random.default_rng(0),
+        weeks=range(1, 15),
+    )
+    assert abs(v - (750.0 / 17 * 14)) < 5.0
+
+
+def test_marginal_crn_ranks_better_candidate_first() -> None:
+    from projections.draft.assistant.season_value import marginal_season_values_var
+
+    base = pd.DataFrame(
+        {"gsis_id": ["a"], "position": ["QB"], "season_mean_fpts": [300.0], "is_rookie": [False]}
+    )
+    cands = pd.DataFrame(
+        {
+            "gsis_id": ["x", "y"],
+            "position": ["RB", "RB"],
+            "season_mean_fpts": [250.0, 120.0],
+            "is_rookie": [False, False],
+        }
+    )
+    slots = {RosterSlot.QB: 1, RosterSlot.RB: 1}
+    out = marginal_season_values_var(
+        base,
+        cands,
+        slots,
+        _avail_all(["a", "x", "y"]),
+        _vp_zero(),
+        n_sims=200,
+        rng=np.random.default_rng(0),
+        weeks=range(1, 15),
+    )
+    assert out["x"] > out["y"] > 0

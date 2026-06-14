@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.performance_variance import VarianceParams, sample_weekly_points
 from projections.draft.assistant.roster_score import _FLEX_SLOTS
 from projections.draft.roster_eligibility import POSITION_SLOTS
 from projections.schemas import RosterSlot
@@ -241,6 +242,126 @@ def expected_season_points(
         return float(_vectorized_lineup_points(avail, meta).mean()) / _GAMES
 
     return _factorized_season_value(roster, availability, weeks, week_value_fn)
+
+
+def _season_value_sampled(
+    points: np.ndarray,  # (n_sims, n_weeks, m) sampled weekly points for the roster
+    avail_uniforms: np.ndarray,  # (n_sims, n_weeks, m) shared uniforms in [0,1)
+    p: np.ndarray,  # (m,) weekly availability prob per roster player
+    bye_idx: np.ndarray,  # (m,) week-index of each player's bye, or -1
+    positions: np.ndarray,  # (m,) position strings
+    roster_slots: Mapping[RosterSlot, int],
+) -> float:
+    """Mean season points: per (sim, week) optimal lineup over sampled points, gated by
+    availability (uniform < p) and byes, summed over weeks, averaged over sims."""
+    n_sims, n_weeks, m = points.shape
+    avail = avail_uniforms < p[None, None, :]
+    for i in range(m):
+        w = int(bye_idx[i])
+        if w >= 0:
+            avail[:, w, i] = False
+    flat_pts = points.reshape(n_sims * n_weeks, m)
+    flat_av = avail.reshape(n_sims * n_weeks, m)
+    weekly = _lineup_points_sampled(flat_pts, flat_av, positions, roster_slots).reshape(
+        n_sims, n_weeks
+    )
+    return float(weekly.sum(axis=1).mean())
+
+
+def _bye_indices(
+    availability: PlayerAvailability, gsis: np.ndarray, weeks: list[int]
+) -> np.ndarray:
+    """Week-index (into `weeks`) of each player's bye, or -1 if none / outside the played weeks."""
+    out = np.full(len(gsis), -1, dtype=int)
+    for i, g in enumerate(gsis):
+        bw = availability.bye_week(str(g))
+        if bw is not None and bw in weeks:
+            out[i] = weeks.index(bw)
+    return out
+
+
+def expected_season_points_var(
+    roster: pd.DataFrame,
+    roster_slots: Mapping[RosterSlot, int],
+    availability: PlayerAvailability,
+    params: VarianceParams,
+    *,
+    n_sims: int,
+    rng: np.random.Generator,
+    weeks: Iterable[int] = tuple(range(1, 15)),
+) -> float:
+    """Risk-aware expected season points: sampled weekly points (variance model) filled into the
+    optimal weekly lineup under availability + byes. Default weeks = the 14-game regular season."""
+    n = len(roster)
+    if n == 0:
+        return 0.0
+    weeks = list(weeks)
+    n_weeks = len(weeks)
+    gsis = roster["gsis_id"].astype(str).to_numpy()
+    positions = roster["position"].astype(str).to_numpy()
+    means = roster["season_mean_fpts"].to_numpy(dtype=np.float64)
+    rookie = roster["is_rookie"].to_numpy(dtype=bool)
+    p = np.array([availability.p_week(str(g)) for g in gsis], dtype=np.float64)
+    bye_idx = _bye_indices(availability, gsis, weeks)
+    points = sample_weekly_points(
+        params, positions, means, rookie, n_sims=n_sims, n_weeks=n_weeks, rng=rng
+    )
+    avail_uniforms = rng.random((n_sims, n_weeks, n))
+    return _season_value_sampled(points, avail_uniforms, p, bye_idx, positions, roster_slots)
+
+
+def marginal_season_values_var(
+    base_roster: pd.DataFrame,
+    candidates: pd.DataFrame,
+    roster_slots: Mapping[RosterSlot, int],
+    availability: PlayerAvailability,
+    params: VarianceParams,
+    *,
+    n_sims: int,
+    rng: np.random.Generator,
+    weeks: Iterable[int] = tuple(range(1, 15)),
+) -> dict[str, float]:
+    """CRN risk-aware marginal season value of adding each candidate to `base_roster`.
+
+    Draws the variance-model points + availability uniforms ONCE over the union of base+candidate
+    ids; base and every `base+candidate` are scored by column-slicing those shared arrays, so the
+    marginal cancels common noise. `base_roster`/`candidates` carry gsis_id, position,
+    season_mean_fpts, is_rookie.
+    """
+    weeks = list(weeks)
+    n_weeks = len(weeks)
+    union_df = pd.concat([base_roster, candidates], ignore_index=True).drop_duplicates("gsis_id")
+    union_df = union_df.reset_index(drop=True)
+    u_gsis = union_df["gsis_id"].astype(str).to_numpy()
+    col_of = {g: i for i, g in enumerate(u_gsis)}
+    u_pos = union_df["position"].astype(str).to_numpy()
+    u_means = union_df["season_mean_fpts"].to_numpy(dtype=np.float64)
+    u_rookie = union_df["is_rookie"].to_numpy(dtype=bool)
+    u_p = np.array([availability.p_week(str(g)) for g in u_gsis], dtype=np.float64)
+    u_bye = _bye_indices(availability, u_gsis, weeks)
+
+    points_u = sample_weekly_points(
+        params, u_pos, u_means, u_rookie, n_sims=n_sims, n_weeks=n_weeks, rng=rng
+    )
+    avail_u = rng.random((n_sims, n_weeks, len(u_gsis)))
+
+    def value_for(ids: list[str]) -> float:
+        cols = np.array([col_of[g] for g in ids])
+        return _season_value_sampled(
+            points_u[:, :, cols],
+            avail_u[:, :, cols],
+            u_p[cols],
+            u_bye[cols],
+            u_pos[cols],
+            roster_slots,
+        )
+
+    base_ids = [str(g) for g in base_roster["gsis_id"]]
+    base_val = value_for(base_ids)
+    out: dict[str, float] = {}
+    for cand_id in (str(g) for g in candidates["gsis_id"]):
+        out[cand_id] = value_for([*base_ids, cand_id]) - base_val
+    return out
 
 
 def marginal_season_values(
