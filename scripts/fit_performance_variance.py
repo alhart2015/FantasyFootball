@@ -24,6 +24,13 @@ import numpy as np
 _MIN_AFFINE = 20
 _MIN_LOGSD = 15
 _GAMES = 17
+# Draft-relevant filters (match the validated brainstorming analysis: only fantasy-relevant
+# player-seasons, else deep/marginal players blow up the variance). A player-season counts toward
+# the per-game affine if it has >= _MIN_FIT_GAMES active games and mean per-game >= _MIN_MEAN_PG;
+# toward the log-SD only if it ALSO has a projected season >= _MIN_PROJ_SEASON.
+_MIN_FIT_GAMES = 8
+_MIN_MEAN_PG = 6.0
+_MIN_PROJ_SEASON = 50.0
 _AFFINE_SEASONS = range(2018, 2026)
 _PROJECTION_SEASONS = range(2021, 2026)
 _OUT_PATH = Path("configs/performance_variance_params.json")
@@ -42,13 +49,17 @@ def fit_params(rows: list[dict[str, Any]]) -> dict[str, Any]:
     all_log: dict[str, list[float]] = {"veteran": [], "rookie": []}
     for r in rows:
         w = np.asarray(r["weekly"], dtype=float)
-        if w.size < 2 or w.mean() <= 0:
+        if w.size < _MIN_FIT_GAMES:  # too few games to estimate anything for this player-season
             continue
         mean_pg, std_pg = float(w.mean()), float(w.std())
-        by_pos.setdefault(r["position"], []).append((mean_pg, std_pg))
-        all_ms.append((mean_pg, std_pg))
+        # Affine: real-usage player-seasons (mean per-game >= floor) so deep scrubs don't flatten it.
+        if mean_pg >= _MIN_MEAN_PG:
+            by_pos.setdefault(r["position"], []).append((mean_pg, std_pg))
+            all_ms.append((mean_pg, std_pg))
+        # log-SD: gate on the PROJECTION (draft-relevant), NOT realized mean — busts must stay in
+        # the ratio (excluding low-realized seasons would bias the projection-miss SD downward).
         ppg = float(r["projected_pg"])
-        if ppg > 0:
+        if ppg * _GAMES >= _MIN_PROJ_SEASON:
             ratio = mean_pg / ppg
             if np.isfinite(ratio) and ratio > 0:
                 tier = "rookie" if r["is_rookie"] else "veteran"
