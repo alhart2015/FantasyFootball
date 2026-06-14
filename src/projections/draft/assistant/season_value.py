@@ -346,7 +346,7 @@ def marginal_season_values_var(
     avail_u = rng.random((n_sims, n_weeks, len(u_gsis)))
 
     def value_for(ids: list[str]) -> float:
-        cols = np.array([col_of[g] for g in ids])
+        cols = np.array([col_of[g] for g in ids], dtype=int)  # int even when empty (first pick)
         return _season_value_sampled(
             points_u[:, :, cols],
             avail_u[:, :, cols],

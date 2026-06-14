@@ -14,14 +14,16 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.pick_timing import my_next_pick
-from projections.draft.assistant.season_value import marginal_season_values
+from projections.draft.assistant.season_value import marginal_season_values_var
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.survival import SurvivalModel, expected_best_by_position
 from projections.draft.league_config import LeagueConfig
@@ -128,6 +130,19 @@ def _validate_mc_params(n_sims: int, top_k: int) -> None:
         raise ValueError(f"top_k must be >= 1; got {top_k}")
 
 
+@lru_cache(maxsize=1)
+def _variance_params() -> VarianceParams:
+    """Load the fitted performance-variance params once (cached for the process)."""
+    return VarianceParams.load()
+
+
+def _rookie_map(pool: pd.DataFrame) -> dict[str, bool]:
+    """gsis_id -> is_rookie from the pool; empty (all-veteran) when the column is absent."""
+    if "is_rookie" not in pool.columns:
+        return {}
+    return dict(zip(pool["gsis_id"].astype(str), pool["is_rookie"].astype(bool), strict=False))
+
+
 def _season_marginals(
     state: DraftState,
     df: pd.DataFrame,
@@ -139,17 +154,19 @@ def _season_marginals(
     base_seed: int,
     top_k: int,
 ) -> pd.DataFrame:
-    """Return df with ``score`` = each candidate's marginal expected season points.
+    """Return df with ``score`` = each candidate's risk-aware marginal expected season points.
 
-    Evaluated (top-k-by-VORP-per-position) candidates carry their real marginal;
-    pruned-out rows get 0.0 (cosmetic tail). Shared by SeasonValueStrategy and
-    SeasonValueTimingStrategy.
+    Evaluated (top-k-by-VORP-per-position) candidates carry their real marginal under the
+    performance-variance model (sampled weekly points); pruned-out rows get 0.0 (cosmetic tail).
+    Shared by SeasonValueStrategy and SeasonValueTimingStrategy.
     """
     my_ids = {str(g) for g in state.my_pick_ids}
     pool_ids = pool["gsis_id"].astype(str)
     base_roster = pool.loc[
         pool_ids.isin(my_ids), ["gsis_id", "position", "season_mean_fpts"]
     ].copy()
+    rookie_map = _rookie_map(pool)
+    base_roster["is_rookie"] = [bool(rookie_map.get(str(g), False)) for g in base_roster["gsis_id"]]
     missing = sorted(my_ids - set(base_roster["gsis_id"].astype(str)))
     if missing:
         warnings.warn(
@@ -164,12 +181,15 @@ def _season_marginals(
         .groupby("position", sort=False)
         .head(top_k)
     )
+    cand = pruned[["gsis_id", "position", "season_mean_fpts"]].copy()
+    cand["is_rookie"] = [bool(rookie_map.get(str(g), False)) for g in cand["gsis_id"]]
     rng = np.random.default_rng([base_seed, state.current_pick])
-    marginals = marginal_season_values(
+    marginals = marginal_season_values_var(
         base_roster,
-        pruned[["gsis_id", "position", "season_mean_fpts"]],
+        cand,
         config.roster_slots,
         availability,
+        _variance_params(),
         n_sims=n_sims,
         rng=rng,
     )
