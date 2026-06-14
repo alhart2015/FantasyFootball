@@ -126,7 +126,9 @@ def test_sleeper_stats_to_statline_qb_fields() -> None:
     out = ext._sleeper_stats_to_statline(stats)
     assert out is not None
     assert out["passing_yards"] == 4193.0 and out["passing_tds"] == 32.0
-    assert out["interceptions"] == 14.0 and out["rushing_yards"] == 599.0 and out["rushing_tds"] == 6.0
+    assert (
+        out["interceptions"] == 14.0 and out["rushing_yards"] == 599.0 and out["rushing_tds"] == 6.0
+    )
 
 
 def test_sleeper_stats_to_statline_none_when_adp_only() -> None:

@@ -98,8 +98,24 @@ def test_two_full_sources_blend_per_field_mean() -> None:
     }
     ext = _external(
         [
-            _row("ESPN", "00-0036900", adp=4.0, full_name="X", position="WR", placeholder=False, stats=espn),
-            _row("SLEEPER", "00-0036900", adp=3.0, full_name="X", position="WR", placeholder=False, stats=sleeper),
+            _row(
+                "ESPN",
+                "00-0036900",
+                adp=4.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=espn,
+            ),
+            _row(
+                "SLEEPER",
+                "00-0036900",
+                adp=3.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=sleeper,
+            ),
         ]
     )
     r = build_consensus(ext, Ruleset()).iloc[0]
@@ -121,21 +137,55 @@ def test_stub_row_excluded_from_blend() -> None:
     }
     ext = _external(
         [
-            _row("ESPN", "00-0036900", adp=4.0, full_name="X", position="WR", placeholder=False, stats=stub),
-            _row("SLEEPER", "00-0036900", adp=3.0, full_name="X", position="WR", placeholder=False, stats=sleeper),
+            _row(
+                "ESPN",
+                "00-0036900",
+                adp=4.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=stub,
+            ),
+            _row(
+                "SLEEPER",
+                "00-0036900",
+                adp=3.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=sleeper,
+            ),
         ]
     )
     r = build_consensus(ext, Ruleset()).iloc[0]
     # Sleeper-only, NOT mean(0, 110) = 55:
-    assert r["receptions"] == 110.0 and r["receiving_yards"] == 1500.0 and r["receiving_tds"] == 10.0
+    assert (
+        r["receptions"] == 110.0 and r["receiving_yards"] == 1500.0 and r["receiving_tds"] == 10.0
+    )
 
 
 def test_all_zero_rows_yield_no_points() -> None:
     stub = {c: 0.0 for c in _STAT_COLS}
     ext = _external(
         [
-            _row("ESPN", "00-0036900", adp=4.0, full_name="X", position="WR", placeholder=False, stats=stub),
-            _row("SLEEPER", "00-0036900", adp=3.0, full_name="X", position="WR", placeholder=False, stats=stub),
+            _row(
+                "ESPN",
+                "00-0036900",
+                adp=4.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=stub,
+            ),
+            _row(
+                "SLEEPER",
+                "00-0036900",
+                adp=3.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=stub,
+            ),
         ]
     )
     r = build_consensus(ext, Ruleset()).iloc[0]
@@ -153,8 +203,24 @@ def test_one_nonzero_field_is_not_stat_bearing() -> None:
     }
     ext = _external(
         [
-            _row("ESPN", "00-0036900", adp=4.0, full_name="X", position="WR", placeholder=False, stats=one),
-            _row("SLEEPER", "00-0036900", adp=3.0, full_name="X", position="WR", placeholder=False, stats=full),
+            _row(
+                "ESPN",
+                "00-0036900",
+                adp=4.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=one,
+            ),
+            _row(
+                "SLEEPER",
+                "00-0036900",
+                adp=3.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=full,
+            ),
         ]
     )
     r = build_consensus(ext, Ruleset()).iloc[0]
@@ -167,7 +233,15 @@ def test_adp_unaffected_by_stat_gating() -> None:
     stub = {c: 0.0 for c in _STAT_COLS}
     ext = _external(
         [
-            _row("ESPN", "00-0036900", adp=4.0, full_name="X", position="WR", placeholder=False, stats=stub),
+            _row(
+                "ESPN",
+                "00-0036900",
+                adp=4.0,
+                full_name="X",
+                position="WR",
+                placeholder=False,
+                stats=stub,
+            ),
             _row("SLEEPER", "00-0036900", adp=2.0, full_name="X", position="WR", placeholder=False),
         ]
     )

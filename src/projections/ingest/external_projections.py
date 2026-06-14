@@ -115,7 +115,8 @@ def _sleeper_stats_to_statline(stats: dict[str, float]) -> dict[str, float] | No
     """Map Sleeper's raw projected stat line to the canonical STAT_FIELDS, raw (no rounding) —
     mirroring _espn_stats_to_statline. Returns None when `stats` carries none of the mapped keys
     (an ADP-only Sleeper row with no real projection), so the caller stores NA rather than a
-    fabricated all-zero line. Non-mapped keys (gp, cmp_pct, *_fd, bonus_*, *_2pt, adp_*) are ignored."""
+    fabricated all-zero line. Non-mapped keys (gp, cmp_pct, *_fd, bonus_*, *_2pt, adp_*) are
+    ignored."""
     if not any(key in stats for key in SLEEPER_STAT_FIELDS):
         return None
     out: dict[str, float] = {field: 0.0 for field in STAT_FIELDS}
