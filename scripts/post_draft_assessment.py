@@ -84,13 +84,76 @@ def corr_ci(
     return r, float(np.percentile(bs, 2.5)), float(np.percentile(bs, 97.5))
 
 
+def run_predictive(season: int, *, draft_seeds: int, n_predictive_sims: int) -> None:
+    """Forward predictive CI (Consumer B): draft the nn/sv/bot field on `season`, then re-score
+    model-sampled seasons. Prints season_value forward champ%/playoff%/wins ± CI — the honest CI
+    that reflects player-outcome luck, complementing the historical-actuals tables above."""
+    from projections.draft.assistant.performance_variance import VarianceParams
+    from projections.draft.backtest.draft_field import seat_layout
+    from projections.draft.backtest.harness import _build_strategy
+    from projections.draft.backtest.inputs import load_inputs
+    from projections.draft.backtest.predictive import predictive_outcomes
+    from projections.draft.league_config import LeagueConfig
+
+    cfg = LeagueConfig.model_validate_json(Path("configs/league_espn_half_16team.json").read_text())
+    inp = load_inputs(season=season, config=cfg, data_root=Path("data"))
+    layout = seat_layout(0)  # one representative seat layout; draft varies by seed
+    seat_strategies = {
+        seat: _build_strategy(
+            label,
+            availability=inp.availability,
+            n_teams=cfg.n_teams,
+            strategy_n_sims=200,
+            base_seed=0,
+        )
+        for seat, label in layout.items()
+    }
+    out = predictive_outcomes(
+        inp.pool,
+        cfg,
+        inp.proj_lookup,
+        VarianceParams.load(),
+        seat_strategies=seat_strategies,
+        strategy_labels=layout,
+        calendar=inp.calendar,
+        jitter=8.0,
+        draft_seeds=range(draft_seeds),
+        n_predictive_sims=n_predictive_sims,
+        rng=np.random.default_rng(0),
+    )
+    sv = out["season_value"]
+    c, cl, ch = boot_ci(sv["champ"])
+    p, pl, ph = boot_ci(sv["playoff"])
+    w, wl, wh = boot_ci(sv["wins"])
+    print(
+        f"\n=== PREDICTIVE forward CI (model-sampled outcomes), season_value, {season} "
+        f"({draft_seeds} drafts x {n_predictive_sims} sims, n={len(sv['champ'])}) ==="
+    )
+    print(
+        f"  champ {c * 100:4.1f}% [{cl * 100:.1f},{ch * 100:.1f}]   "
+        f"playoff {p * 100:4.1f}% [{pl * 100:.1f},{ph * 100:.1f}]   "
+        f"wins {w:.1f} [{wl:.1f},{wh:.1f}]"
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--checkpoint-root", type=Path, default=_DEFAULT_ROOT)
     ap.add_argument("--seasons", nargs="+", default=list(_DEFAULT_SEASONS))
+    ap.add_argument(
+        "--predictive", type=int, default=None, help="season to run the forward predictive CI on"
+    )
+    ap.add_argument("--draft-seeds", type=int, default=20)
+    ap.add_argument("--predictive-sims", type=int, default=50)
     args = ap.parse_args()
+
+    if args.predictive is not None:
+        run_predictive(
+            args.predictive, draft_seeds=args.draft_seeds, n_predictive_sims=args.predictive_sims
+        )
+        return
 
     seasons: dict[str, Path] = {s: args.checkpoint_root / s for s in args.seasons}
     grouped: list[tuple[str, list[Path]]] = [(s, [d]) for s, d in seasons.items()]
