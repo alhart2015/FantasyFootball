@@ -96,6 +96,35 @@ def _espn_stats_to_statline(stats: dict[str, float]) -> dict[str, float]:
     return out
 
 
+# Sleeper's raw projected stat keys -> canonical STAT_FIELDS. Verified live against the Sleeper
+# projections API. Values are STAT_FIELDS members (same convention as ESPN_STAT_IDS).
+SLEEPER_STAT_FIELDS: dict[str, str] = {
+    "pass_yd": "passing_yards",
+    "pass_td": "passing_tds",
+    "pass_int": "interceptions",
+    "rush_yd": "rushing_yards",
+    "rush_td": "rushing_tds",
+    "rec": "receptions",
+    "rec_yd": "receiving_yards",
+    "rec_td": "receiving_tds",
+    "fum_lost": "fumbles_lost",
+}
+
+
+def _sleeper_stats_to_statline(stats: dict[str, float]) -> dict[str, float] | None:
+    """Map Sleeper's raw projected stat line to the canonical STAT_FIELDS, raw (no rounding) —
+    mirroring _espn_stats_to_statline. Returns None when `stats` carries none of the mapped keys
+    (an ADP-only Sleeper row with no real projection), so the caller stores NA rather than a
+    fabricated all-zero line. Non-mapped keys (gp, cmp_pct, *_fd, bonus_*, *_2pt, adp_*) are ignored."""
+    if not any(key in stats for key in SLEEPER_STAT_FIELDS):
+        return None
+    out: dict[str, float] = {field: 0.0 for field in STAT_FIELDS}
+    for key, field in SLEEPER_STAT_FIELDS.items():
+        if key in stats:
+            out[field] = float(stats[key])
+    return out
+
+
 def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
     """Tidy one ESPN kona_player_info payload -> one row per QB/RB/WR/TE with a preseason
     projected stat line + espn_id + ADP + PPR draft rank."""

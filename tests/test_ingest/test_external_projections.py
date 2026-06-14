@@ -91,6 +91,49 @@ def test_parse_sleeper_projections_keeps_name_position_adp_filters_to_skill() ->
     assert r["full_name"] == "A B" and r["position"] == "WR" and r["sleeper_adp"] == 14.5
 
 
+def test_sleeper_stats_to_statline_maps_raw_no_rounding() -> None:
+    # Real Sleeper WR line (fractional rec_td); maps to canonical fields, raw, unrounded.
+    stats = {
+        "rec": 105.0,
+        "rec_yd": 1501.0,
+        "rec_td": 8.4,
+        "rush_yd": 44.0,
+        "fum_lost": 1.0,
+        "gp": 18.0,
+        "cmp_pct": 0.0,
+        "bonus_rec_wr": 105.0,
+        "adp_ppr": 3.4,
+        "rec_fd": 150.1,
+        "rec_0_4": 21.0,
+    }
+    out = ext._sleeper_stats_to_statline(stats)
+    assert out is not None
+    assert out["receptions"] == 105.0
+    assert out["receiving_yards"] == 1501.0
+    assert out["receiving_tds"] == 8.4  # raw, not rounded to 8
+    assert out["rushing_yards"] == 44.0
+    assert out["fumbles_lost"] == 1.0
+    # unmapped/absent canonical fields default to 0.0
+    assert out["passing_yards"] == 0.0 and out["rushing_tds"] == 0.0
+    # non-mapped Sleeper keys are ignored (no stray keys)
+    from projections.schemas import STAT_FIELDS
+
+    assert set(out) == set(STAT_FIELDS)
+
+
+def test_sleeper_stats_to_statline_qb_fields() -> None:
+    stats = {"pass_yd": 4193.0, "pass_td": 32.0, "pass_int": 14.0, "rush_yd": 599.0, "rush_td": 6.0}
+    out = ext._sleeper_stats_to_statline(stats)
+    assert out is not None
+    assert out["passing_yards"] == 4193.0 and out["passing_tds"] == 32.0
+    assert out["interceptions"] == 14.0 and out["rushing_yards"] == 599.0 and out["rushing_tds"] == 6.0
+
+
+def test_sleeper_stats_to_statline_none_when_adp_only() -> None:
+    # A Sleeper row with only ADP (no mapped stat keys) has no projection -> None.
+    assert ext._sleeper_stats_to_statline({"adp_ppr": 14.5, "adp_std": 20.0, "gp": 0.0}) is None
+
+
 def test_make_placeholder_gsis_deterministic_pattern_valid_and_cross_source_stable() -> None:
     import re
 
