@@ -59,7 +59,7 @@ Two surgical changes; **no schema change, no `build_draft_basis` change, no draf
   | `fum_lost` | `fumbles_lost` |
 
   All nine `STAT_FIELDS` are covered. Reference enums, never raw strings (CLAUDE.md): the mapping values are `Stat`/`STAT_FIELDS` members.
-- Add `_sleeper_stats_to_statline(stats: dict[str, float]) -> dict[str, float]` mirroring the existing `_espn_stats_to_statline`: it maps present Sleeper keys to canonical fields, defaults absent fields to 0.0, and applies the **same count-rounding convention** (`round_count` over `COUNT_FIELDS`) already used for ESPN, so the two sources' stat lines are constructed identically before averaging.
+- Add `_sleeper_stats_to_statline(stats: dict[str, float]) -> dict[str, float]` mirroring the existing `_espn_stats_to_statline`: it maps present Sleeper keys to canonical fields and defaults absent fields to 0.0. It stores the **raw fractional values, with no rounding** — exactly as `_espn_stats_to_statline` does (that function deliberately keeps ESPN's raw fractional projections; per its own comment, "Rounding here is irreversible and biases season totals; the scoring layer is the only place that decides how a projected stat becomes points"). `round_count`/`COUNT_FIELDS` are NOT used here; they are retained only for the frozen benchmark spike. Storing Sleeper raw (no rounding) is what makes the two sources' stat lines directly comparable before averaging.
 - In the Sleeper parse path, populate the `STAT_FIELDS` columns from `_sleeper_stats_to_statline(...)` and flip the Sleeper source spec from `has_stats=False` to `has_stats=True`. Sleeper rows in the snapshot stop being all-NA on stat columns.
 - **Side effect (intended):** the all-NA-column `pd.concat` FutureWarning at the source frame assembly disappears because Sleeper now carries real stat columns. (If any source still legitimately lacks stats, set the stat columns' dtype explicitly before `concat` so no all-NA inference warning remains.)
 
@@ -87,7 +87,9 @@ R3. `build_consensus` includes a source row's stat values in the per-field mean 
 R4. The existing ESPN-only behavior is preserved: a group containing a single full ESPN row (no Sleeper stats) produces the same projection as before this change (regression guard).
 R5. `consensus_adp` and `consensus_rank` are unaffected by the points change (ADP aggregation untouched).
 R6. No all-NA `pd.concat` FutureWarning is emitted during ingest.
-R7. **Verification (definition of done):** after re-ingesting 2021–2025, every season's draft-basis pool has `season_mean_fpts > 0` for **≥ 90%** of pool players (2023 must rise from 99/514 to the ~95% the other seasons show).
+R7. **Verification (definition of done):** after re-ingesting 2021–2025, every season's **draft-basis pool** — defined as the rows returned by `build_draft_basis(...)`, not the raw snapshot — has `season_mean_fpts > 0` for **≥ 90%** of those rows (2023 must rise from 99/514 to the ~95% the other seasons show).
+
+R8. **Cross-source value sanity (definition of done):** on 2024 and 2025 (both sources stat-bearing), compare, per player on the ESPN∩Sleeper overlap, OUR-scored ESPN-only projected points vs OUR-scored Sleeper-only projected points (each scored under `league_config.ruleset` from that source's raw stat line alone). They must correlate at **r ≥ 0.85** with **median ratio in [0.85, 1.15]**. This proves the Sleeper mapping is complete and unit-/semantically-consistent with ESPN — that the blend produces *correct values*, not merely *populated* ones. (Distinct from the prior r≈0.95 finding, which compared Sleeper's own `pts_half_ppr` to ESPN; R8 checks OUR scoring of Sleeper's raw line.)
 
 ## Edge cases / failure modes
 
@@ -102,7 +104,7 @@ R7. **Verification (definition of done):** after re-ingesting 2021–2025, every
 
 TDD; each unit gets a failing test first. Tests use synthetic payloads (no network), following the existing ESPN parser tests as the template.
 
-- `_sleeper_stats_to_statline`: synthetic Sleeper `stats` dict → correct canonical `StatLine`, including rounding parity with `_espn_stats_to_statline` and ignoring of non-mapped keys.
+- `_sleeper_stats_to_statline`: synthetic Sleeper `stats` dict → correct canonical `StatLine` for all nine fields, storing **raw fractional values (no rounding), matching `_espn_stats_to_statline`**, and ignoring non-mapped keys (`gp`, `cmp_pct`, `pass_fd`, `bonus_rec_wr`, `*_2pt`, `adp_*`).
 - Sleeper parse: emits populated `STAT_FIELDS` columns (assert not all-NA); ESPN parse output unchanged.
 - `_is_stat_bearing`: 0/1 non-null scoring fields → False; ≥2 → True.
 - `build_consensus` stub guard (the four R3/R4 cases): (a) full + stub → full only; (b) two full → per-field mean then scored once; (c) two stub/no-stat → `has_points=False`; (d) single full ESPN row → byte-identical to pre-change projection (regression).
@@ -112,6 +114,6 @@ TDD; each unit gets a failing test first. Tests use synthetic payloads (no netwo
 
 ## Phasing
 
-Single coherent phase (the durable data-layer change), gated by R1–R7 and the full project gate suite (`pytest`, `mypy src tests`, `ruff check`, `ruff format --check`).
+Single coherent phase (the durable data-layer change), gated by R1–R8 and the full project gate suite (`pytest`, `mypy src tests`, `ruff check`, `ruff format --check`).
 
 **Post-merge payoff (NOT in this spec):** re-ingest 2021–2025 (already part of R7 verification), then re-run the five-season H2H backtests on the blended basis and regenerate the projected-vs-actual correlation + post-draft assessment (`_diag_assess.py`, extended to all five seasons). This is throwaway analysis over existing code; it is the motivation for the change but is tracked separately so the production spec stays a clean, testable unit.
