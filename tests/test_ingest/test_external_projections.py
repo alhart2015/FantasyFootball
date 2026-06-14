@@ -134,6 +134,119 @@ def test_sleeper_stats_to_statline_none_when_adp_only() -> None:
     assert ext._sleeper_stats_to_statline({"adp_ppr": 14.5, "adp_std": 20.0, "gp": 0.0}) is None
 
 
+def test_parse_sleeper_projections_extracts_stat_line() -> None:
+    payload: list[dict[str, Any]] = [
+        {
+            "player_id": "6794",
+            "stats": {"adp_ppr": 14.5, "rec": 105.0, "rec_yd": 1501.0, "rec_td": 8.0},
+            "player": {"first_name": "A", "last_name": "B", "position": "WR"},
+        }
+    ]
+    df = ext.parse_sleeper_projections(payload)
+    r = df.iloc[0]
+    assert r["sleeper_id"] == "6794" and r["sleeper_adp"] == 14.5
+    assert r["receptions"] == 105.0 and r["receiving_yards"] == 1501.0 and r["receiving_tds"] == 8.0
+    assert r["passing_yards"] == 0.0  # absent mapped field defaults to 0.0
+
+
+def test_parse_sleeper_adp_only_row_has_na_stats_but_columns_present() -> None:
+    # All-ADP-only payload: stat columns must still exist (NA) so the has_stats path can read them.
+    from projections.schemas import STAT_FIELDS
+
+    payload: list[dict[str, Any]] = [
+        {
+            "player_id": "9",
+            "stats": {"adp_ppr": 50.0},
+            "player": {"first_name": "Deep", "last_name": "Guy", "position": "RB"},
+        }
+    ]
+    df = ext.parse_sleeper_projections(payload)
+    assert all(f in df.columns for f in STAT_FIELDS)
+    assert all(pd.isna(df.iloc[0][f]) for f in STAT_FIELDS)
+
+
+def test_sleeper_to_canonical_carries_stat_line() -> None:
+    from datetime import date
+
+    from projections.schemas import ExternalProjectionSchema, ProjectionSource
+
+    sl = ext.parse_sleeper_projections(
+        [
+            {
+                "player_id": "6794",
+                "stats": {"adp_ppr": 14.5, "rec": 100.0, "rec_yd": 1400.0, "rec_td": 9.0},
+                "player": {"first_name": "A", "last_name": "B", "position": "WR"},
+            }
+        ]
+    )
+    out = ext._to_canonical(
+        sl,
+        source=ProjectionSource.SLEEPER,
+        id_col="sleeper_id",
+        adp_col="sleeper_adp",
+        rank_col=None,
+        has_stats=True,
+        season=2026,
+        asof=date(2026, 7, 15),
+        id_map=_tiny_id_map(),
+    )
+    ExternalProjectionSchema.validate(out)
+    r = out.iloc[0]
+    assert r["source"] == "SLEEPER" and r["adp"] == 14.5
+    assert r["receptions"] == 100.0 and r["receiving_yards"] == 1400.0
+    assert pd.isna(r["espn_draft_rank"])  # Sleeper has no draft rank
+
+
+def test_refresh_emits_no_all_na_concat_futurewarning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import warnings
+    from datetime import date
+
+    espn_payload: dict[str, Any] = {
+        "players": [
+            {
+                "player": {
+                    "id": 4374302,
+                    "fullName": "Ja'Marr Chase",
+                    "defaultPositionId": 3,
+                    "ownership": {"averageDraftPosition": 4.8},
+                    "draftRanksByRankType": {"PPR": {"rank": 20}},
+                    "stats": [
+                        {
+                            "seasonId": 2026,
+                            "statSourceId": 1,
+                            "statSplitTypeId": 0,
+                            "stats": {"53": 105.0, "42": 1335.0, "43": 8.0},
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+    sleeper_payload: list[dict[str, Any]] = [
+        {
+            "player_id": "6794",
+            "stats": {"adp_ppr": 14.5, "rec": 100.0, "rec_yd": 1400.0, "rec_td": 9.0},
+            "player": {"first_name": "A", "last_name": "B", "position": "WR"},
+        }
+    ]
+    monkeypatch.setattr(ext, "fetch_espn", lambda season: espn_payload)
+    monkeypatch.setattr(ext, "fetch_sleeper_season", lambda season: sleeper_payload)
+    (tmp_path / "raw").mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0036900", "00-0011111"], dtype="string[pyarrow]"),
+            "espn_id": pd.array(["4374302", "x"], dtype="string[pyarrow]"),
+            "sleeper_id": pd.array(["y", "6794"], dtype="string[pyarrow]"),
+        }
+    ).to_parquet(tmp_path / "raw" / "id_map.parquet", index=False)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        ext.refresh_external_projections(tmp_path, season=2026, asof=date(2026, 7, 15))
+
+
 def test_make_placeholder_gsis_deterministic_pattern_valid_and_cross_source_stable() -> None:
     import re
 

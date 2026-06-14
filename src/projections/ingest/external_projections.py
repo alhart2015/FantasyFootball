@@ -190,7 +190,8 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
 # `fantasy_positions` can diverge; revisit if multi-eligibility matters for the Draft Hub.
 def parse_sleeper_projections(payload: list[dict[str, Any]]) -> pd.DataFrame:
     """Tidy Sleeper season projections -> one row per QB/RB/WR/TE with sleeper_id + name +
-    position + PPR ADP (Sleeper has no stat line at the season level)."""
+    position + PPR ADP. Sleeper carries a raw season stat line (mapped via
+    _sleeper_stats_to_statline); ADP-only rows leave the stat columns NA."""
     rows: list[dict[str, object]] = []
     for item in payload:
         pid = item.get("player_id")
@@ -206,15 +207,23 @@ def parse_sleeper_projections(payload: list[dict[str, Any]]) -> pd.DataFrame:
         if not full_name:
             continue
         stats = item.get("stats") or {}
-        rows.append(
-            {
-                "sleeper_id": str(pid),
-                "full_name": full_name,
-                "position": position,
-                "sleeper_adp": stats.get("adp_ppr"),
-            }
-        )
-    return pd.DataFrame(rows)
+        row: dict[str, object] = {
+            "sleeper_id": str(pid),
+            "full_name": full_name,
+            "position": position,
+            "sleeper_adp": stats.get("adp_ppr"),
+        }
+        statline = _sleeper_stats_to_statline(stats)
+        if statline is not None:
+            row.update(statline)
+        rows.append(row)
+    df = pd.DataFrame(rows)
+    # Guarantee the canonical stat columns exist even if NO row carried a projection, so the
+    # has_stats=True path in _to_canonical can read them (absent -> NA).
+    for field in STAT_FIELDS:
+        if field not in df.columns:
+            df[field] = pd.NA
+    return df
 
 
 def _make_placeholder_gsis(full_name: str, position: str) -> str:
@@ -300,6 +309,10 @@ def _to_canonical(
     )
     for f in STAT_FIELDS:
         out[f] = keyed[f] if has_stats else null_col
+    # Uniform nullable-float dtype across all source frames so pd.concat needs no dtype inference
+    # over all-NA columns (e.g. Sleeper's espn_draft_rank) — avoids the all-NA-column FutureWarning.
+    for col in ("adp", "espn_draft_rank", *STAT_FIELDS):
+        out[col] = out[col].astype("Float64")
     return _finish_canonical(out, season=season, asof=asof)
 
 
@@ -377,7 +390,7 @@ def refresh_external_projections(data_root: Path, *, season: int, asof: date | N
     # logged and skipped; only the all-empty pull above is refused.
     source_specs: list[tuple[pd.DataFrame, ProjectionSource, str, str, str | None, bool]] = [
         (espn, ProjectionSource.ESPN, "espn_id", "espn_adp", "espn_pos_rank", True),
-        (sleeper, ProjectionSource.SLEEPER, "sleeper_id", "sleeper_adp", None, False),
+        (sleeper, ProjectionSource.SLEEPER, "sleeper_id", "sleeper_adp", None, True),
     ]
     frames: list[pd.DataFrame] = []
     for parsed, source, id_col, adp_col, rank_col, has_stats in source_specs:
