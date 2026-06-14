@@ -107,6 +107,58 @@ def _vectorized_lineup_points(avail: np.ndarray, meta: _FillMeta) -> np.ndarray:
     return total
 
 
+def _lineup_points_sampled(
+    points: np.ndarray,
+    avail: np.ndarray,
+    pos: np.ndarray,
+    roster_slots: Mapping[RosterSlot, int],
+) -> np.ndarray:
+    """Optimal legal lineup points per row of `(R, n)` `points`/`avail`, ranked by each row's OWN
+    points (sampled weekly points), not a fixed per-player value.
+
+    Generalizes `_vectorized_lineup_points` to per-row point values: same restrictive-first greedy
+    (single-position slots, then FLEX/SUPER_FLEX narrowest-first — optimal for laminar slots).
+    Reduces to `_vectorized_lineup_points` when every row's points equal the fixed roster points
+    (pinned by `test_sampled_fill_matches_fixed_when_points_constant`).
+    """
+    rows_n, _n = points.shape
+    total = np.zeros(rows_n, dtype=np.float64)
+    used = np.zeros_like(avail, dtype=bool)
+    eff = np.where(avail, points, -np.inf)
+    rows = np.arange(rows_n)[:, None]
+    for slot in POSITION_SLOTS:
+        count = roster_slots.get(slot, 0)
+        if count <= 0:
+            continue
+        cols = np.flatnonzero(pos == slot.value)
+        if cols.size == 0:
+            continue
+        sub = np.where(used[:, cols], -np.inf, eff[:, cols])  # (R, m)
+        k = min(count, cols.size)
+        idx = np.argsort(-sub, axis=1)[:, :k]  # (R, k) top-k columns by this row's points
+        vals = sub[rows, idx]
+        total += np.where(vals > -np.inf, vals, 0.0).sum(axis=1)
+        chosen = cols[idx]
+        used[rows, chosen] |= vals > -np.inf
+    for slot, eligible in _FLEX_SLOTS:
+        count = roster_slots.get(slot, 0)
+        if count <= 0:
+            continue
+        cols = np.flatnonzero(np.isin(pos, [p.value for p in eligible]))
+        if cols.size == 0:
+            continue
+        for _ in range(count):
+            sub = np.where(used[:, cols], -np.inf, eff[:, cols])
+            best_local = sub.argmax(axis=1)
+            best_val = sub[np.arange(rows_n), best_local]
+            has = best_val > -np.inf
+            total += np.where(has, best_val, 0.0)
+            chosen = cols[best_local]
+            sel = np.flatnonzero(has)
+            used[sel, chosen[sel]] = True
+    return total
+
+
 def _factorized_season_value(
     roster: pd.DataFrame,
     availability: PlayerAvailability,
