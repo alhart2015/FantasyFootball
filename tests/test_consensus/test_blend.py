@@ -250,6 +250,50 @@ def test_adp_unaffected_by_stat_gating() -> None:
     assert r["n_adp_sources"] == 2
 
 
+def test_handles_non_unique_index_without_misblending() -> None:
+    # build_consensus must tolerate a caller-supplied non-unique index (it resets internally):
+    # the per-group stat-bearing mask must not pull a different player's stats into the blend.
+    a_stats = {c: 0.0 for c in _STAT_COLS} | {
+        "receptions": 80.0,
+        "receiving_yards": 900.0,
+        "receiving_tds": 5.0,
+    }
+    b_stats = {c: 0.0 for c in _STAT_COLS} | {"rushing_yards": 1000.0, "rushing_tds": 8.0}
+    ext = _external(
+        [
+            _row(
+                "ESPN",
+                "00-0000001",
+                adp=5.0,
+                full_name="A",
+                position="WR",
+                placeholder=False,
+                stats=a_stats,
+            ),
+            _row(
+                "ESPN",
+                "00-0000002",
+                adp=6.0,
+                full_name="B",
+                position="RB",
+                placeholder=False,
+                stats=b_stats,
+            ),
+        ]
+    )
+    ext.index = [0, 0]  # duplicate labels — the scenario that broke the .loc[grp.index] lookup
+    out = build_consensus(ext, Ruleset()).set_index("gsis_id")
+    assert len(out) == 2
+    assert (
+        out.loc["00-0000001", "receptions"] == 80.0
+        and out.loc["00-0000001", "rushing_yards"] == 0.0
+    )
+    assert (
+        out.loc["00-0000002", "rushing_yards"] == 1000.0
+        and out.loc["00-0000002", "receptions"] == 0.0
+    )
+
+
 def test_sleeper_only_player_has_adp_no_points() -> None:
     ext = _external(
         [

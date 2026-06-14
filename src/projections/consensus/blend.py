@@ -55,6 +55,12 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
     if external.empty:
         return _empty_output()
 
+    # Normalize to a unique RangeIndex: the per-group `bearing_mask.loc[grp.index]` lookup below
+    # would mis-align (or raise) on a caller-supplied non-unique index (pandera validate does not
+    # reset it). groupby preserves whatever index we set here, so doing this once keeps the
+    # vectorized mask index-safe regardless of caller.
+    external = external.reset_index(drop=True)
+
     season = int(external["season"].iloc[0])
     asof = str(external["asof"].iloc[0])
 
