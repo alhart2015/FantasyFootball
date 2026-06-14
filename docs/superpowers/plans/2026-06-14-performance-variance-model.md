@@ -346,7 +346,11 @@ def fit_params(rows: list[dict]) -> dict:
     return {"weekly_std_affine": weekly_std_affine, "mean_mult_log_sd": mean_mult_log_sd}
 ```
 
-- [ ] **Step 3b: Add `main()`** that builds `rows` from the store: for each season 2019–2025 (2018 reserved as rookie-detection lookback only), read `weekly_stats`, `build_weekly_actuals` → per-(gsis,week) points; group to per-player-season `weekly` arrays + position; `is_rookie` = no `weekly_stats` appearance in any earlier season (from 2018+); `projected_pg` = that season's blended `build_draft_basis` `season_mean_fpts`/17 (skip player-seasons without a projection for the log-SD part, but keep them for the affine which needs no projection). Write `fit_params(rows)` to `configs/performance_variance_params.json` (sorted keys, indent 2). Exact store calls mirror `scripts/post_draft_assessment.py` / `_diag` patterns: `read_partition(Path("data/raw"), "weekly_stats", season=yr)`, `read_latest_partition(Path("data/raw"), "external_projections", season=yr)`, `build_draft_basis(..., league_config=LeagueConfig.model_validate_json(Path("configs/league_espn_half_16team.json").read_text()))`.
+- [ ] **Step 3b: Add `main()`** that builds `rows` from the store with **two distinct season ranges** (external_projections exists only for 2021–2025; weekly_stats for 2018–2025):
+  - **Affine rows (component i) — weekly_stats 2018–2025 (all):** for each season 2018–2025, `read_partition(Path("data/raw"), "weekly_stats", season=yr)`, `build_weekly_actuals` → per-(gsis,week) points; group to per-player-season `weekly` arrays + position. These rows carry `projected_pg = 0` / `is_rookie` (still computed) and contribute to the affine only (`fit_params` skips the log-SD when `ppg <= 0`).
+  - **Log-SD rows (component ii) — only seasons WITH a projection (2021–2025):** for those seasons, `read_latest_partition(Path("data/raw"), "external_projections", season=yr)` + `build_draft_basis(..., league_config=LeagueConfig.model_validate_json(Path("configs/league_espn_half_16team.json").read_text()))` → `projected_pg = season_mean_fpts / 17`; attach to the matching player-season rows so they also contribute to `mean_mult_log_sd`. **Do NOT call build_draft_basis for 2018–2020** (no snapshot — it would raise).
+  - **Rookie flag:** `is_rookie` = no `weekly_stats` appearance in any season `< yr` (lookback from 2018). Build the prior-appearance set incrementally as you iterate seasons ascending.
+  - Write `fit_params(rows)` to `configs/performance_variance_params.json` (sorted keys, indent 2).
 
 - [ ] **Step 4: Run to verify pass** + lint
 
@@ -385,7 +389,7 @@ def test_attach_is_rookie() -> None:
     pool = pd.DataFrame({"gsis_id": ["00-0000001", "00-0000002"], "position": ["WR", "RB"]})
     out = _attach_is_rookie(pool, prior_gsis={"00-0000001"})
     by = dict(zip(out["gsis_id"], out["is_rookie"]))
-    assert by["00-0000001"] is False or by["00-0000001"] == False  # appeared before -> veteran
+    assert bool(by["00-0000001"]) is False  # appeared before -> veteran
     assert bool(by["00-0000002"]) is True  # never appeared -> rookie
 ```
 
@@ -516,7 +520,7 @@ def test_var_reduces_to_deterministic_at_zero_variance() -> None:
                            "season_mean_fpts":[300.0,250.0,200.0],"is_rookie":[False,False,False]})
     slots={RosterSlot.QB:1,RosterSlot.RB:1,RosterSlot.WR:1}
     v = expected_season_points_var(roster, slots, _avail_all(), _vp_zero(),
-                                   n_sims=200, n_weeks=14, rng=np.random.default_rng(0))
+                                   n_sims=200, rng=np.random.default_rng(0), weeks=range(1, 15))
     # deterministic season points = sum of starters' per_game * 14 weeks = (300+250+200)/17*14
     assert abs(v - (750.0/17*14)) < 5.0
 
@@ -526,7 +530,7 @@ def test_marginal_crn_ranks_better_candidate_first() -> None:
                           "season_mean_fpts":[250.0,120.0],"is_rookie":[False,False]})
     slots={RosterSlot.QB:1,RosterSlot.RB:1}
     out = marginal_season_values_var(base, cands, slots, _avail_all(), _vp_zero(),
-                                     n_sims=200, n_weeks=14, rng=np.random.default_rng(0))
+                                     n_sims=200, rng=np.random.default_rng(0), weeks=range(1, 15))
     assert out["x"] > out["y"] > 0
 ```
 
@@ -534,8 +538,9 @@ def test_marginal_crn_ranks_better_candidate_first() -> None:
 
 - [ ] **Step 2: Run to verify they fail** (`expected_season_points_var` / `marginal_season_values_var` missing).
 - [ ] **Step 3: Implement** `expected_season_points_var` and `marginal_season_values_var`:
-  - `expected_season_points_var(roster, roster_slots, availability, params, *, n_sims, n_weeks, rng, weeks=range(1,15))`: build `(n_sims, n_weeks, n)` points via `sample_weekly_points(params, pos, means, is_rookie, ...)`; build availability `(n_sims, n_weeks, n)` from `p_week` (Bernoulli per sim-week) AND byes (force unavailable in the bye week — map week index to calendar week, set avail False where `bye_week==week`); flatten to `(n_sims*n_weeks, n)`, call `_lineup_points_sampled`, reshape `(n_sims, n_weeks)`, sum over weeks → per-sim season totals, `.mean()`. (No `_GAMES` division — points are already per-game weekly and summed over the played weeks.)
-  - `marginal_season_values_var(base, candidates, roster_slots, availability, params, *, n_sims, n_weeks, rng, weeks)`: CRN — draw ONE set of `(m, weekly, availability)` over the union of base+candidate ids using a single rng pass keyed by column; evaluate base and each `base+candidate` against the **same** drawn arrays (slice columns), so the marginal cancels common noise. Mirror the existing `marginal_season_values` column-union/`col_of` pattern but with the sampled arrays instead of `draws`.
+  **Week parameterization:** both functions take a single `weeks` param and derive `n_weeks = len(list(weeks))` internally — never a separate `n_weeks` arg (passing both invites a season-scale bug). **Default `weeks = tuple(range(1, 15))`** (the 14-game regular season, matching `DEFAULT_CALENDAR.regular_weeks` in `inputs.py` — this is what the backtest scores; do NOT use the old `range(1,18)`). The strategy (Task 8) passes this same 14-week default. Bye week `w` maps to index `weeks.index(w)`.
+  - `expected_season_points_var(roster, roster_slots, availability, params, *, n_sims, rng, weeks=tuple(range(1,15)))`: `n_weeks=len(weeks)`; build `(n_sims, n_weeks, n)` points via `sample_weekly_points(params, pos, means, is_rookie, n_sims=n_sims, n_weeks=n_weeks, rng=rng)`; build availability `(n_sims, n_weeks, n)` from `p_week` (Bernoulli per sim-week, thresholding fresh uniforms) AND byes (for each roster player with `bye_week()==weeks[i]`, set `avail[:, i, player]=False`); flatten to `(n_sims*n_weeks, n)`, call `_lineup_points_sampled`, reshape `(n_sims, n_weeks)`, sum over weeks → per-sim season totals, `.mean()`. (No `_GAMES` division — points are already per-game weekly, summed over the played weeks.)
+  - `marginal_season_values_var(base, candidates, roster_slots, availability, params, *, n_sims, rng, weeks=tuple(range(1,15)))`: CRN — over the union of base+candidate ids (the existing `col_of` pattern), draw ONCE: `m` `(n_sims, U)`, weekly Gamma `(n_sims, n_weeks, U)` (via one `sample_weekly_points` call over the union players), and availability uniforms `(n_sims, n_weeks, U)`; then evaluate base and each `base+candidate` by **column-slicing** those same arrays (never re-drawing), so the marginal cancels common noise. Returns `{cand_id: V(base+cand) - V(base)}`.
   - Keep the old `expected_season_points` / `marginal_season_values` (deterministic) in place for now; the strategy switch is Task 8. This keeps the diff additive and the equivalence test meaningful.
 - [ ] **Step 4: Run to verify pass.**
 - [ ] **Step 5: Commit** `feat(season_value): sampler-backed risk-aware season value + CRN marginals`.
@@ -548,8 +553,9 @@ def test_marginal_crn_ranks_better_candidate_first() -> None:
 
 - [ ] **Step 1:** Add the `VarianceParams` (loaded once) + per-player `is_rookie` into `_season_marginals` so the season-value strategies call `marginal_season_values_var`. `is_rookie` comes from the pool column (Task 5); the params load from `configs/performance_variance_params.json` once at strategy construction.
 - [ ] **Step 2: Speed gate** — micro-benchmark a single `recommend` at `n_sims=200`, `n_weeks=14`, mid-draft roster (reuse the `_diag_time.py` harness shape). Assert/observe ≤ 250 ms/pick. If exceeded, lower the strategy's live default `n_sims` until ≤ 250 ms and record the chosen default (R4 fallback). State the measured ms.
-- [ ] **Step 3: Validation (R7b)** — run the existing H2H real-outcome backtest smoke (a few seeds) with the risk-aware strategy and confirm season_value remains competitive (does not collapse vs now_or_never/bots). State results.
-- [ ] **Step 4: Commit** `feat(strategy): risk-aware season_value uses the variance model; n_sims tuned to <=250ms`.
+- [ ] **Step 3: Reconcile existing tests broken by the switch.** Switching `_season_marginals` to the variance MC changes the numeric output of the season-value strategies, so existing tests will move. Grep and run them: `grep -rl "SeasonValue\|season_value\|_season_marginals\|expected_season_points\|marginal_season_values\|--with-season-value" tests/` then `pytest -k "season_value or strategy or tournament"`. For each failure decide: (a) it's the *intended* change (variance now on) → update the assertion and state why in the commit; (b) it's genuine breakage → fix the code. Do NOT blanket-update. The Task-6 equivalence test and the Task-7 zero-variance tests still hold (they pin the reduction-to-deterministic), so a strategy test that asserted an exact pre-variance season_value number is case (a); a test that crashes or asserts a structural invariant (ordering, schema) is case (b).
+- [ ] **Step 4: Validation (R7b)** — run the existing H2H real-outcome backtest smoke (a few seeds) with the risk-aware strategy and confirm season_value remains competitive (does not collapse vs now_or_never/bots). State results.
+- [ ] **Step 5: Commit** `feat(strategy): risk-aware season_value uses the variance model; n_sims tuned to <=250ms` (note which existing tests were updated for the intended variance-on change).
 
 ### Phase 2 gate
 `pytest -v -k "season_value or strategy"`, mypy, ruff, format. All green.
