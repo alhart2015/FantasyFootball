@@ -10,7 +10,7 @@
 - **Two scorings per team:** PROJECTED points-for (the lineup's projected value under shared beliefs — "who drafted better") and ACTUAL points-for/record (realized weekly outcomes). This report relates **projected PF → actual outcomes**.
 - **Draft basis:** the multi-source **ESPN+Sleeper blended** consensus (branch `feat/multi-source-projection-blend`). This is what makes 2021–2023 usable — ESPN does not retain full historical preseason season projections (2023 was 1-field stubs; Sleeper fills the gap). All five seasons' pools are ~100% projected on this basis.
 - **CIs:** paired bootstrap over (seed, seat) team-seasons. **Caveat in §5.**
-- **Checkpoints:** `_h2h_ckpt_blend_2021 … _h2h_ckpt_blend_2025` (200/200 chunks each; manifests: nn/sv, 200 sims, jitter 8). Analysis: `_diag_assess.py`.
+- **Checkpoints (committed):** `reports/data/post_draft_2021_2025/<season>/` (200/200 chunks each; per-season `manifest.json`: nn/sv, 200 sims, jitter 8). Analysis tool: `scripts/post_draft_assessment.py`.
 
 ## 1. Correlation: projected PF → actual win%
 
@@ -56,15 +56,16 @@ Champ% ranges **5.2% → 18.1%** across the five seasons; 2021–2023 (14–18%)
 
 ## 5. CI caveat — the bootstrap CIs are too tight
 
-The backtest resamples **only draft order + schedule**; each player's weekly score is a single fixed historical realization. So the CIs above capture draft/schedule luck but **not** season-to-season projection-quality / player-outcome variance. Evidence: per-season champ% swings 5–18% while each season's bootstrap CI is only ±2–3%. **For a forward-looking 2026 estimate, the honest uncertainty is closer to the cross-season spread (champ ≈ 5–18%, playoff ≈ 50–78%, wins ≈ 7.7–9.2) than the tight per-season bars.** Closing this is **TODO #45** — drawing each simulated week from the player's weekly fantasy-point distribution (Projections Core) instead of a fixed value — which would also widen `_diag_assess.py`'s resampling to player outcomes.
+The backtest resamples **only draft order + schedule**; each player's weekly score is a single fixed historical realization. So the CIs above capture draft/schedule luck but **not** season-to-season projection-quality / player-outcome variance. Evidence: per-season champ% swings 5–18% while each season's bootstrap CI is only ±2–3%. **For a forward-looking 2026 estimate, the honest uncertainty is closer to the cross-season spread (champ ≈ 5–18%, playoff ≈ 50–78%, wins ≈ 7.7–9.2) than the tight per-season bars.** Closing this is **TODO #45** — drawing each simulated week from the player's weekly fantasy-point distribution (Projections Core) instead of a fixed value — which would also widen `scripts/post_draft_assessment.py`'s resampling to player outcomes.
 
 ## Reproduce
 
 ```
 # Re-ingest the blended basis (ESPN+Sleeper) for each season, then:
-python scripts/h2h_backtest_chunked.py --season YYYY --league-config _league_16_half.json \
+python scripts/h2h_backtest_chunked.py --season YYYY --league-config configs/league_espn_half_16team.json \
   --n-seeds 200 --strategy-n-sims 200 --jitter 8 --chunk-size 5 \
-  --checkpoint-dir _h2h_ckpt_blend_YYYY --data-root data
-python _diag_assess.py   # reads _h2h_ckpt_blend_2021..2025
+  --checkpoint-dir reports/data/post_draft_2021_2025/YYYY --data-root data
+# Then the committed analysis (defaults to the committed checkpoints):
+python scripts/post_draft_assessment.py
 ```
 (On the dev Windows box: run in PowerShell with `KMP_DUPLICATE_LIB_OK=TRUE` + single-thread BLAS; the chunk runner auto-retries the intermittent native crash. See `MEMORY.md`.)
