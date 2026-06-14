@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.season_value import (
     _lineup_points_sampled,
     _roster_fill_meta,
@@ -46,15 +48,11 @@ def test_sampled_fill_starts_the_weekly_best() -> None:
     assert out[0] == 20.0 and out[1] == 30.0
 
 
-def _avail_all(gsis: list[str]):
-    from projections.draft.assistant.availability import PlayerAvailability
-
+def _avail_all(gsis: list[str]) -> PlayerAvailability:
     return PlayerAvailability(p={g: 1.0 for g in gsis}, bye={})
 
 
-def _vp_zero():
-    from projections.draft.assistant.performance_variance import VarianceParams
-
+def _vp_zero() -> VarianceParams:
     return VarianceParams(
         {"default": {"a": 0.0, "b": 1e-7}},
         {"default|veteran": 1e-7, "default|rookie": 1e-7},

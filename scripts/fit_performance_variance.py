@@ -52,7 +52,7 @@ def fit_params(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if w.size < _MIN_FIT_GAMES:  # too few games to estimate anything for this player-season
             continue
         mean_pg, std_pg = float(w.mean()), float(w.std())
-        # Affine: real-usage player-seasons (mean per-game >= floor) so deep scrubs don't flatten it.
+        # Affine: real-usage player-seasons (mean per-game >= floor) so scrubs don't flatten it.
         if mean_pg >= _MIN_MEAN_PG:
             by_pos.setdefault(r["position"], []).append((mean_pg, std_pg))
             all_ms.append((mean_pg, std_pg))
