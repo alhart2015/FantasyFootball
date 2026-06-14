@@ -13,6 +13,17 @@ import pandas as pd
 from projections.schemas import STAT_FIELDS, Ruleset
 from projections.scoring import expected_points
 
+MIN_STAT_FIELDS = 2  # a source row must have >= this many non-null, non-zero STAT_FIELDS to count
+
+
+def _is_stat_bearing(row: pd.Series) -> bool:
+    """True iff `row` has >= MIN_STAT_FIELDS STAT_FIELDS values that are non-null AND non-zero.
+    Both source statline constructors zero-fill absent fields, so a degenerate stub arrives as an
+    all-0.0 (fully non-null) row; testing non-zero is what keeps it out of the blend."""
+    vals = pd.to_numeric(row[list(STAT_FIELDS)], errors="coerce").fillna(0.0)
+    return int((vals != 0).sum()) >= MIN_STAT_FIELDS
+
+
 _OUTPUT_COLUMNS: tuple[str, ...] = (
     "gsis_id",
     "season",
@@ -56,14 +67,18 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
         n_adp_sources = int(adp_vals.shape[0])
         consensus_adp: float | None = float(adp_vals.mean()) if n_adp_sources > 0 else None
 
+        # Only "stat-bearing" source rows (>= MIN_STAT_FIELDS non-null, non-zero STAT_FIELDS)
+        # contribute to the per-field mean — this keeps degenerate all-zero stubs (e.g. ESPN's
+        # 2023 historical season projection) out of the blend.
+        bearing = grp[grp.apply(_is_stat_bearing, axis=1)]
+
         # Prefer a stat-bearing row for identity (full_name/position); fall back to the first row.
-        stat_mask = grp[list(STAT_FIELDS)].notna().any(axis=1)
-        identity_row = grp[stat_mask].iloc[0] if stat_mask.any() else grp.iloc[0]
+        identity_row = bearing.iloc[0] if not bearing.empty else grp.iloc[0]
 
         statline: dict[str, float] = {}
         has_points = False
         for field in STAT_FIELDS:
-            vals = grp[field].dropna()
+            vals = bearing[field].dropna()
             if not vals.empty:
                 statline[field] = float(vals.mean())
                 has_points = True
