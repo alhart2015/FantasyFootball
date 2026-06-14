@@ -38,7 +38,7 @@ def _attach_is_rookie(pool: pd.DataFrame, prior_gsis: set[str]) -> pd.DataFrame:
 
 
 def _prior_appearance_gsis(season: int, data_root: Path, *, since: int = 2018) -> set[str]:
-    """gsis_ids appearing in any weekly_stats season in [since, season). Missing partitions skipped."""
+    """gsis_ids appearing in any weekly_stats season in [since, season); missing partitions skip."""
     seen: set[str] = set()
     for yr in range(since, season):
         try:
