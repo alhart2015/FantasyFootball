@@ -61,6 +61,10 @@ def _build_strategy(
         return NowOrNeverStrategy(LogisticSurvival(sigma=default_sigma(n_teams)))
     if key == "season_value":
         return SeasonValueStrategy(availability, n_sims=strategy_n_sims, base_seed=base_seed)
+    if key == "season_value_var":
+        return SeasonValueStrategy(
+            availability, n_sims=strategy_n_sims, base_seed=base_seed, risk_aware=True
+        )
     if key == "season_value_timing":
         return SeasonValueTimingStrategy(
             availability,

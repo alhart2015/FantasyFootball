@@ -9,9 +9,8 @@ import pandas as pd
 import pytest
 
 from projections.draft.assistant.availability import PlayerAvailability
-from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.pick_timing import my_next_pick
-from projections.draft.assistant.season_value import marginal_season_values_var
+from projections.draft.assistant.season_value import marginal_season_values
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.strategy import (
     DraftStrategy,
@@ -471,18 +470,12 @@ def test_timing_score_equals_marginal_minus_opp_cost() -> None:
     )
     rng = np.random.default_rng([0, state.current_pick])
     base = pool.loc[pool["gsis_id"].isin([str(g) for g in state.my_pick_ids])]
-    # Mirror _season_marginals: risk-aware marginal under the variance model. _pool() carries no
-    # is_rookie column, so the strategy treats everyone as veteran (False) — match that here.
-    base_df = base[["gsis_id", "position", "season_mean_fpts"]].copy()
-    base_df["is_rookie"] = False
-    cand_df = pruned[["gsis_id", "position", "season_mean_fpts"]].copy()
-    cand_df["is_rookie"] = False
-    marg = marginal_season_values_var(
-        base_df,
-        cand_df,
+    # Timing defaults to risk_aware=False -> the deterministic season-value marginal.
+    marg = marginal_season_values(
+        base[["gsis_id", "position", "season_mean_fpts"]],
+        pruned[["gsis_id", "position", "season_mean_fpts"]],
         cfg.roster_slots,
         _flat_availability(pool),
-        VarianceParams.load(),
         n_sims=20,
         rng=rng,
     )

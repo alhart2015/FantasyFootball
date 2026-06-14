@@ -23,7 +23,10 @@ import pandas as pd
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.pick_timing import my_next_pick
-from projections.draft.assistant.season_value import marginal_season_values_var
+from projections.draft.assistant.season_value import (
+    marginal_season_values,
+    marginal_season_values_var,
+)
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.survival import SurvivalModel, expected_best_by_position
 from projections.draft.league_config import LeagueConfig
@@ -32,7 +35,13 @@ from projections.schemas import _PYARROW_STR, Position, RecommendationSchema
 
 # Single source of truth for the valid strategy identifiers used by the assistant
 # CLI, the backtest harness, and any other caller that needs to enumerate strategies.
-STRATEGY_KEYS = ("now_or_never", "season_value", "season_value_timing", "raw_vorp")
+STRATEGY_KEYS = (
+    "now_or_never",
+    "season_value",
+    "season_value_var",
+    "season_value_timing",
+    "raw_vorp",
+)
 
 
 @runtime_checkable
@@ -153,20 +162,20 @@ def _season_marginals(
     n_sims: int,
     base_seed: int,
     top_k: int,
+    risk_aware: bool,
 ) -> pd.DataFrame:
-    """Return df with ``score`` = each candidate's risk-aware marginal expected season points.
+    """Return df with ``score`` = each candidate's marginal expected season points.
 
-    Evaluated (top-k-by-VORP-per-position) candidates carry their real marginal under the
-    performance-variance model (sampled weekly points); pruned-out rows get 0.0 (cosmetic tail).
-    Shared by SeasonValueStrategy and SeasonValueTimingStrategy.
+    ``risk_aware=False`` uses the deterministic per-game MC (the original ``season_value``);
+    ``risk_aware=True`` uses the performance-variance model (sampled weekly points + per-player
+    ``is_rookie``). Evaluated (top-k-by-VORP-per-position) candidates carry their real marginal;
+    pruned-out rows get 0.0 (cosmetic tail). Shared by the SeasonValue* strategies.
     """
     my_ids = {str(g) for g in state.my_pick_ids}
     pool_ids = pool["gsis_id"].astype(str)
     base_roster = pool.loc[
         pool_ids.isin(my_ids), ["gsis_id", "position", "season_mean_fpts"]
     ].copy()
-    rookie_map = _rookie_map(pool)
-    base_roster["is_rookie"] = [bool(rookie_map.get(str(g), False)) for g in base_roster["gsis_id"]]
     missing = sorted(my_ids - set(base_roster["gsis_id"].astype(str)))
     if missing:
         warnings.warn(
@@ -182,17 +191,26 @@ def _season_marginals(
         .head(top_k)
     )
     cand = pruned[["gsis_id", "position", "season_mean_fpts"]].copy()
-    cand["is_rookie"] = [bool(rookie_map.get(str(g), False)) for g in cand["gsis_id"]]
     rng = np.random.default_rng([base_seed, state.current_pick])
-    marginals = marginal_season_values_var(
-        base_roster,
-        cand,
-        config.roster_slots,
-        availability,
-        _variance_params(),
-        n_sims=n_sims,
-        rng=rng,
-    )
+    if risk_aware:
+        rookie_map = _rookie_map(pool)
+        base_roster["is_rookie"] = [
+            bool(rookie_map.get(str(g), False)) for g in base_roster["gsis_id"]
+        ]
+        cand["is_rookie"] = [bool(rookie_map.get(str(g), False)) for g in cand["gsis_id"]]
+        marginals = marginal_season_values_var(
+            base_roster,
+            cand,
+            config.roster_slots,
+            availability,
+            _variance_params(),
+            n_sims=n_sims,
+            rng=rng,
+        )
+    else:
+        marginals = marginal_season_values(
+            base_roster, cand, config.roster_slots, availability, n_sims=n_sims, rng=rng
+        )
     out = df.copy()
     out["score"] = out["gsis_id"].astype(str).map(marginals).fillna(0.0).astype(float)
     return out
@@ -261,6 +279,7 @@ class SeasonValueStrategy:
     n_sims: int
     base_seed: int
     top_k: int = 8
+    risk_aware: bool = False  # True = "season_value_var": sampled weekly points (variance model)
 
     def __post_init__(self) -> None:
         # Fail loud at construction so neither CLI can build a degenerate strategy:
@@ -281,6 +300,7 @@ class SeasonValueStrategy:
             n_sims=self.n_sims,
             base_seed=self.base_seed,
             top_k=self.top_k,
+            risk_aware=self.risk_aware,
         )
         p_na: pd.Series[float] = pd.Series(pd.NA, index=out.index, dtype=pd.Float64Dtype())
         return _finalize(out, elig, p_na, starting_need_tier=False)
@@ -302,6 +322,7 @@ class SeasonValueTimingStrategy:
     base_seed: int
     survival: SurvivalModel
     top_k: int = 8
+    risk_aware: bool = False  # True = variance-model marginals under the timing layer
 
     def __post_init__(self) -> None:
         _validate_mc_params(self.n_sims, self.top_k)
@@ -319,6 +340,7 @@ class SeasonValueTimingStrategy:
             n_sims=self.n_sims,
             base_seed=self.base_seed,
             top_k=self.top_k,
+            risk_aware=self.risk_aware,
         )
 
         next_pick = my_next_pick(state.current_pick, state.my_slot, state.n_teams, state.rounds)
