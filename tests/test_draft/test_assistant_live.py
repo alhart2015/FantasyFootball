@@ -225,8 +225,8 @@ def test_best_available_by_position_top_n() -> None:
 
 
 def test_attach_names_inserts_full_name() -> None:
-    rec = _session().recommendation()
-    named = attach_names(rec, _id_map())
+    s = _session()
+    named = attach_names(s.recommendation(), s.player_names)
     assert "full_name" in named.columns
     assert named.iloc[0]["full_name"] == "P1"
 

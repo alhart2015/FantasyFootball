@@ -12,14 +12,9 @@ from pathlib import Path
 import pandas as pd
 
 from projections.draft.assistant.availability_loader import load_store_availability
+from projections.draft.assistant.live import MC_STRATEGIES, build_session_strategy
 from projections.draft.assistant.state import load_draft_state
-from projections.draft.assistant.strategy import (
-    STRATEGY_KEYS,
-    DraftStrategy,
-    SeasonValueStrategy,
-    SeasonValueTimingStrategy,
-)
-from projections.draft.assistant.survival import LogisticSurvival, default_sigma
+from projections.draft.assistant.strategy import STRATEGY_KEYS, DraftStrategy
 from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
 
 _DEFAULT_ID_MAP = Path("data/raw/id_map.parquet")
@@ -34,24 +29,6 @@ def _load_id_map(path: Path) -> pd.DataFrame:
             f"id_map parquet not found at {path}; it is required (position + name source)."
         ) from exc
     return IdMapSchema.validate(df)
-
-
-def _build_strategy(name: str, n_teams: int, sigma: float | None) -> DraftStrategy:
-    from projections.draft.assistant.live import build_session_strategy
-    from projections.draft.league_config import LeagueConfig
-    from projections.schemas import RosterSlot, Ruleset
-
-    # _build_strategy is only called for the analytic strategies (raw_vorp/now_or_never),
-    # which ignore availability/n_sims/base_seed; a minimal league carries n_teams + sigma.
-    league = LeagueConfig(
-        name="_",
-        n_teams=n_teams,
-        roster_slots={RosterSlot.QB: 1, RosterSlot.BENCH: 1},
-        ruleset=Ruleset.espn_ppr(),
-    )
-    return build_session_strategy(
-        name, league=league, sigma=sigma, availability=None, n_sims=1, base_seed=0
-    )
 
 
 def generate_recommendation(
@@ -77,23 +54,19 @@ def generate_recommendation(
     vorp["gsis_id"] = vorp["gsis_id"].astype(_PYARROW_STR)
     vorp = VorpTableSchema.validate(vorp)
 
-    strategy: DraftStrategy
-    if strategy_name in ("season_value", "season_value_var", "season_value_timing"):
+    # Single strategy-construction seam (shared with the live board + resume): load
+    # availability only for the MC strategies, then build by name.
+    availability = None
+    if strategy_name in MC_STRATEGIES:
         availability = load_store_availability(vorp, season=season, data_root=data_root)
-        if strategy_name == "season_value":
-            strategy = SeasonValueStrategy(availability, n_sims=n_sims, base_seed=0)
-        elif strategy_name == "season_value_var":
-            # risk-aware variant; pool here lacks is_rookie (live path), so all-veteran.
-            strategy = SeasonValueStrategy(
-                availability, n_sims=n_sims, base_seed=0, risk_aware=True
-            )
-        else:
-            spread = default_sigma(league.n_teams) if sigma is None else sigma
-            strategy = SeasonValueTimingStrategy(
-                availability, n_sims=n_sims, base_seed=0, survival=LogisticSurvival(sigma=spread)
-            )
-    else:
-        strategy = _build_strategy(strategy_name, league.n_teams, sigma)
+    strategy: DraftStrategy = build_session_strategy(
+        strategy_name,
+        league=league,
+        sigma=sigma,
+        availability=availability,
+        n_sims=n_sims,
+        base_seed=0,
+    )
     return strategy.recommend(state, vorp, league), id_map
 
 

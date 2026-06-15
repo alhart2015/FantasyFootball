@@ -11,8 +11,11 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from typing import TypeVar
 
 from projections.schemas import Position, RosterSlot
+
+_Player = TypeVar("_Player")
 
 # Position-specific starting slots (a slot whose label is also a Position).
 POSITION_SLOTS: tuple[RosterSlot, ...] = (
@@ -50,24 +53,26 @@ def bench_eligible_positions(roster_slots: Mapping[RosterSlot, int]) -> frozense
     )
 
 
-def _open_slots_after(
-    roster_slots: Mapping[RosterSlot, int], my_roster: Iterable[Position]
-) -> tuple[Counter[RosterSlot], frozenset[Position]]:
-    """Per-team open slots remaining after greedily placing my drafted players.
+def allocate_roster_slots(
+    players: Iterable[tuple[_Player, Position]],
+    roster_slots: Mapping[RosterSlot, int],
+) -> tuple[list[tuple[_Player, Position, RosterSlot]], Counter[RosterSlot]]:
+    """Greedily place each player into a roster slot; return placements + open slots.
 
-    Fill priority per player: own position slot → FLEX → SUPER_FLEX → BENCH.
-    A player with no open slot (roster overflow) is left unplaced (no negatives).
-    Also returns the bench-eligible set it computes, so the caller need not
-    recompute it.
+    Fill priority per player: own position slot → FLEX → SUPER_FLEX → BENCH. A player
+    with no open slot (roster overflow) is omitted from placements (no negatives). Each
+    player is a `(key, position)` pair; the opaque `key` (e.g. a gsis_id) is carried
+    through to the placement so callers can label rows. The single source of truth for
+    the restrictive-first fill rule, shared by `_open_slots_after` and the live board.
     """
     open_: Counter[RosterSlot] = Counter(
         {slot: count for slot, count in roster_slots.items() if slot != RosterSlot.IR and count > 0}
     )
     benchable = bench_eligible_positions(roster_slots)
-    for pos in my_roster:
-        own = RosterSlot(pos.value)
+    placements: list[tuple[_Player, Position, RosterSlot]] = []
+    for key, pos in players:
         candidates = (
-            (own, True),
+            (RosterSlot(pos.value), True),
             (RosterSlot.FLEX, pos in FLEX_ELIGIBLE),
             (RosterSlot.SUPER_FLEX, pos in SUPER_FLEX_ELIGIBLE),
             (RosterSlot.BENCH, pos in benchable),
@@ -75,8 +80,21 @@ def _open_slots_after(
         for slot, eligible in candidates:
             if eligible and open_.get(slot, 0) > 0:
                 open_[slot] -= 1
+                placements.append((key, pos, slot))
                 break
-    return open_, benchable
+    return placements, open_
+
+
+def _open_slots_after(
+    roster_slots: Mapping[RosterSlot, int], my_roster: Iterable[Position]
+) -> tuple[Counter[RosterSlot], frozenset[Position]]:
+    """Per-team open slots remaining after greedily placing my drafted players.
+
+    Thin wrapper over `allocate_roster_slots` that discards placements; also returns the
+    bench-eligible set so the caller need not recompute it.
+    """
+    _, open_ = allocate_roster_slots(((pos, pos) for pos in my_roster), roster_slots)
+    return open_, bench_eligible_positions(roster_slots)
 
 
 def _has_open_starting(pos: Position, open_: Counter[RosterSlot]) -> bool:

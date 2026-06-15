@@ -15,6 +15,7 @@ import streamlit as st
 from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.live import (
     BOARD_STRATEGIES,
+    MC_STRATEGIES,
     LiveDraftSession,
     attach_names,
     build_session_strategy,
@@ -26,8 +27,6 @@ from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
 _DEFAULT_VORP = "data/consensus_vorp_2026.parquet"
 _DEFAULT_ID_MAP = "data/raw/id_map.parquet"
 _DEFAULT_LEAGUE = "configs/league_espn_ppr_12team_skill.json"
-
-_MC_STRATEGIES = ("season_value", "season_value_timing")
 
 
 def _load_inputs(vorp_path: Path, id_map_path: Path, league_path: Path):  # type: ignore[no-untyped-def]
@@ -54,7 +53,7 @@ def _build_session(
 ) -> LiveDraftSession:
     id_map, pool, league = _load_inputs(vorp_path, id_map_path, league_path)
     availability = None
-    if strategy_name in _MC_STRATEGIES:
+    if strategy_name in MC_STRATEGIES:
         availability = load_store_availability(pool, season=season, data_root=data_root)
     strategy = build_session_strategy(
         strategy_name,
@@ -125,13 +124,11 @@ def _status_bar(s: LiveDraftSession) -> None:
     if s.is_complete:
         st.subheader("✅ Draft complete")
         return
-    rnd, slot = s.round_and_slot()
+    rnd, slot = s.round_and_slot()  # slot == on_clock_slot (the 2nd element)
     who = "YOU" if s.is_my_pick else f"Team {slot}"
     nxt = s.next_pick_number
     until = "" if nxt is None else f" · your next pick: #{nxt}"
-    st.subheader(
-        f"Pick {rnd}.{s.on_clock_slot:02d} (#{s.current_pick}) · on the clock: {who}{until}"
-    )
+    st.subheader(f"Pick {rnd}.{slot:02d} (#{s.current_pick}) · on the clock: {who}{until}")
 
 
 _SESSION_DIR = Path("data/draft_sessions")
@@ -212,7 +209,6 @@ def _search_box(s: LiveDraftSession) -> None:
 
 def _board_log_col(s: LiveDraftSession) -> None:
     st.markdown("**Board / pick log**")
-    names = dict(zip(s.id_map["gsis_id"], s.id_map["full_name"], strict=False))
     rows = []
     for i, gid in enumerate(s.picks):
         pick_no = i + 1
@@ -221,7 +217,7 @@ def _board_log_col(s: LiveDraftSession) -> None:
             {
                 "#": pick_no,
                 "slot": owner,
-                "player": names.get(gid, "—"),
+                "player": s.name(gid),
                 "mine": "★" if owner == s.my_slot else "",
             }
         )
@@ -236,7 +232,7 @@ def _recommend_col(s: LiveDraftSession) -> None:
     if s.mode == "copilot" and not s.is_my_pick:
         sug = s.suggested_pick()
         if sug is not None:
-            name = dict(zip(s.id_map["gsis_id"], s.id_map["full_name"], strict=False)).get(sug, sug)
+            name = s.name(sug)
             st.info(f"Opponent on the clock. ADP suggests: **{name}**")
             if st.button(f"Confirm pick: {name}", type="primary"):
                 _record_and_rerun(s, str(sug))
@@ -244,7 +240,7 @@ def _recommend_col(s: LiveDraftSession) -> None:
         return
     with st.spinner("Scoring candidates…"):
         rec = _cached_recommendation(id(s), tuple(s.picks), s.strategy_name, s.n_sims, s.sigma)
-    named = attach_names(rec, s.id_map)
+    named = attach_names(rec, s.player_names)
     cols = [
         "rank",
         "full_name",
@@ -270,7 +266,7 @@ def _roster_col(s: LiveDraftSession) -> None:
     st.markdown("**Best available by position**")
     best = s.best_available_by_position(top=3)
     for pos, sub in best.items():
-        named = attach_names(sub, s.id_map)
+        named = attach_names(sub, s.player_names)
         st.caption(
             f"{pos.value}: "
             + ", ".join(f"{r.full_name} ({r.vorp:.0f})" for r in named.itertuples(index=False))

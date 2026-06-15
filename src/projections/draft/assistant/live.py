@@ -7,8 +7,9 @@ decision to existing engine functions. scripts/draft_board.py is a thin view ove
 from __future__ import annotations
 
 import json
-from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Literal
 
@@ -29,12 +30,14 @@ from projections.draft.assistant.strategy import (
 )
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.league_config import LeagueConfig
-from projections.draft.roster_eligibility import (
-    FLEX_ELIGIBLE,
-    SUPER_FLEX_ELIGIBLE,
-    bench_eligible_positions,
-)
+from projections.draft.roster_eligibility import allocate_roster_slots
 from projections.schemas import GsisId, Position, RosterSlot, validate_gsis_id
+
+# MC strategies that require an availability load (the single source of truth, shared by
+# build_session_strategy, the CLI, LiveDraftSession.load, and the board).
+MC_STRATEGIES: frozenset[str] = frozenset(
+    {"season_value", "season_value_var", "season_value_timing"}
+)
 
 # Strategy names the board's dropdown offers (season_value_var is in STRATEGY_KEYS
 # but excluded — its A/B showed no draft benefit; see the spec §2 / memory).
@@ -65,7 +68,7 @@ def build_session_strategy(
     if name == "now_or_never":
         spread = default_sigma(league.n_teams) if sigma is None else sigma
         return NowOrNeverStrategy(LogisticSurvival(sigma=spread))
-    if name in ("season_value", "season_value_var", "season_value_timing"):
+    if name in MC_STRATEGIES:
         if availability is None:
             raise ValueError(f"strategy {name!r} requires availability data (None given)")
         if name == "season_value":
@@ -92,11 +95,14 @@ class RosterView:
     open_slots: dict[RosterSlot, int]
 
 
-def attach_names(df: pd.DataFrame, id_map: pd.DataFrame) -> pd.DataFrame:
-    """Return a copy of `df` with a `full_name` column from id_map (— when unknown)."""
-    names = dict(zip(id_map["gsis_id"], id_map["full_name"], strict=False))
+def attach_names(df: pd.DataFrame, names: Mapping[str, str]) -> pd.DataFrame:
+    """Return a copy of `df` with a `full_name` column from a prebuilt name map.
+
+    `names` is a `gsis_id → full_name` mapping (see `LiveDraftSession.player_names`),
+    passed in so callers don't rebuild it from the full id_map on every call.
+    """
     out = df.copy()
-    out.insert(min(1, len(out.columns)), "full_name", [names.get(g, "—") for g in out["gsis_id"]])
+    out.insert(1, "full_name", [names.get(g, "—") for g in out["gsis_id"]])
     return out
 
 
@@ -122,12 +128,31 @@ class LiveDraftSession:
     vorp_path: Path = field(default=Path("."))
     id_map_path: Path = field(default=Path("."))
     data_root: Path = field(default=Path("data"))
+    # Memo of the last-built DraftState, keyed on the picks tuple (state() is hit
+    # ~4-5x per render and twice per bot pick; rebuilding scans the whole id_map).
+    _state_cache: tuple[tuple[GsisId, ...], DraftState] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    @cached_property
+    def player_names(self) -> dict[str, str]:
+        """gsis_id → full_name over the full id_map, built once per session (id_map is
+        immutable for the session's life). Used by attach_names + the view."""
+        return dict(zip(self.id_map["gsis_id"], self.id_map["full_name"], strict=False))
+
+    def name(self, gsis_id: str) -> str:
+        """Display name for a gsis_id ('—' if absent)."""
+        return self.player_names.get(gsis_id, "—")
 
     def state(self) -> DraftState:
-        """Rebuild the immutable engine snapshot from current picks (cheap; O(picks))."""
-        return build_draft_state(
-            self.picks, my_slot=self.my_slot, league=self.league, id_map=self.id_map
-        )
+        """The immutable engine snapshot for the current picks (memoized per picks tuple)."""
+        key = tuple(self.picks)
+        if self._state_cache is None or self._state_cache[0] != key:
+            built = build_draft_state(
+                self.picks, my_slot=self.my_slot, league=self.league, id_map=self.id_map
+            )
+            self._state_cache = (key, built)
+        return self._state_cache[1]
 
     @property
     def current_pick(self) -> int:
@@ -184,31 +209,18 @@ class LiveDraftSession:
 
     def my_roster_view(self) -> RosterView:
         state = self.state()
-        names = dict(zip(self.id_map["gsis_id"], self.id_map["full_name"], strict=False))
-        benchable = bench_eligible_positions(self.league.roster_slots)
-        open_: Counter[RosterSlot] = Counter(
-            {s: c for s, c in self.league.roster_slots.items() if s != RosterSlot.IR and c > 0}
+        placements, open_ = allocate_roster_slots(
+            zip(state.my_pick_ids, state.my_roster, strict=False), self.league.roster_slots
         )
-        rows: list[dict[str, str]] = []
-        for gid, pos in zip(state.my_pick_ids, state.my_roster, strict=False):
-            own = RosterSlot(pos.value)
-            for slot, eligible in (
-                (own, True),
-                (RosterSlot.FLEX, pos in FLEX_ELIGIBLE),
-                (RosterSlot.SUPER_FLEX, pos in SUPER_FLEX_ELIGIBLE),
-                (RosterSlot.BENCH, pos in benchable),
-            ):
-                if eligible and open_.get(slot, 0) > 0:
-                    open_[slot] -= 1
-                    rows.append(
-                        {
-                            "slot": slot.value,
-                            "gsis_id": gid,
-                            "full_name": names.get(gid, "—"),
-                            "position": pos.value,
-                        }
-                    )
-                    break
+        rows = [
+            {
+                "slot": slot.value,
+                "gsis_id": gid,
+                "full_name": self.name(gid),
+                "position": pos.value,
+            }
+            for gid, pos, slot in placements
+        ]
         filled = pd.DataFrame(rows, columns=["slot", "gsis_id", "full_name", "position"])
         open_slots: dict[RosterSlot, int] = {
             s: c for s, c in open_.items() if c > 0 and s != RosterSlot.BENCH
@@ -280,7 +292,7 @@ class LiveDraftSession:
         n_sims = int(data.get("n_sims", 300))
         season = int(data.get("season", 2026))
         availability = None
-        if name in ("season_value", "season_value_var", "season_value_timing"):
+        if name in MC_STRATEGIES:
             availability = load_store_availability(pool, season=season, data_root=data_root)
         strategy = build_session_strategy(
             name,
