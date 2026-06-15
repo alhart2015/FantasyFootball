@@ -21,8 +21,7 @@ import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.performance_variance import VarianceParams, sample_weekly_points
-from projections.draft.assistant.roster_score import _FLEX_SLOTS
-from projections.draft.roster_eligibility import POSITION_SLOTS
+from projections.draft.roster_eligibility import FLEX_SLOTS, POSITION_SLOTS
 from projections.schemas import RosterSlot
 
 # Healthy-season denominator: a full season projection divided into per-game points
@@ -33,7 +32,7 @@ _GAMES = 17
 # Flex tiers with eligibility pre-resolved to position-value strings (np.isin needs the raw
 # values, not Position enums). Built once and reused by the sampled lineup fill below.
 _FLEX_ELIGIBLE_VALUES: tuple[tuple[RosterSlot, list[str]], ...] = tuple(
-    (slot, [p.value for p in eligible]) for slot, eligible in _FLEX_SLOTS
+    (slot, [p.value for p in eligible]) for slot, eligible in FLEX_SLOTS
 )
 
 

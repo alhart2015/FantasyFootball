@@ -113,6 +113,39 @@ def test_var_bye_forces_starter_out_for_that_week() -> None:
     assert abs(v - expected) < 5.0
 
 
+def test_var_reduces_to_deterministic_with_byes_and_flex() -> None:
+    # Cross-check the two season-value paths: at zero variance with full availability (p=1),
+    # the variance MC must reduce to the deterministic per-game model on the SAME roster, weeks,
+    # and bye. The two apply byes through DIFFERENT machinery (deterministic single-week
+    # factorization vs the var path's per-week sampling + scatter) and share only the `uniform < p`
+    # convention + lineup semantics; this pins them together so neither can silently drift. The
+    # FLEX slot + a backup RB exercise both single-slot and flex fill in both paths.
+    from projections.draft.assistant.season_value import (
+        expected_season_points,
+        expected_season_points_var,
+    )
+
+    roster = pd.DataFrame(
+        {
+            "gsis_id": ["q", "r1", "r2", "w", "t"],
+            "position": ["QB", "RB", "RB", "WR", "TE"],
+            "season_mean_fpts": [300.0, 250.0, 240.0, 220.0, 180.0],
+            "is_rookie": [False, False, False, False, False],
+        }
+    )
+    slots = {RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.FLEX: 1}
+    avail = PlayerAvailability(p={g: 1.0 for g in roster["gsis_id"]}, bye={"r2": 5})
+    weeks = range(1, 15)
+    det = expected_season_points(
+        roster, slots, avail, n_sims=400, rng=np.random.default_rng(1), weeks=weeks
+    )
+    var = expected_season_points_var(
+        roster, slots, avail, _vp_zero(), n_sims=400, rng=np.random.default_rng(2), weeks=weeks
+    )
+    # p=1 removes availability noise; only the ~1e-6 zero-variance gamma residual remains.
+    assert abs(det - var) < 0.5
+
+
 def test_marginal_crn_ranks_better_candidate_first() -> None:
     from projections.draft.assistant.season_value import marginal_season_values_var
 

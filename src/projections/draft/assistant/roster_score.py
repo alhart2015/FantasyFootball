@@ -12,18 +12,8 @@ from collections.abc import Mapping
 
 import pandas as pd
 
-from projections.draft.roster_eligibility import (
-    FLEX_ELIGIBLE,
-    POSITION_SLOTS,
-    SUPER_FLEX_ELIGIBLE,
-)
+from projections.draft.roster_eligibility import FLEX_SLOTS, POSITION_SLOTS
 from projections.schemas import Position, RosterSlot
-
-# Flex-type slots in ascending eligibility breadth (FLEX subset of SUPER_FLEX). Order matters.
-_FLEX_SLOTS: tuple[tuple[RosterSlot, frozenset[Position]], ...] = (
-    (RosterSlot.FLEX, FLEX_ELIGIBLE),
-    (RosterSlot.SUPER_FLEX, SUPER_FLEX_ELIGIBLE),
-)
 
 
 def optimal_lineup_points(
@@ -53,7 +43,7 @@ def optimal_lineup_points(
                 total += by_pos[pos][cursor[pos]]
                 cursor[pos] += 1
     # 2) Flex tiers, narrowest first; each takes the best remaining eligible player.
-    for slot, eligible in _FLEX_SLOTS:
+    for slot, eligible in FLEX_SLOTS:
         for _ in range(roster_slots.get(slot, 0)):
             best_pos: Position | None = None
             best_val = float("-inf")
