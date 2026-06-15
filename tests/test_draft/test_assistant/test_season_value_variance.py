@@ -83,6 +83,36 @@ def test_var_reduces_to_deterministic_at_zero_variance() -> None:
     assert abs(v - (750.0 / 17 * 14)) < 5.0
 
 
+def test_var_bye_forces_starter_out_for_that_week() -> None:
+    # A starter's bye must drop them from the lineup that week. With zero variance, a QB/RB/WR
+    # roster (one slot each, no backup) and the RB on bye in week 5 of the 14-week season: 13
+    # full weeks + 1 week with the RB slot empty. Exercises the bye path the mask refactor
+    # rewrote (the other var tests use bye={}, so this is the only bye coverage).
+    from projections.draft.assistant.season_value import expected_season_points_var
+
+    roster = pd.DataFrame(
+        {
+            "gsis_id": ["a", "b", "c"],
+            "position": ["QB", "RB", "WR"],
+            "season_mean_fpts": [300.0, 250.0, 200.0],
+            "is_rookie": [False, False, False],
+        }
+    )
+    slots = {RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.WR: 1}
+    avail = PlayerAvailability(p={"a": 1.0, "b": 1.0, "c": 1.0}, bye={"b": 5})
+    v = expected_season_points_var(
+        roster,
+        slots,
+        avail,
+        _vp_zero(),
+        n_sims=200,
+        rng=np.random.default_rng(0),
+        weeks=range(1, 15),
+    )
+    expected = (13 * 750.0 + 500.0) / 17  # RB (250 season pts) absent for exactly one week
+    assert abs(v - expected) < 5.0
+
+
 def test_marginal_crn_ranks_better_candidate_first() -> None:
     from projections.draft.assistant.season_value import marginal_season_values_var
 

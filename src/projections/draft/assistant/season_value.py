@@ -71,11 +71,11 @@ def _roster_fill_meta(roster: pd.DataFrame, roster_slots: Mapping[RosterSlot, in
         sorted_cols = cols[order]
         single.append((sorted_cols, pts[sorted_cols], count))
     flex: list[tuple[np.ndarray, int]] = []
-    for slot, eligible in _FLEX_SLOTS:  # same flex tiers/order as optimal_lineup_points
+    # same flex tiers/order as optimal_lineup_points
+    for slot, elig_values in _FLEX_ELIGIBLE_VALUES:
         count = roster_slots.get(slot, 0)
         if count <= 0:
             continue
-        elig_values = [p.value for p in eligible]
         cols = np.flatnonzero(np.isin(pos, elig_values))
         if cols.size == 0:
             continue
