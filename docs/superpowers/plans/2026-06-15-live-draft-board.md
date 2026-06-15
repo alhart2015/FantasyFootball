@@ -15,6 +15,7 @@
 - Reference enums, never strings: `Position.RB`, `RosterSlot.FLEX`, etc. Persisted/compared values use `.value`.
 - `validate_gsis_id(raw)` is the only sanctioned `GsisId` constructor.
 - Run a single test with live output: `pytest -n0 -s <path>::<name> -v` (the suite defaults to `-n auto`).
+- **Imports always go in the top import block**, never appended below functions (ruff E402). When a task's test step shows a new import, add it to the top block — the symbol it names is created by that same task's implement step, so the Step-2 "red" is an `ImportError`/`AttributeError` (expected). Remove any import that ends up unused (ruff F401).
 - Commit messages end with the `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` trailer.
 
 ---
@@ -163,12 +164,7 @@ from __future__ import annotations
 import pytest
 
 from projections.draft.assistant.live import build_session_strategy
-from projections.draft.assistant.strategy import (
-    NowOrNeverStrategy,
-    RawVorpStrategy,
-    SeasonValueStrategy,
-    SeasonValueTimingStrategy,
-)
+from projections.draft.assistant.strategy import NowOrNeverStrategy, RawVorpStrategy
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import RosterSlot, Ruleset
 
@@ -396,7 +392,7 @@ def _session(picks: list[str] | None = None, mode: str = "copilot") -> LiveDraft
         strategy=_FakeStrategy(),
         strategy_name="fake",
         mode=mode,
-        adp_jitter=8.0,
+        adp_jitter=0.0,  # pure ADP order → deterministic bot picks in tests
         base_seed=0,
         picks=list(picks or []),
     )
@@ -633,7 +629,7 @@ def test_suggested_pick_is_deterministic_and_low_adp() -> None:
     first = s.suggested_pick()
     again = s.suggested_pick()
     assert first == again  # stable across reruns for one board state
-    # adp_jitter is small relative to ADP spacing → lowest-ADP player wins.
+    # _session uses adp_jitter=0.0 → pure ADP order → lowest-ADP player wins.
     assert first == "00-0000001"
 
 
@@ -695,13 +691,14 @@ from projections.schemas import Position, RosterSlot
 
 def test_my_roster_view_assigns_slots_and_open_needs() -> None:
     # Make picks 7 (RB) and 18 (mine, snake) land in my roster.
-    picks = [f"00-000{i:04d}" for i in range(1, 7)]  # 6 opponent picks
+    picks = [f"00-000{i:04d}" for i in range(1, 7)]  # 6 opponent picks (ids 1..6)
     s = _session(picks=picks)
-    s.record_pick("00-0000007")  # pick #7 → mine (RB per id_map pattern)
+    # Pick #7 is mine (slot 7 of 12). id 9 is an RB in the fixture (index 8 → "RB").
+    s.record_pick("00-0000009")
     view = s.my_roster_view()
     assert len(view.filled) == 1
     assert view.filled.iloc[0]["position"] == "RB"
-    assert view.filled.iloc[0]["full_name"] == "P7"
+    assert view.filled.iloc[0]["full_name"] == "P9"
     # An RB slot is now consumed; one RB starter slot remains open (RB:2).
     assert view.open_slots[RosterSlot.RB] == 1
 
@@ -850,6 +847,16 @@ ui = [
 ]
 ```
 
+- [ ] **Step 1b: Let mypy ignore streamlit's missing stubs**
+
+In `pyproject.toml`, extend the existing `[[tool.mypy.overrides]]` `module` list to include `"streamlit.*"` (streamlit ships no type stubs; the board file is type-checked via `mypy_path = ["src", "scripts"]`):
+
+```toml
+[[tool.mypy.overrides]]
+module = ["nflreadpy.*", "pandera.*", "scipy.*", "joblib.*", "pandas.*", "sklearn.*", "msgpack.*", "matplotlib.*", "streamlit.*"]
+ignore_missing_imports = true
+```
+
 - [ ] **Step 2: Install it**
 
 Run: `pip install -e ".[ui]"`
@@ -900,7 +907,6 @@ from projections.draft.assistant.availability_loader import load_store_availabil
 from projections.draft.assistant.live import (
     BOARD_STRATEGIES,
     LiveDraftSession,
-    attach_names,
     build_session_strategy,
 )
 from projections.draft.league_config import LeagueConfig
@@ -1026,17 +1032,18 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Add the render helpers + record/confirm wiring**
 
-In `scripts/draft_board.py`, add these functions above `main`:
+First extend the top import block: add `attach_names` to the `projections.draft.assistant.live` import, and add `from projections.draft.assistant.pick_timing import slot_for`. Then add these functions above `main`:
 
 ```python
 @st.cache_data(show_spinner=False)
 def _cached_recommendation(
-    _s_id: int, picks: tuple[str, ...], strategy_name: str, n_sims: int, sigma: float | None
+    s_id: int, picks: tuple[str, ...], strategy_name: str, n_sims: int, sigma: float | None
 ) -> pd.DataFrame:
-    """Cache MC recommendations on every result-affecting param (picks/strategy/n_sims/sigma).
+    """Cache MC recommendations on every result-affecting param.
 
-    `_s_id` ties the cache to the current session object (id()); the leading underscore
-    tells Streamlit not to hash the (unhashable) session itself.
+    All args are hashable and part of the cache key: `s_id` (= id(session)) binds the
+    cache to the current session instance, so a restarted draft (new pool) does not
+    reuse another session's result; picks/strategy_name/n_sims/sigma cover the rest.
     """
     s: LiveDraftSession = st.session_state["session"]
     return s.recommendation()
@@ -1074,9 +1081,7 @@ def _board_log_col(s: LiveDraftSession) -> None:
     rows = []
     for i, gid in enumerate(s.picks):
         pick_no = i + 1
-        slot = s.on_clock_slot if pick_no == s.current_pick else None
-        from projections.draft.assistant.pick_timing import slot_for
-        owner = slot_for(pick_no, s.league.n_teams)
+        owner = slot_for(pick_no, s.league.n_teams)  # slot_for imported at module top
         rows.append({"#": pick_no, "slot": owner, "player": names.get(gid, "—"),
                      "mine": "★" if owner == s.my_slot else ""})
     st.dataframe(pd.DataFrame(rows), height=520, hide_index=True)
@@ -1451,7 +1456,7 @@ data/draft_sessions/
 
 - [ ] **Step 2: Replace the `_autosave` shim with a real implementation**
 
-In `scripts/draft_board.py`, replace the no-op `_autosave` with:
+First add `import json` to the top import block (used by `_resume_controls`). Then replace the no-op `_autosave` with:
 
 ```python
 _SESSION_DIR = Path("data/draft_sessions")
@@ -1477,11 +1482,7 @@ def _resume_controls() -> None:
     st.sidebar.caption(f"Resume autosave: {newest.name}")
     if st.sidebar.button("↩ Resume last draft"):
         try:
-            import pandas as pd
-
-            from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
-
-            data = __import__("json").loads(newest.read_text())
+            data = json.loads(newest.read_text())  # json/pandas/schemas imported at module top
             id_map = IdMapSchema.validate(pd.read_parquet(data["id_map"]))
             pool = pd.read_parquet(data["vorp_table"])
             pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
