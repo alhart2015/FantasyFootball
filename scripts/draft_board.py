@@ -15,8 +15,10 @@ from projections.draft.assistant.availability_loader import load_store_availabil
 from projections.draft.assistant.live import (
     BOARD_STRATEGIES,
     LiveDraftSession,
+    attach_names,
     build_session_strategy,
 )
+from projections.draft.assistant.pick_timing import slot_for
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
 
@@ -129,6 +131,117 @@ def _status_bar(s: LiveDraftSession) -> None:
     )
 
 
+def _autosave(s: LiveDraftSession) -> None:
+    """No-op until Task 13 wires real autosave."""
+
+
+@st.cache_data(show_spinner=False)
+def _cached_recommendation(
+    s_id: int, picks: tuple[str, ...], strategy_name: str, n_sims: int, sigma: float | None
+) -> pd.DataFrame:
+    """Cache MC recommendations on every result-affecting param.
+
+    All args are hashable and part of the cache key: `s_id` (= id(session)) binds the
+    cache to the current session instance, so a restarted draft (new pool) does not
+    reuse another session's result; picks/strategy_name/n_sims/sigma cover the rest.
+    """
+    s: LiveDraftSession = st.session_state["session"]
+    return s.recommendation()
+
+
+def _record_and_rerun(s: LiveDraftSession, gsis_id: str) -> None:
+    try:
+        s.record_pick(gsis_id)
+    except ValueError as exc:
+        st.warning(str(exc))
+        return
+    _autosave(s)
+    st.rerun()
+
+
+def _search_box(s: LiveDraftSession) -> None:
+    query = st.text_input("🔍 Record a pick — search a player", key=f"search_{s.current_pick}")
+    if not query:
+        return
+    id_map = s.id_map
+    drafted = s.state().drafted_ids
+    hits = id_map[
+        id_map["full_name"].str.contains(query, case=False, na=False)
+        & ~id_map["gsis_id"].isin(drafted)
+    ].head(8)
+    for row in hits.itertuples(index=False):
+        team = "" if pd.isna(row.team) else f" · {row.team}"
+        if st.button(f"{row.full_name} ({row.position}{team})", key=f"pick_{row.gsis_id}"):
+            _record_and_rerun(s, str(row.gsis_id))
+
+
+def _board_log_col(s: LiveDraftSession) -> None:
+    st.markdown("**Board / pick log**")
+    names = dict(zip(s.id_map["gsis_id"], s.id_map["full_name"], strict=False))
+    rows = []
+    for i, gid in enumerate(s.picks):
+        pick_no = i + 1
+        owner = slot_for(pick_no, s.league.n_teams)  # slot_for imported at module top
+        rows.append(
+            {
+                "#": pick_no,
+                "slot": owner,
+                "player": names.get(gid, "—"),
+                "mine": "★" if owner == s.my_slot else "",
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), height=520, hide_index=True)
+
+
+def _recommend_col(s: LiveDraftSession) -> None:
+    st.markdown("**★ Recommendations**")
+    if s.is_complete:
+        st.success("Draft complete.")
+        return
+    if s.mode == "copilot" and not s.is_my_pick:
+        sug = s.suggested_pick()
+        if sug is not None:
+            name = dict(zip(s.id_map["gsis_id"], s.id_map["full_name"], strict=False)).get(sug, sug)
+            st.info(f"Opponent on the clock. ADP suggests: **{name}**")
+            if st.button(f"Confirm pick: {name}", type="primary"):
+                _record_and_rerun(s, str(sug))
+        st.caption("…or search below to record a different pick.")
+        return
+    with st.spinner("Scoring candidates…"):
+        rec = _cached_recommendation(id(s), tuple(s.picks), s.strategy_name, s.n_sims, s.sigma)
+    named = attach_names(rec, s.id_map)
+    cols = [
+        "rank",
+        "full_name",
+        "position",
+        "vorp",
+        "consensus_adp",
+        "p_available_next",
+        "score",
+        "fills_starting_slot",
+    ]
+    st.dataframe(named[cols].head(20), height=480, hide_index=True)
+
+
+def _roster_col(s: LiveDraftSession) -> None:
+    st.markdown("**My Roster**")
+    view = s.my_roster_view()
+    st.dataframe(view.filled[["slot", "full_name", "position"]], hide_index=True)
+    if view.open_slots:
+        st.caption(
+            "Open starting slots: "
+            + ", ".join(f"{slot.value} x{n}" for slot, n in view.open_slots.items())
+        )
+    st.markdown("**Best available by position**")
+    best = s.best_available_by_position(top=3)
+    for pos, sub in best.items():
+        named = attach_names(sub, s.id_map)
+        st.caption(
+            f"{pos.value}: "
+            + ", ".join(f"{r.full_name} ({r.vorp:.0f})" for r in named.itertuples(index=False))
+        )
+
+
 def main() -> None:
     st.set_page_config(page_title="Draft Board", layout="wide")
     st.title("🏈 Live Draft Board")
@@ -139,6 +252,14 @@ def main() -> None:
         st.info("Configure the draft in the sidebar and click **Start / restart draft**.")
         return
     _status_bar(s)
+    _search_box(s)
+    left, center, right = st.columns([1.1, 2.0, 1.3])
+    with left:
+        _board_log_col(s)
+    with center:
+        _recommend_col(s)
+    with right:
+        _roster_col(s)
     st.caption(f"Mode: {s.mode} · strategy: {s.strategy_name} · {len(s.picks)} picks made")
 
 
