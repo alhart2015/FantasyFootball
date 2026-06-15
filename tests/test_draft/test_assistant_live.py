@@ -168,3 +168,30 @@ def test_available_pool_excludes_drafted() -> None:
     avail = s.available_pool()
     assert "00-0000001" not in set(avail["gsis_id"])
     assert len(avail) == len(_pool()) - 2
+
+
+def test_recommendation_delegates_to_strategy() -> None:
+    s = _session()
+    rec = s.recommendation()
+    assert list(rec["gsis_id"])[0] == "00-0000001"  # highest vorp, undrafted
+    assert "rank" in rec.columns
+
+
+def test_recommendation_empty_when_complete() -> None:
+    s = _session()
+    s.picks = list(_pool()["gsis_id"])  # whole pool drafted → nothing available
+    assert s.recommendation().empty
+
+
+def test_suggested_pick_is_deterministic_and_low_adp() -> None:
+    s = _session()
+    first = s.suggested_pick()
+    again = s.suggested_pick()
+    assert first == again  # stable across reruns for one board state
+    # _session uses adp_jitter=0.0 → pure ADP order → lowest-ADP player wins.
+    assert first == "00-0000001"
+
+
+def test_suggested_pick_none_when_pool_empty() -> None:
+    s = _session(picks=list(_pool()["gsis_id"]))
+    assert s.suggested_pick() is None

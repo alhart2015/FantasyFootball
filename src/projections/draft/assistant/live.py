@@ -10,9 +10,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.opponent import bot_pick
 from projections.draft.assistant.pick_timing import my_next_pick, slot_for
 from projections.draft.assistant.state import DraftState, build_draft_state
 from projections.draft.assistant.strategy import (
@@ -143,3 +145,15 @@ class LiveDraftSession:
 
     def undo(self) -> GsisId | None:
         return self.picks.pop() if self.picks else None
+
+    def recommendation(self) -> pd.DataFrame:
+        return self.strategy.recommend(self.state(), self.pool, self.league)
+
+    def suggested_pick(self) -> GsisId | None:
+        avail = self.available_pool()
+        if avail.empty:
+            return None
+        # Deterministic per board state → stable across Streamlit reruns, reproducible
+        # in mock mode. (Re-deriving the seed each call is intentional; no stored RNG.)
+        rng = np.random.default_rng([self.base_seed, self.current_pick])
+        return bot_pick(avail, rng, adp_jitter=self.adp_jitter)
