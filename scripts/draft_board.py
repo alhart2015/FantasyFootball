@@ -6,6 +6,7 @@ Thin view over projections.draft.assistant.live.LiveDraftSession. Run with:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -117,6 +118,8 @@ def _sidebar() -> None:
         except Exception as exc:  # surface any setup failure to the user
             st.sidebar.error(f"Setup failed: {exc}")
 
+    _resume_controls()
+
 
 def _status_bar(s: LiveDraftSession) -> None:
     if s.is_complete:
@@ -131,8 +134,40 @@ def _status_bar(s: LiveDraftSession) -> None:
     )
 
 
+_SESSION_DIR = Path("data/draft_sessions")
+
+
 def _autosave(s: LiveDraftSession) -> None:
-    """No-op until Task 13 wires real autosave."""
+    path = st.session_state.get("autosave_path")
+    if path is None:
+        # Stable filename per session, derived from the object id (no timestamp needed).
+        path = _SESSION_DIR / f"session_{id(s):x}.json"
+        st.session_state["autosave_path"] = path
+    s.save(Path(path))
+
+
+def _resume_controls() -> None:
+    if not _SESSION_DIR.exists():
+        return
+    saves = sorted(
+        _SESSION_DIR.glob("session_*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    if not saves:
+        return
+    newest = saves[0]
+    st.sidebar.divider()
+    st.sidebar.caption(f"Resume autosave: {newest.name}")
+    if st.sidebar.button("↩ Resume last draft"):
+        try:
+            data = json.loads(newest.read_text())  # json/pandas/schemas imported at module top
+            id_map = IdMapSchema.validate(pd.read_parquet(data["id_map"]))
+            pool = pd.read_parquet(data["vorp_table"])
+            pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
+            pool = VorpTableSchema.validate(pool)
+            st.session_state["session"] = LiveDraftSession.load(newest, id_map=id_map, pool=pool)
+            st.session_state["autosave_path"] = newest
+        except Exception as exc:  # surface any resume failure to the user
+            st.sidebar.error(f"Resume failed: {exc}")
 
 
 @st.cache_data(show_spinner=False)
