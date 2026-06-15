@@ -242,6 +242,18 @@ def _roster_col(s: LiveDraftSession) -> None:
         )
 
 
+def _mock_controls(s: LiveDraftSession) -> None:
+    if s.mode != "mock":
+        return
+    if s.is_complete:
+        st.success(f"Mock complete — your optimal-lineup score: **{s.roster_scorecard():.1f}**")
+        return
+    if not s.is_my_pick and st.button("⏭ Advance to my pick", type="secondary"):
+        s.mock_advance_to_my_pick()
+        _autosave(s)
+        st.rerun()
+
+
 def main() -> None:
     st.set_page_config(page_title="Draft Board", layout="wide")
     st.title("🏈 Live Draft Board")
@@ -253,6 +265,7 @@ def main() -> None:
         return
     _status_bar(s)
     _search_box(s)
+    _mock_controls(s)
     left, center, right = st.columns([1.1, 2.0, 1.3])
     with left:
         _board_log_col(s)
