@@ -226,3 +226,28 @@ def test_attach_names_inserts_full_name() -> None:
     named = attach_names(rec, _id_map())
     assert "full_name" in named.columns
     assert named.iloc[0]["full_name"] == "P1"
+
+
+def test_mock_advance_stops_at_my_pick() -> None:
+    s = _session(mode="mock")  # my_slot=7
+    made = s.mock_advance_to_my_pick()
+    assert len(made) == 6  # bots take picks 1..6
+    assert s.is_my_pick  # standing at pick 7 (mine)
+    assert s.current_pick == 7
+
+
+def test_mock_advance_raises_in_copilot() -> None:
+    s = _session(mode="copilot")
+    with pytest.raises(RuntimeError, match="mock"):
+        s.mock_advance_to_my_pick()
+
+
+def test_roster_scorecard_matches_optimal_lineup() -> None:
+    from projections.draft.assistant.roster_score import optimal_lineup_points
+
+    picks = [f"00-000{i:04d}" for i in range(1, 7)]
+    s = _session(picks=picks)
+    s.record_pick("00-0000007")  # my pick #7
+    mine = s.pool[s.pool["gsis_id"].isin(s.state().my_pick_ids)]
+    expected = optimal_lineup_points(mine, s.league.roster_slots)
+    assert s.roster_scorecard() == expected

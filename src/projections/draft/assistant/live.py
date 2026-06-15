@@ -17,6 +17,7 @@ import pandas as pd
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.opponent import bot_pick
 from projections.draft.assistant.pick_timing import my_next_pick, slot_for
+from projections.draft.assistant.roster_score import optimal_lineup_points
 from projections.draft.assistant.state import DraftState, build_draft_state
 from projections.draft.assistant.strategy import (
     DraftStrategy,
@@ -221,3 +222,19 @@ class LiveDraftSession:
             if not sub.empty:
                 out[pos] = sub.head(top).reset_index(drop=True)
         return out
+
+    def mock_advance_to_my_pick(self) -> list[GsisId]:
+        if self.mode != "mock":
+            raise RuntimeError("mock_advance_to_my_pick is only valid in mock mode")
+        made: list[GsisId] = []
+        while not self.is_complete and not self.is_my_pick:
+            gid = self.suggested_pick()
+            if gid is None:
+                break
+            self.record_pick(gid)
+            made.append(gid)
+        return made
+
+    def roster_scorecard(self) -> float:
+        mine = self.pool[self.pool["gsis_id"].isin(self.state().my_pick_ids)]
+        return optimal_lineup_points(mine, self.league.roster_slots)
