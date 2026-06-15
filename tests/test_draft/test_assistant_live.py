@@ -5,11 +5,15 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from projections.draft.assistant.live import LiveDraftSession, build_session_strategy
+from projections.draft.assistant.live import (
+    LiveDraftSession,
+    attach_names,
+    build_session_strategy,
+)
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.strategy import NowOrNeverStrategy, RawVorpStrategy
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset
+from projections.schemas import _PYARROW_STR, Position, RosterSlot, Ruleset, validate_gsis_id
 
 
 def _league() -> LeagueConfig:
@@ -81,7 +85,7 @@ def _session(picks: list[str] | None = None, mode: str = "copilot") -> LiveDraft
         mode=mode,  # type: ignore[arg-type]
         adp_jitter=0.0,  # pure ADP order → deterministic bot picks in tests
         base_seed=0,
-        picks=list(picks or []),
+        picks=[validate_gsis_id(p) for p in (picks or [])],
     )
 
 
@@ -120,7 +124,7 @@ def test_current_pick_and_my_pick_progression() -> None:
     s = _session()
     assert s.current_pick == 1
     assert not s.is_my_pick  # slot 1 on the clock, I'm slot 7
-    s.picks = [f"00-000{i:04d}" for i in range(1, 7)]  # 6 picks made → pick 7 is mine
+    s = _session(picks=[f"00-000{i:04d}" for i in range(1, 7)])  # 6 picks → pick 7 is mine
     assert s.current_pick == 7
     assert s.is_my_pick
     assert s.round_and_slot() == (1, 7)
@@ -133,9 +137,8 @@ def test_next_pick_number_snakes() -> None:
 
 
 def test_is_complete_when_roster_full() -> None:
-    s = _session()
-    total = s.league.n_teams * s.league.roster_size
-    s.picks = [f"00-000{i:04d}" for i in range(1, total + 1)]
+    total = _league().n_teams * _league().roster_size
+    s = _session(picks=[f"00-000{i:04d}" for i in range(1, total + 1)])
     assert s.is_complete
 
 
@@ -178,8 +181,7 @@ def test_recommendation_delegates_to_strategy() -> None:
 
 
 def test_recommendation_empty_when_complete() -> None:
-    s = _session()
-    s.picks = list(_pool()["gsis_id"])  # whole pool drafted → nothing available
+    s = _session(picks=list(_pool()["gsis_id"]))  # whole pool drafted → nothing available
     assert s.recommendation().empty
 
 
@@ -195,3 +197,32 @@ def test_suggested_pick_is_deterministic_and_low_adp() -> None:
 def test_suggested_pick_none_when_pool_empty() -> None:
     s = _session(picks=list(_pool()["gsis_id"]))
     assert s.suggested_pick() is None
+
+
+def test_my_roster_view_assigns_slots_and_open_needs() -> None:
+    picks = [f"00-000{i:04d}" for i in range(1, 7)]  # 6 opponent picks (ids 1..6)
+    s = _session(picks=picks)
+    # Pick #7 is mine (slot 7 of 12). id 9 is an RB in the fixture (index 8 → "RB").
+    s.record_pick("00-0000009")
+    view = s.my_roster_view()
+    assert len(view.filled) == 1
+    assert view.filled.iloc[0]["position"] == "RB"
+    assert view.filled.iloc[0]["full_name"] == "P9"
+    # An RB slot is now consumed; one RB starter slot remains open (RB:2).
+    assert view.open_slots[RosterSlot.RB] == 1
+
+
+def test_best_available_by_position_top_n() -> None:
+    s = _session()
+    best = s.best_available_by_position(top=2)
+    assert set(best) <= set(Position)
+    rb = best[Position.RB]
+    assert len(rb) == 2
+    assert list(rb["vorp"]) == sorted(rb["vorp"], reverse=True)
+
+
+def test_attach_names_inserts_full_name() -> None:
+    rec = _session().recommendation()
+    named = attach_names(rec, _id_map())
+    assert "full_name" in named.columns
+    assert named.iloc[0]["full_name"] == "P1"

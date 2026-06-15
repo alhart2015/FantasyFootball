@@ -163,8 +163,10 @@ def test_build_draft_state_bad_slot_raises() -> None:
     from projections.schemas import RosterSlot, Ruleset
 
     league = LeagueConfig(
-        name="t", n_teams=12,
-        roster_slots={RosterSlot.QB: 1, RosterSlot.BENCH: 1}, ruleset=Ruleset.espn_ppr(),
+        name="t",
+        n_teams=12,
+        roster_slots={RosterSlot.QB: 1, RosterSlot.BENCH: 1},
+        ruleset=Ruleset.espn_ppr(),
     )
     with pytest.raises(ValueError, match="my_slot"):
         build_draft_state([], my_slot=99, league=league, id_map=_id_map())
