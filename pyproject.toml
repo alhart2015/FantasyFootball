@@ -37,6 +37,9 @@ dev = [
     "pre-commit>=3.6",
     "matplotlib>=3.8",
 ]
+ui = [
+    "streamlit>=1.36",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -76,7 +79,7 @@ python_version = "3.11"
 mypy_path = ["src", "scripts"]
 
 [[tool.mypy.overrides]]
-module = ["nflreadpy.*", "pandera.*", "scipy.*", "joblib.*", "pandas.*", "sklearn.*", "msgpack.*", "matplotlib.*"]
+module = ["nflreadpy.*", "pandera.*", "scipy.*", "joblib.*", "pandas.*", "sklearn.*", "msgpack.*", "matplotlib.*", "streamlit.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
