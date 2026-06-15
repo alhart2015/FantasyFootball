@@ -64,6 +64,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--data-root", type=Path, default=Path("data"))
     p.add_argument("--max-retries", type=int, default=5)
     p.add_argument(
+        "--chunk-timeout",
+        type=float,
+        default=None,
+        help=(
+            "Per-chunk wall-clock limit in seconds; a worker exceeding it is killed and retried "
+            "like a crash (the dev box hangs workers, not just segfaults). Default: no limit."
+        ),
+    )
+    p.add_argument(
         "--strategy-a",
         choices=list(STRATEGY_KEYS),
         default="now_or_never",
@@ -123,6 +132,38 @@ def _run_worker(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_chunk_with_retries(
+    cmd: list[str],
+    env: dict[str, str],
+    out: Path,
+    expected_rows: int,
+    *,
+    lo: int,
+    hi: int,
+    max_retries: int,
+    timeout: float | None,
+) -> bool:
+    """Run one chunk's worker subprocess, retrying on a crash (non-zero exit) OR a hang.
+
+    `timeout` (seconds, or None to disable) bounds each attempt: a worker that stalls past it is
+    killed and the attempt retried, exactly like a crash. The unstable dev box hangs workers, not
+    just segfaults them, and without this bound the driver's `subprocess.run` blocks forever (see
+    docs/dev-box-stability.md). Returns True once an attempt produces a valid checkpoint.
+    """
+    for attempt in range(1, max_retries + 1):
+        print(f"[run ] chunk {lo:>4}-{hi:<4} attempt {attempt}/{max_retries}", flush=True)
+        try:
+            rc = subprocess.run(cmd, env=env, timeout=timeout).returncode
+        except subprocess.TimeoutExpired:
+            print(f"[time] chunk {lo:>4}-{hi:<4} hung >{timeout}s; killed, retrying", flush=True)
+            continue
+        if rc == 0 and _valid_chunk_file(out, expected_rows):
+            print(f"[ok  ] chunk {lo:>4}-{hi:<4}", flush=True)
+            return True
+        print(f"[fail] chunk {lo:>4}-{hi:<4} rc={rc}; retrying", flush=True)
+    return False
+
+
 def _run_driver(args: argparse.Namespace) -> int:
     config = LeagueConfig.model_validate_json(args.league_config.read_text())
     n_teams = config.n_teams
@@ -160,14 +201,16 @@ def _run_driver(args: argparse.Namespace) -> int:
             "--strategy-a", args.strategy_a, "--strategy-b", args.strategy_b,
             "--data-root", str(args.data_root),
         ]  # fmt: skip
-        for attempt in range(1, args.max_retries + 1):
-            print(f"[run ] chunk {lo:>4}-{hi:<4} attempt {attempt}/{args.max_retries}", flush=True)
-            rc = subprocess.run(cmd, env=env).returncode
-            if rc == 0 and _valid_chunk_file(out, expected):
-                print(f"[ok  ] chunk {lo:>4}-{hi:<4}", flush=True)
-                break
-            print(f"[fail] chunk {lo:>4}-{hi:<4} rc={rc}; retrying", flush=True)
-        else:
+        if not _run_chunk_with_retries(
+            cmd,
+            env,
+            out,
+            expected,
+            lo=lo,
+            hi=hi,
+            max_retries=args.max_retries,
+            timeout=args.chunk_timeout,
+        ):
             print(f"[ERROR] chunk {lo}-{hi} failed after {args.max_retries} attempts", flush=True)
             return 1
 
