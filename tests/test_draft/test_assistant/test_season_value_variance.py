@@ -109,7 +109,7 @@ def test_var_bye_forces_starter_out_for_that_week() -> None:
         rng=np.random.default_rng(0),
         weeks=range(1, 15),
     )
-    expected = (13 * 750.0 + 500.0) / 17  # RB (250 season pts) absent for exactly one week
+    expected = (14 * 750.0 - 250.0) / 17  # 14-week clean total minus the RB's one bye week (250)
     assert abs(v - expected) < 5.0
 
 
