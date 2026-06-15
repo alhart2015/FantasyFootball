@@ -8,25 +8,11 @@ so no real worker is spawned. See docs/dev-box-stability.md.
 
 from __future__ import annotations
 
-import importlib.util
 import subprocess
 from pathlib import Path
-from types import ModuleType
 
 import pytest
-
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "h2h_backtest_chunked.py"
-
-
-def _load() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("h2h_backtest_chunked", _SCRIPT)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-mod = _load()
+import scripts.h2h_backtest_chunked as mod
 
 
 def test_chunk_timeout_arg_parsed() -> None:
@@ -44,10 +30,10 @@ def test_hung_chunk_is_killed_and_retried(monkeypatch: pytest.MonkeyPatch, tmp_p
     ) -> subprocess.CompletedProcess[bytes]:
         seen_timeouts.append(timeout)
         if len(seen_timeouts) == 1:
-            raise subprocess.TimeoutExpired(cmd, timeout if timeout is not None else 0.0)
+            raise subprocess.TimeoutExpired(cmd, timeout or 0.0)
         return subprocess.CompletedProcess[bytes](cmd, 0)
 
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr("subprocess.run", fake_run)
     monkeypatch.setattr(mod, "_valid_chunk_file", lambda out, expected: True)
     ok = mod._run_chunk_with_retries(
         ["worker"], {}, tmp_path / "c.json", 16, lo=0, hi=5, max_retries=5, timeout=600.0
@@ -66,7 +52,7 @@ def test_persistent_hang_exhausts_retries(monkeypatch: pytest.MonkeyPatch, tmp_p
         attempts += 1
         raise subprocess.TimeoutExpired(cmd, timeout if timeout is not None else 0.0)
 
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr("subprocess.run", fake_run)
     monkeypatch.setattr(mod, "_valid_chunk_file", lambda out, expected: True)
     ok = mod._run_chunk_with_retries(
         ["worker"], {}, tmp_path / "c.json", 16, lo=0, hi=5, max_retries=3, timeout=1.0
@@ -84,7 +70,7 @@ def test_crash_then_success_still_retries(monkeypatch: pytest.MonkeyPatch, tmp_p
     ) -> subprocess.CompletedProcess[bytes]:
         return subprocess.CompletedProcess[bytes](cmd, next(rcs))
 
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr("subprocess.run", fake_run)
     monkeypatch.setattr(mod, "_valid_chunk_file", lambda out, expected: True)
     ok = mod._run_chunk_with_retries(
         ["worker"], {}, tmp_path / "c.json", 16, lo=0, hi=5, max_retries=5, timeout=None
