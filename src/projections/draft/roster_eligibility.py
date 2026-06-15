@@ -29,6 +29,14 @@ SUPER_FLEX_ELIGIBLE: frozenset[Position] = frozenset(
     {Position.QB, Position.RB, Position.WR, Position.TE}
 )
 
+# Flex-type slots in ascending eligibility breadth (FLEX subset of SUPER_FLEX). Order is
+# load-bearing: narrowest eligibility first keeps restrictive-first greedy lineup fills optimal.
+# Single source consumed by roster_score, backtest.lineup, and the season-value sampler.
+FLEX_SLOTS: tuple[tuple[RosterSlot, frozenset[Position]], ...] = (
+    (RosterSlot.FLEX, FLEX_ELIGIBLE),
+    (RosterSlot.SUPER_FLEX, SUPER_FLEX_ELIGIBLE),
+)
+
 
 def bench_eligible_positions(roster_slots: Mapping[RosterSlot, int]) -> frozenset[Position]:
     """Positions the league actually rosters (so the shared bench can hold them).

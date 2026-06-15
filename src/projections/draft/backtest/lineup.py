@@ -10,13 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
-from projections.draft.roster_eligibility import FLEX_ELIGIBLE, POSITION_SLOTS, SUPER_FLEX_ELIGIBLE
+from projections.draft.roster_eligibility import FLEX_SLOTS, POSITION_SLOTS
 from projections.schemas import Position, RosterSlot
-
-_FLEX_SLOTS: tuple[tuple[RosterSlot, frozenset[Position]], ...] = (
-    (RosterSlot.FLEX, FLEX_ELIGIBLE),
-    (RosterSlot.SUPER_FLEX, SUPER_FLEX_ELIGIBLE),
-)
 
 
 def weekly_lineup_points(
@@ -67,7 +62,7 @@ def weekly_lineup_points(
 
     # 2) Flex tiers, narrowest eligibility first; each takes the highest-projected
     #    remaining eligible player and scores their actual points.
-    for slot, eligible in _FLEX_SLOTS:
+    for slot, eligible in FLEX_SLOTS:
         for _ in range(roster_slots.get(slot, 0)):
             best_pos: Position | None = None
             best_proj = float("-inf")
