@@ -9,6 +9,7 @@ source — the consensus VORP table can't supply a position for off-board picks)
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +52,47 @@ class DraftState:
         )
 
 
+def build_draft_state(
+    picks: Sequence[str],
+    *,
+    my_slot: int,
+    league: LeagueConfig,
+    id_map: pd.DataFrame,
+) -> DraftState:
+    """Build a `DraftState` from in-memory picks (the file-free half of load_draft_state).
+
+    Raises ValueError on: my_slot out of range, a malformed/duplicate gsis_id, or
+    one of *my* picks being absent from id_map (unknown position).
+    """
+    if not 1 <= my_slot <= league.n_teams:
+        raise ValueError(f"my_slot must be in 1..{league.n_teams}; got {my_slot}")
+
+    parsed = tuple(validate_gsis_id(str(p)) for p in picks)
+    if len(set(parsed)) != len(parsed):
+        raise ValueError("draft state has a duplicate pick (a player drafted twice)")
+
+    pos_by_id = dict(zip(id_map["gsis_id"], id_map["position"], strict=False))
+    my_roster: list[Position] = []
+    for index, gid in enumerate(parsed):
+        pick_number = index + 1
+        if slot_for(pick_number, league.n_teams) != my_slot:
+            continue
+        if gid not in pos_by_id:
+            raise ValueError(
+                f"my pick {gid} (pick #{pick_number}) is absent from id_map; "
+                "cannot resolve its position for roster accounting"
+            )
+        my_roster.append(Position(pos_by_id[gid]))
+
+    return DraftState(
+        my_slot=my_slot,
+        n_teams=league.n_teams,
+        rounds=league.roster_size,
+        picks=parsed,
+        my_roster=tuple(my_roster),
+    )
+
+
 def load_draft_state(state_path: Path, id_map: pd.DataFrame) -> tuple[DraftState, LeagueConfig]:
     """Parse a draft-state JSON file into a `DraftState` + its `LeagueConfig`.
 
@@ -66,33 +108,7 @@ def load_draft_state(state_path: Path, id_map: pd.DataFrame) -> tuple[DraftState
     if not isinstance(data["picks"], list):
         raise ValueError("draft-state JSON 'picks' must be a list")
     league = LeagueConfig.model_validate_json(Path(data["league_config"]).read_text())
-
-    my_slot = int(data["my_slot"])
-    if not 1 <= my_slot <= league.n_teams:
-        raise ValueError(f"my_slot must be in 1..{league.n_teams}; got {my_slot}")
-
-    picks = tuple(validate_gsis_id(str(p)) for p in data["picks"])
-    if len(set(picks)) != len(picks):
-        raise ValueError("draft state has a duplicate pick (a player drafted twice)")
-
-    pos_by_id = dict(zip(id_map["gsis_id"], id_map["position"], strict=False))
-    my_roster: list[Position] = []
-    for index, gid in enumerate(picks):
-        pick_number = index + 1
-        if slot_for(pick_number, league.n_teams) != my_slot:
-            continue
-        if gid not in pos_by_id:
-            raise ValueError(
-                f"my pick {gid} (pick #{pick_number}) is absent from id_map; "
-                "cannot resolve its position for roster accounting"
-            )
-        my_roster.append(Position(pos_by_id[gid]))
-
-    state = DraftState(
-        my_slot=my_slot,
-        n_teams=league.n_teams,
-        rounds=league.roster_size,
-        picks=picks,
-        my_roster=tuple(my_roster),
+    state = build_draft_state(
+        data["picks"], my_slot=int(data["my_slot"]), league=league, id_map=id_map
     )
     return state, league

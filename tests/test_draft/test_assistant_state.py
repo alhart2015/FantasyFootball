@@ -141,3 +141,30 @@ def test_my_pick_ids_picks_out_my_snake_slots() -> None:
 def test_my_pick_ids_empty_when_no_picks() -> None:
     state = DraftState(my_slot=1, n_teams=4, rounds=5, picks=(), my_roster=())
     assert state.my_pick_ids == ()
+
+
+def test_build_draft_state_matches_load_draft_state(tmp_path: Path) -> None:
+    from projections.draft.assistant.state import build_draft_state
+    from projections.draft.league_config import LeagueConfig
+
+    cfg_path = _write_config(tmp_path)
+    league = LeagueConfig.model_validate_json(cfg_path.read_text())
+    picks = [*_OPP_PICKS, "00-0000007", "00-0000008"]
+    state_path = _state_file(tmp_path, cfg_path, picks)
+
+    from_file, _ = load_draft_state(state_path, _id_map())
+    in_memory = build_draft_state(picks, my_slot=7, league=league, id_map=_id_map())
+    assert in_memory == from_file
+
+
+def test_build_draft_state_bad_slot_raises() -> None:
+    from projections.draft.assistant.state import build_draft_state
+    from projections.draft.league_config import LeagueConfig
+    from projections.schemas import RosterSlot, Ruleset
+
+    league = LeagueConfig(
+        name="t", n_teams=12,
+        roster_slots={RosterSlot.QB: 1, RosterSlot.BENCH: 1}, ruleset=Ruleset.espn_ppr(),
+    )
+    with pytest.raises(ValueError, match="my_slot"):
+        build_draft_state([], my_slot=99, league=league, id_map=_id_map())
