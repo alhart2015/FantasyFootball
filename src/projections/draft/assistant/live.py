@@ -24,7 +24,7 @@ from projections.draft.assistant.strategy import (
 )
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import GsisId
+from projections.schemas import GsisId, validate_gsis_id
 
 # Strategy names the board's dropdown offers (season_value_var is in STRATEGY_KEYS
 # but excluded — its A/B showed no draft benefit; see the spec §2 / memory).
@@ -128,3 +128,18 @@ class LiveDraftSession:
     def round_and_slot(self) -> tuple[int, int]:
         rnd = (self.current_pick - 1) // self.league.n_teams + 1
         return rnd, self.on_clock_slot
+
+    def available_pool(self) -> pd.DataFrame:
+        drafted = self.state().drafted_ids
+        return self.pool[~self.pool["gsis_id"].isin(drafted)].reset_index(drop=True)
+
+    def record_pick(self, gsis_id: str) -> None:
+        gid = validate_gsis_id(str(gsis_id))
+        if gid in self.state().drafted_ids:
+            raise ValueError(f"{gid} already drafted")
+        if gid not in set(self.id_map["gsis_id"]):
+            raise ValueError(f"{gid} absent from id_map (cannot resolve position)")
+        self.picks.append(gid)
+
+    def undo(self) -> GsisId | None:
+        return self.picks.pop() if self.picks else None

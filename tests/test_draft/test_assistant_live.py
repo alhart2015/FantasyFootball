@@ -137,3 +137,34 @@ def test_is_complete_when_roster_full() -> None:
     total = s.league.n_teams * s.league.roster_size
     s.picks = [f"00-000{i:04d}" for i in range(1, total + 1)]
     assert s.is_complete
+
+
+def test_record_pick_appends_and_rejects_duplicate() -> None:
+    s = _session()
+    s.record_pick("00-0000001")
+    assert s.picks == ["00-0000001"]
+    with pytest.raises(ValueError, match="already drafted"):
+        s.record_pick("00-0000001")
+
+
+def test_record_pick_rejects_absent_from_id_map() -> None:
+    s = _session()
+    with pytest.raises(ValueError, match="id_map"):
+        s.record_pick("00-0009999")
+
+
+def test_undo_pops_last() -> None:
+    s = _session()
+    s.record_pick("00-0000001")
+    s.record_pick("00-0000002")
+    assert s.undo() == "00-0000002"
+    assert s.picks == ["00-0000001"]
+    s.undo()
+    assert s.undo() is None  # empty → None
+
+
+def test_available_pool_excludes_drafted() -> None:
+    s = _session(picks=["00-0000001", "00-0000002"])
+    avail = s.available_pool()
+    assert "00-0000001" not in set(avail["gsis_id"])
+    assert len(avail) == len(_pool()) - 2
