@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -251,3 +254,36 @@ def test_roster_scorecard_matches_optimal_lineup() -> None:
     mine = s.pool[s.pool["gsis_id"].isin(s.state().my_pick_ids)]
     expected = optimal_lineup_points(mine, s.league.roster_slots)
     assert s.roster_scorecard() == expected
+
+
+def test_to_state_dict_is_cli_compatible(tmp_path: Path) -> None:
+    from projections.draft.assistant.state import load_draft_state
+
+    cfg_path = tmp_path / "cfg.json"
+    cfg_path.write_text(_league().model_dump_json())
+    s = _session(picks=["00-0000001", "00-0000002"])
+    s.league_config_path = cfg_path
+    d = s.to_state_dict()
+    assert set(d) >= {"league_config", "my_slot", "picks", "mode", "strategy_name"}
+
+    # load_draft_state must accept the saved superset unchanged.
+    state_path = tmp_path / "session.json"
+    state_path.write_text(json.dumps(d))
+    loaded_state, _ = load_draft_state(state_path, _id_map())
+    assert list(loaded_state.picks) == ["00-0000001", "00-0000002"]
+
+
+def test_save_load_round_trip(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "cfg.json"
+    cfg_path.write_text(_league().model_dump_json())
+
+    s = _session(picks=["00-0000001"])
+    s.league_config_path = cfg_path
+    s.strategy_name = "raw_vorp"  # analytic → load needs no availability
+    save_path = tmp_path / "session.json"
+    s.save(save_path)
+
+    loaded = LiveDraftSession.load(save_path, id_map=_id_map(), pool=_pool())
+    assert loaded.picks == ["00-0000001"]
+    assert loaded.strategy_name == "raw_vorp"
+    assert loaded.my_slot == 7

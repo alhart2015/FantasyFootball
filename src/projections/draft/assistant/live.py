@@ -6,6 +6,7 @@ decision to existing engine functions. scripts/draft_board.py is a thin view ove
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -238,3 +239,72 @@ class LiveDraftSession:
     def roster_scorecard(self) -> float:
         mine = self.pool[self.pool["gsis_id"].isin(self.state().my_pick_ids)]
         return optimal_lineup_points(mine, self.league.roster_slots)
+
+    def to_state_dict(self) -> dict[str, object]:
+        """CLI-compatible superset: load_draft_state reads the required keys; the rest
+        (mode/strategy/data paths) drive one-click resume."""
+        return {
+            "league_config": str(self.league_config_path),
+            "my_slot": self.my_slot,
+            "picks": list(self.picks),
+            "mode": self.mode,
+            "adp_jitter": self.adp_jitter,
+            "strategy_name": self.strategy_name,
+            "n_sims": self.n_sims,
+            "sigma": self.sigma,
+            "season": self.season,
+            "vorp_table": str(self.vorp_path),
+            "id_map": str(self.id_map_path),
+        }
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.to_state_dict(), indent=2))
+
+    @classmethod
+    def load(
+        cls,
+        path: Path,
+        *,
+        id_map: pd.DataFrame,
+        pool: pd.DataFrame,
+        data_root: Path = Path("data"),
+    ) -> LiveDraftSession:
+        """Rebuild a session from a saved state dict; strategy via build_session_strategy
+        (MC strategies load availability from data_root + saved season)."""
+        from projections.draft.assistant.availability_loader import load_store_availability
+
+        data = json.loads(path.read_text())
+        league = LeagueConfig.model_validate_json(Path(data["league_config"]).read_text())
+        name = str(data["strategy_name"])
+        n_sims = int(data.get("n_sims", 300))
+        season = int(data.get("season", 2026))
+        availability = None
+        if name in ("season_value", "season_value_var", "season_value_timing"):
+            availability = load_store_availability(pool, season=season, data_root=data_root)
+        strategy = build_session_strategy(
+            name,
+            league=league,
+            sigma=data.get("sigma"),
+            availability=availability,
+            n_sims=n_sims,
+            base_seed=0,
+        )
+        return cls(
+            league=league,
+            my_slot=int(data["my_slot"]),
+            id_map=id_map,
+            pool=pool,
+            strategy=strategy,
+            strategy_name=name,
+            mode=data.get("mode", "copilot"),
+            adp_jitter=float(data.get("adp_jitter", 8.0)),
+            n_sims=n_sims,
+            sigma=data.get("sigma"),
+            season=season,
+            picks=[validate_gsis_id(str(p)) for p in data["picks"]],
+            league_config_path=Path(data["league_config"]),
+            vorp_path=Path(data.get("vorp_table", ".")),
+            id_map_path=Path(data.get("id_map", ".")),
+            data_root=data_root,
+        )
