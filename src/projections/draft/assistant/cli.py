@@ -16,8 +16,6 @@ from projections.draft.assistant.state import load_draft_state
 from projections.draft.assistant.strategy import (
     STRATEGY_KEYS,
     DraftStrategy,
-    NowOrNeverStrategy,
-    RawVorpStrategy,
     SeasonValueStrategy,
     SeasonValueTimingStrategy,
 )
@@ -39,12 +37,21 @@ def _load_id_map(path: Path) -> pd.DataFrame:
 
 
 def _build_strategy(name: str, n_teams: int, sigma: float | None) -> DraftStrategy:
-    if name == "raw_vorp":
-        return RawVorpStrategy()
-    if name == "now_or_never":
-        spread = default_sigma(n_teams) if sigma is None else sigma
-        return NowOrNeverStrategy(LogisticSurvival(sigma=spread))
-    raise ValueError(f"unknown strategy {name!r}")
+    from projections.draft.assistant.live import build_session_strategy
+    from projections.draft.league_config import LeagueConfig
+    from projections.schemas import RosterSlot, Ruleset
+
+    # _build_strategy is only called for the analytic strategies (raw_vorp/now_or_never),
+    # which ignore availability/n_sims/base_seed; a minimal league carries n_teams + sigma.
+    league = LeagueConfig(
+        name="_",
+        n_teams=n_teams,
+        roster_slots={RosterSlot.QB: 1, RosterSlot.BENCH: 1},
+        ruleset=Ruleset.espn_ppr(),
+    )
+    return build_session_strategy(
+        name, league=league, sigma=sigma, availability=None, n_sims=1, base_seed=0
+    )
 
 
 def generate_recommendation(
