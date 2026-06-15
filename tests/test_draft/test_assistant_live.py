@@ -173,7 +173,7 @@ def test_available_pool_excludes_drafted() -> None:
 def test_recommendation_delegates_to_strategy() -> None:
     s = _session()
     rec = s.recommendation()
-    assert list(rec["gsis_id"])[0] == "00-0000001"  # highest vorp, undrafted
+    assert next(iter(rec["gsis_id"])) == "00-0000001"  # highest vorp, undrafted
     assert "rank" in rec.columns
 
 
