@@ -71,10 +71,15 @@ def generate_recommendation(
     vorp = VorpTableSchema.validate(vorp)
 
     strategy: DraftStrategy
-    if strategy_name in ("season_value", "season_value_timing"):
+    if strategy_name in ("season_value", "season_value_var", "season_value_timing"):
         availability = load_store_availability(vorp, season=season, data_root=data_root)
         if strategy_name == "season_value":
             strategy = SeasonValueStrategy(availability, n_sims=n_sims, base_seed=0)
+        elif strategy_name == "season_value_var":
+            # risk-aware variant; pool here lacks is_rookie (live path), so all-veteran.
+            strategy = SeasonValueStrategy(
+                availability, n_sims=n_sims, base_seed=0, risk_aware=True
+            )
         else:
             spread = default_sigma(league.n_teams) if sigma is None else sigma
             strategy = SeasonValueTimingStrategy(

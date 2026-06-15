@@ -70,10 +70,38 @@ def simulate_league(
     """
     rng = np.random.default_rng(seed)
     rosters = draft_mixed_field(dict(seat_strategies), pool, config, rng=rng, jitter=jitter)
-    pos_by_id = {str(g): str(p) for g, p in zip(pool["gsis_id"], pool["position"], strict=False)}
+    # Schedule draw immediately follows the draft; the (rng-free) scoring loop used to sit between
+    # them, so drawing here is byte-identical to the prior order.
+    sched = regular_season_schedule(
+        n_teams=config.n_teams, n_weeks=len(calendar.regular_weeks), rng=rng
+    )
+    return score_drafted_league(
+        rosters,
+        pool,
+        config,
+        proj_lookup=proj_lookup,
+        actual_lookup=actual_lookup,
+        calendar=calendar,
+        strategy_labels=strategy_labels,
+        sched=sched,
+    )
 
-    # Build each (week, seat) roster once; both scorings start the same lineup (by
-    # projection) and only differ in which field they sum, so the roster is shared.
+
+def score_drafted_league(
+    rosters: Mapping[int, list[str]],
+    pool: pd.DataFrame,
+    config: LeagueConfig,
+    *,
+    proj_lookup: Mapping[tuple[str, int], float],
+    actual_lookup: Mapping[tuple[str, int], float],
+    calendar: Calendar,
+    strategy_labels: Mapping[int, str],
+    sched: list[list[tuple[int, int]]],
+) -> LeagueOutcome:
+    """Score already-drafted rosters both ways against a fixed schedule. Separated from
+    ``simulate_league`` so the predictive forward-CI sim can draft once and re-score many
+    model-sampled ``actual_lookup``s without re-running the (expensive) draft."""
+    pos_by_id = {str(g): str(p) for g, p in zip(pool["gsis_id"], pool["position"], strict=False)}
     all_weeks = set(calendar.regular_weeks) | set(calendar.playoff_weeks)
     pts_actual: dict[int, dict[int, float]] = {wk: {} for wk in all_weeks}
     pts_proj: dict[int, dict[int, float]] = {wk: {} for wk in all_weeks}
@@ -91,11 +119,6 @@ def simulate_league(
             pts_proj[wk][s] = weekly_lineup_points(
                 roster, config.roster_slots, score_by="projected"
             )
-
-    # One schedule (one rng draw) shared by both scorings.
-    sched = regular_season_schedule(
-        n_teams=config.n_teams, n_weeks=len(calendar.regular_weeks), rng=rng
-    )
 
     return LeagueOutcome(
         actual=_standings_and_playoffs(rosters, pts_actual, sched, strategy_labels, calendar),

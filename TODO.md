@@ -4,7 +4,11 @@ Running project management list. Add items as they come up; remove or check off 
 
 ## Open
 
-### 45. Per-player weekly performance distribution in the season-value Monte Carlo (honest variance + honest post-draft CIs)
+### 45. Per-player weekly performance distribution in the season-value Monte Carlo — ✅ DONE (v1; branch `feat/performance-variance-model`)
+
+**Shipped** (spec/plan `docs/superpowers/specs|plans/2026-06-14-performance-variance-model.*`): a fitted two-component variance model — mean-preserving lognormal season-mean multiplier `m` (E[m]=1, log-SD by position×rookie) + per-game-affine Gamma weekly noise (`std = a_pos·pg + b_pos`). `scripts/fit_performance_variance.py` fits it offline (2018-2025 weekly_stats for the affine; 2021-2025 for the log-SD) → committed `configs/performance_variance_params.json` (R7a: arith ratio SD 0.374 vet / 0.580 rookie; within-season CV QB 0.48 / RB-WR-TE 0.68-0.69). `performance_variance.py` is the vectorized sampler. **Consumer A:** `season_value.py` `expected_season_points_var` / `marginal_season_values_var` make the MC risk-aware (optimal-by-sampled weekly fill, CRN-preserved), wired into the SeasonValue strategies; **26 ms/pick at n_sims=200 (R4 ✓, no fallback needed)**; H2H smoke shows sv stays competitive (R7b ✓). **Consumer B:** `backtest/predictive.py` (`score_drafted_league` extracted from `simulate_league`) drafts once then re-scores model-sampled seasons → `scripts/post_draft_assessment.py --predictive`. R7c ✓: 2025 forward champ 8.3% [5.0,12.1] vs the too-tight historical 5.2% [3.8,6.9] — materially wider, reflecting player-outcome luck. `is_rookie` attached to the pool in `load_inputs`. **Deferred follow-ons:** per-player empirical-Bayes shrinkage (0.69-reliable signal); same-game correlation (TODO #1 option D); playoff-week weighting; draft-capital rookie refinement; realistic lineup-set-by-projection in Consumer A (v1 uses optimal-by-sampled). **Original write-up below for history.**
+
+<details><summary>Original spec rationale</summary>
 
 The season-value MC (`src/projections/draft/assistant/season_value.py`) currently models only **availability** variance — each week a player is available (Bernoulli `p`) or out (injury/bye), and when available they score their **deterministic** `per_game = season_mean_fpts / 17`. There is **no week-to-week performance variance**: an available player scores the exact same points every simulated week. Two consequences:
 
@@ -14,6 +18,8 @@ The season-value MC (`src/projections/draft/assistant/season_value.py`) currentl
 **The fix — plug real per-player-per-week distributions into the MC.** Projections Core already produces **per-player, per-week probability distributions over fantasy points** (`src/projections/`, the `Distribution` protocol + scoring layer) — that is exactly the missing piece. In the season-value MC, replace the deterministic `per_game` with a **draw from the player's weekly fantasy-point distribution** (conditional on being available), so each simulated week samples a real boom/bust outcome. Keep CRN/antithetic structure for the marginal-value comparisons. Consider correlation (TODO #1 option D — same-game stacks) as a later refinement; v1 can use marginal weekly distributions (independent draws) which already fixes the spread.
 
 **Why it's its own spec/plan, not an inline change:** (a) it touches the hot path — `_vectorized_lineup_points` and the ~125× fast-path must stay fast with an added per-week sampling dimension (n_sims × weeks × players draws); (b) it needs a source for the weekly distribution at *draft time* — preseason we have a season projection, not 17 weekly distributions, so we need a defensible way to spread a season projection into weekly distributions (variance model by position/role, or reuse the Projections Core weekly model's dispersion); (c) it changes every downstream number (`SeasonValuer`, `SeasonValueStrategy`, `SeasonValueTimingStrategy` marginals, and the tournament/backtest), so it needs the adoption-gate / A-B discipline. **Also widen the post-draft CI methodology** (`scripts/post_draft_assessment.py`) once this lands: resample player outcomes from their distributions, not just draft/schedule.
+
+</details>
 
 ### 44. Waiver-wire / undrafted-pool assessment after the 16-team draft sims — which positions are weak vs strong
 

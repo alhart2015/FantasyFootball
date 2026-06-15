@@ -470,6 +470,7 @@ def test_timing_score_equals_marginal_minus_opp_cost() -> None:
     )
     rng = np.random.default_rng([0, state.current_pick])
     base = pool.loc[pool["gsis_id"].isin([str(g) for g in state.my_pick_ids])]
+    # Timing defaults to risk_aware=False -> the deterministic season-value marginal.
     marg = marginal_season_values(
         base[["gsis_id", "position", "season_mean_fpts"]],
         pruned[["gsis_id", "position", "season_mean_fpts"]],
