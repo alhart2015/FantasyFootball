@@ -4,6 +4,22 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — Live Draft Board (Slice 3, the UI) — shipped (2026-06-15, on branch `feat/live-draft-board`)
+
+**Status:** The final Draft Assistant slice — a Streamlit live-draft board over the existing engine, with **two modes** sharing one board: **co-pilot** (log every real pick; opponents get a one-click ADP smart-assist) and **mock** (opponents auto-drafted by the ADP bot; "advance to my pick" + end-of-draft scorecard). Built spec → spec-review loop → plan → plan-review loop → inline execution via `superpowers-go`. Spec/plan at `docs/superpowers/specs|plans/2026-06-15-live-draft-board.*`.
+
+**What shipped:**
+- **`src/projections/draft/assistant/live.py`** — `LiveDraftSession`, a pure, fully-typed, Streamlit-free controller: `state()`/`record_pick`/`undo`/`available_pool`/`recommendation`/`suggested_pick` (deterministic per board state = the bot pick = co-pilot smart-assist)/`my_roster_view` (`RosterView`)/`best_available_by_position`/`mock_advance_to_my_pick`/`roster_scorecard`/`to_state_dict`/`save`/`load`. Plus `build_session_strategy` (the shared name→`DraftStrategy` seam, used by the board dropdown and resume; `cli._build_strategy` now delegates to it) and `attach_names`. Board offers the 4 production strategies — `season_value_var` excluded (no draft benefit per the A/B; memory `risk-aware-season-value-no-draft-benefit`).
+- **`build_draft_state`** extracted from `load_draft_state` (file-free `DraftState` builder; `load_draft_state` delegates — byte-identical, pinned by an equivalence test).
+- **`scripts/draft_board.py`** — thin Streamlit view (layout B, three-column command center: pick log · recommendations · roster + best-available; sticky status bar + search-and-record; strategy dropdown with MC spinner + cache keyed on picks/strategy/n_sims/sigma). Autosave to `data/draft_sessions/` after every pick + sidebar resume (crash recovery — the box BSODs; memory `h2h-backtest-native-crash`).
+- **`streamlit`** added under a `[ui]` optional-dependencies extra (`pip install -e ".[ui]"`) + `streamlit.*` mypy override; `data/draft_sessions/` gitignored; `CONTRIBUTING.md` run section.
+
+**Gates:** full `tests/test_draft` + `tests/test_scripts/test_draft_board_smoke.py` green (22 new live-controller tests + an `AppTest` headless smoke); `mypy src tests` clean (307 files); ruff check + format clean. Each task TDD (red→green→commit).
+
+**Deferred (documented future seams):** ESPN/Sleeper live-draft API auto-sync; auction/keeper modes; season-value MC scorecard in mock mode; tier-cliff viz. **Data dep:** MC strategies need ingested `weekly_stats` (+ 2026 `schedules` for byes) under `data/`; absent → fail loud in the sidebar / bye-degrade warning.
+
+---
+
 ## Draft Assistant — `SeasonValueTimingStrategy` (pick-timing layer) + Test 9 (2026-06-13, on branch `feat/season-value-timing-strategy`)
 
 **Status:** Shipped a new draft strategy `season_value_timing` and generalized the H2H harness to test any strategy pair. Built spec→spec-review→plan→plan-review→subagent execution (7 TDD tasks + the run, each two-stage reviewed; final whole-impl review). Spec/plan at `docs/superpowers/specs|plans/2026-06-13-season-value-timing-strategy.*`; result in `reports/draft_strategy_tests.md` (Test 9). **No verdict** (decide-at-end rule).

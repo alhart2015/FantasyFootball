@@ -51,6 +51,22 @@ Pre-commit runs lint + format + typecheck on every commit. You don't need to rem
 
 The Python public API is `from projections import ...`. CLI verbs (`python -m projections refresh|project|backtest|query`) are coming in Plan 4 and aren't built yet.
 
+## Live draft board (Draft Assistant UI)
+
+Install the UI extra once: `pip install -e ".[ui]"`. Then:
+
+```bash
+streamlit run scripts/draft_board.py
+```
+
+Co-pilot mode: log every pick (yours + opponents'); opponents get a one-click ADP
+suggestion. Mock mode: opponents are auto-drafted; "Advance to my pick" runs the field
+to your turn; the draft ends with an optimal-lineup scorecard. Inputs (set in the
+sidebar): a consensus VORP parquet (`generate_vorp_table.py --source consensus`),
+`data/raw/id_map.parquet`, and a league-config JSON. Sessions autosave to
+`data/draft_sessions/` and can be resumed from the sidebar. All draft logic lives in the
+testable `projections.draft.assistant.live.LiveDraftSession`; the script is a thin view.
+
 ## Workflow
 
 This project uses the superpowers spec → plan → execute discipline.
