@@ -6,7 +6,15 @@ decision to existing engine functions. scripts/draft_board.py is a thin view ove
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal
+
+import pandas as pd
+
 from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.pick_timing import my_next_pick, slot_for
+from projections.draft.assistant.state import DraftState, build_draft_state
 from projections.draft.assistant.strategy import (
     DraftStrategy,
     NowOrNeverStrategy,
@@ -16,6 +24,7 @@ from projections.draft.assistant.strategy import (
 )
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.league_config import LeagueConfig
+from projections.schemas import GsisId
 
 # Strategy names the board's dropdown offers (season_value_var is in STRATEGY_KEYS
 # but excluded — its A/B showed no draft benefit; see the spec §2 / memory).
@@ -63,3 +72,59 @@ def build_session_strategy(
             survival=LogisticSurvival(sigma=spread),
         )
     raise ValueError(f"unknown strategy {name!r}")
+
+
+@dataclass
+class LiveDraftSession:
+    """Mutable, Streamlit-free controller for one live/mock snake draft."""
+
+    league: LeagueConfig
+    my_slot: int
+    id_map: pd.DataFrame
+    pool: pd.DataFrame
+    strategy: DraftStrategy
+    strategy_name: str
+    mode: Literal["copilot", "mock"] = "copilot"
+    adp_jitter: float = 8.0
+    base_seed: int = 0
+    n_sims: int = 300
+    sigma: float | None = None
+    season: int = 2026
+    picks: list[GsisId] = field(default_factory=list)
+    # Persistence-only paths (defaults keep core tests path-free).
+    league_config_path: Path = field(default=Path("."))
+    vorp_path: Path = field(default=Path("."))
+    id_map_path: Path = field(default=Path("."))
+    data_root: Path = field(default=Path("data"))
+
+    def state(self) -> DraftState:
+        """Rebuild the immutable engine snapshot from current picks (cheap; O(picks))."""
+        return build_draft_state(
+            self.picks, my_slot=self.my_slot, league=self.league, id_map=self.id_map
+        )
+
+    @property
+    def current_pick(self) -> int:
+        return len(self.picks) + 1
+
+    @property
+    def is_complete(self) -> bool:
+        return len(self.picks) >= self.league.n_teams * self.league.roster_size
+
+    @property
+    def on_clock_slot(self) -> int:
+        return slot_for(self.current_pick, self.league.n_teams)
+
+    @property
+    def is_my_pick(self) -> bool:
+        return not self.is_complete and self.on_clock_slot == self.my_slot
+
+    @property
+    def next_pick_number(self) -> int | None:
+        return my_next_pick(
+            self.current_pick, self.my_slot, self.league.n_teams, self.league.roster_size
+        )
+
+    def round_and_slot(self) -> tuple[int, int]:
+        rnd = (self.current_pick - 1) // self.league.n_teams + 1
+        return rnd, self.on_clock_slot
