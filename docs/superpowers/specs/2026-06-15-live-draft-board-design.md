@@ -34,8 +34,11 @@ skips opponents' picks while keeping recommendations correct.
 2. Manual pick entry with ADP smart-assist (one-click confirm of the bot's suggestion
    for opponents); full search-and-record fallback for any pick.
 3. Mock mode: bot-driven opponents, "advance to my pick", end-of-draft roster scorecard.
-4. All recommendation strategies selectable live (instant `now_or_never`/`raw_vorp`;
+4. The four production strategies selectable live (instant `now_or_never`/`raw_vorp`;
    MC `season_value`/`season_value_timing` with a spinner + result caching).
+   `season_value_var` is in `STRATEGY_KEYS` but is **deliberately excluded** from the
+   board's dropdown — its A/B showed no draft benefit (memory
+   `risk-aware-season-value-no-draft-benefit`); exposing it would mislead. (See §4.5.)
 5. Crash-recovery: autosave after every pick; resume an in-progress session on launch.
 6. **All draft logic in a pure, tested controller in `src/`; the Streamlit file is a
    thin view.** Gates (`pytest`, `mypy --strict`, `ruff`) apply to the controller.
@@ -93,8 +96,9 @@ Methods / properties:
 
 - `state() -> DraftState` — `build_draft_state(self.picks, …)`; memoized per `picks` tuple.
 - `current_pick: int`, `round_and_slot() -> tuple[int, int]`, `on_clock_slot: int`
-  (`slot_for(current_pick, n_teams)`), `is_my_pick: bool`, `my_next_pick: int | None`
-  (`my_next_pick(...)`), `is_complete: bool` (`len(picks) >= n_teams * roster_size`).
+  (`slot_for(current_pick, n_teams)`), `is_my_pick: bool`, `next_pick_number: int | None`
+  (wraps the imported `my_next_pick(...)` function — the property is renamed to avoid
+  shadowing it), `is_complete: bool` (`len(picks) >= n_teams * roster_size`).
 - `available_pool() -> pd.DataFrame` — `pool` minus `state().drafted_ids`.
 - `record_pick(gsis_id) -> None` — reject if already drafted or absent from `id_map`
   (can't resolve a position → can't keep roster accounting honest); else append.
@@ -104,16 +108,22 @@ Methods / properties:
 - `suggested_pick() -> GsisId | None` — `bot_pick(available, rng, adp_jitter=…)` with a
   **deterministic** rng seeded from `(base_seed, current_pick)` so the suggestion is
   stable across Streamlit reruns and reproducible in mock mode; `None` if pool empty.
-- `my_roster_view() -> pd.DataFrame` — my picks (name, position) with their greedy slot
-  assignment + open needs, via the shared `roster_eligibility`.
+- `my_roster_view() -> RosterView` — a small dataclass (not a bare frame, to fix its
+  shape): `filled: pd.DataFrame` with columns `[slot (RosterSlot), gsis_id, full_name,
+  position]` (one row per filled starting/bench slot via the shared `roster_eligibility`
+  greedy allocation) and `open_slots: dict[RosterSlot, int]` (unfilled starting slots).
 - `best_available_by_position(top: int) -> dict[Position, pd.DataFrame]` — top-N
   available per `Position` by `vorp` (tier-cliff visibility).
-- `mock_advance_to_my_pick() -> list[GsisId]` — mock only: repeatedly
+- `mock_advance_to_my_pick() -> list[GsisId]` — **(Phase 3)** mock only: repeatedly
   `record_pick(suggested_pick())` until `is_my_pick` or `is_complete`; returns the bot
   picks made. Raises in co-pilot mode (guard).
-- `roster_scorecard() -> float` — `optimal_lineup_points(my drafted rows joined to pool,
-  league.roster_slots)`; the mock end-of-draft "how did I do" number. (Season-value MC
-  scorecard is an optional add via `SeasonValuer`; behind a flag, latency-tolerant.)
+- `roster_scorecard() -> float` — **(Phase 3)** `optimal_lineup_points(my drafted rows
+  joined to `pool` on `gsis_id` for `season_mean_fpts`, league.roster_slots)`; the mock
+  end-of-draft "how did I do" number (`VorpTableSchema` carries `season_mean_fpts`,
+  verified). Season-value MC scorecard is an optional later add via `SeasonValuer`.
+
+The two mock methods above are part of the §4.2 surface for completeness but land in
+**Phase 3** with the mock UI, not in the Phase-1 controller foundation (see §8).
 
 ### 4.3 The view (layout B — three-column command center)
 
@@ -124,9 +134,12 @@ with the search/record box. Three columns:
   pick marked.
 - **Center (hero) — Recommendations:** the `RecommendationSchema` table (player name,
   `position`, `vorp`, `consensus_adp`, `p_available_next`, `score`, ★ `fills_starting_slot`),
-  with the strategy dropdown above. On an opponent's turn in co-pilot mode this column
-  shows the smart-assist suggestion with a **Confirm** button (+ search override). MC
-  strategies render inside `st.spinner`; results cached per `(picks, strategy, n_sims)`.
+  with the strategy dropdown above (the four production strategies from §2 goal 4 — not
+  `season_value_var`). On an opponent's turn in co-pilot mode this column shows the
+  smart-assist suggestion with a **Confirm** button (+ search override). MC strategies
+  render inside `st.spinner`; results are cached on **every result-affecting parameter** —
+  `(picks tuple, strategy_name, n_sims, sigma)` — so a `sigma` change for
+  `season_value_timing` at the same `n_sims` is not served a stale cached result.
 - **Right — My Roster + Best-available-by-position:** filled slots, open needs, best
   remaining at each position.
 
@@ -136,26 +149,54 @@ strategy dropdown; `n_sims` (MC strategies); `adp_jitter` slider (mock field / s
 noise); New-draft / Resume controls.
 
 **Pick entry:** the search box filters `id_map` by `full_name`; matches render as
-clickable rows that call `record_pick`. Mock mode adds an **"Advance to my pick"** button.
+clickable rows that **show `position` and `team` alongside the name** (so the user
+disambiguates same-name players — `id_map` is not unique on name) and call `record_pick`.
+Mock mode adds an **"Advance to my pick"** button.
 
-### 4.4 Persistence / crash-recovery
+### 4.4 Strategy construction seam
+
+Both the sidebar dropdown and the resume path turn a `strategy_name` (+ live params) into
+a `DraftStrategy`. To avoid duplicating that logic (and the existing inline `cli.py`
+version covers only the analytic strategies), name one shared builder in `live.py`:
+
+```python
+def build_session_strategy(
+    name: str, *, league: LeagueConfig, sigma: float | None,
+    availability: PlayerAvailability | None, n_sims: int, base_seed: int,
+) -> DraftStrategy: ...
+```
+
+It maps each production name to its constructor (`now_or_never`/`season_value_timing` →
+`LogisticSurvival(default_sigma(n_teams) if sigma is None else sigma)`;
+`season_value*` → require a non-null `availability`, fail loud otherwise). The existing
+`cli._build_strategy` is refactored to delegate to it (no behavior change). Both the view
+and `LiveDraftSession.load` call `build_session_strategy` — there is no `strategy_factory`
+parameter.
+
+### 4.5 Persistence / crash-recovery
 
 The dev box has a history of mid-run BSODs (see memory `h2h-backtest-native-crash`); a
 live draft cannot lose state. After **every** pick the session autosaves to a JSON file
-(default `data/draft_sessions/<timestamp>.json`, gitignored) via:
+under `data/draft_sessions/<timestamp>.json`. **This path is not currently gitignored** —
+Phase 4 adds `data/draft_sessions/` to `.gitignore` (sessions are per-draft scratch, not
+artifacts). Persistence API:
 
 ```python
 def to_state_dict(self) -> dict   # CLI-compatible superset
 def save(self, path: Path) -> None
 @classmethod
-def load(cls, path, *, id_map, pool, strategy_factory) -> LiveDraftSession
+def load(cls, path, *, id_map, pool, data_root=Path("data")) -> LiveDraftSession
+    # rebuilds strategy via build_session_strategy; MC strategies load availability
+    # from `data_root` + the saved `season`
 ```
 
 `to_state_dict` is a **superset** of the CLI draft-state format — it includes the
 required `{league_config, my_slot, picks}` (so `load_draft_state` and
 `scripts/draft_assistant.py` read it unchanged) plus `{mode, adp_jitter, strategy_name,
-vorp_table, id_map}` for full one-click resume. On launch the app detects the newest
-autosave and offers **Resume** vs **New draft**.
+n_sims, sigma, season, vorp_table, id_map}` for full one-click resume. `load` reads those,
+re-validates the data inputs, and reconstructs the strategy via `build_session_strategy`
+(§4.4) — loading `availability` from `data_root`/`season` when the saved strategy is an
+MC one. On launch the app detects the newest autosave and offers **Resume** vs **New draft**.
 
 ## 5. Data Flow
 
@@ -212,6 +253,9 @@ autosave and offers **Resume** vs **New draft**.
   - Persistence round-trip: `to_state_dict` → `save` → `load` reproduces picks/mode;
     asserts the CLI-required keys are present and `load_draft_state` accepts the file.
 - **`build_draft_state`** — equivalence test vs `load_draft_state` on a temp file.
+- **`build_session_strategy`** — returns the right concrete type per name; `season_value*`
+  with `availability=None` fails loud; `cli._build_strategy` still produces an identical
+  `now_or_never`/`raw_vorp` to before the refactor.
 - **Optional Streamlit smoke** — `st.testing.v1.AppTest` driving setup + 2-3 picks,
   asserting no exception and key widgets present; guarded by `pytest.importorskip("streamlit")`.
 - **Gates:** `pytest -k "draft"` (relevant subset), `mypy src tests`, `ruff check src tests`,
@@ -220,14 +264,16 @@ autosave and offers **Resume** vs **New draft**.
 ## 8. Phasing
 
 1. **Controller foundation** — `build_draft_state` refactor (+ equivalence test);
-   `LiveDraftSession` core (state/record/undo/available/recommendation/suggested_pick/
-   ownership) + tests.
+   `build_session_strategy` seam (+ `cli._build_strategy` delegating to it, no behavior
+   change); `LiveDraftSession` core (state/record/undo/available/recommendation/
+   suggested_pick/ownership/`my_roster_view`/`best_available_by_position`) + tests.
 2. **Streamlit view, co-pilot** — layout B, setup sidebar, status bar, search-and-record,
    three columns, smart-assist confirm; strategy dropdown + MC spinner/cache;
    `[ui]` extra in `pyproject`.
 3. **Mock mode** — bot auto-advance ("Advance to my pick"), `adp_jitter` control,
-   end-of-draft `roster_scorecard`.
-4. **Persistence & polish** — autosave/resume; optional `AppTest` smoke; docs
+   end-of-draft `roster_scorecard` + `mock_advance_to_my_pick`.
+4. **Persistence & polish** — autosave/resume (`to_state_dict`/`save`/`load`);
+   add `data/draft_sessions/` to `.gitignore`; optional `AppTest` smoke; docs
    (`CONTRIBUTING.md` run command) + `project_management.md` / `TODO.md` update.
 
 Each phase ≤ 5 files, gated independently (per the project's phased-execution rule).
