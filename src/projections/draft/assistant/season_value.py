@@ -30,6 +30,12 @@ from projections.schemas import RosterSlot
 # era-correct *historical* schedule length used to estimate injury rates.
 _GAMES = 17
 
+# Flex tiers with eligibility pre-resolved to position-value strings (np.isin needs the raw
+# values, not Position enums). Built once and reused by the sampled lineup fill below.
+_FLEX_ELIGIBLE_VALUES: tuple[tuple[RosterSlot, list[str]], ...] = tuple(
+    (slot, [p.value for p in eligible]) for slot, eligible in _FLEX_SLOTS
+)
+
 
 @dataclass(frozen=True)
 class _FillMeta:
@@ -141,11 +147,11 @@ def _lineup_points_sampled(
         total += np.where(vals > -np.inf, vals, 0.0).sum(axis=1)
         chosen = cols[idx]
         used[rows, chosen] |= vals > -np.inf
-    for slot, eligible in _FLEX_SLOTS:
+    for slot, elig_values in _FLEX_ELIGIBLE_VALUES:
         count = roster_slots.get(slot, 0)
         if count <= 0:
             continue
-        cols = np.flatnonzero(np.isin(pos, [p.value for p in eligible]))
+        cols = np.flatnonzero(np.isin(pos, elig_values))
         if cols.size == 0:
             continue
         for _ in range(count):
@@ -244,22 +250,31 @@ def expected_season_points(
     return _factorized_season_value(roster, availability, weeks, week_value_fn)
 
 
+def _availability_mask(
+    avail_uniforms: np.ndarray,  # (n_sims, n_weeks, m) shared uniforms in [0,1)
+    p: np.ndarray,  # (m,) weekly availability prob per player
+    bye_idx: np.ndarray,  # (m,) week-index of each player's bye, or -1
+) -> np.ndarray:
+    """Boolean (n_sims, n_weeks, m) availability: healthy (uniform < p) and not on bye.
+
+    Built once over the full union in the CRN marginal path, then column-sliced per
+    candidate — so the threshold and bye scatter run once, not once per candidate.
+    """
+    avail = avail_uniforms < p[None, None, :]
+    cols = np.flatnonzero(bye_idx >= 0)
+    avail[:, bye_idx[cols], cols] = False  # force byes out (advanced-index scatter)
+    return avail
+
+
 def _season_value_sampled(
     points: np.ndarray,  # (n_sims, n_weeks, m) sampled weekly points for the roster
-    avail_uniforms: np.ndarray,  # (n_sims, n_weeks, m) shared uniforms in [0,1)
-    p: np.ndarray,  # (m,) weekly availability prob per roster player
-    bye_idx: np.ndarray,  # (m,) week-index of each player's bye, or -1
+    avail: np.ndarray,  # (n_sims, n_weeks, m) boolean availability (byes already applied)
     positions: np.ndarray,  # (m,) position strings
     roster_slots: Mapping[RosterSlot, int],
 ) -> float:
-    """Mean season points: per (sim, week) optimal lineup over sampled points, gated by
-    availability (uniform < p) and byes, summed over weeks, averaged over sims."""
+    """Mean season points: per (sim, week) optimal lineup over sampled points, gated by the
+    precomputed `avail` mask, summed over weeks, averaged over sims."""
     n_sims, n_weeks, m = points.shape
-    avail = avail_uniforms < p[None, None, :]
-    for i in range(m):
-        w = int(bye_idx[i])
-        if w >= 0:
-            avail[:, w, i] = False
     flat_pts = points.reshape(n_sims * n_weeks, m)
     flat_av = avail.reshape(n_sims * n_weeks, m)
     weekly = _lineup_points_sampled(flat_pts, flat_av, positions, roster_slots).reshape(
@@ -272,11 +287,12 @@ def _bye_indices(
     availability: PlayerAvailability, gsis: np.ndarray, weeks: list[int]
 ) -> np.ndarray:
     """Week-index (into `weeks`) of each player's bye, or -1 if none / outside the played weeks."""
+    week_pos = {w: i for i, w in enumerate(weeks)}
     out = np.full(len(gsis), -1, dtype=int)
     for i, g in enumerate(gsis):
         bw = availability.bye_week(str(g))
-        if bw is not None and bw in weeks:
-            out[i] = weeks.index(bw)
+        if bw is not None and bw in week_pos:
+            out[i] = week_pos[bw]
     return out
 
 
@@ -307,7 +323,8 @@ def expected_season_points_var(
         params, positions, means, rookie, n_sims=n_sims, n_weeks=n_weeks, rng=rng
     )
     avail_uniforms = rng.random((n_sims, n_weeks, n))
-    return _season_value_sampled(points, avail_uniforms, p, bye_idx, positions, roster_slots)
+    avail = _availability_mask(avail_uniforms, p, bye_idx)
+    return _season_value_sampled(points, avail, positions, roster_slots)
 
 
 def marginal_season_values_var(
@@ -344,14 +361,13 @@ def marginal_season_values_var(
         params, u_pos, u_means, u_rookie, n_sims=n_sims, n_weeks=n_weeks, rng=rng
     )
     avail_u = rng.random((n_sims, n_weeks, len(u_gsis)))
+    avail_mask_u = _availability_mask(avail_u, u_p, u_bye)  # threshold + byes once over the union
 
     def value_for(ids: list[str]) -> float:
         cols = np.array([col_of[g] for g in ids], dtype=int)  # int even when empty (first pick)
         return _season_value_sampled(
             points_u[:, :, cols],
-            avail_u[:, :, cols],
-            u_p[cols],
-            u_bye[cols],
+            avail_mask_u[:, :, cols],
             u_pos[cols],
             roster_slots,
         )

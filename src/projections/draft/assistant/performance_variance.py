@@ -75,18 +75,12 @@ def sample_weekly_points(
     true_mean = projected_means.astype(np.float64)[None, :] * m  # (n_sims, n)
     pg = true_mean / _GAMES  # per-game mean
 
-    a = np.array(
-        [
-            (params.weekly_std_affine.get(str(p)) or params.weekly_std_affine["default"])["a"]
-            for p in positions
-        ]
-    )
-    b = np.array(
-        [
-            (params.weekly_std_affine.get(str(p)) or params.weekly_std_affine["default"])["b"]
-            for p in positions
-        ]
-    )
+    coefs = [
+        params.weekly_std_affine.get(str(p)) or params.weekly_std_affine["default"]
+        for p in positions
+    ]
+    a = np.array([c["a"] for c in coefs])
+    b = np.array([c["b"] for c in coefs])
     std = np.maximum(a[None, :] * pg + b[None, :], 1e-9)  # (n_sims, n) per-game weekly std
 
     valid = pg > 0

@@ -194,10 +194,10 @@ def _season_marginals(
     rng = np.random.default_rng([base_seed, state.current_pick])
     if risk_aware:
         rookie_map = _rookie_map(pool)
-        base_roster["is_rookie"] = [
-            bool(rookie_map.get(str(g), False)) for g in base_roster["gsis_id"]
-        ]
-        cand["is_rookie"] = [bool(rookie_map.get(str(g), False)) for g in cand["gsis_id"]]
+        base_roster["is_rookie"] = (
+            base_roster["gsis_id"].astype(str).map(rookie_map).fillna(False).astype(bool)
+        )
+        cand["is_rookie"] = cand["gsis_id"].astype(str).map(rookie_map).fillna(False).astype(bool)
         marginals = marginal_season_values_var(
             base_roster,
             cand,
