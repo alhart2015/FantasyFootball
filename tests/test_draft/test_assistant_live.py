@@ -77,17 +77,24 @@ class _FakeStrategy:
         return avail
 
 
-def _session(picks: list[str] | None = None, mode: str = "copilot") -> LiveDraftSession:
+def _session(
+    picks: list[str] | None = None,
+    mode: str = "copilot",
+    *,
+    adp_jitter: float = 0.0,  # default: pure ADP order → deterministic bot picks in tests
+    base_seed: int = 0,
+    pool: pd.DataFrame | None = None,
+) -> LiveDraftSession:
     return LiveDraftSession(
         league=_league(),
         my_slot=7,
         id_map=_id_map(),
-        pool=_pool(),
+        pool=_pool() if pool is None else pool,
         strategy=_FakeStrategy(),
         strategy_name="fake",
         mode=mode,  # type: ignore[arg-type]
-        adp_jitter=0.0,  # pure ADP order → deterministic bot picks in tests
-        base_seed=0,
+        adp_jitter=adp_jitter,
+        base_seed=base_seed,
         picks=[validate_gsis_id(p) for p in (picks or [])],
     )
 
@@ -215,22 +222,20 @@ def test_suggested_pick_none_when_pool_empty() -> None:
 
 
 def test_suggested_pick_reproducible_and_seeded_under_jitter() -> None:
-    # The shared fixture pins adp_jitter=0.0, which zeroes the rng draws; this test uses
-    # jitter > 0 so the seed actually matters — guarding determinism + that base_seed is honored.
+    # The shared fixture pins adp_jitter=0.0, which zeroes the rng draws; jitter > 0 makes
+    # the seed matter — guarding determinism + that base_seed is honored.
     def sess(seed: int) -> LiveDraftSession:
-        return LiveDraftSession(
-            league=_league(),
-            my_slot=7,
-            id_map=_id_map(),
-            pool=_pool(),
-            strategy=_FakeStrategy(),
-            strategy_name="fake",
-            adp_jitter=8.0,
-            base_seed=seed,
-        )
+        return _session(adp_jitter=8.0, base_seed=seed)
 
     assert sess(0).suggested_pick() == sess(0).suggested_pick()  # same seed → reproducible
     assert sess(0).suggested_pick() != sess(1).suggested_pick()  # base_seed changes the pick
+
+
+def test_suggested_pick_backfills_missing_consensus_adp() -> None:
+    # consensus_adp is Optional in VorpTableSchema; a pool without it must not KeyError —
+    # suggested_pick back-fills all-NA (no market signal) and bot_pick breaks ties on gsis.
+    s = _session(pool=_pool().drop(columns=["consensus_adp"]))
+    assert s.suggested_pick() == "00-0000001"  # all +inf → lowest gsis_id wins
 
 
 def test_my_roster_view_assigns_slots_and_open_needs() -> None:
@@ -296,17 +301,7 @@ def test_mock_advance_tolerates_pool_player_absent_from_id_map() -> None:
         ],
         ignore_index=True,
     )
-    s = LiveDraftSession(
-        league=_league(),
-        my_slot=7,
-        id_map=_id_map(),
-        pool=pool,
-        strategy=_FakeStrategy(),
-        strategy_name="fake",
-        mode="mock",
-        adp_jitter=0.0,
-        base_seed=0,
-    )
+    s = _session(pool=pool, mode="mock")
     made = s.mock_advance_to_my_pick()  # must not raise
     assert extra in made  # the off-id_map rookie (lowest ADP) was the first bot pick
     assert s.is_my_pick

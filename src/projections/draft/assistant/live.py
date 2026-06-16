@@ -187,13 +187,12 @@ class LiveDraftSession:
         gid = validate_gsis_id(str(gsis_id))
         if gid in self.state().drafted_ids:
             raise ValueError(f"{gid} already drafted")
-        # Only *my* picks need an id_map position (roster accounting via build_draft_state).
+        # Only *my* picks need an id_map position (roster accounting via build_draft_state);
+        # player_names is keyed by the id_map gsis_ids, so absence there == absent from id_map.
         # An opponent pick just leaves the available pool, so an off-id_map opponent pick
         # — e.g. a placeholder-gsis rookie carried in the VORP pool but not yet in id_map —
         # is fine; without this, mock_advance's bot picks would crash on such a player.
-        if slot_for(self.current_pick, self.league.n_teams) == self.my_slot and (
-            gid not in self.player_names
-        ):
+        if self.on_clock_slot == self.my_slot and gid not in self.player_names:
             raise ValueError(f"{gid} absent from id_map (cannot resolve position for my roster)")
         self.picks.append(gid)
 
@@ -211,7 +210,9 @@ class LiveDraftSession:
             # A non-consensus VORP pool (the column is Optional in VorpTableSchema) has no
             # market signal; back-fill all-NA so bot_pick treats everyone as +inf (ties
             # break on gsis_id) instead of raising KeyError. Mirrors the strategy path.
-            avail = avail.assign(consensus_adp=pd.array([pd.NA] * len(avail), dtype="Float64"))
+            avail = avail.assign(
+                consensus_adp=pd.array([pd.NA] * len(avail), dtype=pd.Float64Dtype())
+            )
         # Deterministic per board state → stable across Streamlit reruns, reproducible
         # in mock mode. (Re-deriving the seed each call is intentional; no stored RNG.)
         rng = np.random.default_rng([self.base_seed, self.current_pick])
