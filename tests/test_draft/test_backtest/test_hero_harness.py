@@ -278,3 +278,66 @@ def test_load_hero_cells_fails_loud_on_missing(tmp_path) -> None:
             n_teams=cfg.n_teams,
             checkpoint_dir=tmp_path,
         )
+
+
+def _two_strategy_frame():
+    """Hand-built HeroResultSchema frame: 'good' always 10-4, 'bad' always 4-10,
+    over 2 seats x 2 seeds, both scorings."""
+    import pandas as pd
+
+    rows = []
+    for strat, (w, ls) in (("good", (10, 4)), ("bad", (4, 10))):
+        for seat in (1, 2):
+            for seed in (0, 1):
+                for scoring in ("actual", "projected"):
+                    rows.append(
+                        dict(
+                            season=2025,
+                            strategy=strat,
+                            seat=seat,
+                            seed=seed,
+                            scoring=scoring,
+                            wins=w,
+                            losses=ls,
+                            made_playoffs=(strat == "good"),
+                            is_champion=False,
+                            points_for=1000.0 + w,
+                        )
+                    )
+    return pd.DataFrame(rows)
+
+
+def test_seat_averaged_metrics_win_pct() -> None:
+    from projections.draft.backtest.hero_harness import seat_averaged_metrics
+
+    m = seat_averaged_metrics(_two_strategy_frame(), scoring="actual")
+    assert abs(m["good"].win_pct.point - 10 / 14) < 1e-9
+    assert abs(m["bad"].win_pct.point - 4 / 14) < 1e-9
+
+
+def test_per_seat_metrics_groups_by_seat() -> None:
+    from projections.draft.backtest.hero_harness import per_seat_metrics
+
+    m = per_seat_metrics(_two_strategy_frame(), scoring="actual")
+    assert ("good", 1) in m and ("good", 2) in m
+    assert abs(m[("good", 1)].win_pct.point - 10 / 14) < 1e-9
+
+
+def test_paired_diff_sign_and_zero() -> None:
+    from projections.draft.backtest.hero_harness import paired_diff
+
+    df = _two_strategy_frame()
+    d = paired_diff(df, scoring="actual", metric="win_pct", strategy="good", reference="bad")
+    assert d.point > 0
+    z = paired_diff(df, scoring="actual", metric="win_pct", strategy="good", reference="good")
+    assert z.point == 0.0
+
+
+def test_bot_baseline_is_structural() -> None:
+    from projections.draft.backtest.hero_harness import bot_baseline
+
+    _, cal, _, _ = _inputs()  # cal.playoff_size == 6
+    b = bot_baseline(cal, 16)
+    assert b.win_pct.point == 0.5
+    assert abs(b.playoff.point - 6 / 16) < 1e-9
+    assert abs(b.championship.point - 1 / 16) < 1e-9

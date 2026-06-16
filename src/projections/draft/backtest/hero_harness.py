@@ -16,9 +16,10 @@ import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.strategy import _DEFAULT_FLOOR, _DEFAULT_FLOOR_WEIGHT
+from projections.draft.assistant.tournament import Interval, _bootstrap_mean
 from projections.draft.backtest.checkpoint import dump_results, load_results
 from projections.draft.backtest.draft_field import hero_seat_layout
-from projections.draft.backtest.harness import _build_strategy
+from projections.draft.backtest.harness import StrategyMetrics, _build_strategy
 from projections.draft.backtest.league import Calendar, LeagueResult, simulate_league
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import HeroResultSchema
@@ -194,6 +195,90 @@ def collect_hero_cells(
                     )
                 )
     return cells
+
+
+def _metrics_from_group(g: pd.DataFrame, *, base_seed: int = 0) -> StrategyMetrics:
+    win = (g["wins"] / (g["wins"] + g["losses"])).to_numpy(dtype=float)
+    playoff = g["made_playoffs"].to_numpy(dtype=float)
+    champ = g["is_champion"].to_numpy(dtype=float)
+    pf = g["points_for"].to_numpy(dtype=float)
+    return StrategyMetrics(
+        championship=_bootstrap_mean(champ, seed=base_seed),
+        playoff=_bootstrap_mean(playoff, seed=base_seed),
+        win_pct=_bootstrap_mean(win, seed=base_seed),
+        points_for=_bootstrap_mean(pf, seed=base_seed),
+    )
+
+
+def seat_averaged_metrics(
+    df: pd.DataFrame, *, scoring: str, base_seed: int = 0
+) -> dict[str, StrategyMetrics]:
+    """Per-strategy metrics averaged over all seats+seeds (the headline)."""
+    sub = df[df["scoring"] == scoring]
+    return {
+        str(s): _metrics_from_group(g, base_seed=base_seed)
+        for s, g in sub.groupby("strategy", sort=True)
+    }
+
+
+def per_seat_metrics(
+    df: pd.DataFrame, *, scoring: str, base_seed: int = 0
+) -> dict[tuple[str, int], StrategyMetrics]:
+    """Per-(strategy, seat) metrics — the retained slot-by-slot breakdown."""
+    sub = df[df["scoring"] == scoring]
+    return {
+        (str(s), int(seat)): _metrics_from_group(g, base_seed=base_seed)
+        for (s, seat), g in sub.groupby(["strategy", "seat"], sort=True)
+    }
+
+
+_METRIC_COL = {"win_pct": None, "playoff": "made_playoffs", "championship": "is_champion"}
+
+
+def _metric_series(g: pd.DataFrame, metric: str) -> pd.Series:
+    if metric == "win_pct":
+        return (g["wins"] / (g["wins"] + g["losses"])).astype(float)
+    return g[_METRIC_COL[metric]].astype(float)
+
+
+def paired_diff(
+    df: pd.DataFrame,
+    *,
+    scoring: str,
+    metric: str,
+    strategy: str,
+    reference: str,
+    base_seed: int = 0,
+) -> Interval:
+    """Bootstrap CI of (strategy - reference) on `metric`, paired on the shared (seat, seed)
+    grid (CRN). metric in {win_pct, playoff, championship}."""
+    sub = df[df["scoring"] == scoring]
+    a = sub[sub["strategy"] == strategy].set_index(["seat", "seed"]).sort_index()
+    b = sub[sub["strategy"] == reference].set_index(["seat", "seed"]).sort_index()
+    common = a.index.intersection(b.index)
+    diff = (
+        _metric_series(a.loc[common], metric).to_numpy()
+        - _metric_series(b.loc[common], metric).to_numpy()
+    )
+    return _bootstrap_mean(diff, seed=base_seed)
+
+
+def _exact(v: float) -> Interval:
+    """A degenerate (exact, zero-width) Interval — for structural constants."""
+    return Interval(point=v, lo_95=v, hi_95=v)
+
+
+def bot_baseline(calendar: Calendar, n_teams: int) -> StrategyMetrics:
+    """The structural average-team reference for an n_teams league with this playoff size:
+    win 0.5, playoff playoff_size/n_teams, champ 1/n_teams. In a 1-hero league these are
+    exact by construction (zero-sum win%; one champion; playoff_size berths), not estimated.
+    points_for has no structural value -> NaN."""
+    return StrategyMetrics(
+        championship=_exact(1.0 / n_teams),
+        playoff=_exact(calendar.playoff_size / n_teams),
+        win_pct=_exact(0.5),
+        points_for=_exact(float("nan")),
+    )
 
 
 def load_hero_cells(
