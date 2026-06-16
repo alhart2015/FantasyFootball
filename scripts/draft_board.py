@@ -203,6 +203,16 @@ def _resume_controls() -> None:
 
 
 @st.cache_data(show_spinner=False)
+def _cached_projection(session_token: str, picks: tuple[str, ...], n_sims: int) -> dict:  # type: ignore[type-arg]
+    """Cache the projected-league eval on (session, picks, n_sims). Pulls the live session +
+    an optional injected availability from session_state (tests inject; prod loads from store)."""
+    s: LiveDraftSession = st.session_state["session"]
+    avail = st.session_state.get("_eval_availability")
+    res = s.project_league_outcomes(n_sims=n_sims, availability=avail)
+    return {slot: vars(proj) for slot, proj in res.items()}
+
+
+@st.cache_data(show_spinner=False)
 def _cached_recommendation(
     session_token: str, picks: tuple[str, ...], strategy_name: str, n_sims: int, sigma: float | None
 ) -> pd.DataFrame:
@@ -365,6 +375,42 @@ def _mock_controls(s: LiveDraftSession) -> None:
         st.rerun()
 
 
+def _results_section(s: LiveDraftSession) -> None:
+    if not s.is_complete:
+        return
+    st.markdown("### 📊 Projected draft results")
+    st.caption(
+        "Projected-vs-projected league sim (injury + performance variance, optimal lineup all "
+        "teams). Measures roster quality under our projections, not real outcomes."
+    )
+    n_sims = 2000
+    if not st.button("Run projected eval", key="run_projected_eval", type="primary"):
+        return
+    token = st.session_state.get("session_token", "")
+    with st.spinner("Simulating seasons…"):
+        res = _cached_projection(token, tuple(s.picks), n_sims)
+    n = s.league.n_teams
+    me = res[s.my_slot]
+    base = {"playoff": 6 / n, "bye": 2 / n, "champ": 1 / n}
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Reg-season win%", f"{me['reg_win_pct']:.1%}", "vs 50%")
+    c2.metric("Make playoffs", f"{me['make_playoffs_pct']:.1%}", f"vs {base['playoff']:.1%}")
+    c3.metric("First-round bye", f"{me['bye_pct']:.1%}", f"vs {base['bye']:.1%}")
+    c4.metric("Championship %", f"{me['champ_pct']:.1%}", f"vs {base['champ']:.1%}")
+    rows = [
+        {
+            "slot": slot,
+            "you": "★" if slot == s.my_slot else "",
+            "reg win%": f"{res[slot]['reg_win_pct']:.0%}",
+            "playoff%": f"{res[slot]['make_playoffs_pct']:.0%}",
+            "bye%": f"{res[slot]['bye_pct']:.0%}",
+            "champ%": f"{res[slot]['champ_pct']:.0%}",
+        }
+        for slot in range(1, n + 1)
+    ]
+    st.dataframe(pd.DataFrame(rows), hide_index=True)
+
+
 def main() -> None:
     st.set_page_config(page_title="Draft Board", layout="wide")
     st.title("🏈 Live Draft Board")
@@ -385,6 +431,7 @@ def main() -> None:
     with right:
         _roster_col(s)
         _best_available_col(s)
+    _results_section(s)
     st.caption(f"Mode: {s.mode} · strategy: {s.strategy_name} · {len(s.picks)} picks made")
 
 
