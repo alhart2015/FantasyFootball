@@ -104,3 +104,23 @@ def test_seat_layout_custom_labels() -> None:
     assert {s for s, lab in lay.items() if lab == "season_value_timing"} == {2, 6, 10, 14}
     assert {s for s, lab in lay.items() if lab == "season_value"} == {4, 8, 12, 16}
     assert {s for s, lab in lay.items() if lab == "bot"} == {1, 3, 5, 7, 9, 11, 13, 15}
+
+
+def test_hero_seat_layout_one_hero_rest_bots() -> None:
+    from projections.draft.backtest.draft_field import hero_seat_layout
+
+    layout = hero_seat_layout(hero_seat=3, hero_label="now_or_never", n_teams=12)
+    assert layout[3] == "now_or_never"
+    assert all(layout[s] == "bot" for s in range(1, 13) if s != 3)
+    assert set(layout) == set(range(1, 13))
+
+
+def test_hero_seat_layout_rejects_out_of_range_seat() -> None:
+    import pytest
+
+    from projections.draft.backtest.draft_field import hero_seat_layout
+
+    with pytest.raises(ValueError, match="hero_seat"):
+        hero_seat_layout(hero_seat=0, hero_label="x", n_teams=12)
+    with pytest.raises(ValueError, match="hero_seat"):
+        hero_seat_layout(hero_seat=13, hero_label="x", n_teams=12)

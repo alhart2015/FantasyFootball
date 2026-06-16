@@ -38,6 +38,18 @@ def seat_layout(
     return {s: (label_a if s in a else label_b if s in b else "bot") for s in range(1, 17)}
 
 
+def hero_seat_layout(*, hero_seat: int, hero_label: str, n_teams: int) -> dict[int, str]:
+    """Seat map for the hero-vs-bots eval: `hero_label` at `hero_seat`, bots elsewhere.
+
+    Works for any team count (the mixed `seat_layout` is hardcoded 16-team). The hero is
+    the single non-bot seat; the rest are constrained-ADP bots (label "bot" => None
+    strategy downstream).
+    """
+    if not 1 <= hero_seat <= n_teams:
+        raise ValueError(f"hero_seat must be in [1, {n_teams}]; got {hero_seat}")
+    return {s: (hero_label if s == hero_seat else "bot") for s in range(1, n_teams + 1)}
+
+
 def _bot_eligible(counts: dict[str, int], picks_left: int) -> set[str]:
     """Return the set of positions the ADP bot may select given roster constraints."""
     deficit = {p: max(0, _MINP[p] - counts.get(p, 0)) for p in _MINP}
