@@ -76,3 +76,23 @@ def test_crash_then_success_still_retries(monkeypatch: pytest.MonkeyPatch, tmp_p
         ["worker"], {}, tmp_path / "c.json", 16, lo=0, hi=5, max_retries=5, timeout=None
     )
     assert ok is True
+
+
+def test_run_key_includes_floor_params() -> None:
+    args = mod._parse_args(
+        [
+            "--league-config",
+            "configs/league_espn_ppr_12team_skill.json",
+            "--strategy-a",
+            "now_or_never_floored",
+            "--strategy-b",
+            "now_or_never",
+            "--floor",
+            "55",
+            "--floor-weight",
+            "2",
+        ]
+    )
+    key = mod._run_key(args)
+    assert key["floor"] == 55.0
+    assert key["floor_weight"] == 2.0

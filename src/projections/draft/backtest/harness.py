@@ -13,14 +13,17 @@ import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.strategy import (
-    STRATEGY_KEYS as STRATEGY_KEYS,
-)
-from projections.draft.assistant.strategy import (
+    _DEFAULT_FLOOR,
+    _DEFAULT_FLOOR_WEIGHT,
     DraftStrategy,
+    NowOrNeverFlooredStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
     SeasonValueStrategy,
     SeasonValueTimingStrategy,
+)
+from projections.draft.assistant.strategy import (
+    STRATEGY_KEYS as STRATEGY_KEYS,
 )
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.assistant.tournament import Interval, _bootstrap_mean
@@ -51,14 +54,25 @@ def _build_strategy(
     n_teams: int,
     strategy_n_sims: int,
     base_seed: int,
+    floor: float = _DEFAULT_FLOOR,
+    floor_weight: float = _DEFAULT_FLOOR_WEIGHT,
 ) -> DraftStrategy | None:
-    """Construct a strategy by key from the inputs the harness already has."""
+    """Construct a strategy by key from the inputs the harness already has.
+
+    `floor`/`floor_weight` apply only to `now_or_never_floored`; ignored for other keys.
+    """
     if key == "bot":
         return None
     if key == "raw_vorp":
         return RawVorpStrategy()
     if key == "now_or_never":
         return NowOrNeverStrategy(LogisticSurvival(sigma=default_sigma(n_teams)))
+    if key == "now_or_never_floored":
+        return NowOrNeverFlooredStrategy(
+            LogisticSurvival(sigma=default_sigma(n_teams)),
+            floor=floor,
+            floor_weight=floor_weight,
+        )
     if key == "season_value":
         return SeasonValueStrategy(availability, n_sims=strategy_n_sims, base_seed=base_seed)
     if key == "season_value_var":
@@ -90,6 +104,8 @@ def collect_results(
     base_seed: int = 0,
     strategy_a: str = "now_or_never",
     strategy_b: str = "season_value",
+    floor: float = _DEFAULT_FLOOR,
+    floor_weight: float = _DEFAULT_FLOOR_WEIGHT,
 ) -> tuple[list[LeagueResult], list[LeagueResult]]:
     """Simulate seed indices [seed_lo, seed_hi) and return raw (actual, projected) results.
 
@@ -117,6 +133,8 @@ def collect_results(
             n_teams=config.n_teams,
             strategy_n_sims=strategy_n_sims,
             base_seed=base_seed,
+            floor=floor,
+            floor_weight=floor_weight,
         ),
         strategy_b: _build_strategy(
             strategy_b,
@@ -124,6 +142,8 @@ def collect_results(
             n_teams=config.n_teams,
             strategy_n_sims=strategy_n_sims,
             base_seed=base_seed,
+            floor=floor,
+            floor_weight=floor_weight,
         ),
         "bot": None,
     }
@@ -199,6 +219,8 @@ def run_backtest(
     base_seed: int = 0,
     strategy_a: str = "now_or_never",
     strategy_b: str = "season_value",
+    floor: float = _DEFAULT_FLOOR,
+    floor_weight: float = _DEFAULT_FLOOR_WEIGHT,
 ) -> BacktestResult:
     """Run all n_seeds in one process and aggregate. See collect_results for chunked runs."""
     results_actual, results_projected = collect_results(
@@ -215,5 +237,7 @@ def run_backtest(
         base_seed=base_seed,
         strategy_a=strategy_a,
         strategy_b=strategy_b,
+        floor=floor,
+        floor_weight=floor_weight,
     )
     return aggregate(results_actual, results_projected, n_seeds=n_seeds, base_seed=base_seed)

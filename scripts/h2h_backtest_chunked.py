@@ -30,6 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from projections.draft.assistant.strategy import _DEFAULT_FLOOR, _DEFAULT_FLOOR_WEIGHT
 from projections.draft.backtest.checkpoint import (
     dump_results,
     load_results,
@@ -84,6 +85,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="season_value",
         help="Draft strategy for seat-role B (default season_value).",
     )
+    p.add_argument(
+        "--floor",
+        type=float,
+        default=_DEFAULT_FLOOR,
+        help="[now_or_never_floored] absolute VORP quality bar F.",
+    )
+    p.add_argument(
+        "--floor-weight",
+        type=float,
+        default=_DEFAULT_FLOOR_WEIGHT,
+        help="[now_or_never_floored] hinge weight (0 = plain now_or_never).",
+    )
     # Worker-only flags (the driver sets these when spawning a chunk subprocess):
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--chunk-lo", type=int)
@@ -123,6 +136,8 @@ def _run_worker(args: argparse.Namespace) -> int:
         strategy_n_sims=args.strategy_n_sims,
         strategy_a=args.strategy_a,
         strategy_b=args.strategy_b,
+        floor=args.floor,
+        floor_weight=args.floor_weight,
         base_seed=0,
     )
     out: Path = args.out
@@ -164,6 +179,23 @@ def _run_chunk_with_retries(
     return False
 
 
+def _run_key(args: argparse.Namespace) -> dict[str, object]:
+    """The run identity pinned in the checkpoint manifest. Pure -> unit-testable.
+
+    Includes floor/floor_weight so a resume with a different floor cannot silently pool
+    mismatched chunks (the per-chunk row-count check alone can't catch that).
+    """
+    return {
+        "season": args.season,
+        "strategy_a": args.strategy_a,
+        "strategy_b": args.strategy_b,
+        "strategy_n_sims": args.strategy_n_sims,
+        "jitter": args.jitter,
+        "floor": args.floor,
+        "floor_weight": args.floor_weight,
+    }
+
+
 def _run_driver(args: argparse.Namespace) -> int:
     config = LeagueConfig.model_validate_json(args.league_config.read_text())
     n_teams = config.n_teams
@@ -174,16 +206,7 @@ def _run_driver(args: argparse.Namespace) -> int:
             flush=True,
         )
         return 1
-    verify_or_write_manifest(
-        args.checkpoint_dir,
-        {
-            "season": args.season,
-            "strategy_a": args.strategy_a,
-            "strategy_b": args.strategy_b,
-            "strategy_n_sims": args.strategy_n_sims,
-            "jitter": args.jitter,
-        },
-    )
+    verify_or_write_manifest(args.checkpoint_dir, _run_key(args))
     chunks = plan_chunks(n_seeds=args.n_seeds, chunk_size=args.chunk_size)
     env = {**os.environ, **_WORKER_ENV}
 
@@ -199,6 +222,7 @@ def _run_driver(args: argparse.Namespace) -> int:
             "--season", str(args.season), "--league-config", str(args.league_config),
             "--strategy-n-sims", str(args.strategy_n_sims), "--jitter", str(args.jitter),
             "--strategy-a", args.strategy_a, "--strategy-b", args.strategy_b,
+            "--floor", str(args.floor), "--floor-weight", str(args.floor_weight),
             "--data-root", str(args.data_root),
         ]  # fmt: skip
         if not _run_chunk_with_retries(

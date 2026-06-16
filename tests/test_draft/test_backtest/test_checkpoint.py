@@ -48,3 +48,23 @@ def test_verify_or_write_manifest_rejects_mismatch(tmp_path: Path) -> None:
     verify_or_write_manifest(tmp_path, {"season": 2025, "strategy_a": "now_or_never"})
     with pytest.raises(ValueError, match="fresh"):
         verify_or_write_manifest(tmp_path, {"season": 2024, "strategy_a": "now_or_never"})
+
+
+def test_manifest_rejects_changed_floor(tmp_path: Path) -> None:
+    import pytest
+
+    from projections.draft.backtest.checkpoint import verify_or_write_manifest
+
+    key = {
+        "season": 2025,
+        "strategy_a": "now_or_never_floored",
+        "strategy_b": "now_or_never",
+        "strategy_n_sims": 200,
+        "jitter": 8.0,
+        "floor": 40.0,
+        "floor_weight": 1.0,
+    }
+    verify_or_write_manifest(tmp_path, key)  # first write OK
+    verify_or_write_manifest(tmp_path, key)  # identical run_key -> no raise
+    with pytest.raises(ValueError, match="was built with params"):
+        verify_or_write_manifest(tmp_path, {**key, "floor": 60.0})  # changed floor -> reject
