@@ -42,7 +42,7 @@ Two related asks from using the live draft board:
   - `league_config`: built in-memory via a `_skill_config(ruleset, n_teams)` helper using the canonical roster above (no 9 hand-written JSON files).
   - `table_path`: `data/vorp_2026/{scoring_key}_{n_teams}team.parquet`.
   - Default preset: `("half", 16)`.
-- **Generator** (`scripts/generate_preset_vorp_tables.py`): for each of the 9 presets, from the raw 2026 external snapshot:
+- **Generator** (`scripts/generate_preset_vorp_tables.py`): **mirrors the proven `build_draft_basis` path** (`src/projections/draft/backtest/draft_basis.py`), which already does `build_consensus(external, league_config.ruleset) → consensus_to_season_projections → generate_vorp_table` and produced the existing correct half-PPR table — so the ruleset threads through `build_consensus`'s ruleset stamp and `generate_vorp_table`'s ruleset-match guard without surprise. The generator differs from `build_draft_basis` only in: (a) it attaches the **published ESPN+Sleeper `consensus_adp` + `full_name`** from `build_consensus`'s output (the real 2026 market), not Sleeper-only ADP; (b) it loops the 9 presets. For each preset, from the raw 2026 external snapshot:
   1. `external = ExternalProjectionSchema.validate(read_latest_partition(data/raw, "external_projections", season=2026))`.
   2. `consensus = build_consensus(external, ruleset)` — **this is the path that genuinely re-scores the stat line under the ruleset** (the column named `projected_points_ppr` holds points under the *given* ruleset; same path that produced the existing correct half-PPR table). `consensus` carries `consensus_adp` (ESPN+Sleeper blend) and `full_name`.
   3. `season_proj = consensus_to_season_projections(consensus)`.
@@ -59,6 +59,8 @@ Two related asks from using the live draft board:
 - **`gauntlet_schedule(n_teams, n_weeks) -> list[list[tuple[int, int]]]`**: a 1-factorization (circle method) of `K_{n_teams}` for even `n_teams`, seating slot 1 as the fixed vertex so it plays slot 2 (wk1), slot 3 (wk2), … cycling; the remaining `n_teams-1` labels pair via `(r+k), (r-k) mod (n_teams-1)` for `k = 1..(n_teams-2)/2`. Week `w` uses round `(w-1) mod (n_teams-1)`. Every team plays exactly one game per week.
 - **`team_weekly_points(roster, availability, params, *, n_sims, weeks, roster_slots, rng) -> np.ndarray` `(n_sims, len(weeks))`**: draw variance-model weekly points + availability mask, fill optimal starting lineup per (sim, week). (Promoted verbatim-in-spirit from the scratch helper.)
 - **`project_draft(rosters, pool, availability, params, *, league_config, n_sims, rng) -> dict[int, SeatProjection]`**: orchestrates — compute each team's `(n_sims, 17)` weekly points; vectorized regular-season records (weeks 1–13) + points-for via the gauntlet schedule; per-sim seeding by `(wins, points_for)` desc; bracket (top-2 byes skip wk14; wk14 wildcard 3v6 & 4v5; wk15 reseeded semis seed1-vs-lowest-survivor & seed2-vs-other; championship = wk16+wk17 combined). Returns per-seat `SeatProjection(reg_win_pct, make_playoffs_pct, bye_pct, champ_pct, mean_seed)`.
+- **Tie rule (matchups + bracket):** higher weekly (or 2-week championship) total wins; an exact tie breaks to the **better seed** (lower seed index / regular-season standing). Continuous variance draws make exact ties ~measure-zero; the rule only fixes the degenerate case deterministically. Standings sort `(wins, points_for)` desc with a stable argsort.
+- **Schedule note for `n_teams=16`:** the 13 regular-season weeks use rounds `0..12` of the 15-round factorization (no wrap), so slot 1 faces slots 2–14 (not 15/16) — a realistic partial schedule; every team still plays exactly 13 games. For `n_teams=10` the 9 rounds wrap (weeks 1–9 → rounds 0–8, weeks 10–13 → rounds 0–3).
 - **Determinism:** a single seeded `rng`; same seed + rosters → identical metrics.
 - `is_rookie` is required by the variance sampler; the pool passed in must carry it (the controller attaches it — §6).
 
@@ -66,7 +68,7 @@ Two related asks from using the live draft board:
 
 `LiveDraftSession.project_league_outcomes(*, n_sims: int = 2000, seed: int = 0) -> dict[int, SeatProjection]`:
 - Reconstructs all `n_teams` rosters from `self.picks` by snake slot.
-- Lazily loads availability (`load_store_availability(self.pool, season=self.season, data_root=...)`) and attaches `is_rookie` to the pool (reusing `_attach_is_rookie` + `_prior_appearance_gsis`, promoted from `backtest/inputs.py` to a shared util if needed), caching both on the session so repeated calls don't reload.
+- Lazily loads availability (`load_store_availability(self.pool, season=self.season, data_root=self._data_root)`, where `self._data_root` defaults to `Path("data")` — the board passes it through `_build_session`, mirroring how the session already loads availability for MC strategies) and attaches `is_rookie` to the pool (reusing `_attach_is_rookie` + `_prior_appearance_gsis`, promoted from `backtest/inputs.py` to a shared util if needed), caching both on the session so repeated calls don't reload.
 - Requires `self.is_complete`; raises `ValueError` otherwise (the UI only calls it when complete).
 - Delegates to `project_draft` and returns the per-seat map (the UI reads `my_slot` + the full table).
 
@@ -86,6 +88,7 @@ Two related asks from using the live draft board:
 
 - **Incomplete draft** → the results panel shows "Complete the draft to see projected results" and the button is absent; `project_league_outcomes` raises if called early.
 - **Missing preset table** (`data/vorp_2026/{...}.parquet` not generated) → `_build_session` surfaces a clear error naming the file and the `scripts/generate_preset_vorp_tables.py` command.
+- **Missing 2026 external snapshot** (no `data/raw/external_projections/season=2026` partition) → the generator's `read_latest_partition` raises; the generator fails loud naming the ingest step (`python -m projections.ingest.external_projections --season 2026`), writing no tables.
 - **Pool too thin for a size** (e.g., a required starting position can't be filled at 16 teams) → `generate_vorp_table` already raises "cannot fill"; the generator fails loud for that preset (does not write a partial table).
 - **2026 byes absent** (schedules partition not ingested) → `load_store_availability` degrades to no byes (warn); injury Bernoulli still applies — unchanged behavior.
 - **Odd/unsupported team counts** → only even {10,12,16} are offered; `gauntlet_schedule` documents the even-`n_teams` precondition.
