@@ -25,13 +25,13 @@
 - `scripts/h2h_backtest_chunked.py` — `--floor`/`--floor-weight` args; threaded into `_run_worker`'s `collect_results`; added to the manifest `run_key`; forwarded in the worker subprocess command.
 - `reports/draft_strategy_tests.md`, `project_management.md`, `TODO.md` — the validation test entry + status (Task 4).
 
-**Test files (modified):**
+**Test files (modified — exact paths, confirmed present):**
 - `tests/test_draft/test_assistant_strategy.py` — unit tests for `NowOrNeverFlooredStrategy`.
 - `tests/test_draft/test_assistant_live.py` — `build_session_strategy` / `BOARD_STRATEGIES` wiring.
 - `tests/test_draft/test_assistant_cli.py` — CLI flag smoke.
-- `tests/test_draft/test_backtest_harness.py` (or the existing harness test module) — registry construction + default byte-identical guard; `tests/test_draft/test_backtest_checkpoint.py` — manifest includes floor/weight.
-
-> Before Task 3, confirm the harness/checkpoint test filenames: `ls tests/test_draft | grep -i "backtest\|harness\|checkpoint"`. Use the existing modules; create `test_backtest_harness.py` only if none covers `_build_strategy`.
+- `tests/test_draft/test_backtest/test_harness.py` — `_build_strategy("now_or_never_floored", …)` construction + defaults; the existing default-`(nn, sv)` aggregation tests stay green.
+- `tests/test_draft/test_backtest/test_checkpoint.py` — `verify_or_write_manifest` rejects a changed `floor` (helper-level guard).
+- `tests/test_scripts/test_h2h_backtest_chunked.py` — `_run_key(args)` contains `floor`/`floor_weight` (the driver-level provenance guard). `tests/test_scripts/conftest.py` already puts `scripts/` on `sys.path`, so `from scripts.h2h_backtest_chunked import _run_key, _parse_args` works.
 
 ---
 
@@ -117,6 +117,20 @@ def test_floored_rejects_degenerate_params() -> None:
         NowOrNeverFlooredStrategy(_FakeSurvival(), floor=float("nan"))
     with pytest.raises(ValueError, match="finite"):
         NowOrNeverFlooredStrategy(_FakeSurvival(), floor_weight=float("inf"))
+
+
+def test_floored_null_adp_p_available_is_null() -> None:
+    """Null ADP → p=1 internally (hinge is ADP-independent), display p null. Mirrors
+    the now_or_never null-ADP test but on the floored class with the floor active."""
+    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+
+    pool = _pool()
+    pool["consensus_adp"] = pd.array([pd.NA, pd.NA, pd.NA, pd.NA], dtype=pd.Float64Dtype())
+    rec = NowOrNeverFlooredStrategy(
+        LogisticSurvival(sigma=8.0), floor=45.0, floor_weight=2.0
+    ).recommend(_state(), pool, _config())
+    RecommendationSchema.validate(rec)
+    assert rec["p_available_next"].isna().all()
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -124,7 +138,7 @@ def test_floored_rejects_degenerate_params() -> None:
 Run: `pytest tests/test_draft/test_assistant_strategy.py -k floored -v`
 Expected: FAIL — `ImportError: cannot import name 'NowOrNeverFlooredStrategy'`.
 
-- [ ] **Step 3: Add the key to `STRATEGY_KEYS`**
+- [ ] **Step 3: Add the key to `STRATEGY_KEYS` + the default constants**
 
 In `src/projections/draft/assistant/strategy.py`, extend the tuple (keep the others):
 
@@ -138,6 +152,21 @@ STRATEGY_KEYS = (
     "raw_vorp",
 )
 ```
+
+Immediately below `STRATEGY_KEYS`, add the **single source of truth** for the floor defaults (every pass-through layer imports these, so Task 4 changes the shipped default in exactly one place):
+
+```python
+# PROVISIONAL defaults for the now_or_never_floored knobs — a mid-grid starting point,
+# replaced by the A/B winner (spec §8 / plan Task 4). Imported by build_session_strategy,
+# the harness registry, and both CLIs so there is ONE literal to update.
+_DEFAULT_FLOOR = 40.0
+_DEFAULT_FLOOR_WEIGHT = 1.0
+```
+
+Then, after checking for any test that asserts the exact `STRATEGY_KEYS` tuple and updating it:
+
+Run: `grep -rn "STRATEGY_KEYS ==" tests/ ; grep -rn "STRATEGY_KEYS" tests/test_draft/test_assistant_strategy.py`
+If a test pins the tuple contents/length, update it to include `"now_or_never_floored"`.
 
 - [ ] **Step 4: Add the `math` import and the strategy class**
 
@@ -160,8 +189,8 @@ class NowOrNeverFlooredStrategy:
     """
 
     survival: SurvivalModel
-    floor: float = 40.0
-    floor_weight: float = 1.0
+    floor: float = _DEFAULT_FLOOR
+    floor_weight: float = _DEFAULT_FLOOR_WEIGHT
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.floor) or not math.isfinite(self.floor_weight):
@@ -259,7 +288,11 @@ def test_build_session_strategy_now_or_never_floored() -> None:
 
 def test_build_session_strategy_floored_defaults() -> None:
     from projections.draft.assistant.live import build_session_strategy
-    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+    from projections.draft.assistant.strategy import (
+        _DEFAULT_FLOOR,
+        _DEFAULT_FLOOR_WEIGHT,
+        NowOrNeverFlooredStrategy,
+    )
 
     strat = build_session_strategy(
         "now_or_never_floored",
@@ -270,8 +303,9 @@ def test_build_session_strategy_floored_defaults() -> None:
         base_seed=0,
     )
     assert isinstance(strat, NowOrNeverFlooredStrategy)
-    assert strat.floor == 40.0
-    assert strat.floor_weight == 1.0
+    # Compare against the constants (not literals) so Task 4's default change stays green.
+    assert strat.floor == _DEFAULT_FLOOR
+    assert strat.floor_weight == _DEFAULT_FLOOR_WEIGHT
 ```
 
 > If `test_assistant_live.py` has no `_league()` helper, build a `LeagueConfig` inline as `_config()` does in `test_assistant_strategy.py` (n_teams=12, the same roster_slots). Check with `grep -n "_league\|LeagueConfig(" tests/test_draft/test_assistant_live.py` first.
@@ -285,7 +319,7 @@ Expected: FAIL — `build_session_strategy() got an unexpected keyword argument 
 
 In `src/projections/draft/assistant/live.py`:
 
-(a) Import the new class — extend the existing `from projections.draft.assistant.strategy import (...)` block to include `NowOrNeverFlooredStrategy`.
+(a) Import the new class **and the default constants** — extend the existing `from projections.draft.assistant.strategy import (...)` block to include `NowOrNeverFlooredStrategy`, `_DEFAULT_FLOOR`, `_DEFAULT_FLOOR_WEIGHT`.
 
 (b) Add to `BOARD_STRATEGIES` (after `"now_or_never"`):
 
@@ -310,8 +344,8 @@ def build_session_strategy(
     availability: PlayerAvailability | None,
     n_sims: int,
     base_seed: int,
-    floor: float = 40.0,
-    floor_weight: float = 1.0,
+    floor: float = _DEFAULT_FLOOR,
+    floor_weight: float = _DEFAULT_FLOOR_WEIGHT,
 ) -> DraftStrategy:
     ...
     if name == "now_or_never":
@@ -332,7 +366,7 @@ def build_session_strategy(
 
 In `src/projections/draft/assistant/cli.py`:
 
-(a) `generate_recommendation` — add `floor: float = 40.0, floor_weight: float = 1.0` to the signature and pass them to `build_session_strategy`:
+(a) `generate_recommendation` — add `floor: float = _DEFAULT_FLOOR, floor_weight: float = _DEFAULT_FLOOR_WEIGHT` to the signature (import the two constants from `projections.draft.assistant.strategy`) and pass them to `build_session_strategy`:
 
 ```python
     strategy: DraftStrategy = build_session_strategy(
@@ -353,13 +387,13 @@ In `src/projections/draft/assistant/cli.py`:
     p.add_argument(
         "--floor",
         type=float,
-        default=40.0,
+        default=_DEFAULT_FLOOR,
         help="[--strategy now_or_never_floored] absolute VORP quality bar F.",
     )
     p.add_argument(
         "--floor-weight",
         type=float,
-        default=1.0,
+        default=_DEFAULT_FLOOR_WEIGHT,
         help="[--strategy now_or_never_floored] hinge weight λ (0 = plain now_or_never).",
     )
 ```
@@ -430,12 +464,12 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 **Files:**
 - Modify: `src/projections/draft/backtest/harness.py` (`_build_strategy` ~line 47; `collect_results` ~line 78; `run_backtest` ~line 188)
 - Modify: `src/projections/draft/backtest/cli.py` (`_parse_args` ~line 23; `run` ~line 107)
-- Modify: `scripts/h2h_backtest_chunked.py` (`_parse_args` ~line 55; `_run_worker` ~line 110; `_run_driver` manifest ~line 177 + worker cmd ~line 196)
-- Test: the existing harness + checkpoint test modules (confirm names first, see File Structure note)
+- Modify: `scripts/h2h_backtest_chunked.py` (`_parse_args` ~line 55; `_run_worker` ~line 110; new `_run_key` helper; `_run_driver` manifest ~line 177 + worker cmd ~line 196)
+- Test: `tests/test_draft/test_backtest/test_harness.py`, `tests/test_draft/test_backtest/test_checkpoint.py`, `tests/test_scripts/test_h2h_backtest_chunked.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to the harness test module (the one that imports `_build_strategy` / `collect_results`; create `tests/test_draft/test_backtest_harness.py` if none exists, mirroring its sibling imports):
+Add to `tests/test_draft/test_backtest/test_harness.py` (it already imports `_build_strategy`):
 
 ```python
 def test_build_strategy_now_or_never_floored() -> None:
@@ -456,7 +490,11 @@ def test_build_strategy_now_or_never_floored() -> None:
 
 
 def test_build_strategy_floored_defaults_when_unset() -> None:
-    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+    from projections.draft.assistant.strategy import (
+        _DEFAULT_FLOOR,
+        _DEFAULT_FLOOR_WEIGHT,
+        NowOrNeverFlooredStrategy,
+    )
     from projections.draft.backtest.harness import _build_strategy
 
     strat = _build_strategy(
@@ -467,15 +505,15 @@ def test_build_strategy_floored_defaults_when_unset() -> None:
         base_seed=0,
     )
     assert isinstance(strat, NowOrNeverFlooredStrategy)
-    assert strat.floor == 40.0 and strat.floor_weight == 1.0
+    assert strat.floor == _DEFAULT_FLOOR and strat.floor_weight == _DEFAULT_FLOOR_WEIGHT
 ```
 
-> Locate the existing availability fixture: `grep -rn "PlayerAvailability(" tests/test_draft/ | head`. Reuse it; if none, construct the minimal `PlayerAvailability` the harness tests already use.
+> Locate the existing availability fixture in `test_harness.py`: `grep -rn "PlayerAvailability(\|_availability\|def availability" tests/test_draft/test_backtest/test_harness.py | head`. Reuse it; if it is a pytest fixture, take it as a parameter rather than calling `_availability()`.
 
-Add to the checkpoint test module (`grep -rln "verify_or_write_manifest" tests/`):
+Add to `tests/test_draft/test_backtest/test_checkpoint.py` — the **helper-level** guard (proves `verify_or_write_manifest` rejects a changed floor):
 
 ```python
-def test_manifest_distinguishes_floor_params(tmp_path) -> None:
+def test_manifest_rejects_changed_floor(tmp_path) -> None:
     from projections.draft.backtest.checkpoint import verify_or_write_manifest
 
     key = {
@@ -488,16 +526,34 @@ def test_manifest_distinguishes_floor_params(tmp_path) -> None:
         verify_or_write_manifest(tmp_path, {**key, "floor": 60.0})  # changed floor → reject
 ```
 
+Add to `tests/test_scripts/test_h2h_backtest_chunked.py` — the **driver-level** guard (proves the driver actually puts floor/weight into the manifest key; this is the real §5 protection):
+
+```python
+def test_run_key_includes_floor_params() -> None:
+    from scripts.h2h_backtest_chunked import _parse_args, _run_key
+
+    args = _parse_args(
+        [
+            "--league-config", "configs/league_espn_ppr_12team_skill.json",
+            "--strategy-a", "now_or_never_floored", "--strategy-b", "now_or_never",
+            "--floor", "55", "--floor-weight", "2",
+        ]
+    )
+    key = _run_key(args)
+    assert key["floor"] == 55.0
+    assert key["floor_weight"] == 2.0
+```
+
 - [ ] **Step 2: Run to verify failure**
 
-Run: `pytest tests/test_draft/test_backtest_harness.py tests/test_draft/test_backtest_checkpoint.py -k "floor" -v` (substitute the real module names)
-Expected: FAIL — `_build_strategy() got an unexpected keyword argument 'floor'` / manifest test fails because the run_key has no floor keys yet (the production manifest still omits them — the test pins the *helper*, which already compares dicts, so this test passes once Step 4 adds floor to the driver's run_key; if it passes immediately, that only proves the helper compares dicts — keep it, the driver wiring in Step 4 is what makes it meaningful end-to-end).
+Run: `pytest tests/test_draft/test_backtest/test_harness.py tests/test_draft/test_backtest/test_checkpoint.py tests/test_scripts/test_h2h_backtest_chunked.py -k "floor" -v`
+Expected: FAIL — `_build_strategy() got an unexpected keyword argument 'floor'` (harness); `ImportError: cannot import name '_run_key'` (chunked). The checkpoint helper test may already pass (the helper compares dicts) — that's fine; the `_run_key` test is the one that pins the driver wiring and fails until Step 4(c).
 
 - [ ] **Step 3: Wire `_build_strategy`, `collect_results`, `run_backtest`**
 
 In `src/projections/draft/backtest/harness.py`:
 
-(a) Import `NowOrNeverFlooredStrategy` in the existing strategy-import block.
+(a) Import `NowOrNeverFlooredStrategy`, `_DEFAULT_FLOOR`, `_DEFAULT_FLOOR_WEIGHT` in the existing strategy-import block.
 
 (b) `_build_strategy` — add params + branch:
 
@@ -509,8 +565,8 @@ def _build_strategy(
     n_teams: int,
     strategy_n_sims: int,
     base_seed: int,
-    floor: float = 40.0,
-    floor_weight: float = 1.0,
+    floor: float = _DEFAULT_FLOOR,
+    floor_weight: float = _DEFAULT_FLOOR_WEIGHT,
 ) -> DraftStrategy | None:
     ...
     if key == "now_or_never":
@@ -524,36 +580,37 @@ def _build_strategy(
     ...
 ```
 
-(c) `collect_results` — add `floor: float = 40.0, floor_weight: float = 1.0` to the signature and pass them into **both** `_build_strategy(strategy_a, ...)` and `_build_strategy(strategy_b, ...)` calls.
+(c) `collect_results` — add `floor: float = _DEFAULT_FLOOR, floor_weight: float = _DEFAULT_FLOOR_WEIGHT` to the signature and pass them into **both** `_build_strategy(strategy_a, ...)` and `_build_strategy(strategy_b, ...)` calls.
 
-(d) `run_backtest` — add `floor: float = 40.0, floor_weight: float = 1.0` to the signature and forward them to `collect_results`.
+(d) `run_backtest` — add `floor: float = _DEFAULT_FLOOR, floor_weight: float = _DEFAULT_FLOOR_WEIGHT` to the signature and forward them to `collect_results`.
 
 - [ ] **Step 4: Wire `backtest/cli.py` and the chunked runner**
 
-In `src/projections/draft/backtest/cli.py`: add `--floor`/`--floor-weight` (mirroring the assistant CLI's flags, defaults `40.0`/`1.0`) in `_parse_args`, and pass `floor=args.floor, floor_weight=args.floor_weight` into `run_backtest` in `run`.
+In `src/projections/draft/backtest/cli.py`: import `_DEFAULT_FLOOR`, `_DEFAULT_FLOOR_WEIGHT` from `projections.draft.assistant.strategy`; add `--floor`/`--floor-weight` (`type=float`, `default=_DEFAULT_FLOOR` / `_DEFAULT_FLOOR_WEIGHT`) in `_parse_args`, and pass `floor=args.floor, floor_weight=args.floor_weight` into `run_backtest` in `run`.
 
 In `scripts/h2h_backtest_chunked.py`:
 
-(a) `_parse_args` — add `--floor` / `--floor-weight` (`type=float`, defaults `40.0` / `1.0`).
+(a) `_parse_args` — import `_DEFAULT_FLOOR`, `_DEFAULT_FLOOR_WEIGHT` from `projections.draft.assistant.strategy`; add `--floor` / `--floor-weight` (`type=float`, defaults `_DEFAULT_FLOOR` / `_DEFAULT_FLOOR_WEIGHT`).
 
 (b) `_run_worker` — pass `floor=args.floor, floor_weight=args.floor_weight` into `collect_results`.
 
-(c) `_run_driver` — add both to the manifest `run_key` dict:
+(c) Extract the manifest key into a **pure, testable** helper (so the §5 provenance guard is verified, not just the dict-comparing helper). Add to `scripts/h2h_backtest_chunked.py`:
 
 ```python
-    verify_or_write_manifest(
-        args.checkpoint_dir,
-        {
-            "season": args.season,
-            "strategy_a": args.strategy_a,
-            "strategy_b": args.strategy_b,
-            "strategy_n_sims": args.strategy_n_sims,
-            "jitter": args.jitter,
-            "floor": args.floor,
-            "floor_weight": args.floor_weight,
-        },
-    )
+def _run_key(args: argparse.Namespace) -> dict[str, object]:
+    """The run identity pinned in the checkpoint manifest. Pure → unit-testable."""
+    return {
+        "season": args.season,
+        "strategy_a": args.strategy_a,
+        "strategy_b": args.strategy_b,
+        "strategy_n_sims": args.strategy_n_sims,
+        "jitter": args.jitter,
+        "floor": args.floor,
+        "floor_weight": args.floor_weight,
+    }
 ```
+
+Then `_run_driver` calls `verify_or_write_manifest(args.checkpoint_dir, _run_key(args))`.
 
 (d) `_run_driver` — forward both in the worker subprocess `cmd` list (next to `--strategy-a`/`--strategy-b`):
 
@@ -563,8 +620,8 @@ In `scripts/h2h_backtest_chunked.py`:
 
 - [ ] **Step 5: Run to verify pass + default-byte-identical guard**
 
-Run: `pytest tests/test_draft/ -k "floor or harness or checkpoint or collect_results or chunk" -v`
-Expected: PASS — including the **existing** `test_chunked_collection_matches_monolithic` and any default-`(now_or_never, season_value)` aggregation tests (proof the defaulted new params leave the default A/B byte-identical).
+Run: `pytest tests/test_draft/test_backtest/ tests/test_scripts/test_h2h_backtest_chunked.py -v`
+Expected: PASS — including the **existing** chunked-vs-monolithic equivalence test and the default-`(now_or_never, season_value)` aggregation tests (proof the defaulted new params leave the default A/B byte-identical).
 
 - [ ] **Step 6: Lint/type**
 
@@ -597,7 +654,9 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Confirm data + the strategy is selectable**
 
-Run: `python scripts/draft_assistant.py --help` and confirm `now_or_never_floored` appears in `--strategy` choices and `--floor`/`--floor-weight` exist. Confirm the data partitions: `python -c "from pathlib import Path; print(sorted(p.name for p in Path('data/raw/weekly_stats').glob('season=*')))"` includes 2024 and 2025.
+Run: `python scripts/draft_assistant.py --help` and confirm `now_or_never_floored` appears in `--strategy` choices and `--floor`/`--floor-weight` exist. Confirm the harness inputs load for both seasons by dry-running `load_inputs` (the harness's own loader, so the path/layout is whatever it actually uses):
+`python -c "from projections.draft.backtest.inputs import load_inputs; from projections.draft.league_config import LeagueConfig; c=LeagueConfig.model_validate_json(open('configs/league_espn_ppr_12team_skill.json').read()); [load_inputs(season=s, config=c, data_root=__import__('pathlib').Path('data')) for s in (2024,2025)]; print('inputs OK 2024+2025')"`
+If it raises (missing partitions), ingest the needed season(s) before proceeding.
 
 - [ ] **Step 2: Coarse screen (cheap, 2025 only)**
 
@@ -623,7 +682,7 @@ Append a new Test entry to `reports/draft_strategy_tests.md` (follow the Test 7�
 
 - [ ] **Step 5: Set the shipped default**
 
-Update the provisional `40.0` / `1.0` defaults to the A/B winner in all four sites (keep them consistent): `NowOrNeverFlooredStrategy.floor`/`.floor_weight` (`strategy.py`), `build_session_strategy` (`live.py`), `_build_strategy` (`harness.py`), and both CLIs' `--floor`/`--floor-weight` defaults (`assistant/cli.py`, `backtest/cli.py`). If the A/B is inconclusive, leave `40.0`/`1.0` and say so in the report.
+Update the two constants `_DEFAULT_FLOOR` / `_DEFAULT_FLOOR_WEIGHT` in `strategy.py` to the A/B winner — **one edit**, since every site (dataclass default, `build_session_strategy`, `_build_strategy`, both CLIs) imports them. Re-run `pytest tests/test_draft/test_assistant_strategy.py -k floored` after, since a couple of hand-computed score tests assume specific `(F, λ)` *passed explicitly* (not the default) and so are unaffected; confirm green. If the A/B is inconclusive, leave the constants at `40.0`/`1.0` and say so in the report.
 
 - [ ] **Step 6: Update PM/TODO**
 
@@ -660,12 +719,12 @@ All must pass (Task 4's data-dependent run is the exception — it runs where th
 - §4 reuse `expected_best_by_position` unchanged → Task 1 Step 4 (no helper edit). ✓
 - §5 harness registry key + floor/weight threading + manifest provenance → Task 3. ✓
 - §6 assistant CLI auto-surface via STRATEGY_KEYS + `build_session_strategy` branch + `BOARD_STRATEGIES` add + not in MC_STRATEGIES → Task 2. ✓
-- §7 tests: λ=0≡nn byte-identical, score formula, directed reorder flip, last-pick, construction guards, null-ADP (covered by reusing `_pool` whose ADPs are non-null; null-ADP path is the existing nn test's concern and unchanged by the floor — the hinge is ADP-independent), harness A/B default byte-identical, manifest guard, CLI/board seam → Tasks 1–3. ✓
+- §7 tests: λ=0≡nn byte-identical, score formula, directed reorder flip, last-pick, construction guards, **explicit null-ADP test** (`test_floored_null_adp_p_available_is_null`, Task 1), harness A/B default byte-identical, **driver-level manifest guard** (`_run_key` test, Task 3) + helper-level guard, CLI/board seam → Tasks 1–3. ✓
 - §8 two-stage validation + set default + data dependency → Task 4. ✓
 - §2 non-goals (no nn edit, not in MC_STRATEGIES, no board sliders, fixed F) → respected across tasks. ✓
 
 **Placeholder scan:** every code step shows complete code; commands have expected output. No TBD/TODO. ✓
 
-**Type consistency:** `NowOrNeverFlooredStrategy(survival, floor: float, floor_weight: float)` used identically in Tasks 1–3; `build_session_strategy`/`_build_strategy`/`collect_results`/`run_backtest` all gain `floor: float = 40.0, floor_weight: float = 1.0`; manifest key uses `"floor"`/`"floor_weight"` consistently with the CLI `--floor`/`--floor-weight` (argparse dest `floor`/`floor_weight`). ✓
+**Type consistency:** `NowOrNeverFlooredStrategy(survival, floor: float, floor_weight: float)` used identically in Tasks 1–3; `build_session_strategy`/`_build_strategy`/`collect_results`/`run_backtest` all gain `floor: float = _DEFAULT_FLOOR, floor_weight: float = _DEFAULT_FLOOR_WEIGHT`; manifest key uses `"floor"`/`"floor_weight"` consistently with the CLI `--floor`/`--floor-weight` (argparse dest `floor`/`floor_weight`). ✓
 
 **Note (DRY):** Task 1 intentionally duplicates ~8 lines of `now_or_never`'s score prelude rather than extracting a shared helper, because the spec keeps `now_or_never` byte-identical as the A/B control. Documented in the class docstring.
