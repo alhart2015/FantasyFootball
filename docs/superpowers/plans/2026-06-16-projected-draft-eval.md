@@ -665,11 +665,21 @@ def test_stronger_roster_wins_more() -> None:
     )
     assert res[1].champ_pct > 0.3
     assert res[1].make_playoffs_pct > max(res[s].make_playoffs_pct for s in range(2, n + 1))
+
+
+def test_project_draft_requires_at_least_six_teams() -> None:
+    rosters, pool = _symmetric_league(4)
+    avail = PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={})
+    with pytest.raises(ValueError, match="at least"):
+        project_draft(
+            rosters, pool, avail, VarianceParams.load(),
+            league_config=_config(4), n_sims=50, rng=np.random.default_rng(0),
+        )
 ```
 
 - [ ] **Step 2: Run it, confirm FAIL**
 
-Run: `pytest tests/test_draft/test_league_projection.py -k "project_draft or symmetric or stronger" -v` → FAIL (missing `SeatProjection`/`project_draft`).
+Run: `pytest tests/test_draft/test_league_projection.py -k "project_draft or symmetric or stronger or six_teams" -v` → FAIL (missing `SeatProjection`/`project_draft`).
 
 - [ ] **Step 3: Implement `SeatProjection` + `project_draft`**
 
@@ -703,6 +713,8 @@ def project_draft(
     Ties (matchup or championship) break to the better seed / lower slot.
     """
     n_teams = league_config.n_teams
+    if n_teams < PLAYOFF_SIZE:
+        raise ValueError(f"projected eval needs at least {PLAYOFF_SIZE} teams; got {n_teams}")
     slots = list(range(1, n_teams + 1))
     sub = pool.set_index("gsis_id")
     weekly = {
@@ -751,7 +763,7 @@ def project_draft(
         champ_of[i] = f1 if f1_total >= f2_total else f2
 
     out: dict[int, SeatProjection] = {}
-    for col, s in enumerate(slots):
+    for s in slots:
         in_playoffs = (seeds[:, :PLAYOFF_SIZE] == s).any(axis=1)
         has_bye = (seeds[:, :N_BYES] == s).any(axis=1)
         seed_of_s = np.argmax(seeds == s, axis=1) + 1  # 1-based seed per sim
@@ -928,7 +940,7 @@ git commit -m "refactor(draft): promote is_rookie helper to a shared module"
 
 Add to `tests/test_draft/test_assistant_live.py` (reuses `_session`, `_pool_with_names`, `_PYARROW_STR`; new imports inside the test):
 
-`_session`, `_pool_with_names`, `_id_map`, `_FakeStrategy`, `LiveDraftSession`, `validate_gsis_id`, and `_league` are already defined/imported in `test_assistant_live.py`. Build a small **even** league whose roster fits `_pool_with_names()` (39 players): 2 teams × roster_size 6 = 12 ≤ 39.
+`_session`, `_pool_with_names`, `_id_map`, `_FakeStrategy`, `LiveDraftSession`, `validate_gsis_id`, and `_league` are already defined/imported in `test_assistant_live.py`. The bracket needs **≥ 6 teams**, so use a 6-team league whose roster fits `_pool_with_names()` (39 players): 6 teams × roster_size 6 = 36 ≤ 39.
 
 ```python
 def test_project_league_outcomes_requires_complete_draft() -> None:
@@ -945,17 +957,17 @@ def test_project_league_outcomes_returns_seat_projection_for_my_slot() -> None:
 
     league = LeagueConfig(
         name="t",
-        n_teams=2,
+        n_teams=6,
         roster_slots={
             RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.WR: 1,
-            RosterSlot.FLEX: 1, RosterSlot.BENCH: 2,
+            RosterSlot.TE: 1, RosterSlot.FLEX: 1, RosterSlot.BENCH: 1,
         },
         ruleset=Ruleset.espn_half(),
     )
     pool = _pool_with_names()
     completed = [
         validate_gsis_id(g)
-        for g in list(pool["gsis_id"].astype(str))[: 2 * league.roster_size]
+        for g in list(pool["gsis_id"].astype(str))[: 6 * league.roster_size]
     ]
     s = LiveDraftSession(
         league=league, my_slot=1, id_map=_id_map(), pool=pool,
@@ -1147,11 +1159,15 @@ git commit -m "feat(draft): preset scoring/size dropdowns in the board sidebar"
 
 - [ ] **Step 1: Write the failing smoke test**
 
-First, **parameterize `_smoke_session`** so the results test can build a completable small league. In `tests/test_scripts/test_draft_board_smoke.py`, change the helper's signature and its `LeagueConfig.n_teams` (the existing 24-player pool + roster_size 11 means 2 teams × 11 = 22 ≤ 24 completes; the default 12 keeps existing smoke tests unchanged):
+First, **parameterize `_smoke_session`** so the results test can build a completable league (the bracket needs ≥ 6 teams). In `tests/test_scripts/test_draft_board_smoke.py`: add an `n_teams: int = 12` parameter used in the `LeagueConfig`, and **enlarge the synthetic pool to 72 players** (was 24) so a 6-team draft with the 11-slot roster completes (6 × 11 = 66 ≤ 72). The default `n_teams=12` keeps the existing mid-draft smoke tests unchanged (they don't complete the draft; 72 players just gives a deeper pool). Concretely, change the helper's `ids`/`positions`/`names` ranges from 24 to 72 and thread `n_teams`:
 
 ```python
 def _smoke_session(picks: list[str] | None = None, my_slot: int = 1, n_teams: int = 12):  # type: ignore[no-untyped-def]
     ...
+    ids = [f"00-00{i:05d}" for i in range(1, 73)]            # 72 players (was 24)
+    positions = (["RB", "WR", "QB", "TE"] * 18)[: len(ids)]   # cycle 4 positions
+    names = [f"Player {i}" for i in range(1, len(ids) + 1)]
+    # ... id_map + pool built from ids/positions/names (same columns as before) ...
     league = LeagueConfig(
         name="t",
         n_teams=n_teams,   # was hard-coded 12
@@ -1164,7 +1180,9 @@ def _smoke_session(picks: list[str] | None = None, my_slot: int = 1, n_teams: in
     ...
 ```
 
-Then add the results-panel test (`validate_gsis_id` is imported from `projections.schemas` inside `_smoke_session`'s module already; import it in the test too):
+(Keep the gsis-id width consistent everywhere in `_smoke_session` — e.g. `00-0000001` style; the example uses `f"00-00{i:05d}"` which yields `00-0000001`. The pool's `consensus_adp`/`season_mean_fpts`/`vorp`/`full_name` columns are built over the same `ids` length as before.)
+
+Then add the results-panel test (use a **6-team** league so the bracket runs; 6 × 11 = 66 ≤ 72):
 
 ```python
 def test_board_results_panel_runs_projected_eval(tmp_path: Path) -> None:
@@ -1174,7 +1192,7 @@ def test_board_results_panel_runs_projected_eval(tmp_path: Path) -> None:
     from projections.draft.assistant.availability import PlayerAvailability
     from projections.schemas import validate_gsis_id
 
-    sess = _smoke_session(my_slot=1, n_teams=2)  # 2 x 11 = 22 <= 24-player fixture pool
+    sess = _smoke_session(my_slot=1, n_teams=6)  # 6 x 11 = 66 <= 72-player fixture pool
     full = list(sess.pool["gsis_id"].astype(str))[: sess.league.n_teams * sess.league.roster_size]
     sess.picks = [validate_gsis_id(g) for g in full]
     assert sess.is_complete
