@@ -17,13 +17,12 @@ from projections.draft.assistant.presets import (
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import RosterSlot, Ruleset
 
-_SKILL = {
+_STARTERS = {
     RosterSlot.QB: 1,
     RosterSlot.RB: 2,
     RosterSlot.WR: 3,
     RosterSlot.TE: 1,
     RosterSlot.FLEX: 1,
-    RosterSlot.BENCH: 9,
 }
 
 
@@ -38,10 +37,22 @@ def test_get_preset_resolves_ruleset_size_roster_and_path() -> None:
     p = get_preset("half", 16)
     assert p.league_config.n_teams == 16
     assert p.league_config.ruleset == Ruleset.espn_half()
-    assert p.league_config.roster_slots == _SKILL
+    # 16-team uses a shallow 5-slot bench; same skill starters as the other sizes.
+    assert p.league_config.roster_slots == {**_STARTERS, RosterSlot.BENCH: 5}
     assert p.table_path == Path("data/vorp_2026/half_16team.parquet")
     assert get_preset("ppr", 12).league_config.ruleset == Ruleset.espn_ppr()
     assert get_preset("std", 10).league_config.ruleset == Ruleset.standard()
+
+
+def test_bench_depth_is_shallower_for_sixteen_team() -> None:
+    assert get_preset("half", 16).league_config.roster_slots[RosterSlot.BENCH] == 5
+    assert get_preset("ppr", 12).league_config.roster_slots[RosterSlot.BENCH] == 9
+    assert get_preset("std", 10).league_config.roster_slots[RosterSlot.BENCH] == 9
+    # only bench differs across sizes — starters are identical
+    for n in (10, 12, 16):
+        slots = dict(get_preset("half", n).league_config.roster_slots)
+        slots.pop(RosterSlot.BENCH)
+        assert slots == _STARTERS
 
 
 def test_get_preset_rejects_unknown() -> None:

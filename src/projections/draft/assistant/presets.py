@@ -23,15 +23,19 @@ _RULESETS: dict[str, Ruleset] = {
     "std": Ruleset.standard(),
 }
 _SCORING_LABELS: dict[str, str] = {"half": "Half-PPR", "ppr": "Full PPR", "std": "Standard"}
-# Canonical skill roster (no K/DST -- consensus is skill-only); matches the user's draft.
-_SKILL_ROSTER: dict[RosterSlot, int] = {
+# Skill-position starters (no K/DST -- consensus is skill-only); matches the user's draft.
+_SKILL_STARTERS: dict[RosterSlot, int] = {
     RosterSlot.QB: 1,
     RosterSlot.RB: 2,
     RosterSlot.WR: 3,
     RosterSlot.TE: 1,
     RosterSlot.FLEX: 1,
-    RosterSlot.BENCH: 9,
 }
+# Bench depth by league size: 16-team is shallower (5) so the deep field doesn't drain the
+# draftable pool. Bench depth does NOT affect VORP (replacement uses cushioned starter demand),
+# so the pre-generated tables stay valid across bench changes.
+_BENCH_BY_SIZE: dict[int, int] = {10: 9, 12: 9, 16: 5}
+_DEFAULT_BENCH = 9
 # Relative to the repo root; callers that perform I/O must resolve it against the project root.
 _TABLE_DIR = Path("data/vorp_2026")
 
@@ -46,10 +50,11 @@ class DraftPreset:
 
 
 def _skill_config(scoring_key: str, n_teams: int) -> LeagueConfig:
+    roster = {**_SKILL_STARTERS, RosterSlot.BENCH: _BENCH_BY_SIZE.get(n_teams, _DEFAULT_BENCH)}
     return LeagueConfig(
         name=f"{scoring_key}_{n_teams}team_2026",
         n_teams=n_teams,
-        roster_slots=dict(_SKILL_ROSTER),
+        roster_slots=roster,
         ruleset=_RULESETS[scoring_key],
     )
 
