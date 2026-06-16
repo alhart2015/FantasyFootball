@@ -17,8 +17,11 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.league_projection import SeatProjection, project_draft
 from projections.draft.assistant.opponent import bot_pick
+from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.pick_timing import my_next_pick, slot_for
+from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.assistant.roster_score import optimal_lineup_points
 from projections.draft.assistant.state import DraftState, build_draft_state
 from projections.draft.assistant.strategy import (
@@ -317,6 +320,46 @@ class LiveDraftSession:
     def roster_scorecard(self) -> float:
         mine = self.pool[self.pool["gsis_id"].isin(self.state().my_pick_ids)]
         return optimal_lineup_points(mine, self.league.roster_slots)
+
+    def project_league_outcomes(
+        self,
+        *,
+        n_sims: int = 2000,
+        seed: int = 0,
+        availability: PlayerAvailability | None = None,
+        params: VarianceParams | None = None,
+        data_root: Path = Path("data"),
+    ) -> dict[int, SeatProjection]:
+        """Projected-vs-projected per-seat season metrics for the COMPLETED draft.
+
+        Reconstructs every team from the snake pick order, then runs the variance-model league
+        sim (injury + performance draws, optimal lineup both sides, the fixed top-6/top-2-bye
+        bracket). `availability`/`params` default to the store + the fitted variance config;
+        tests inject them to stay hermetic. Raises if the draft is not complete.
+        """
+        if not self.is_complete:
+            raise ValueError("draft must be complete to project league outcomes")
+        pool = attach_is_rookie(self.pool, season=self.season, data_root=data_root)
+        if availability is None:
+            from projections.draft.assistant.availability_loader import load_store_availability
+
+            availability = load_store_availability(pool, season=self.season, data_root=data_root)
+        if params is None:
+            params = VarianceParams.load()
+        n_teams = self.league.n_teams
+        rosters = {
+            slot: [str(p) for i, p in enumerate(self.picks) if slot_for(i + 1, n_teams) == slot]
+            for slot in range(1, n_teams + 1)
+        }
+        return project_draft(
+            rosters=rosters,
+            pool=pool,
+            availability=availability,
+            params=params,
+            league_config=self.league,
+            n_sims=n_sims,
+            rng=np.random.default_rng(seed),
+        )
 
     def to_state_dict(self) -> dict[str, object]:
         """CLI-compatible superset: load_draft_state reads the required keys; the rest

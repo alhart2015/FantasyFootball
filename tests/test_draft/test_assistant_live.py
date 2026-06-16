@@ -506,3 +506,51 @@ def test_available_for_pick_cap_applied_after_filter_reaches_deep_player() -> No
     deep_wr = all_wrs.iloc[-1]["gsis_id"]  # lowest-VORP WR
     assert deep_wr not in set(cross_top3["gsis_id"])  # hidden by the cross-position cap
     assert deep_wr in set(all_wrs["gsis_id"])  # reachable once the position filter is applied
+
+
+def test_project_league_outcomes_requires_complete_draft() -> None:
+    s = _session()  # picks=[] -> not complete
+    with pytest.raises(ValueError, match="complete"):
+        s.project_league_outcomes(n_sims=50)
+
+
+def test_project_league_outcomes_returns_seat_projection_for_my_slot() -> None:
+    from projections.draft.assistant.availability import PlayerAvailability
+    from projections.draft.assistant.league_projection import SeatProjection
+    from projections.draft.league_config import LeagueConfig
+    from projections.schemas import RosterSlot, Ruleset
+
+    # The bracket needs >= 6 teams; 6 teams x roster_size 6 = 36 <= 39-player _pool_with_names().
+    league = LeagueConfig(
+        name="t",
+        n_teams=6,
+        roster_slots={
+            RosterSlot.QB: 1,
+            RosterSlot.RB: 1,
+            RosterSlot.WR: 1,
+            RosterSlot.TE: 1,
+            RosterSlot.FLEX: 1,
+            RosterSlot.BENCH: 1,
+        },
+        ruleset=Ruleset.espn_half(),
+    )
+    pool = _pool_with_names()
+    completed = [
+        validate_gsis_id(g) for g in list(pool["gsis_id"].astype(str))[: 6 * league.roster_size]
+    ]
+    s = LiveDraftSession(
+        league=league,
+        my_slot=1,
+        id_map=_id_map(),
+        pool=pool,
+        strategy=_FakeStrategy(),
+        strategy_name="fake",
+        mode="mock",
+        adp_jitter=0.0,
+        picks=completed,
+    )
+    assert s.is_complete
+    avail = PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={})
+    res = s.project_league_outcomes(n_sims=200, availability=avail)
+    assert isinstance(res[1], SeatProjection)
+    assert 0.0 <= res[1].champ_pct <= 1.0
