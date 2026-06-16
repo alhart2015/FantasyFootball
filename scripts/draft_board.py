@@ -7,6 +7,7 @@ Thin view over projections.draft.assistant.live.LiveDraftSession. Run with:
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 
 import pandas as pd
@@ -77,8 +78,19 @@ def _build_session(
         league_config_path=Path(league_path),
         vorp_path=vorp_path,
         id_map_path=id_map_path,
-        data_root=data_root,
     )
+
+
+def _install_session(sess: LiveDraftSession, *, autosave_path: Path | None = None) -> None:
+    """Place a session in session_state with a fresh unique token.
+
+    The token (not id(sess), which Python recycles after GC) keys both the recommendation
+    cache and the autosave filename, so a restart/resume never collides with a prior
+    draft. `autosave_path=None` starts a new autosave file; resume passes the resumed file.
+    """
+    st.session_state["session"] = sess
+    st.session_state["session_token"] = uuid.uuid4().hex
+    st.session_state["autosave_path"] = autosave_path
 
 
 def _sidebar() -> None:
@@ -102,17 +114,19 @@ def _sidebar() -> None:
 
     if st.sidebar.button("Start / restart draft", type="primary"):
         try:
-            st.session_state["session"] = _build_session(
-                vorp_path=Path(vorp_path),
-                id_map_path=Path(id_map_path),
-                league_path=Path(league_path),
-                my_slot=int(my_slot),
-                mode=mode,
-                strategy_name=strategy_name,
-                n_sims=int(n_sims),
-                adp_jitter=float(adp_jitter),
-                season=int(season),
-                data_root=Path("data"),
+            _install_session(
+                _build_session(
+                    vorp_path=Path(vorp_path),
+                    id_map_path=Path(id_map_path),
+                    league_path=Path(league_path),
+                    my_slot=int(my_slot),
+                    mode=mode,
+                    strategy_name=strategy_name,
+                    n_sims=int(n_sims),
+                    adp_jitter=float(adp_jitter),
+                    season=int(season),
+                    data_root=Path("data"),
+                )
             )
         except Exception as exc:  # surface any setup failure to the user
             st.sidebar.error(f"Setup failed: {exc}")
@@ -137,8 +151,10 @@ _SESSION_DIR = Path("data/draft_sessions")
 def _autosave(s: LiveDraftSession) -> None:
     path = st.session_state.get("autosave_path")
     if path is None:
-        # Stable filename per session, derived from the object id (no timestamp needed).
-        path = _SESSION_DIR / f"session_{id(s):x}.json"
+        # Filename keyed on the per-session token (unique via uuid), NOT id(s) — Python
+        # recycles addresses after GC, so an id()-named file could clobber a prior draft.
+        token = st.session_state.get("session_token", "session")
+        path = _SESSION_DIR / f"session_{token}.json"
         st.session_state["autosave_path"] = path
     s.save(Path(path))
 
@@ -161,21 +177,22 @@ def _resume_controls() -> None:
             pool = pd.read_parquet(data["vorp_table"])
             pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
             pool = VorpTableSchema.validate(pool)
-            st.session_state["session"] = LiveDraftSession.load(newest, id_map=id_map, pool=pool)
-            st.session_state["autosave_path"] = newest
+            loaded = LiveDraftSession.load(newest, id_map=id_map, pool=pool)
+            _install_session(loaded, autosave_path=newest)
         except Exception as exc:  # surface any resume failure to the user
             st.sidebar.error(f"Resume failed: {exc}")
 
 
 @st.cache_data(show_spinner=False)
 def _cached_recommendation(
-    s_id: int, picks: tuple[str, ...], strategy_name: str, n_sims: int, sigma: float | None
+    session_token: str, picks: tuple[str, ...], strategy_name: str, n_sims: int, sigma: float | None
 ) -> pd.DataFrame:
     """Cache MC recommendations on every result-affecting param.
 
-    All args are hashable and part of the cache key: `s_id` (= id(session)) binds the
-    cache to the current session instance, so a restarted draft (new pool) does not
-    reuse another session's result; picks/strategy_name/n_sims/sigma cover the rest.
+    `session_token` (a per-session uuid in session_state, NOT id(session) — which Python
+    recycles after GC) binds the cache to the current draft, so a restart/resume with the
+    same picks/strategy/n_sims/sigma recomputes against the new pool instead of serving a
+    stale entry. The body pulls the live session from session_state on a cache miss.
     """
     s: LiveDraftSession = st.session_state["session"]
     return s.recommendation()
@@ -198,7 +215,7 @@ def _search_box(s: LiveDraftSession) -> None:
     id_map = s.id_map
     drafted = s.state().drafted_ids
     hits = id_map[
-        id_map["full_name"].str.contains(query, case=False, na=False)
+        id_map["full_name"].str.contains(query, case=False, na=False, regex=False)
         & ~id_map["gsis_id"].isin(drafted)
     ].head(8)
     for row in hits.itertuples(index=False):
@@ -239,7 +256,8 @@ def _recommend_col(s: LiveDraftSession) -> None:
         st.caption("…or search below to record a different pick.")
         return
     with st.spinner("Scoring candidates…"):
-        rec = _cached_recommendation(id(s), tuple(s.picks), s.strategy_name, s.n_sims, s.sigma)
+        token = st.session_state.get("session_token", "")
+        rec = _cached_recommendation(token, tuple(s.picks), s.strategy_name, s.n_sims, s.sigma)
     named = attach_names(rec, s.player_names)
     cols = [
         "rank",

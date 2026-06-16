@@ -153,10 +153,22 @@ def test_record_pick_appends_and_rejects_duplicate() -> None:
         s.record_pick("00-0000001")
 
 
-def test_record_pick_rejects_absent_from_id_map() -> None:
-    s = _session()
+def test_record_pick_rejects_absent_from_id_map_for_my_pick() -> None:
+    # Stand at pick 7 (my slot) so the recorded pick is mine; my picks need an id_map position.
+    s = _session(picks=[f"00-000{i:04d}" for i in range(1, 7)])
+    assert s.is_my_pick
     with pytest.raises(ValueError, match="id_map"):
         s.record_pick("00-0009999")
+
+
+def test_record_pick_allows_off_id_map_opponent_pick() -> None:
+    # At pick 1 (an opponent's slot) a player absent from id_map is fine — only my picks
+    # need a resolvable position. This is what lets mock_advance record placeholder-gsis
+    # rookies that live in the VORP pool but not yet in id_map (instead of crashing).
+    s = _session()
+    assert not s.is_my_pick
+    s.record_pick("00-0009999")
+    assert "00-0009999" in s.picks
 
 
 def test_undo_pops_last() -> None:
@@ -243,6 +255,42 @@ def test_mock_advance_raises_in_copilot() -> None:
     s = _session(mode="copilot")
     with pytest.raises(RuntimeError, match="mock"):
         s.mock_advance_to_my_pick()
+
+
+def test_mock_advance_tolerates_pool_player_absent_from_id_map() -> None:
+    # A placeholder-gsis rookie can sit in the VORP pool but not in id_map; the bot may
+    # pick it. mock_advance must not crash on such a pick (regression guard).
+    extra = "00-0009998"  # not present in _id_map()
+    pool = pd.concat(
+        [
+            _pool(),
+            pd.DataFrame(
+                {
+                    "gsis_id": pd.array([extra], dtype=_PYARROW_STR),
+                    "position": pd.array(["RB"], dtype=_PYARROW_STR),
+                    "season_mean_fpts": [999.0],
+                    "vorp": [999.0],
+                    "replacement_fpts": [100.0],
+                    "consensus_adp": pd.array([0.5], dtype=pd.Float64Dtype()),  # lowest → first
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    s = LiveDraftSession(
+        league=_league(),
+        my_slot=7,
+        id_map=_id_map(),
+        pool=pool,
+        strategy=_FakeStrategy(),
+        strategy_name="fake",
+        mode="mock",
+        adp_jitter=0.0,
+        base_seed=0,
+    )
+    made = s.mock_advance_to_my_pick()  # must not raise
+    assert extra in made  # the off-id_map rookie (lowest ADP) was the first bot pick
+    assert s.is_my_pick
 
 
 def test_roster_scorecard_matches_optimal_lineup() -> None:

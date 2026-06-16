@@ -62,7 +62,7 @@ def test_allocate_roster_slots_places_restrictive_first_and_carries_key() -> Non
     # Three RBs into RB:2 + FLEX:1: first two take RB slots, third spills to FLEX;
     # the opaque key (here a gsis-like string) is carried through to each placement.
     players = [("a", Position.RB), ("b", Position.RB), ("c", Position.RB)]
-    placements, open_ = allocate_roster_slots(players, _SLOTS)
+    placements, open_, benchable = allocate_roster_slots(players, _SLOTS)
     assert placements == [
         ("a", Position.RB, RosterSlot.RB),
         ("b", Position.RB, RosterSlot.RB),
@@ -71,11 +71,13 @@ def test_allocate_roster_slots_places_restrictive_first_and_carries_key() -> Non
     assert open_[RosterSlot.RB] == 0
     assert open_[RosterSlot.FLEX] == 0
     assert open_[RosterSlot.QB] == 1  # untouched
+    # benchable is the set of positions the league rosters (QB/RB/WR/TE all have slots).
+    assert benchable == frozenset({Position.QB, Position.RB, Position.WR, Position.TE})
 
 
 def test_allocate_roster_slots_overflow_player_omitted() -> None:
     # One QB slot, no FLEX/SUPER_FLEX/BENCH → a 2nd QB has nowhere to go.
     slots = {RosterSlot.QB: 1, RosterSlot.BENCH: 0}
-    placements, open_ = allocate_roster_slots([("a", Position.QB), ("b", Position.QB)], slots)
+    placements, open_, _ = allocate_roster_slots([("a", Position.QB), ("b", Position.QB)], slots)
     assert placements == [("a", Position.QB, RosterSlot.QB)]  # 2nd QB omitted
     assert open_[RosterSlot.QB] == 0

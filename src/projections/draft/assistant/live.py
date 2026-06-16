@@ -127,7 +127,6 @@ class LiveDraftSession:
     league_config_path: Path = field(default=Path("."))
     vorp_path: Path = field(default=Path("."))
     id_map_path: Path = field(default=Path("."))
-    data_root: Path = field(default=Path("data"))
     # Memo of the last-built DraftState, keyed on the picks tuple (state() is hit
     # ~4-5x per render and twice per bot pick; rebuilding scans the whole id_map).
     _state_cache: tuple[tuple[GsisId, ...], DraftState] | None = field(
@@ -188,8 +187,14 @@ class LiveDraftSession:
         gid = validate_gsis_id(str(gsis_id))
         if gid in self.state().drafted_ids:
             raise ValueError(f"{gid} already drafted")
-        if gid not in set(self.id_map["gsis_id"]):
-            raise ValueError(f"{gid} absent from id_map (cannot resolve position)")
+        # Only *my* picks need an id_map position (roster accounting via build_draft_state).
+        # An opponent pick just leaves the available pool, so an off-id_map opponent pick
+        # — e.g. a placeholder-gsis rookie carried in the VORP pool but not yet in id_map —
+        # is fine; without this, mock_advance's bot picks would crash on such a player.
+        if slot_for(self.current_pick, self.league.n_teams) == self.my_slot and (
+            gid not in self.player_names
+        ):
+            raise ValueError(f"{gid} absent from id_map (cannot resolve position for my roster)")
         self.picks.append(gid)
 
     def undo(self) -> GsisId | None:
@@ -202,6 +207,11 @@ class LiveDraftSession:
         avail = self.available_pool()
         if avail.empty:
             return None
+        if "consensus_adp" not in avail.columns:
+            # A non-consensus VORP pool (the column is Optional in VorpTableSchema) has no
+            # market signal; back-fill all-NA so bot_pick treats everyone as +inf (ties
+            # break on gsis_id) instead of raising KeyError. Mirrors the strategy path.
+            avail = avail.assign(consensus_adp=pd.array([pd.NA] * len(avail), dtype="Float64"))
         # Deterministic per board state → stable across Streamlit reruns, reproducible
         # in mock mode. (Re-deriving the seed each call is intentional; no stored RNG.)
         rng = np.random.default_rng([self.base_seed, self.current_pick])
@@ -209,7 +219,7 @@ class LiveDraftSession:
 
     def my_roster_view(self) -> RosterView:
         state = self.state()
-        placements, open_ = allocate_roster_slots(
+        placements, open_, _ = allocate_roster_slots(
             zip(state.my_pick_ids, state.my_roster, strict=False), self.league.roster_slots
         )
         rows = [
@@ -318,5 +328,4 @@ class LiveDraftSession:
             league_config_path=Path(data["league_config"]),
             vorp_path=Path(data.get("vorp_table", ".")),
             id_map_path=Path(data.get("id_map", ".")),
-            data_root=data_root,
         )

@@ -56,13 +56,14 @@ def bench_eligible_positions(roster_slots: Mapping[RosterSlot, int]) -> frozense
 def allocate_roster_slots(
     players: Iterable[tuple[_Player, Position]],
     roster_slots: Mapping[RosterSlot, int],
-) -> tuple[list[tuple[_Player, Position, RosterSlot]], Counter[RosterSlot]]:
-    """Greedily place each player into a roster slot; return placements + open slots.
+) -> tuple[list[tuple[_Player, Position, RosterSlot]], Counter[RosterSlot], frozenset[Position]]:
+    """Greedily place each player into a roster slot; return placements, open slots, benchable.
 
     Fill priority per player: own position slot → FLEX → SUPER_FLEX → BENCH. A player
     with no open slot (roster overflow) is omitted from placements (no negatives). Each
     player is a `(key, position)` pair; the opaque `key` (e.g. a gsis_id) is carried
-    through to the placement so callers can label rows. The single source of truth for
+    through to the placement so callers can label rows. Also returns the bench-eligible
+    set it computes, so wrappers need not recompute it. The single source of truth for
     the restrictive-first fill rule, shared by `_open_slots_after` and the live board.
     """
     open_: Counter[RosterSlot] = Counter(
@@ -82,7 +83,7 @@ def allocate_roster_slots(
                 open_[slot] -= 1
                 placements.append((key, pos, slot))
                 break
-    return placements, open_
+    return placements, open_, benchable
 
 
 def _open_slots_after(
@@ -90,11 +91,11 @@ def _open_slots_after(
 ) -> tuple[Counter[RosterSlot], frozenset[Position]]:
     """Per-team open slots remaining after greedily placing my drafted players.
 
-    Thin wrapper over `allocate_roster_slots` that discards placements; also returns the
-    bench-eligible set so the caller need not recompute it.
+    Thin wrapper over `allocate_roster_slots` that discards placements and forwards the
+    bench-eligible set it already computed (so the caller need not recompute it).
     """
-    _, open_ = allocate_roster_slots(((pos, pos) for pos in my_roster), roster_slots)
-    return open_, bench_eligible_positions(roster_slots)
+    _, open_, benchable = allocate_roster_slots(((pos, pos) for pos in my_roster), roster_slots)
+    return open_, benchable
 
 
 def _has_open_starting(pos: Position, open_: Counter[RosterSlot]) -> bool:
