@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from pathlib import Path
+
+import pandas as pd
 import pytest
 
 from projections.draft.backtest.league import Calendar
@@ -7,6 +11,8 @@ from projections.draft.league_config import LeagueConfig
 from projections.schemas import RosterSlot
 from tests.test_draft.test_backtest.test_availability_stub import stub_availability
 from tests.test_draft.test_backtest.test_draft_field import _synthetic_pool
+
+_Lookup = dict[tuple[str, int], float]
 
 
 def _cfg16() -> LeagueConfig:
@@ -27,7 +33,7 @@ def _cfg16() -> LeagueConfig:
     )
 
 
-def _inputs():
+def _inputs() -> tuple[pd.DataFrame, Calendar, _Lookup, _Lookup]:
     pool = _synthetic_pool(n_per_pos=60)
     cal = Calendar(regular_weeks=tuple(range(1, 6)), playoff_weeks=(6, 7, 8), playoff_size=6)
     proj = {
@@ -85,7 +91,9 @@ def test_simulate_hero_cell_is_deterministic() -> None:
     assert (a1.wins, a1.losses, a1.points_for) == (a2.wins, a2.losses, a2.points_for)
 
 
-def test_simulate_hero_cell_crn_seed_is_strategy_and_seat_independent(monkeypatch) -> None:
+def test_simulate_hero_cell_crn_seed_is_strategy_and_seat_independent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The load-bearing CRN invariant (spec §3): the league seed passed to simulate_league
     is base_seed + seed, independent of strategy AND seat. Capture the seed across several
     (strategy, seat) and assert it never varies for a fixed (base_seed, seed)."""
@@ -96,7 +104,9 @@ def test_simulate_hero_cell_crn_seed_is_strategy_and_seat_independent(monkeypatc
     cfg = _cfg16()
     captured: list[int] = []
 
-    def _fake_simulate_league(seed, *, strategy_labels, **kw):
+    def _fake_simulate_league(
+        seed: int, *, strategy_labels: Mapping[int, str], **kw: object
+    ) -> LeagueOutcome:
         captured.append(seed)
         hero_seat = next(s for s, lbl in strategy_labels.items() if lbl != "bot")
         lbl = strategy_labels[hero_seat]
@@ -184,7 +194,7 @@ def test_consolidate_cells_to_schema() -> None:
     assert row["strategy"] == "now_or_never" and row["seat"] == 4 and row["wins"] == 8
 
 
-def test_collect_hero_cells_resumes_and_skips_completed(tmp_path) -> None:
+def test_collect_hero_cells_resumes_and_skips_completed(tmp_path: Path) -> None:
     from projections.draft.backtest.hero_harness import collect_hero_cells
 
     pool, cal, proj, actual = _inputs()
@@ -216,7 +226,7 @@ def test_collect_hero_cells_resumes_and_skips_completed(tmp_path) -> None:
     assert all(f.stat().st_mtime_ns == mtimes[f] for f in files)
 
 
-def test_collect_hero_cells_ignores_corrupt_checkpoint(tmp_path) -> None:
+def test_collect_hero_cells_ignores_corrupt_checkpoint(tmp_path: Path) -> None:
     from projections.draft.backtest.hero_harness import collect_hero_cells
 
     pool, cal, proj, actual = _inputs()
@@ -243,7 +253,7 @@ def test_collect_hero_cells_ignores_corrupt_checkpoint(tmp_path) -> None:
     assert len(cells) == 16  # raw_vorp x 16 seats x 1 seed
 
 
-def test_load_hero_cells_fails_loud_on_missing(tmp_path) -> None:
+def test_load_hero_cells_fails_loud_on_missing(tmp_path: Path) -> None:
     from projections.draft.backtest.hero_harness import collect_hero_cells, load_hero_cells
 
     pool, cal, proj, actual = _inputs()
@@ -280,11 +290,9 @@ def test_load_hero_cells_fails_loud_on_missing(tmp_path) -> None:
         )
 
 
-def _two_strategy_frame():
+def _two_strategy_frame() -> pd.DataFrame:
     """Hand-built HeroResultSchema frame: 'good' always 10-4, 'bad' always 4-10,
     over 2 seats x 2 seeds, both scorings."""
-    import pandas as pd
-
     rows = []
     for strat, (w, ls) in (("good", (10, 4)), ("bad", (4, 10))):
         for seat in (1, 2):

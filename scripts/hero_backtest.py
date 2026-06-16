@@ -7,12 +7,7 @@ re-run the same command to continue after a crash/reboot.
 
 from __future__ import annotations
 
-from projections.draft.backtest.hero_cli import (  # noqa: F401
-    _parse_args,
-    _report,
-    _run,
-    _run_key,
-)
+from projections.draft.backtest.hero_cli import _parse_args, _report, _run
 
 
 def main(argv: list[str] | None = None) -> int:
