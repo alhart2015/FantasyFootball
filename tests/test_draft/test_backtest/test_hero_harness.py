@@ -182,3 +182,99 @@ def test_consolidate_cells_to_schema() -> None:
     assert len(df) == 2
     row = df[(df["scoring"] == "actual")].iloc[0]
     assert row["strategy"] == "now_or_never" and row["seat"] == 4 and row["wins"] == 8
+
+
+def test_collect_hero_cells_resumes_and_skips_completed(tmp_path) -> None:
+    from projections.draft.backtest.hero_harness import collect_hero_cells
+
+    pool, cal, proj, actual = _inputs()
+    cfg = _cfg16()
+    kw = dict(
+        seed_lo=0,
+        seed_hi=2,
+        strategies=("raw_vorp",),
+        season=2025,
+        pool=pool,
+        config=cfg,
+        availability=stub_availability(pool),
+        proj_lookup=proj,
+        actual_lookup=actual,
+        calendar=cal,
+        jitter=8.0,
+        strategy_n_sims=5,
+        base_seed=0,
+        checkpoint_dir=tmp_path,
+    )
+    cells1 = collect_hero_cells(**kw)
+    assert len(cells1) == 32  # raw_vorp x 16 seats x 2 seeds
+    files = list(tmp_path.glob("cell_*.json"))
+    assert len(files) == 32
+    mtimes = {f: f.stat().st_mtime_ns for f in files}
+
+    cells2 = collect_hero_cells(**kw)  # re-run: all cached → no rewrites
+    assert len(cells2) == 32
+    assert all(f.stat().st_mtime_ns == mtimes[f] for f in files)
+
+
+def test_collect_hero_cells_ignores_corrupt_checkpoint(tmp_path) -> None:
+    from projections.draft.backtest.hero_harness import collect_hero_cells
+
+    pool, cal, proj, actual = _inputs()
+    kw = dict(
+        seed_lo=0,
+        seed_hi=1,
+        strategies=("raw_vorp",),
+        season=2025,
+        pool=pool,
+        config=_cfg16(),
+        availability=stub_availability(pool),
+        proj_lookup=proj,
+        actual_lookup=actual,
+        calendar=cal,
+        jitter=8.0,
+        strategy_n_sims=5,
+        base_seed=0,
+        checkpoint_dir=tmp_path,
+    )
+    collect_hero_cells(**kw)
+    victim = next(iter(tmp_path.glob("cell_*.json")))
+    victim.write_text("{ truncated")  # corrupt → must be re-run, not crash
+    cells = collect_hero_cells(**kw)
+    assert len(cells) == 16  # raw_vorp x 16 seats x 1 seed
+
+
+def test_load_hero_cells_fails_loud_on_missing(tmp_path) -> None:
+    from projections.draft.backtest.hero_harness import collect_hero_cells, load_hero_cells
+
+    pool, cal, proj, actual = _inputs()
+    cfg = _cfg16()
+    base = dict(
+        season=2025,
+        pool=pool,
+        config=cfg,
+        availability=stub_availability(pool),
+        proj_lookup=proj,
+        actual_lookup=actual,
+        calendar=cal,
+        jitter=8.0,
+        strategy_n_sims=5,
+        base_seed=0,
+        checkpoint_dir=tmp_path,
+    )
+    collect_hero_cells(seed_lo=0, seed_hi=1, strategies=("raw_vorp",), **base)  # 16 cells
+    cells = load_hero_cells(
+        seed_hi=1,
+        strategies=("raw_vorp",),
+        season=2025,
+        n_teams=cfg.n_teams,
+        checkpoint_dir=tmp_path,
+    )
+    assert len(cells) == 16
+    with pytest.raises(FileNotFoundError, match="now_or_never"):
+        load_hero_cells(
+            seed_hi=1,
+            strategies=("now_or_never",),
+            season=2025,
+            n_teams=cfg.n_teams,
+            checkpoint_dir=tmp_path,
+        )
