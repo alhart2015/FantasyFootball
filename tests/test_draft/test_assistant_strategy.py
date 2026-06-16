@@ -585,3 +585,93 @@ def test_timing_null_adp_treated_as_surviving() -> None:
 
 def test_timing_satisfies_protocol() -> None:
     assert isinstance(_timing(_pool()), DraftStrategy)
+
+
+# --- now_or_never_floored ---------------------------------------------------
+
+
+def test_floored_satisfies_protocol() -> None:
+    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+
+    assert isinstance(NowOrNeverFlooredStrategy(_FakeSurvival()), DraftStrategy)
+
+
+def test_floored_lambda_zero_is_identical_to_now_or_never() -> None:
+    """floor_weight=0 ⇒ byte-identical recommendation to now_or_never, for any floor."""
+    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+
+    base = NowOrNeverStrategy(_FakeSurvival()).recommend(_state(), _pool(), _config())
+    floored = NowOrNeverFlooredStrategy(_FakeSurvival(), floor=999.0, floor_weight=0.0).recommend(
+        _state(), _pool(), _config()
+    )
+    pd.testing.assert_frame_equal(base, floored)
+
+
+def test_floored_score_is_now_or_never_minus_hinge() -> None:
+    """score == vorp - E[best survivor] - lambda*max(0, F - vorp), hand-computed on _pool()."""
+    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+
+    rec = NowOrNeverFlooredStrategy(_FakeSurvival(), floor=52.0, floor_weight=6.0).recommend(
+        _state(), _pool(), _config()
+    )
+    # now_or_never scores (see test_now_or_never_reorders_cross_position):
+    #   rb1 12.6 (vorp 50), rb2 2.6 (vorp 40), wr1 1.25 (vorp 52), wr2 -20.75 (vorp 30)
+    # hinge with F=52, λ=6:  rb1 -6*2=-12 ⇒ 0.6 ; rb2 -6*12=-72 ⇒ -69.4 ;
+    #   wr1 -6*0=0 ⇒ 1.25 ; wr2 -6*22=-132 ⇒ -152.75
+    by_id = dict(zip(rec["gsis_id"], rec["score"], strict=True))
+    assert by_id["00-0000010"] == 0.6
+    assert by_id["00-0000011"] == -69.4
+    assert by_id["00-0000020"] == 1.25
+    assert by_id["00-0000021"] == -152.75
+
+
+def test_floored_demotes_sub_floor_scarce_player_below_better_one() -> None:
+    """The pathology fix: under nn, scarce rb1 (vorp 50) outranks wr1 (vorp 52);
+    once the floor bites (F=52 so wr1 is at the bar, rb1 below), wr1 leads."""
+    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+
+    nn = NowOrNeverStrategy(_FakeSurvival()).recommend(_state(), _pool(), _config())
+    assert nn["gsis_id"].iloc[0] == "00-0000010"  # rb1 first under now_or_never
+
+    floored = NowOrNeverFlooredStrategy(_FakeSurvival(), floor=52.0, floor_weight=6.0).recommend(
+        _state(), _pool(), _config()
+    )
+    assert floored["gsis_id"].iloc[0] == "00-0000020"  # wr1 now first (floor flip)
+
+
+def test_floored_last_pick_fallback_equals_raw_vorp() -> None:
+    """No next pick ⇒ raw VORP, floor not applied (identical to nn's fallback), any (F, λ)."""
+    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+
+    last = _state(current_pick=7, rounds=1)
+    floored = NowOrNeverFlooredStrategy(_FakeSurvival(), floor=999.0, floor_weight=9.0).recommend(
+        last, _pool(), _config()
+    )
+    raw = RawVorpStrategy().recommend(last, _pool(), _config())
+    assert list(floored["gsis_id"]) == list(raw["gsis_id"])
+    assert floored["p_available_next"].isna().all()
+
+
+def test_floored_rejects_degenerate_params() -> None:
+    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+
+    with pytest.raises(ValueError, match="floor_weight"):
+        NowOrNeverFlooredStrategy(_FakeSurvival(), floor_weight=-1.0)
+    with pytest.raises(ValueError, match="finite"):
+        NowOrNeverFlooredStrategy(_FakeSurvival(), floor=float("nan"))
+    with pytest.raises(ValueError, match="finite"):
+        NowOrNeverFlooredStrategy(_FakeSurvival(), floor_weight=float("inf"))
+
+
+def test_floored_null_adp_p_available_is_null() -> None:
+    """Null ADP → p=1 internally (hinge is ADP-independent), display p null. Mirrors
+    the now_or_never null-ADP test but on the floored class with the floor active."""
+    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+
+    pool = _pool()
+    pool["consensus_adp"] = pd.array([pd.NA, pd.NA, pd.NA, pd.NA], dtype=pd.Float64Dtype())
+    rec = NowOrNeverFlooredStrategy(
+        LogisticSurvival(sigma=8.0), floor=45.0, floor_weight=2.0
+    ).recommend(_state(), pool, _config())
+    RecommendationSchema.validate(rec)
+    assert rec["p_available_next"].isna().all()
