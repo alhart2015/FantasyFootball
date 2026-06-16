@@ -266,3 +266,25 @@ def test_parse_args_accepts_season_value_timing() -> None:
         ["--state", "s.json", "--vorp-table", "v.parquet", "--strategy", "season_value_timing"]
     )
     assert args.strategy == "season_value_timing"
+
+
+def test_cli_parses_now_or_never_floored_flags() -> None:
+    from projections.draft.assistant.cli import _parse_args
+
+    args = _parse_args(
+        [
+            "--state",
+            "s.json",
+            "--vorp-table",
+            "v.parquet",
+            "--strategy",
+            "now_or_never_floored",
+            "--floor",
+            "55",
+            "--floor-weight",
+            "2.5",
+        ]
+    )
+    assert args.strategy == "now_or_never_floored"
+    assert args.floor == 55.0
+    assert args.floor_weight == 2.5

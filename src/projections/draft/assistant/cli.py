@@ -14,7 +14,12 @@ import pandas as pd
 from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.live import MC_STRATEGIES, build_session_strategy
 from projections.draft.assistant.state import load_draft_state
-from projections.draft.assistant.strategy import STRATEGY_KEYS, DraftStrategy
+from projections.draft.assistant.strategy import (
+    _DEFAULT_FLOOR,
+    _DEFAULT_FLOOR_WEIGHT,
+    STRATEGY_KEYS,
+    DraftStrategy,
+)
 from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
 
 _DEFAULT_ID_MAP = Path("data/raw/id_map.parquet")
@@ -41,6 +46,8 @@ def generate_recommendation(
     season: int = 2026,
     n_sims: int = 300,
     data_root: Path = Path("data"),
+    floor: float = _DEFAULT_FLOOR,
+    floor_weight: float = _DEFAULT_FLOOR_WEIGHT,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load inputs, run the chosen strategy.
 
@@ -66,6 +73,8 @@ def generate_recommendation(
         availability=availability,
         n_sims=n_sims,
         base_seed=0,
+        floor=floor,
+        floor_weight=floor_weight,
     )
     return strategy.recommend(state, vorp, league), id_map
 
@@ -119,6 +128,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Survival spread in picks (default ~ 2/3 of a round).",
     )
     p.add_argument(
+        "--floor",
+        type=float,
+        default=_DEFAULT_FLOOR,
+        help="[--strategy now_or_never_floored] absolute VORP quality bar F.",
+    )
+    p.add_argument(
+        "--floor-weight",
+        type=float,
+        default=_DEFAULT_FLOOR_WEIGHT,
+        help="[--strategy now_or_never_floored] hinge weight (0 = plain now_or_never).",
+    )
+    p.add_argument(
         "--season",
         type=int,
         default=2026,
@@ -155,6 +176,8 @@ def run(argv: list[str] | None = None) -> int:
         season=args.season,
         n_sims=args.n_sims,
         data_root=args.data_root,
+        floor=args.floor,
+        floor_weight=args.floor_weight,
     )
     print(format_table(rec, id_map, int(args.top)))
     return 0

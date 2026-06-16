@@ -361,3 +361,45 @@ def test_save_load_round_trip(tmp_path: Path) -> None:
     assert loaded.n_sims == 175
     assert loaded.season == 2024
     assert loaded.sigma == 9.0
+
+
+def test_build_session_strategy_now_or_never_floored() -> None:
+    from projections.draft.assistant.live import BOARD_STRATEGIES, build_session_strategy
+    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+
+    strat = build_session_strategy(
+        "now_or_never_floored",
+        league=_league(),
+        sigma=None,
+        availability=None,  # analytic: must NOT require availability
+        n_sims=300,
+        base_seed=0,
+        floor=55.0,
+        floor_weight=2.0,
+    )
+    assert isinstance(strat, NowOrNeverFlooredStrategy)
+    assert strat.floor == 55.0
+    assert strat.floor_weight == 2.0
+    assert "now_or_never_floored" in BOARD_STRATEGIES
+
+
+def test_build_session_strategy_floored_defaults() -> None:
+    from projections.draft.assistant.live import build_session_strategy
+    from projections.draft.assistant.strategy import (
+        _DEFAULT_FLOOR,
+        _DEFAULT_FLOOR_WEIGHT,
+        NowOrNeverFlooredStrategy,
+    )
+
+    strat = build_session_strategy(
+        "now_or_never_floored",
+        league=_league(),
+        sigma=None,
+        availability=None,
+        n_sims=300,
+        base_seed=0,
+    )
+    assert isinstance(strat, NowOrNeverFlooredStrategy)
+    # Compare against the constants (not literals) so the A/B default change stays green.
+    assert strat.floor == _DEFAULT_FLOOR
+    assert strat.floor_weight == _DEFAULT_FLOOR_WEIGHT
