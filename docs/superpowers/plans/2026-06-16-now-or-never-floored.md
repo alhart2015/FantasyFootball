@@ -655,8 +655,8 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - [ ] **Step 1: Confirm data + the strategy is selectable**
 
 Run: `python scripts/draft_assistant.py --help` and confirm `now_or_never_floored` appears in `--strategy` choices and `--floor`/`--floor-weight` exist. Confirm the harness inputs load for both seasons by dry-running `load_inputs` (the harness's own loader, so the path/layout is whatever it actually uses):
-`python -c "from projections.draft.backtest.inputs import load_inputs; from projections.draft.league_config import LeagueConfig; c=LeagueConfig.model_validate_json(open('configs/league_espn_ppr_12team_skill.json').read()); [load_inputs(season=s, config=c, data_root=__import__('pathlib').Path('data')) for s in (2024,2025)]; print('inputs OK 2024+2025')"`
-If it raises (missing partitions), ingest the needed season(s) before proceeding.
+`python -c "from projections.draft.backtest.inputs import load_inputs; from projections.draft.league_config import LeagueConfig; c=LeagueConfig.model_validate_json(open('configs/league_espn_half_16team.json').read()); [load_inputs(season=s, config=c, data_root=__import__('pathlib').Path('data')) for s in (2024,2025)]; print('inputs OK 2024+2025')"`
+If it raises (missing partitions), ingest the needed season(s) before proceeding. **Use the 16-team config** `configs/league_espn_half_16team.json` — the H2H harness hard-requires `n_teams == 16` (the mirrored seat layout); a 12-team config trips the `collect_results` guard.
 
 - [ ] **Step 2: Coarse screen (cheap, 2025 only)**
 
@@ -665,7 +665,7 @@ For each `(F, λ)` in `F ∈ {0,20,40,60} × λ ∈ {0.5,1,2}`, run a reduced-se
 ```powershell
 $env:KMP_DUPLICATE_LIB_OK="TRUE"; $env:OMP_NUM_THREADS="1"; $env:OPENBLAS_NUM_THREADS="1"
 python scripts/h2h_backtest_chunked.py --season 2025 `
-  --league-config configs/league_espn_ppr_12team_skill.json `
+  --league-config configs/league_espn_half_16team.json `
   --n-seeds 60 --strategy-a now_or_never_floored --strategy-b now_or_never `
   --floor 40 --floor-weight 1 --checkpoint-dir _ckpt/floor_F40_L1_2025 --out _ckpt/floor_F40_L1_2025.txt
 ```
