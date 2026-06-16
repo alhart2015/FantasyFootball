@@ -980,6 +980,10 @@ class VorpTableSchema(pa.DataFrameModel):
     # Optional (not-required): populated only on the consensus-fed path (the raw market ADP
     # the cheat sheet's adp_delta uses). Weekly-path VORP tables omit it and still validate.
     consensus_adp: Series[pd.Float64Dtype] | None = pa.Field(gt=0, nullable=True)
+    # Optional (not-required): populated only on the consensus-fed path (the player's
+    # display name, incl. placeholder-gsis rookies absent from id_map). Weekly-path VORP
+    # tables omit it and still validate. Nullable: a player with no consensus name is NA.
+    full_name: Series[str] | None = pa.Field(nullable=True)
 
     class Config:
         strict = "filter"
