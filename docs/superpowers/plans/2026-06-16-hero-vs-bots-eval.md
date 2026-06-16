@@ -194,31 +194,36 @@ def test_simulate_hero_cell_is_deterministic() -> None:
     assert (a1.wins, a1.losses, a1.points_for) == (a2.wins, a2.losses, a2.points_for)
 
 
-def test_simulate_hero_cell_crn_same_bots_across_strategies() -> None:
-    """Same (seat, seed) ⇒ identical bot field across hero strategies (CRN).
-    Proxy: two different hero strategies at the same seat/seed produce the same
-    league seed → the bots draft identically, so the bot rosters match. We verify
-    via the hero's OWN result differing while the run is otherwise paired by
-    re-deriving the bot draft: run hero=raw_vorp and hero=now_or_never, and assert
-    the league is seeded identically (the hero seat result objects carry seat/strategy;
-    determinism across strategies at fixed seed is the contract we pin)."""
-    from projections.draft.backtest.hero_harness import simulate_hero_cell
+def test_simulate_hero_cell_crn_seed_is_strategy_and_seat_independent(monkeypatch) -> None:
+    """The load-bearing CRN invariant (spec §3): the league seed passed to simulate_league
+    is base_seed + seed, independent of strategy AND seat. Capture the seed across several
+    (strategy, seat) and assert it never varies for a fixed (base_seed, seed)."""
+    import projections.draft.backtest.hero_harness as hh
+    from projections.draft.backtest.league import LeagueOutcome, LeagueResult
 
     pool, cal, proj, actual = _inputs()
     cfg = _cfg16()
-    common = dict(
-        hero_seat=2, seed=3, pool=pool, config=cfg, availability=stub_availability(pool),
-        proj_lookup=proj, actual_lookup=actual, calendar=cal, jitter=8.0,
-        strategy_n_sims=5, base_seed=0,
-    )
-    a_rv, _ = simulate_hero_cell(strategy_key="raw_vorp", **common)
-    a_nn, _ = simulate_hero_cell(strategy_key="now_or_never", **common)
-    # Different strategies → generally different hero rosters/outcomes, but both ran at
-    # the SAME league seed (base_seed + seed). The contract: the cell is a pure function
-    # of its inputs (determinism, pinned above) and the seed ignores strategy. Here we
-    # assert the labels are correct and the call is well-formed for both strategies.
-    assert a_rv.strategy == "raw_vorp" and a_nn.strategy == "now_or_never"
-    assert a_rv.seat == 2 and a_nn.seat == 2
+    captured: list[int] = []
+
+    def _fake_simulate_league(seed, *, strategy_labels, **kw):
+        captured.append(seed)
+        # Return a minimal outcome with the hero seat present (label != "bot").
+        hero_seat = next(s for s, lbl in strategy_labels.items() if lbl != "bot")
+        lbl = strategy_labels[hero_seat]
+        r = LeagueResult(seat=hero_seat, strategy=lbl, wins=1, losses=1,
+                         points_for=1.0, made_playoffs=False, is_champion=False)
+        return LeagueOutcome(actual=[r], projected=[r])
+
+    monkeypatch.setattr(hh, "simulate_league", _fake_simulate_league)
+    for strat in ("raw_vorp", "now_or_never"):
+        for seat in (2, 6, 11):
+            hh.simulate_hero_cell(
+                strategy_key=strat, hero_seat=seat, seed=3, pool=pool, config=cfg,
+                availability=stub_availability(pool), proj_lookup=proj, actual_lookup=actual,
+                calendar=cal, jitter=8.0, strategy_n_sims=5, base_seed=100,
+            )
+    # base_seed=100 + seed=3 for every (strategy, seat) → all identical.
+    assert captured == [103] * 6
 
 
 def test_simulate_hero_cell_mc_requires_availability() -> None:
@@ -503,6 +508,28 @@ def test_collect_hero_cells_ignores_corrupt_checkpoint(tmp_path) -> None:
     victim.write_text("{ truncated")  # corrupt → must be re-run, not crash
     cells = collect_hero_cells(**kw)
     assert len(cells) == 16  # raw_vorp × 16 seats × 1 seed
+
+
+def test_load_hero_cells_fails_loud_on_missing(tmp_path) -> None:
+    import pytest
+
+    from projections.draft.backtest.hero_harness import collect_hero_cells, load_hero_cells
+
+    pool, cal, proj, actual = _inputs()
+    cfg = _cfg16()
+    base = dict(
+        season=2025, pool=pool, config=cfg, availability=stub_availability(pool),
+        proj_lookup=proj, actual_lookup=actual, calendar=cal, jitter=8.0,
+        strategy_n_sims=5, base_seed=0, checkpoint_dir=tmp_path,
+    )
+    collect_hero_cells(seed_lo=0, seed_hi=1, strategies=("raw_vorp",), **base)  # writes 16 cells
+    cells = load_hero_cells(seed_hi=1, strategies=("raw_vorp",), season=2025,
+                            n_teams=cfg.n_teams, checkpoint_dir=tmp_path)
+    assert len(cells) == 16
+    # A strategy that was never run must FAIL LOUD, never recompute.
+    with pytest.raises(FileNotFoundError, match="now_or_never"):
+        load_hero_cells(seed_hi=1, strategies=("now_or_never",), season=2025,
+                        n_teams=cfg.n_teams, checkpoint_dir=tmp_path)
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -580,12 +607,42 @@ def collect_hero_cells(
                 cells.append(HeroCell(season=season, strategy=strategy, seat=seat, seed=seed,
                                       actual=a, projected=p))
     return cells
+
+
+def load_hero_cells(
+    *,
+    seed_hi: int,
+    strategies: tuple[str, ...],
+    season: int,
+    n_teams: int,
+    checkpoint_dir: Path,
+) -> list[HeroCell]:
+    """Load already-computed cells (strategy × [1, n_teams] × [0, seed_hi)); NEVER simulate.
+
+    Fails loud on any missing/invalid cell — the run must be complete first. Used by the
+    report path so a mismatched/incomplete run errors instead of silently recomputing.
+    """
+    cells: list[HeroCell] = []
+    for strategy in strategies:
+        for seat in range(1, n_teams + 1):
+            for seed in range(seed_hi):
+                out = _cell_file(checkpoint_dir, strategy, seat, seed)
+                cached = _valid_cell(out)
+                if cached is None:
+                    raise FileNotFoundError(
+                        f"missing/invalid hero cell {out.name} — finish the run first "
+                        f"(strategy={strategy}, seat={seat}, seed={seed})"
+                    )
+                a, p = cached
+                cells.append(HeroCell(season=season, strategy=strategy, seat=seat, seed=seed,
+                                      actual=a, projected=p))
+    return cells
 ```
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `PYTHONPATH="<worktree>/src" python -m pytest tests/test_draft/test_backtest/test_hero_harness.py -k collect -v`
-Expected: PASS (2 tests).
+Run: `PYTHONPATH="<worktree>/src" python -m pytest tests/test_draft/test_backtest/test_hero_harness.py -k "collect or load_hero" -v`
+Expected: PASS (3 tests).
 
 - [ ] **Step 5: Lint/type + commit**
 
@@ -850,7 +907,8 @@ from projections.draft.backtest.hero_harness import (
     bot_baseline,
     collect_hero_cells,
     consolidate_cells,
-    per_seat_metrics,
+    load_hero_cells,
+    paired_diff,
     seat_averaged_metrics,
 )
 from projections.draft.backtest.inputs import load_inputs
@@ -871,10 +929,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         sp.add_argument("--season", type=int, default=2025)
         sp.add_argument("--data-root", type=Path, default=Path("data"))
         sp.add_argument("--checkpoint-dir", type=Path, default=Path("_hero_ckpt"))
-        sp.add_argument("--strategies", default=_DEFAULT_STRATEGIES)
 
     r = sub.add_parser("run")
     _common(r)
+    r.add_argument("--strategies", default=_DEFAULT_STRATEGIES)  # run-only; report reads the manifest
     r.add_argument("--n-seeds", type=int, default=40)
     r.add_argument("--strategy-n-sims", type=int, default=50)
     r.add_argument("--jitter", type=float, default=8.0)
@@ -922,25 +980,24 @@ def _run(args: argparse.Namespace) -> int:
 def _report(args: argparse.Namespace) -> int:
     config = LeagueConfig.model_validate_json(args.league_config.read_text())
     inputs = load_inputs(season=args.season, config=config, data_root=args.data_root)
-    # Reload all cells from the checkpoint dir by re-running collect (cells are all cached).
-    strategies = tuple(args.strategies.split(","))
-    cells = collect_hero_cells(
-        seed_lo=0, seed_hi=_infer_n_seeds(args.checkpoint_dir), strategies=strategies,
-        season=args.season, pool=inputs.pool, config=config, availability=inputs.availability,
-        proj_lookup=inputs.proj_lookup, actual_lookup=inputs.actual_lookup,
-        calendar=inputs.calendar, jitter=8.0, strategy_n_sims=1, base_seed=0,
-        checkpoint_dir=args.checkpoint_dir,
+    # The manifest is the run identity: derive strategies + n_seeds from it (NOT from CLI
+    # args), and LOAD cells (fail loud on any missing) — report never recomputes.
+    manifest = json.loads((args.checkpoint_dir / "manifest.json").read_text())
+    strategies = tuple(str(manifest["strategies"]).split(","))
+    cells = load_hero_cells(
+        seed_hi=int(manifest["n_seeds"]), strategies=strategies, season=args.season,
+        n_teams=config.n_teams, checkpoint_dir=args.checkpoint_dir,
     )
     df = consolidate_cells(cells)
     args.out_parquet.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(args.out_parquet, index=False)  # derived report artifact (spec §6, not the store)
     seat_avg = seat_averaged_metrics(df, scoring="actual")
     base = bot_baseline(inputs.calendar, config.n_teams)
-    print(_format_headline(seat_avg, base, config.n_teams))
+    print(_format_headline(seat_avg, base, config.n_teams, reference=args.reference, df=df))
     return 0
 ```
 
-> Notes for the implementer: (a) `_infer_n_seeds` — read the manifest's `n_seeds` (`json.loads((checkpoint_dir/"manifest.json").read_text())["n_seeds"]`); write that tiny helper. (b) `report` re-invokes `collect_hero_cells` only to **load** cached cells — every cell file already exists, so nothing recomputes (and the analytic `strategy_n_sims=1` is irrelevant since no MC runs). (c) `_format_headline(seat_avg, base, n_teams)` — a small fixed-width table: one row per strategy (win%/playoff%/champ%/PF + CI via the existing `Interval` fields) plus the `bot (avg team)` baseline row; write it mirroring `backtest/cli.py:_format_table`. (d) `report` writing the parquet directly is the documented store-exception (spec §6). (e) wire `main(argv)`: dispatch `args.cmd` to `_run`/`_report`.
+> Notes for the implementer: (a) `report` derives `strategies` + `n_seeds` from the **manifest** and uses **load-only** `load_hero_cells`, so a mismatched/incomplete run errors loudly instead of recomputing at the wrong `n_sims`. The manifest read fails loud (missing file / missing key) if `--checkpoint-dir` has no completed run — that's the desired behavior. (b) `_format_headline(seat_avg, base, n_teams, *, reference, df)` — a fixed-width table: one row per strategy (win%/playoff%/champ%/PF + CI via the existing `Interval` `point`/`lo_95`/`hi_95`), the `bot (avg team)` baseline row, and a paired-diff column vs `reference` (call `paired_diff(df, scoring="actual", metric="win_pct", strategy=s, reference=reference)`); write it mirroring `backtest/cli.py:_format_table`. (c) the per-seat breakdown is **retained in the parquet** (every cell row) for ad-hoc analysis via `per_seat_metrics`; the printed headline is the seat-average. (d) writing the parquet directly is the documented store-exception (spec §6). (e) wire `main(argv)`: dispatch `args.cmd` to `_run`/`_report`.
 
 - [ ] **Step 4: Implement `scripts/hero_backtest.py`**
 
@@ -978,12 +1035,21 @@ Expected: PASS (2 tests).
 Add a tiny end-to-end test that runs 1 seed × 2 analytic strategies on the synthetic `_inputs()` via `collect_hero_cells` directly (already covered by Task 4) — no new test needed; the CLI parse tests + Task 4 cover the seam. Confirm imports resolve:
 Run: `PYTHONPATH="<worktree>/src" python -c "import scripts.hero_backtest"` → no error.
 
-- [ ] **Step 7: Lint/type + commit**
+- [ ] **Step 7: Add gitignore entries (before any run writes per-cell JSONs)**
+
+Append to `.gitignore` (so the thousands of `cell_*.json` checkpoints + the derived parquet aren't accidentally committed):
+
+```gitignore
+_hero_*/
+data/backtest/hero_eval/
+```
+
+- [ ] **Step 8: Lint/type + commit**
 
 Run: `MYPYPATH=src python -m mypy src/projections/draft/backtest/hero_cli.py scripts/hero_backtest.py && python -m ruff check src/projections/draft/backtest/hero_cli.py scripts/hero_backtest.py tests/test_scripts/test_hero_backtest.py && python -m ruff format --check src/projections/draft/backtest/hero_cli.py scripts/hero_backtest.py`
 
 ```bash
-git add src/projections/draft/backtest/hero_cli.py scripts/hero_backtest.py tests/test_scripts/test_hero_backtest.py
+git add .gitignore src/projections/draft/backtest/hero_cli.py scripts/hero_backtest.py tests/test_scripts/test_hero_backtest.py
 git commit -m "feat(draft): hero_backtest CLI — resumable run + report subcommands"
 ```
 
