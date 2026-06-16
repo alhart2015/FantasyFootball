@@ -12,6 +12,7 @@ top-6 make the playoffs, top-2 byes.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -23,6 +24,7 @@ from projections.draft.assistant.season_value import (
     _bye_indices,
     _lineup_points_sampled,
 )
+from projections.draft.league_config import LeagueConfig
 from projections.schemas import RosterSlot
 
 REG_WEEKS: tuple[int, ...] = tuple(range(1, 14))  # 1..13
@@ -79,3 +81,107 @@ def team_weekly_points(
     return _lineup_points_sampled(
         pts.reshape(n_sims * nw, m), av.reshape(n_sims * nw, m), pos, roster_slots
     ).reshape(n_sims, nw)
+
+
+__all__ = [
+    "ALL_WEEKS",
+    "REG_WEEKS",
+    "SeatProjection",
+    "gauntlet_schedule",
+    "project_draft",
+    "team_weekly_points",
+]
+
+
+@dataclass(frozen=True)
+class SeatProjection:
+    reg_win_pct: float
+    make_playoffs_pct: float
+    bye_pct: float
+    champ_pct: float
+    mean_seed: float
+
+
+def project_draft(
+    rosters: Mapping[int, list[str]],
+    pool: pd.DataFrame,
+    availability: PlayerAvailability,
+    params: VarianceParams,
+    *,
+    league_config: LeagueConfig,
+    n_sims: int,
+    rng: np.random.Generator,
+) -> dict[int, SeatProjection]:
+    """Per-seat projected-season metrics over `n_sims` MC seasons (projected-vs-projected).
+
+    Regular season (wks 1-13) via the gauntlet schedule -> records + points-for; seed by
+    (wins, points_for); top-6 make playoffs, top-2 bye; wk14 wildcard (3v6,4v5), wk15 reseeded
+    semis (seed1 vs lowest survivor, seed2 vs other), championship = wk16+wk17 combined.
+    Ties (matchup or championship) break to the better seed / lower slot.
+    """
+    n_teams = league_config.n_teams
+    if n_teams < PLAYOFF_SIZE:
+        raise ValueError(f"projected eval needs at least {PLAYOFF_SIZE} teams; got {n_teams}")
+    slots = list(range(1, n_teams + 1))
+    sub = pool.set_index("gsis_id")
+    weekly = {
+        s: team_weekly_points(
+            sub.loc[rosters[s]].reset_index(),
+            availability,
+            params,
+            n_sims=n_sims,
+            weeks=list(ALL_WEEKS),
+            roster_slots=league_config.roster_slots,
+            rng=rng,
+        )
+        for s in slots
+    }
+
+    wins = {s: np.zeros(n_sims) for s in slots}
+    pf = {s: np.zeros(n_sims) for s in slots}
+    schedule = gauntlet_schedule(n_teams, len(REG_WEEKS))
+    for w, matchups in zip(REG_WEEKS, schedule, strict=True):
+        for a, b in matchups:
+            pa, pb = weekly[a][:, w - 1], weekly[b][:, w - 1]
+            pf[a] += pa
+            pf[b] += pb
+            a_win = pa >= pb
+            wins[a] += a_win
+            wins[b] += ~a_win
+
+    win_mat = np.stack([wins[s] for s in slots], axis=1)
+    pf_mat = np.stack([pf[s] for s in slots], axis=1)
+    # seeds[i] = slots best->worst for sim i (wins dominate; points_for breaks ties)
+    seeds = np.argsort(-(win_mat * 1e6 + pf_mat), axis=1) + 1
+
+    def wk(slot: int, sim: int, week: int) -> float:
+        return float(weekly[slot][sim, week - 1])
+
+    champ_of = np.zeros(n_sims, dtype=int)
+    for i in range(n_sims):
+        o = [int(s) for s in seeds[i]]
+        seedpos = {s: r for r, s in enumerate(o)}
+        s1, s2, s3, s4, s5, s6 = o[:6]
+        win_a = s3 if wk(s3, i, WILDCARD_WEEK) >= wk(s6, i, WILDCARD_WEEK) else s6
+        win_b = s4 if wk(s4, i, WILDCARD_WEEK) >= wk(s5, i, WILDCARD_WEEK) else s5
+        hi, lo = sorted([win_a, win_b], key=lambda s: seedpos[s])  # better seed, worse seed
+        f1 = s1 if wk(s1, i, SEMIFINAL_WEEK) >= wk(lo, i, SEMIFINAL_WEEK) else lo
+        f2 = s2 if wk(s2, i, SEMIFINAL_WEEK) >= wk(hi, i, SEMIFINAL_WEEK) else hi
+        c1, c2 = CHAMPIONSHIP_WEEKS
+        f1_total = wk(f1, i, c1) + wk(f1, i, c2)
+        f2_total = wk(f2, i, c1) + wk(f2, i, c2)
+        champ_of[i] = f1 if f1_total >= f2_total else f2
+
+    out: dict[int, SeatProjection] = {}
+    for s in slots:
+        in_playoffs = (seeds[:, :PLAYOFF_SIZE] == s).any(axis=1)
+        has_bye = (seeds[:, :N_BYES] == s).any(axis=1)
+        seed_of_s = np.argmax(seeds == s, axis=1) + 1  # 1-based seed per sim
+        out[s] = SeatProjection(
+            reg_win_pct=float(wins[s].mean() / len(REG_WEEKS)),
+            make_playoffs_pct=float(in_playoffs.mean()),
+            bye_pct=float(has_bye.mean()),
+            champ_pct=float((champ_of == s).mean()),
+            mean_seed=float(seed_of_s.mean()),
+        )
+    return out
