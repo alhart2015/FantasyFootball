@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+import pytest
+
+from projections.draft.backtest.league import Calendar
+from projections.draft.league_config import LeagueConfig
+from projections.schemas import RosterSlot
+from tests.test_draft.test_backtest.test_availability_stub import stub_availability
+from tests.test_draft.test_backtest.test_draft_field import _synthetic_pool
+
+
+def _cfg16() -> LeagueConfig:
+    return LeagueConfig(
+        name="t16",
+        n_teams=16,
+        budget=200,
+        min_bid=1,
+        roster_slots={
+            RosterSlot.QB: 1,
+            RosterSlot.RB: 2,
+            RosterSlot.WR: 2,
+            RosterSlot.TE: 1,
+            RosterSlot.FLEX: 1,
+            RosterSlot.BENCH: 4,
+        },
+        ruleset="espn_half",  # type: ignore[arg-type]
+    )
+
+
+def _inputs():
+    pool = _synthetic_pool(n_per_pos=60)
+    cal = Calendar(regular_weeks=tuple(range(1, 6)), playoff_weeks=(6, 7, 8), playoff_size=6)
+    proj = {
+        (g, wk): float(m)
+        for g, m in zip(pool["gsis_id"], pool["season_mean_fpts"], strict=False)
+        for wk in range(1, 9)
+    }
+    return pool, cal, dict(proj), dict(proj)
+
+
+def test_simulate_hero_cell_returns_hero_seat_result() -> None:
+    from projections.draft.backtest.hero_harness import simulate_hero_cell
+
+    pool, cal, proj, actual = _inputs()
+    cfg = _cfg16()
+    a, p = simulate_hero_cell(
+        strategy_key="now_or_never",
+        hero_seat=4,
+        seed=0,
+        pool=pool,
+        config=cfg,
+        availability=stub_availability(pool),
+        proj_lookup=proj,
+        actual_lookup=actual,
+        calendar=cal,
+        jitter=8.0,
+        strategy_n_sims=5,
+        base_seed=0,
+    )
+    assert a.seat == 4 and p.seat == 4
+    assert a.strategy == "now_or_never" and p.strategy == "now_or_never"
+
+
+def test_simulate_hero_cell_is_deterministic() -> None:
+    from projections.draft.backtest.hero_harness import simulate_hero_cell
+
+    pool, cal, proj, actual = _inputs()
+    cfg = _cfg16()
+    kw = dict(
+        strategy_key="now_or_never",
+        hero_seat=4,
+        seed=1,
+        pool=pool,
+        config=cfg,
+        availability=stub_availability(pool),
+        proj_lookup=proj,
+        actual_lookup=actual,
+        calendar=cal,
+        jitter=8.0,
+        strategy_n_sims=5,
+        base_seed=0,
+    )
+    a1, _ = simulate_hero_cell(**kw)
+    a2, _ = simulate_hero_cell(**kw)
+    assert (a1.wins, a1.losses, a1.points_for) == (a2.wins, a2.losses, a2.points_for)
+
+
+def test_simulate_hero_cell_crn_seed_is_strategy_and_seat_independent(monkeypatch) -> None:
+    """The load-bearing CRN invariant (spec §3): the league seed passed to simulate_league
+    is base_seed + seed, independent of strategy AND seat. Capture the seed across several
+    (strategy, seat) and assert it never varies for a fixed (base_seed, seed)."""
+    import projections.draft.backtest.hero_harness as hh
+    from projections.draft.backtest.league import LeagueOutcome, LeagueResult
+
+    pool, cal, proj, actual = _inputs()
+    cfg = _cfg16()
+    captured: list[int] = []
+
+    def _fake_simulate_league(seed, *, strategy_labels, **kw):
+        captured.append(seed)
+        hero_seat = next(s for s, lbl in strategy_labels.items() if lbl != "bot")
+        lbl = strategy_labels[hero_seat]
+        r = LeagueResult(
+            seat=hero_seat,
+            strategy=lbl,
+            wins=1,
+            losses=1,
+            points_for=1.0,
+            made_playoffs=False,
+            is_champion=False,
+        )
+        return LeagueOutcome(actual=[r], projected=[r])
+
+    monkeypatch.setattr(hh, "simulate_league", _fake_simulate_league)
+    for strat in ("raw_vorp", "now_or_never"):
+        for seat in (2, 6, 11):
+            hh.simulate_hero_cell(
+                strategy_key=strat,
+                hero_seat=seat,
+                seed=3,
+                pool=pool,
+                config=cfg,
+                availability=stub_availability(pool),
+                proj_lookup=proj,
+                actual_lookup=actual,
+                calendar=cal,
+                jitter=8.0,
+                strategy_n_sims=5,
+                base_seed=100,
+            )
+    assert captured == [103] * 6
+
+
+def test_simulate_hero_cell_mc_requires_availability() -> None:
+    from projections.draft.backtest.hero_harness import simulate_hero_cell
+
+    pool, cal, proj, actual = _inputs()
+    with pytest.raises(ValueError, match="availability"):
+        simulate_hero_cell(
+            strategy_key="season_value",
+            hero_seat=1,
+            seed=0,
+            pool=pool,
+            config=_cfg16(),
+            availability=None,
+            proj_lookup=proj,
+            actual_lookup=actual,
+            calendar=cal,
+            jitter=8.0,
+            strategy_n_sims=5,
+            base_seed=0,
+        )
