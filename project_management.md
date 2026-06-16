@@ -4,6 +4,19 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — Live Draft Board UX pass (name fix + click-to-pick + best-available filter) — shipped (2026-06-16, branch `feat/draft-board-ux`)
+
+**Status:** Three board usability fixes, built spec → spec-review (2 iters) → plan → plan-review (2 iters) → subagent-driven execution via `superpowers-go`. Spec/plan `docs/superpowers/specs|plans/2026-06-16-draft-board-ux.*`. **Pure UI + name-data plumbing — no draft/strategy/engine-math change.**
+
+**What shipped:**
+- **Name fix (the "ADP suggests: —" bug).** 60/458 consensus-pool players are placeholder-gsis rookies absent from `id_map`, so the board showed "—". Now `full_name` is carried into the VORP table: Optional+nullable `VorpTableSchema.full_name`; the consensus generator merges it (`_merge_consensus_columns`); `LiveDraftSession.player_names` overlays pool `full_name` over id_map (pool wins, id_map fallback, then "—"); `cli.format_table` prefers the pool name too. **Guard interaction caught + fixed:** broadening `player_names` would have let `record_pick` accept a my-pick of an off-id_map rookie (then `build_draft_state` raises forever + poisons autosave) — so the my-pick guard now checks a dedicated `_id_map_ids` set directly, not the broadened display map. Regenerated `data/consensus_vorp_2026.parquet` (untracked artifact); verified `99-8467088 → "Jeremiyah Love"`, ADP suggestion → "Puka Nacua".
+- **Click-to-confirm picking.** Removed the top "Record a pick — search" box. Picks are now staged by clicking a row in the **center recommender** (your turn) or the **right best-available pane**, then a shared **Confirm pick** button records it (most-recent click wins via per-pane `on_select` callbacks; widgets keyed by `current_pick` to reset). The opponent ADP suggestion stays a separate one-click confirm.
+- **Best-available picker.** New `LiveDraftSession.available_for_pick(position, query, top)` (position filter incl. "All", case-insensitive name search, vorp-sorted, cap applied last so search/filter can reach deep players) rendered as a searchable + position-filterable selectable table.
+
+**Gates:** relevant subset (`tests/test_draft test_schemas test_scripts`) 644 passed / 1 net-skipped; schema-seam guard 236 passed; `mypy src tests` clean (312); ruff check + format clean (355). Each task TDD via fresh subagent + spec-compliance + code-quality review. **Deferred (one functional gap):** resolve my-roster position from the pool's `position` column so placeholder-gsis rookies are draftable to *my own* roster (today they're opponent-pick-only) — see TODO.
+
+---
+
 ## Draft Assistant — Hero-vs-Bots eval — shipped + run; reframes the strategy series (2026-06-16, branch `feat/hero-vs-bots-eval`, stacked on PR #72)
 
 **Status:** A second, **deployment-realistic** evaluation mode (and a methodology correction). The mixed-field H2H harness (Tests 7–10) seats multiple strategies in one league — which confounds each strategy's outcome via pool contention + schedule-vs-other-strategies, *not* how a real draft works (you run ONE strategy vs ~15 ADP-ish humans). This eval runs **each strategy as the sole hero vs a 15-bot field**, real-outcome H2H, **swept across all 16 seats** (slot-averaged headline, per-seat retained), **CRN across strategies**. Built spec → spec-review (3 iters) → plan → plan-review (2 iters) → inline execution via `superpowers-go`. Spec/plan `docs/superpowers/specs|plans/2026-06-16-hero-vs-bots-eval.*`.
