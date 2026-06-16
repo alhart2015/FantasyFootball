@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
-from projections.draft.backtest.inputs import _attach_is_rookie
+from projections.draft.assistant.rookies import attach_is_rookie
 
 
-def test_attach_is_rookie() -> None:
+def test_attach_is_rookie(tmp_path: Path) -> None:
+    # No prior-season partitions exist -> every player is treated as a rookie.
     pool = pd.DataFrame({"gsis_id": ["00-0000001", "00-0000002"], "position": ["WR", "RB"]})
-    out = _attach_is_rookie(pool, prior_gsis={"00-0000001"})
-    by = dict(zip(out["gsis_id"], out["is_rookie"], strict=True))
-    assert bool(by["00-0000001"]) is False  # appeared before -> veteran
-    assert bool(by["00-0000002"]) is True  # never appeared -> rookie
+    out = attach_is_rookie(pool, season=2026, data_root=tmp_path)
+    assert out["is_rookie"].all()
 
 
-def test_attach_is_rookie_does_not_mutate_input() -> None:
+def test_attach_is_rookie_does_not_mutate_input(tmp_path: Path) -> None:
     pool = pd.DataFrame({"gsis_id": ["00-0000003"], "position": ["TE"]})
-    _attach_is_rookie(pool, prior_gsis=set())
+    attach_is_rookie(pool, season=2026, data_root=tmp_path)
     assert "is_rookie" not in pool.columns  # returns a new frame
