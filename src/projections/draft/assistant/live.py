@@ -278,6 +278,30 @@ class LiveDraftSession:
                 out[pos] = sub.head(top).reset_index(drop=True)
         return out
 
+    def available_for_pick(
+        self, position: Position | None = None, query: str = "", top: int = 60
+    ) -> pd.DataFrame:
+        """Name-attached available players for the picker pane.
+
+        Filters to `position` (None = all positions), then to rows whose resolved name
+        contains `query` (case-insensitive substring; "" = no filter), sorts by vorp
+        descending, and caps to `top`. The cap is applied LAST — after the position and
+        query filters and the sort — so a position selection or a search can reach a deep
+        player an unfiltered cross-position top-N would hide. Names use the same
+        pool-over-id_map source as `player_names` (so rookies match what's displayed).
+        """
+        avail = self.available_pool()
+        if position is not None:
+            avail = avail[avail["position"] == position.value]
+        # Drop a pre-existing full_name column (pool-sourced) so attach_names can insert the
+        # canonical resolved name (pool-over-id_map) without a duplicate-column error.
+        if "full_name" in avail.columns:
+            avail = avail.drop(columns=["full_name"])
+        named = attach_names(avail, self.player_names)
+        if query:
+            named = named[named["full_name"].str.contains(query, case=False, na=False, regex=False)]
+        return named.sort_values("vorp", ascending=False).head(top).reset_index(drop=True)
+
     def mock_advance_to_my_pick(self) -> list[GsisId]:
         if self.mode != "mock":
             raise RuntimeError("mock_advance_to_my_pick is only valid in mock mode")

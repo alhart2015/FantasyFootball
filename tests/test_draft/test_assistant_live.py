@@ -467,3 +467,42 @@ def test_record_pick_off_id_map_rookie_allowed_for_opponent_when_named() -> None
     s.record_pick("99-8467088")
     assert "99-8467088" in s.picks
     s.state()  # must not raise (opponent picks need no id_map position)
+
+
+def test_available_for_pick_position_filter_and_all() -> None:
+    s = _session(pool=_pool_with_names())
+    rbs = s.available_for_pick(position=Position.RB, top=100)
+    assert set(rbs["position"]) == {"RB"}
+    allp = s.available_for_pick(position=None, top=100)
+    assert {"RB", "WR", "QB", "TE"} <= set(allp["position"])
+
+
+def test_available_for_pick_case_insensitive_name_query() -> None:
+    pool = pd.concat([_pool_with_names(), _rookie_row()], ignore_index=True)
+    s = _session(pool=pool)
+    hits = s.available_for_pick(query="rookie", top=100)
+    assert "99-8467088" in set(hits["gsis_id"])
+    assert all("rookie" in str(n).lower() for n in hits["full_name"])
+
+
+def test_available_for_pick_sorts_by_vorp_caps_and_attaches_names() -> None:
+    s = _session(pool=_pool_with_names())
+    out = s.available_for_pick(top=3)
+    assert "full_name" in out.columns
+    assert len(out) == 3
+    assert list(out["vorp"]) == sorted(out["vorp"], reverse=True)
+
+
+def test_available_for_pick_excludes_drafted() -> None:
+    s = _session(picks=["00-0000001"], pool=_pool_with_names())
+    out = s.available_for_pick(top=100)
+    assert "00-0000001" not in set(out["gsis_id"])
+
+
+def test_available_for_pick_cap_applied_after_filter_reaches_deep_player() -> None:
+    s = _session(pool=_pool_with_names())
+    cross_top3 = s.available_for_pick(position=None, top=3)  # highest VORP across positions
+    all_wrs = s.available_for_pick(position=Position.WR, top=100)
+    deep_wr = all_wrs.iloc[-1]["gsis_id"]  # lowest-VORP WR
+    assert deep_wr not in set(cross_top3["gsis_id"])  # hidden by the cross-position cap
+    assert deep_wr in set(all_wrs["gsis_id"])  # reachable once the position filter is applied
