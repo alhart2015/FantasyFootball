@@ -23,7 +23,7 @@ from projections.draft.assistant.live import (
 )
 from projections.draft.assistant.pick_timing import slot_for
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
+from projections.schemas import _PYARROW_STR, IdMapSchema, Position, VorpTableSchema
 
 _DEFAULT_VORP = "data/consensus_vorp_2026.parquet"
 _DEFAULT_ID_MAP = "data/raw/id_map.parquet"
@@ -208,20 +208,51 @@ def _record_and_rerun(s: LiveDraftSession, gsis_id: str) -> None:
     st.rerun()
 
 
-def _search_box(s: LiveDraftSession) -> None:
-    query = st.text_input("🔍 Record a pick — search a player", key=f"search_{s.current_pick}")
-    if not query:
+def _selectable(named: pd.DataFrame, cols: list[str], key: str) -> None:
+    """Render a single-row-selectable table; selecting a row stages `pending_pick`.
+
+    `named` must carry `gsis_id` with a clean 0..n-1 index (selection rows are positional).
+    The on_select callback (a closure over this render's frame + key) fires only for the
+    pane the user clicked, so across the two selectable panes the most-recent click wins.
+    """
+    show = [c for c in cols if c in named.columns]
+
+    def _stage() -> None:
+        state = st.session_state.get(key)
+        rows = state["selection"]["rows"] if state else []
+        if rows:
+            st.session_state["pending_pick"] = str(named.iloc[rows[0]]["gsis_id"])
+
+    st.dataframe(
+        named[show],
+        height=400,
+        hide_index=True,
+        selection_mode="single-row",
+        on_select=_stage,
+        key=key,
+    )
+
+
+def _confirm_bar(s: LiveDraftSession) -> None:
+    """Shared 'Confirm pick' / 'clear' controls for the staged selection (`pending_pick`)."""
+    pending = st.session_state.get("pending_pick")
+    if not pending:
         return
-    id_map = s.id_map
-    drafted = s.state().drafted_ids
-    hits = id_map[
-        id_map["full_name"].str.contains(query, case=False, na=False, regex=False)
-        & ~id_map["gsis_id"].isin(drafted)
-    ].head(8)
-    for row in hits.itertuples(index=False):
-        team = "" if pd.isna(row.team) else f" · {row.team}"
-        if st.button(f"{row.full_name} ({row.position}{team})", key=f"pick_{row.gsis_id}"):
-            _record_and_rerun(s, str(row.gsis_id))
+    name = s.name(str(pending))
+    confirm_col, clear_col = st.columns([4, 1])
+    if confirm_col.button(f"✅ Confirm pick: {name}", key="confirm_pending", type="primary"):
+        try:
+            s.record_pick(str(pending))
+        except ValueError as exc:  # already drafted, or my-pick rookie absent from id_map
+            st.warning(str(exc))
+            st.session_state["pending_pick"] = None  # don't let a rejected selection linger
+            return
+        st.session_state["pending_pick"] = None
+        _autosave(s)
+        st.rerun()
+    if clear_col.button("✕ clear", key="clear_pending"):
+        st.session_state["pending_pick"] = None
+        st.rerun()
 
 
 def _board_log_col(s: LiveDraftSession) -> None:
@@ -249,16 +280,16 @@ def _recommend_col(s: LiveDraftSession) -> None:
     if s.mode == "copilot" and not s.is_my_pick:
         sug = s.suggested_pick()
         if sug is not None:
-            name = s.name(sug)
+            name = s.name(str(sug))
             st.info(f"Opponent on the clock. ADP suggests: **{name}**")
-            if st.button(f"Confirm pick: {name}", type="primary"):
+            if st.button(f"Confirm pick: {name}", key="confirm_adp", type="primary"):
                 _record_and_rerun(s, str(sug))
-        st.caption("…or search below to record a different pick.")
+        st.caption("…or click a player in **Best available** (right) to record a different pick.")
         return
     with st.spinner("Scoring candidates…"):
         token = st.session_state.get("session_token", "")
         rec = _cached_recommendation(token, tuple(s.picks), s.strategy_name, s.n_sims, s.sigma)
-    named = attach_names(rec, s.player_names)
+    named = attach_names(rec, s.player_names).reset_index(drop=True)
     cols = [
         "rank",
         "full_name",
@@ -269,7 +300,8 @@ def _recommend_col(s: LiveDraftSession) -> None:
         "score",
         "fills_starting_slot",
     ]
-    st.dataframe(named[cols].head(20), height=480, hide_index=True)
+    st.caption("Click a row to stage it, then **Confirm pick** above.")
+    _selectable(named, cols, key=f"sel_rec_{s.current_pick}")
 
 
 def _roster_col(s: LiveDraftSession) -> None:
@@ -281,14 +313,25 @@ def _roster_col(s: LiveDraftSession) -> None:
             "Open starting slots: "
             + ", ".join(f"{slot.value} x{n}" for slot, n in view.open_slots.items())
         )
-    st.markdown("**Best available by position**")
-    best = s.best_available_by_position(top=3)
-    for pos, sub in best.items():
-        named = attach_names(sub, s.player_names)
-        st.caption(
-            f"{pos.value}: "
-            + ", ".join(f"{r.full_name} ({r.vorp:.0f})" for r in named.itertuples(index=False))
-        )
+
+
+def _best_available_col(s: LiveDraftSession) -> None:
+    st.markdown("**🔎 Best available**")
+    if s.is_complete:
+        return
+    pos_label = st.selectbox(
+        "Position", ["All", "QB", "RB", "WR", "TE"], key=f"ba_pos_{s.current_pick}"
+    )
+    query = st.text_input("Search player", key=f"ba_query_{s.current_pick}", placeholder="name…")
+    position = None if pos_label == "All" else Position(pos_label)
+    avail = s.available_for_pick(position=position, query=query, top=60)
+    if avail.empty:
+        st.caption("No matching available players.")
+        return
+    st.caption("Click a row to stage it, then **Confirm pick** above.")
+    _selectable(
+        avail, ["full_name", "position", "vorp", "consensus_adp"], key=f"sel_ba_{s.current_pick}"
+    )
 
 
 def _mock_controls(s: LiveDraftSession) -> None:
@@ -313,7 +356,7 @@ def main() -> None:
         st.info("Configure the draft in the sidebar and click **Start / restart draft**.")
         return
     _status_bar(s)
-    _search_box(s)
+    _confirm_bar(s)
     _mock_controls(s)
     left, center, right = st.columns([1.1, 2.0, 1.3])
     with left:
@@ -322,6 +365,7 @@ def main() -> None:
         _recommend_col(s)
     with right:
         _roster_col(s)
+        _best_available_col(s)
     st.caption(f"Mode: {s.mode} · strategy: {s.strategy_name} · {len(s.picks)} picks made")
 
 
