@@ -68,6 +68,23 @@ def get_preset(scoring_key: str, n_teams: int) -> DraftPreset:
     )
 
 
+def materialize_league_config(preset: DraftPreset, *, config_dir: Path | None = None) -> Path:
+    """Write the preset's in-memory `LeagueConfig` to a JSON file and return its path.
+
+    The live board's autosave persists the league config as a *path* (the CLI's
+    `load_draft_state` and `LiveDraftSession.load` both read it via `read_text()`), so a
+    preset-started draft must point at a real file to be resumable — without this it would
+    serialize `league_config: "."` and fail to resume. Idempotent: rewrites the canonical JSON
+    (next to the preset's table by default) each call. The file is an untracked artifact, like
+    the VORP tables.
+    """
+    target_dir = config_dir if config_dir is not None else preset.table_path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"{preset.scoring_key}_{preset.n_teams}team.league.json"
+    path.write_text(preset.league_config.model_dump_json(indent=2))
+    return path
+
+
 __all__ = [
     "DEFAULT_SCORING",
     "DEFAULT_TEAMS",
@@ -75,4 +92,5 @@ __all__ = [
     "TEAM_SIZES",
     "DraftPreset",
     "get_preset",
+    "materialize_league_config",
 ]

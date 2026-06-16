@@ -28,6 +28,7 @@ from projections.draft.assistant.presets import (
     SCORING_KEYS,
     TEAM_SIZES,
     get_preset,
+    materialize_league_config,
 )
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, IdMapSchema, Position, VorpTableSchema
@@ -128,11 +129,15 @@ def _sidebar() -> None:
 
     if st.sidebar.button("Start / restart draft", type="primary"):
         try:
+            # Persist the preset's in-memory config to a real file so autosave/resume (which
+            # store the league config as a PATH) work for preset-started drafts.
+            league_config_path = materialize_league_config(preset)
             _install_session(
                 _build_session(
                     vorp_path=Path(vorp_path),
                     id_map_path=Path(id_map_path),
                     league=preset.league_config,
+                    league_config_path=league_config_path,
                     my_slot=int(my_slot),
                     mode=mode,
                     strategy_name=strategy_name,

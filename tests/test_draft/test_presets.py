@@ -12,7 +12,9 @@ from projections.draft.assistant.presets import (
     SCORING_KEYS,
     TEAM_SIZES,
     get_preset,
+    materialize_league_config,
 )
+from projections.draft.league_config import LeagueConfig
 from projections.schemas import RosterSlot, Ruleset
 
 _SKILL = {
@@ -47,3 +49,13 @@ def test_get_preset_rejects_unknown() -> None:
         get_preset("nope", 16)
     with pytest.raises(ValueError, match="n_teams"):
         get_preset("half", 11)
+
+
+def test_materialize_league_config_writes_a_resumable_path(tmp_path: Path) -> None:
+    """Resume stores the league config as a PATH, so a preset-started draft must point at a real
+    file. The written JSON must round-trip back to the preset's config."""
+    preset = get_preset("half", 16)
+    path = materialize_league_config(preset, config_dir=tmp_path)
+    assert path.exists() and path.is_file()
+    loaded = LeagueConfig.model_validate_json(path.read_text())
+    assert loaded == preset.league_config
