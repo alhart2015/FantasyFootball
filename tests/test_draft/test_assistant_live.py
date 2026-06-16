@@ -214,6 +214,25 @@ def test_suggested_pick_none_when_pool_empty() -> None:
     assert s.suggested_pick() is None
 
 
+def test_suggested_pick_reproducible_and_seeded_under_jitter() -> None:
+    # The shared fixture pins adp_jitter=0.0, which zeroes the rng draws; this test uses
+    # jitter > 0 so the seed actually matters — guarding determinism + that base_seed is honored.
+    def sess(seed: int) -> LiveDraftSession:
+        return LiveDraftSession(
+            league=_league(),
+            my_slot=7,
+            id_map=_id_map(),
+            pool=_pool(),
+            strategy=_FakeStrategy(),
+            strategy_name="fake",
+            adp_jitter=8.0,
+            base_seed=seed,
+        )
+
+    assert sess(0).suggested_pick() == sess(0).suggested_pick()  # same seed → reproducible
+    assert sess(0).suggested_pick() != sess(1).suggested_pick()  # base_seed changes the pick
+
+
 def test_my_roster_view_assigns_slots_and_open_needs() -> None:
     picks = [f"00-000{i:04d}" for i in range(1, 7)]  # 6 opponent picks (ids 1..6)
     s = _session(picks=picks)
@@ -328,6 +347,13 @@ def test_save_load_round_trip(tmp_path: Path) -> None:
     s = _session(picks=["00-0000001"])
     s.league_config_path = cfg_path
     s.strategy_name = "raw_vorp"  # analytic → load needs no availability
+    # Set every persisted config field to a distinctive NON-default so a dropped/renamed
+    # key in to_state_dict or a wrong fallback in load() is caught (not just picks/slot).
+    s.mode = "mock"
+    s.adp_jitter = 4.0
+    s.n_sims = 175
+    s.season = 2024
+    s.sigma = 9.0
     save_path = tmp_path / "session.json"
     s.save(save_path)
 
@@ -335,3 +361,8 @@ def test_save_load_round_trip(tmp_path: Path) -> None:
     assert loaded.picks == ["00-0000001"]
     assert loaded.strategy_name == "raw_vorp"
     assert loaded.my_slot == 7
+    assert loaded.mode == "mock"
+    assert loaded.adp_jitter == 4.0
+    assert loaded.n_sims == 175
+    assert loaded.season == 2024
+    assert loaded.sigma == 9.0
