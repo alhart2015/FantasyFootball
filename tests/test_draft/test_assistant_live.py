@@ -64,6 +64,48 @@ def _pool() -> pd.DataFrame:
     )
 
 
+def _pool_with_names() -> pd.DataFrame:
+    """The shared pool plus a full_name column whose values differ from id_map's
+    ('Pool i' vs the id_map 'Pi') so 'pool name wins' is observable."""
+    pool = _pool()
+    pool["full_name"] = pd.array([f"Pool {i}" for i in range(1, 40)], dtype=_PYARROW_STR)
+    return pool
+
+
+def _rookie_row() -> pd.DataFrame:
+    """A placeholder-gsis rookie that lives in the VORP pool (with a name) but NOT in id_map."""
+    return pd.DataFrame(
+        {
+            "gsis_id": pd.array(["99-8467088"], dtype=_PYARROW_STR),
+            "position": pd.array(["RB"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [400.0],
+            "vorp": [200.0],
+            "replacement_fpts": [100.0],
+            "consensus_adp": pd.array([0.5], dtype=pd.Float64Dtype()),  # lowest -> picked first
+            "full_name": pd.array(["Rookie RB"], dtype=_PYARROW_STR),
+        }
+    )
+
+
+def test_player_names_prefers_pool_full_name_for_off_id_map_rookie() -> None:
+    pool = pd.concat([_pool_with_names(), _rookie_row()], ignore_index=True)
+    s = _session(pool=pool)
+    assert s.name("99-8467088") == "Rookie RB"
+    assert s.name("00-0000001") == "Pool 1"
+
+
+def test_player_names_falls_back_to_id_map_when_pool_name_null() -> None:
+    pool = _pool_with_names()
+    pool.loc[0, "full_name"] = pd.NA  # gsis 00-0000001 has no pool name
+    s = _session(pool=pool)
+    assert s.name("00-0000001") == "P1"
+
+
+def test_player_names_weekly_pool_without_full_name_uses_id_map() -> None:
+    s = _session(pool=_pool())  # _pool() has no full_name column
+    assert s.name("00-0000001") == "P1"
+
+
 class _FakeStrategy:
     """A DraftStrategy that returns the eligible pool sorted by vorp (no MC)."""
 
@@ -403,3 +445,25 @@ def test_build_session_strategy_floored_defaults() -> None:
     # Compare against the constants (not literals) so the A/B default change stays green.
     assert strat.floor == _DEFAULT_FLOOR
     assert strat.floor_weight == _DEFAULT_FLOOR_WEIGHT
+
+
+def test_record_pick_off_id_map_rookie_rejected_for_my_pick_even_when_named() -> None:
+    # The rookie now HAS a name in player_names (pool full_name), so the old guard
+    # (gid not in player_names) would wrongly allow it. The id_map guard must still reject
+    # it for my pick and NOT append (else the next state() would raise and poison the session).
+    pool = pd.concat([_pool_with_names(), _rookie_row()], ignore_index=True)
+    s = _session(picks=[f"00-000{i:04d}" for i in range(1, 7)], pool=pool)  # pick 7 is mine
+    assert s.is_my_pick
+    assert "99-8467088" in s.player_names  # broadened map contains the rookie
+    with pytest.raises(ValueError, match="id_map"):
+        s.record_pick("99-8467088")
+    assert "99-8467088" not in s.picks  # not appended
+
+
+def test_record_pick_off_id_map_rookie_allowed_for_opponent_when_named() -> None:
+    pool = pd.concat([_pool_with_names(), _rookie_row()], ignore_index=True)
+    s = _session(pool=pool)  # pick 1 is an opponent's
+    assert not s.is_my_pick
+    s.record_pick("99-8467088")
+    assert "99-8467088" in s.picks
+    s.state()  # must not raise (opponent picks need no id_map position)

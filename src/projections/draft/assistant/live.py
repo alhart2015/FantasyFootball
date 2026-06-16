@@ -147,9 +147,27 @@ class LiveDraftSession:
 
     @cached_property
     def player_names(self) -> dict[str, str]:
-        """gsis_id → full_name over the full id_map, built once per session (id_map is
-        immutable for the session's life). Used by attach_names + the view."""
-        return dict(zip(self.id_map["gsis_id"], self.id_map["full_name"], strict=False))
+        """gsis_id -> full_name: id_map names overlaid with the pool's own full_name.
+
+        The consensus VORP pool carries full_name for players absent from id_map
+        (placeholder-gsis rookies); those names win so every drafted/available player
+        resolves. A pool player with a null name falls back to id_map, then '—'.
+        """
+        names: dict[str, str] = dict(
+            zip(self.id_map["gsis_id"], self.id_map["full_name"], strict=False)
+        )
+        if "full_name" in self.pool.columns:
+            for gid, nm in zip(self.pool["gsis_id"], self.pool["full_name"], strict=False):
+                if pd.notna(nm):
+                    names[str(gid)] = str(nm)
+        return names
+
+    @cached_property
+    def _id_map_ids(self) -> frozenset[str]:
+        """gsis_ids present in id_map — the players whose position build_draft_state can
+        resolve. record_pick's my-pick guard checks this directly (player_names is no
+        longer id_map-only, so it can't stand in for id_map membership)."""
+        return frozenset(str(g) for g in self.id_map["gsis_id"])
 
     def name(self, gsis_id: str) -> str:
         """Display name for a gsis_id ('—' if absent)."""
@@ -199,12 +217,13 @@ class LiveDraftSession:
         gid = validate_gsis_id(str(gsis_id))
         if gid in self.state().drafted_ids:
             raise ValueError(f"{gid} already drafted")
-        # Only *my* picks need an id_map position (roster accounting via build_draft_state);
-        # player_names is keyed by the id_map gsis_ids, so absence there == absent from id_map.
+        # Only *my* picks need an id_map position (roster accounting via build_draft_state).
+        # player_names is now broader than id_map (it includes pool-only rookies), so it can
+        # no longer stand in for id_map membership; _id_map_ids is the authoritative check.
         # An opponent pick just leaves the available pool, so an off-id_map opponent pick
         # — e.g. a placeholder-gsis rookie carried in the VORP pool but not yet in id_map —
         # is fine; without this, mock_advance's bot picks would crash on such a player.
-        if self.on_clock_slot == self.my_slot and gid not in self.player_names:
+        if self.on_clock_slot == self.my_slot and gid not in self._id_map_ids:
             raise ValueError(f"{gid} absent from id_map (cannot resolve position for my roster)")
         self.picks.append(gid)
 
