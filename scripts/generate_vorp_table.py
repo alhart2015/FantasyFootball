@@ -138,6 +138,18 @@ def _warn_dropped_draftable(consensus: pd.DataFrame, league_config: LeagueConfig
         )
 
 
+def _merge_consensus_columns(out_df: pd.DataFrame, consensus: pd.DataFrame) -> pd.DataFrame:
+    """Attach the consensus market columns (consensus_adp, full_name) onto the VORP table.
+
+    full_name is the player's display name (incl. placeholder-gsis rookies the live board
+    must name). Returns a re-validated VorpTableSchema frame.
+    """
+    cols = consensus[["gsis_id", "consensus_adp", "full_name"]]
+    merged = out_df.merge(cols, on="gsis_id", how="left")
+    merged["gsis_id"] = merged["gsis_id"].astype(_PYARROW_STR)
+    return VorpTableSchema.validate(merged)
+
+
 def main() -> int:
     args = _parse_args()
     flag_error = _reject_irrelevant_flags(args)
@@ -177,10 +189,7 @@ def main() -> int:
     out_df = generate_vorp_table(season_proj, league_config)
 
     if consensus is not None:
-        adp = consensus[["gsis_id", "consensus_adp"]]
-        out_df = out_df.merge(adp, on="gsis_id", how="left")
-        out_df["gsis_id"] = out_df["gsis_id"].astype(_PYARROW_STR)
-        out_df = VorpTableSchema.validate(out_df)
+        out_df = _merge_consensus_columns(out_df, consensus)
 
     suffix = args.out.suffix.lower()
     if suffix == ".csv":
