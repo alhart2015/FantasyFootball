@@ -7,6 +7,7 @@ strategies. The deployment-realistic counterpart to the mixed-field harness (har
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 
 import pandas as pd
@@ -17,6 +18,7 @@ from projections.draft.backtest.draft_field import hero_seat_layout
 from projections.draft.backtest.harness import _build_strategy
 from projections.draft.backtest.league import Calendar, LeagueResult, simulate_league
 from projections.draft.league_config import LeagueConfig
+from projections.schemas import HeroResultSchema
 
 _MC_KEYS = frozenset({"season_value", "season_value_var", "season_value_timing"})
 
@@ -70,3 +72,38 @@ def simulate_hero_cell(
     (a,) = [r for r in outcome.actual if r.seat == hero_seat]
     (p,) = [r for r in outcome.projected if r.seat == hero_seat]
     return a, p
+
+
+@dataclasses.dataclass(frozen=True)
+class HeroCell:
+    """One simulated hero-vs-bots cell: the hero's result under both scorings."""
+
+    season: int
+    strategy: str
+    seat: int
+    seed: int
+    actual: LeagueResult
+    projected: LeagueResult
+
+
+def consolidate_cells(cells: list[HeroCell]) -> pd.DataFrame:
+    """Flatten cells into a long-format, validated HeroResultSchema frame."""
+    rows: list[dict[str, object]] = []
+    for c in cells:
+        for scoring, res in (("actual", c.actual), ("projected", c.projected)):
+            rows.append(
+                {
+                    "season": c.season,
+                    "strategy": c.strategy,
+                    "seat": c.seat,
+                    "seed": c.seed,
+                    "scoring": scoring,
+                    "wins": res.wins,
+                    "losses": res.losses,
+                    "made_playoffs": res.made_playoffs,
+                    "is_champion": res.is_champion,
+                    "points_for": res.points_for,
+                }
+            )
+    df = pd.DataFrame(rows)
+    return HeroResultSchema.validate(df)

@@ -150,3 +150,35 @@ def test_simulate_hero_cell_mc_requires_availability() -> None:
             strategy_n_sims=5,
             base_seed=0,
         )
+
+
+def test_consolidate_cells_to_schema() -> None:
+    from projections.draft.backtest.hero_harness import HeroCell, consolidate_cells
+    from projections.draft.backtest.league import LeagueResult
+    from projections.schemas import HeroResultSchema
+
+    a = LeagueResult(
+        seat=4,
+        strategy="now_or_never",
+        wins=8,
+        losses=6,
+        points_for=1200.0,
+        made_playoffs=True,
+        is_champion=False,
+    )
+    p = LeagueResult(
+        seat=4,
+        strategy="now_or_never",
+        wins=9,
+        losses=5,
+        points_for=1250.0,
+        made_playoffs=True,
+        is_champion=True,
+    )
+    cells = [HeroCell(season=2025, strategy="now_or_never", seat=4, seed=0, actual=a, projected=p)]
+    df = consolidate_cells(cells)
+    HeroResultSchema.validate(df)
+    assert set(df["scoring"]) == {"actual", "projected"}
+    assert len(df) == 2
+    row = df[(df["scoring"] == "actual")].iloc[0]
+    assert row["strategy"] == "now_or_never" and row["seat"] == 4 and row["wins"] == 8

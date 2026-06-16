@@ -1061,6 +1061,33 @@ class RecommendationSchema(pa.DataFrameModel):
         coerce = True
 
 
+class HeroResultSchema(pa.DataFrameModel):
+    """Long-format hero-vs-bots eval results — one row per (cell, scoring).
+
+    A cell is one (season, strategy, seat, seed) sole-hero-vs-bots league; each cell
+    contributes two rows (`scoring` in {"actual", "projected"}) carrying the hero seat's
+    season result. `strategy` is a real strategy key (never "bot" — the bot baseline is
+    structural, computed at report time, not stored).
+    """
+
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    # Aliased: the column is "strategy"; the attribute can't be (DataFrameModel.strategy
+    # is a reserved classmethod).
+    strategy_key: Series[str] = pa.Field(alias="strategy")
+    seat: Series[int] = pa.Field(ge=1)
+    seed: Series[int] = pa.Field(ge=0)
+    scoring: Series[str] = pa.Field(isin=("actual", "projected"))
+    wins: Series[int] = pa.Field(ge=0)
+    losses: Series[int] = pa.Field(ge=0)
+    made_playoffs: Series[bool]
+    is_champion: Series[bool]
+    points_for: Series[float] = pa.Field(ge=0)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
 class PreseasonFeaturesSchema(pa.DataFrameModel):
     """One row per (gsis_id, season) for every player on depth_charts_{season}
     with position in {QB, RB, WR, TE}. Inputs to PreseasonModel.predict_season_distribution.
