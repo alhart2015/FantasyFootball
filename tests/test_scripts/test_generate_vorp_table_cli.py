@@ -340,6 +340,11 @@ def test_cli_consensus_mode_round_trip(cli_inputs: dict[str, Path], tmp_path: Pa
     VorpTableSchema.validate(out)
     assert "consensus_adp" in out.columns
     assert out["consensus_adp"].notna().all()
+    # full_name is carried from the consensus snapshot (in-pool players all have one).
+    assert "full_name" in out.columns
+    assert out["full_name"].notna().all()
+    # A known QB maps to its consensus full_name ("QB Player 0").
+    assert dict(zip(out["gsis_id"], out["full_name"], strict=False))["00-1000000"] == "QB Player 0"
     # The ADP-only "Hyped Rookie" is NOT in the VORP table (no points to rank on).
     assert "00-3999999" not in set(out["gsis_id"])
     # ...but the CLI WARNED about dropping a draftable player.
@@ -419,6 +424,40 @@ def test_cli_rejects_weekly_projections_in_consensus_mode(cli_inputs: dict[str, 
     )
     assert proc.returncode != 0
     assert "--weekly-projections is only valid with --source weekly" in proc.stderr
+
+
+def test_merge_consensus_columns_carries_full_name() -> None:
+    """The consensus merge attaches consensus_adp AND full_name onto the VORP table
+    (cheap unit check — no store round-trip)."""
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(repo_root / "scripts"))
+    from generate_vorp_table import _merge_consensus_columns
+
+    out_df = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-1000001", "00-2000001"], dtype=_PYARROW_STR),
+            "position": pd.array([Position.QB.value, Position.RB.value], dtype=_PYARROW_STR),
+            "season_mean_fpts": [320.0, 260.0],
+            "vorp": [80.0, 30.0],
+            "replacement_fpts": [240.0, 230.0],
+        }
+    )
+    consensus = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-1000001", "00-2000001"], dtype=_PYARROW_STR),
+            "consensus_adp": pd.array([2.0, 14.0], dtype=pd.Float64Dtype()),
+            "full_name": pd.array(["Patrick Mahomes", "Bijan Robinson"], dtype=_PYARROW_STR),
+        }
+    )
+    merged = _merge_consensus_columns(out_df, consensus)
+    assert "full_name" in merged.columns
+    assert dict(zip(merged["gsis_id"], merged["full_name"], strict=False)) == {
+        "00-1000001": "Patrick Mahomes",
+        "00-2000001": "Bijan Robinson",
+    }
 
 
 def test_cli_rejects_asof_in_weekly_mode(cli_inputs: dict[str, Path]) -> None:

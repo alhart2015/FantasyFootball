@@ -76,18 +76,34 @@ def generate_recommendation(
         floor=floor,
         floor_weight=floor_weight,
     )
-    return strategy.recommend(state, vorp, league), id_map
+    rec = strategy.recommend(state, vorp, league)
+    if "full_name" in vorp.columns:
+        # Carry the pool's display name (incl. placeholder-gsis rookies absent from id_map)
+        # so format_table can prefer it over id_map — consistent with the live board.
+        rec = rec.merge(vorp[["gsis_id", "full_name"]], on="gsis_id", how="left")
+    return rec, id_map
 
 
 def format_table(rec: pd.DataFrame, id_map: pd.DataFrame, top: int) -> str:
-    """Render the top-N recommendation as a fixed-width text table."""
+    """Render the top-N recommendation as a fixed-width text table.
+
+    Display name prefers the pool's full_name (carried on rec by generate_recommendation,
+    incl. placeholder-gsis rookies) and falls back to id_map, then '-'.
+    """
     names = dict(zip(id_map["gsis_id"], id_map["full_name"], strict=False))
+    has_pool_name = "full_name" in rec.columns
     header = (
         f"{'#':>3}  {'PLAYER':<24} {'POS':<4} {'VORP':>7} {'ADP':>6} {'P(next)':>8} {'SCORE':>8}"
     )
     lines = [header]
     for row in rec.head(top).itertuples(index=False):
-        name = str(names.get(row.gsis_id, "-"))[:24]
+        pool_name = getattr(row, "full_name", None) if has_pool_name else None
+        resolved = (
+            pool_name
+            if pool_name is not None and pd.notna(pool_name)
+            else names.get(row.gsis_id, "-")
+        )
+        name = str(resolved)[:24]
         adp = f"{float(row.consensus_adp):.1f}" if pd.notna(row.consensus_adp) else "-"
         p_next = f"{float(row.p_available_next):.2f}" if pd.notna(row.p_available_next) else "-"
         star = "*" if row.fills_starting_slot else " "

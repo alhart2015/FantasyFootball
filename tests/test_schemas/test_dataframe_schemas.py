@@ -1094,6 +1094,29 @@ def test_external_projection_schema_accepts_espn_and_sleeper_rows() -> None:
     assert len(validated) == 2
 
 
+def test_vorp_table_schema_accepts_optional_full_name() -> None:
+    """Consensus-fed VORP tables carry full_name; weekly-fed ones do not.
+    The column is Optional + nullable so both validate."""
+    base = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-1000001", "00-2000001"], dtype=_PYARROW_STR),
+            "position": pd.array([Position.QB.value, Position.RB.value], dtype=_PYARROW_STR),
+            "season_mean_fpts": pd.array([320.0, 260.0], dtype="float64"),
+            "vorp": pd.array([80.0, 30.0], dtype="float64"),
+            "replacement_fpts": pd.array([240.0, 230.0], dtype="float64"),
+        }
+    )
+    # Without full_name (weekly path) -> still validates.
+    VorpTableSchema.validate(base)
+
+    # With full_name (consensus path), including a null -> validates and the column survives.
+    with_names = base.copy()
+    with_names["full_name"] = pd.array(["Patrick Mahomes", pd.NA], dtype=_PYARROW_STR)
+    validated = VorpTableSchema.validate(with_names)
+    assert "full_name" in validated.columns
+    assert validated["full_name"].iloc[0] == "Patrick Mahomes"
+
+
 def test_vorp_table_schema_accepts_optional_consensus_adp() -> None:
     """Consensus-fed VORP tables carry consensus_adp; weekly-fed ones do not.
     The column is Optional so both validate."""
