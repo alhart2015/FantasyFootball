@@ -4,6 +4,20 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — `now_or_never_floored` strategy — code shipped, A/B pending (2026-06-16, on branch `feat/now-or-never-floored`)
+
+**Status:** TODO #42's scarcity-floor strategy is **built, wired, and gated** — a new, separate, A/B-able `DraftStrategy` that is `now_or_never` plus a one-sided hinge penalty below an absolute VORP bar. Built spec → spec-review loop → plan → plan-review loop → inline execution via `superpowers-go`. Spec/plan at `docs/superpowers/specs|plans/2026-06-16-now-or-never-floored.*`. **The H2H A/B run (Task 4) is the one remaining step** — deferred because it needs the real 2024/2025 data (absent from this worktree) and the BSOD-prone chunked harness.
+
+**What it is:** `score = vorp - E[best survivor at pos by my next pick] - floor_weight·max(0, floor - vorp)`. The hinge demotes sub-`floor` players so the dynamic-scarcity term can no longer float a best-of-a-bad-tier player (the Test 7 TE over-investment, 23% of capital) over a better one elsewhere. **`floor_weight = 0` reproduces `now_or_never` byte-for-byte** (pinned test) — `now_or_never` itself is untouched (the A/B control). Provisional defaults `F=40` / `λ=1` live in `_DEFAULT_FLOOR` / `_DEFAULT_FLOOR_WEIGHT` (single source of truth, set from the A/B winner later).
+
+**What shipped (`src/projections/draft/assistant/` + `backtest/`):** `NowOrNeverFlooredStrategy` (`strategy.py`, reuses `expected_best_by_position` + `_finalize` unchanged; last-pick → raw VORP like nn; `__post_init__` guards `floor_weight>=0` + finiteness); registered in `STRATEGY_KEYS`, the assistant CLI (`--floor`/`--floor-weight`, auto-surfaced via `STRATEGY_KEYS`), the live board (`build_session_strategy` branch + added to `BOARD_STRATEGIES`; analytic, NOT in `MC_STRATEGIES`), and the H2H harness registry (`_build_strategy`/`collect_results`/`run_backtest` + both runners). The chunked runner forwards `--floor`/`--floor-weight` to workers and records them in the checkpoint manifest via a new pure `_run_key()` (resume with a changed floor now fails loud).
+
+**Gates:** `pytest -k "draft or ingest or store or schemas"` 567 passed / 11 network-skipped; `mypy src tests` clean (308 files); ruff check + format clean. Each task TDD (red→green→commit); the default `(now_or_never, season_value)` harness path stays byte-identical (existing equivalence tests green).
+
+**Remaining — Task 4 (run where the 2024/2025 data lives, PowerShell + `KMP_DUPLICATE_LIB_OK=TRUE`, chunked runner):** two-stage A/B — coarse 2025-only screen over `F∈{0,20,40,60}×λ∈{0.5,1,2}` at reduced seeds → full 200×200 confirm of the best 1–2 vs `now_or_never` + bot on 2024 **and** 2025. Then log a Test entry in `reports/draft_strategy_tests.md` and set `_DEFAULT_FLOOR`/`_DEFAULT_FLOOR_WEIGHT` to the winner. **No adopt/reject verdict** (decide-at-end rule). Example: `python scripts/h2h_backtest_chunked.py --season 2025 --league-config configs/league_espn_ppr_12team_skill.json --n-seeds 60 --strategy-a now_or_never_floored --strategy-b now_or_never --floor 40 --floor-weight 1 --checkpoint-dir _ckpt/floor_F40_L1_2025`.
+
+---
+
 ## Draft Assistant — Live Draft Board (Slice 3, the UI) — shipped (2026-06-15, on branch `feat/live-draft-board`)
 
 **Status:** The final Draft Assistant slice — a Streamlit live-draft board over the existing engine, with **two modes** sharing one board: **co-pilot** (log every real pick; opponents get a one-click ADP smart-assist) and **mock** (opponents auto-drafted by the ADP bot; "advance to my pick" + end-of-draft scorecard). Built spec → spec-review loop → plan → plan-review loop → inline execution via `superpowers-go`. Spec/plan at `docs/superpowers/specs|plans/2026-06-15-live-draft-board.*`.
