@@ -378,15 +378,17 @@ git commit -m "feat(draft): player_names overlays pool names; record_pick guard 
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/test_draft/test_assistant_cli.py`:
+Add to `tests/test_draft/test_assistant_cli.py` (uses the existing `pd`, `pytest`, `_PYARROW_STR`, `run`, `_setup` imports; takes the `capsys` fixture exactly like `test_run_prints_table`):
 
 ```python
-def test_cli_prefers_pool_full_name_over_id_map(tmp_path: Path) -> None:
+def test_cli_prefers_pool_full_name_over_id_map(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """A placeholder-gsis rookie absent from id_map but named in the VORP pool prints its
-    pool name; an in-id_map player still prints (id_map fallback when the pool has no name)."""
+    pool name; in-id_map players still print (id_map fallback when the pool has no name)."""
     state_path, _vorp_path, id_path = _setup(tmp_path)
-    # Rewrite the vorp pool: keep the two id_map players, add a rookie absent from id_map,
-    # and give the pool its own full_name column.
+    # A vorp pool with the two id_map players + a rookie absent from id_map, plus its own
+    # full_name column (the consensus path now carries it — Task 2).
     vorp = pd.DataFrame(
         {
             "gsis_id": pd.array(
@@ -413,26 +415,9 @@ def test_cli_prefers_pool_full_name_over_id_map(tmp_path: Path) -> None:
         ]
     )
     assert code == 0
-    out = capsys_out()
+    out = capsys.readouterr().out
     assert "Rookie RB" in out  # named from the pool (absent from id_map)
 ```
-
-Then add this tiny capture helper near the top of the file (after the imports) so the test can read stdout without threading `capsys` through `_setup`:
-
-```python
-def capsys_out() -> str:  # pragma: no cover - test scaffolding
-    raise AssertionError("replaced per-test by capsys")
-```
-
-Replace the test body's `out = capsys_out()` line with the standard fixture instead — i.e. give the test the `capsys` parameter and use it directly:
-
-```python
-def test_cli_prefers_pool_full_name_over_id_map(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-```
-
-and `out = capsys.readouterr().out`. (Do NOT add the `capsys_out` stub — it was only illustrative; use the `capsys` fixture exactly like `test_run_prints_table`.)
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -666,6 +651,7 @@ def _confirm_bar(s: LiveDraftSession) -> None:
             s.record_pick(str(pending))
         except ValueError as exc:  # already drafted, or my-pick rookie absent from id_map
             st.warning(str(exc))
+            st.session_state["pending_pick"] = None  # don't let a rejected selection linger
             return
         st.session_state["pending_pick"] = None
         _autosave(s)
