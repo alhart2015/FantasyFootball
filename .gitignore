@@ -239,3 +239,7 @@ data/features_probe/
 
 # Probe / adoption-gate stderr capture (LightGBM warnings etc; transient)
 reports/*.stderr
+
+# hero-vs-bots eval (resumable per-cell checkpoints + derived results)
+_hero_*/
+data/backtest/hero_eval/

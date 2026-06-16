@@ -4,6 +4,22 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — Hero-vs-Bots eval — shipped + run; reframes the strategy series (2026-06-16, branch `feat/hero-vs-bots-eval`, stacked on PR #72)
+
+**Status:** A second, **deployment-realistic** evaluation mode (and a methodology correction). The mixed-field H2H harness (Tests 7–10) seats multiple strategies in one league — which confounds each strategy's outcome via pool contention + schedule-vs-other-strategies, *not* how a real draft works (you run ONE strategy vs ~15 ADP-ish humans). This eval runs **each strategy as the sole hero vs a 15-bot field**, real-outcome H2H, **swept across all 16 seats** (slot-averaged headline, per-seat retained), **CRN across strategies**. Built spec → spec-review (3 iters) → plan → plan-review (2 iters) → inline execution via `superpowers-go`. Spec/plan `docs/superpowers/specs|plans/2026-06-16-hero-vs-bots-eval.*`.
+
+**What shipped (`src/projections/draft/backtest/`):** `hero_seat_layout` (any team count, `draft_field.py`); `simulate_hero_cell` (one cell, reuses `simulate_league`; league seed = `base_seed + seed`, seat/strategy-independent → CRN); `collect_hero_cells` (resumable atomic per-cell JSON checkpoints) + `load_hero_cells` (fail-loud, for report); `HeroResultSchema` (schemas.py, long-format; `strategy` column aliased — `DataFrameModel.strategy` is reserved); `hero_aggregate` (seat-avg / per-seat / paired-diff / **structural** bot baseline = avg team: win 0.5, playoff `playoff_size/n`, champ `1/n`); `hero_cli` + `scripts/hero_backtest.py` (`run`/`report`). Mixed-field harness untouched. 14 new tests incl. a CRN-seed guard.
+
+**Result (Test 11 in `reports/draft_strategy_tests.md`; 16-team half-PPR, N=25, FIVE seasons 2021–2025 = 2000 paired samples/strategy):**
+- **Most consistent signal (in isolation, not a verdict): the scarcity floor.** `now_or_never_floored` exceeds `now_or_never` by a pooled paired **+2.35 win% [CI +1.72, +2.98]**, ahead in **4/5** seasons, season-best in 3 — a recorded data point, not a recommendation to adopt.
+- **Per-season rankings swing wildly** (sv best 2021, raw_vorp best 2025, floored best 2022–24, all bunched ~80% in 2022) — **two seasons was misleading.** The user pushed for more data; it corrected a wrong conclusion.
+- **CORRECTION to the earlier 2-season cut:** "`season_value` is bottom-tier / simple value wins" was a 2024–25 artifact. Over 5 seasons `season_value` is the **best in 2021** (+9.7), strong in 2023, and pooled **~neutral vs nn (+0.68, CI brackets 0) but high-variance** (−6.8…+9.7); `raw_vorp` is the **worst on average** (−1.02). So `season_value` is competitive-but-season-dependent, **not** dominant (mixed-field claim) and **not** bottom-tier (2-season claim).
+- **`season_value_var ≈ season_value` across all 5 seasons** (pooled −0.31 vs +0.68) — determinism control holds; mean-preserving variance gives no draft benefit + validates harness MC stability. Updates memory [[hero-vs-bots-reframes-strategy-ranking]] (the 2-season "sv bottom-tier" was corrected).
+
+**Gates:** `pytest -k "draft or ingest or store or schemas"` 581 passed; `mypy src tests` clean (312); ruff clean. Each task TDD. **No cross-strategy adopt/reject verdict — pure data-gathering** (the draft is months out; the single strategy decision is the end-of-investigation call). **Deferred (top lever):** a better human-opponent model than noisy-ADP — the whole eval rests on the bots (TODO #46); also chunked/parallel sweep; per-slot breakdowns; extend N beyond 25; more seasons / formats.
+
+---
+
 ## Draft Assistant — `now_or_never_floored` strategy — shipped + A/B'd (2026-06-16, on branch `feat/now-or-never-floored`, PR #72)
 
 **Status:** TODO #42's scarcity-floor strategy is **built, wired, gated, and validated** — a new, separate, A/B-able `DraftStrategy` that is `now_or_never` plus a one-sided hinge penalty below an absolute VORP bar. Built spec → spec-review loop → plan → plan-review loop → inline execution via `superpowers-go`. Spec/plan at `docs/superpowers/specs|plans/2026-06-16-now-or-never-floored.*`. **A/B result: the floor makes `now_or_never` reliable** — big CI-separated win in 2025 (the season nn ≈ bot), neutral-to-slightly-positive in 2024 (where nn already won), never hurts. Full numbers in `reports/draft_strategy_tests.md` **Test 10**.

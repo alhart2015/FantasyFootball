@@ -239,6 +239,46 @@ Bots in fact *edge* nn on actual win% (paired −1.40 [−2.67, −0.11]); the s
 
 ---
 
+### Test 11 — Hero-vs-bots eval (deployment-realistic; all 6 strategies, 2021–2025) — **HIGH VALUE / reframes the series**
+
+**Why this exists — the methodology fix.** Tests 1–10 seat *multiple strategies in one league* (4 A + 4 B + 8 bots). That answers "if A and B share a draft, who wins," but **not the question a drafter faces**: you run ONE strategy against ~15 humans (≈ ADP bots), not a field salted with copies of A and B. The mixed field confounds each strategy's outcome via pool contention (A and B cannibalize each other's targets) and schedule (you play other A/B teams, never in reality). This eval runs **each strategy as the sole hero** vs a 15-bot field, real-outcome H2H, **swept across all 16 seats** (slot-averaged headline; per-seat retained), **CRN across strategies** (league seed = `base_seed + seed`, seat/strategy-independent → paired). New harness: `src/projections/draft/backtest/hero_harness.py` + `scripts/hero_backtest.py` (branch `feat/hero-vs-bots-eval`; spec/plan `docs/superpowers/specs|plans/2026-06-16-hero-vs-bots-eval.*`). 16-team half-PPR, **N=25 seeds × 16 seats = 400 samples/strategy/season**, MC strategies at `strategy_n_sims=50`. **Run on five seasons (2021–2025)** — two seasons (the first cut) proved misleading (see correction below).
+
+**Per-season WIN% (ACTUAL axis; bold = season best):**
+
+| strategy | 2021 | 2022 | 2023 | 2024 | 2025 |
+|----------|------|------|------|------|------|
+| now_or_never | 58.3 | 79.6 | 74.3 | 74.0 | 59.9 |
+| now_or_never_floored | 59.9 | **80.5** | **80.7** | **77.6** | 59.2 |
+| raw_vorp | 56.1 | 79.4 | 76.1 | 67.6 | **61.8** |
+| season_value | **68.0** | 79.8 | 80.2 | 67.2 | 54.3 |
+| season_value_timing | 65.5 | 80.4 | 75.5 | 71.3 | 59.6 |
+| season_value_var | 66.4 | 79.0 | 79.2 | 66.2 | 53.8 |
+| bot (avg team) | 50.0 | 50.0 | 50.0 | 50.0 | 50.0 |
+
+Per-season *rankings swing wildly*: `season_value` best in 2021, `raw_vorp` best in 2025, `now_or_never_floored` best in 2022–2024, everyone bunched ~80% in 2022. **No two-season cut is trustworthy** — exactly why all five were run.
+
+**Pooled paired ΔWIN% vs `now_or_never` (per season+seat+seed, 5 seasons = 2000 paired samples/strategy):**
+
+| strategy | pooled ΔWIN% | 95% CI | seasons ≥ nn |
+|----------|--------------|--------|--------------|
+| **now_or_never_floored** | **+2.35** | [+1.72, +2.98] | **4 / 5** |
+| season_value_timing | +1.25 | [+0.44, +2.05] | 3 / 5 |
+| season_value | +0.68 | [−0.16, +1.51] | 3 / 5 |
+| season_value_var | −0.31 | [−1.12, +0.50] | 2 / 5 |
+| raw_vorp | −1.02 | [−1.80, −0.24] | 2 / 5 |
+
+**Per-slot pattern (exploratory; per-seat = 125 samples, noisier than the pooled headline).** Best strategy by draft slot, pooled across 5 seasons: **early slots 1–4 favor the season-value family** — `season_value_timing` at 1–2, `season_value` at 3–4 (the longest round-1→2 waits, where depth + pick-timing planning helps most); **the broad middle, slots 5–14, favors `now_or_never_floored`** (the single best at 10 consecutive seats); **slots 15–16 mixed** (sv at 15, floored at 16). Notably *not* a simple "long wait → scarcity strategy" story — the long-wait early seats favor `season_value`, not `now_or_never`. Single-seat gaps are often within noise; the signal is the consistency across *adjacent* seats. Recorded in isolation as a data point (no per-slot recommendation); full per-`(strategy, seat)` detail in `data/backtest/hero_eval/{2021..2025}.parquet`.
+
+**What the five seasons show (recorded in isolation — data-gathering, NOT a verdict).**
+- **The most consistent signal is the scarcity floor:** `now_or_never_floored` exceeds `now_or_never` by a CI-separated **+2.35 win%** pooled across five seasons, ahead in **4/5** and season-best in three. This is what the eval favors *in isolation*; it is **not** a recommendation to adopt — that call is reserved for the single end-of-investigation decision (the draft is months out).
+- **CORRECTION to the two-season cut (2024–2025).** The first run suggested "`season_value` is bottom-tier / simple value wins" — that was a **2024–2025 artifact and is wrong over five seasons.** `season_value` was the **best** strategy in 2021 (+9.7) and strong in 2023 (+5.8); pooled, it is **~neutral vs nn (+0.68, CI brackets 0) but very high-variance** (range −6.8 to +9.7). And `raw_vorp`, which topped 2025, is the **worst on average** (−1.02). So neither the mixed-field "sv dominates" nor the 2-season "sv is bad" holds: `season_value` is competitive-but-season-dependent, not dominant and not bottom-tier.
+- **`season_value_var ≈ season_value` across all five seasons** (pooled −0.31 vs +0.68; ≈1% apart each year) — the determinism control holds robustly: the mean-preserving variance model does not re-rank picks (and the harness's MC is stable, or sv_var would diverge). Confirms "no draft benefit."
+- **What survives vs the mixed field:** the mixed-field `sv > nn > bot` *ordering* still doesn't hold solo (sv isn't a clear winner) — but the corrected story is "high-variance, ~neutral," not "loses." Every strategy clears the 50% average-team bot in every season.
+
+**No cross-strategy adopt/reject verdict** — we are gathering data, not committing to a strategy (the draft is months away; the single decision comes at the end of the investigation). In isolation the eval most consistently favors `now_or_never_floored` over `now_or_never`; `season_value`'s edge is real some years and gone others. Caveats: N=25 / five seasons / one format / one ruleset; **bots are a noisy-ADP human proxy — the single biggest realism lever and the top follow-up** (TODO #46), since the whole eval rests on them. Per-seat results retained in `data/backtest/hero_eval/{2021..2025}.parquet` (e.g. 2024: the floor helps most at the wings, +4.4 win% at seats 1–3/14–16). Reproduce: `scripts/hero_backtest.py run --season <Y> --league-config configs/league_espn_half_16team.json --n-seeds 25 --strategy-n-sims 50 --checkpoint-dir _hero_<Y>` then `... report ...` (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
+
+---
+
 ## Future tests (backlog)
 
 ### F1 — Head-to-head season simulation (the realistic objective) — ✅ DONE → see **Test 7 (F1)** above. sv wins more games + playoff berths (both scorings); championship a wash (nn ≈ sv).
