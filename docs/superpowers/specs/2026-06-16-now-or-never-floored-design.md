@@ -30,12 +30,14 @@ A frozen dataclass behind the existing `DraftStrategy` protocol (CLI key `now_or
 ```
 NowOrNeverFlooredStrategy(
     survival: SurvivalModel,
-    floor: float = 30.0,        # F: quality bar, VORP units (replacement = 0)
+    floor: float = 40.0,        # F: quality bar, VORP units (replacement = 0)
     floor_weight: float = 1.0,  # λ: hinge hardness (0 = exactly now_or_never)
 )
 ```
 
-`__post_init__` validates `floor_weight >= 0` (a negative weight would *reward* being below the bar) and that `floor`/`floor_weight` are finite (not NaN/inf — a NaN floor would silently turn every penalty into NaN and collapse the score column to null). `floor` itself is unconstrained in sign: `F = 0` penalizes only below-replacement players; `F = 30` penalizes everyone below 30 VORP.
+`__post_init__` validates `floor_weight >= 0` (a negative weight would *reward* being below the bar) and that `floor`/`floor_weight` are finite (not NaN/inf — a NaN floor would silently turn every penalty into NaN and collapse the score column to null). `floor` itself is unconstrained in sign: `F = 0` penalizes only below-replacement players; `F = 40` penalizes everyone below 40 VORP.
+
+**The `40.0` / `1.0` defaults are PROVISIONAL** — a mid-grid starting point, not a tuned recommendation. The shipped default is set from the A/B winner (§8); `40` is a grid point so the validation directly evaluates the default. This strategy is **analytic** (no Monte-Carlo) — like `now_or_never`, it must **not** be added to `MC_STRATEGIES` (`live.py`) and requires no availability load.
 
 **`recommend(state, pool, config) -> RecommendationSchema`:**
 
@@ -62,7 +64,7 @@ NowOrNeverFlooredStrategy(
 The H2H harness (`src/projections/draft/backtest/`) already supports arbitrary strategy pairs via `--strategy-a`/`--strategy-b` and a key→`DraftStrategy` registry (`_build_strategy`, shipped in the `season_value_timing` slice). This slice only:
 
 - **Adds `"now_or_never_floored"` to `STRATEGY_KEYS`** (`strategy.py`) and to the harness registry, constructed like `now_or_never` — `survival = LogisticSurvival(default_sigma(config.n_teams))` — plus the new `floor` / `floor_weight`.
-- **Threads `floor` / `floor_weight` through the registry** as optional params (defaults `30.0` / `1.0`), consumed only when a role's key is `now_or_never_floored`; ignored for every other key.
+- **Threads `floor` / `floor_weight` through the registry** as optional params (defaults `40.0` / `1.0`), consumed only when a role's key is `now_or_never_floored`; ignored for every other key.
 - **Adds `--floor` / `--floor-weight` flags** to `scripts/h2h_backtest.py` and `scripts/h2h_backtest_chunked.py`, feeding those params so the `(F, λ)` grid can be swept across runs. Existing `--strategy-n-sims` / σ behavior is untouched.
 - **The checkpoint manifest guard** (`checkpoint.verify_or_write_manifest`) must include `floor` / `floor_weight` so a resume with a different floor cannot silently pool mismatched chunks (the same provenance concern TODO #43 closed for the strategy pair).
 - **Default `(now_or_never, season_value)` reproduces today byte-identically** — existing harness tests, the seat-weighted-champion identity, and `test_chunked_collection_matches_monolithic` stay green.
@@ -71,8 +73,9 @@ To test this strategy: run `A = now_or_never_floored`, `B = now_or_never` (and b
 
 ## 6. Live assistant CLI + board
 
-- `scripts/draft_assistant.py` / `assistant/cli.py` gains `--strategy now_or_never_floored` with `--floor` / `--floor-weight` (defaults `30.0` / `1.0`), constructed from the already-wired `--sigma` (survival, like `now_or_never`). Default strategy unchanged.
-- The shared `build_session_strategy` seam (used by both the CLI and the live board) gains the key, constructed with `floor` / `floor_weight` parameters that **default** to `30.0` / `1.0`. Adding the key makes the strategy **selectable on the live board** at the default `(F, λ)` with no further UI work. Exposing `floor` / `floor_weight` as **board sliders is a deferred polish** (non-goal for v1) — the board offers the strategy at its validated default.
+- `scripts/draft_assistant.py` / `assistant/cli.py` gains `--strategy now_or_never_floored` with `--floor` / `--floor-weight` (defaults `40.0` / `1.0`), constructed from the already-wired `--sigma` (survival, like `now_or_never`). The CLI's `--strategy` choices come from `STRATEGY_KEYS` (`cli.py:110`), so registering the key surfaces it on the CLI automatically. Default strategy unchanged.
+- The shared `build_session_strategy` seam (`live.py`, used by both the CLI and the live board) gains a `now_or_never_floored` branch constructing `NowOrNeverFlooredStrategy(LogisticSurvival(sigma=spread), floor=…, floor_weight=…)`, with new `floor` / `floor_weight` keyword params that **default** to `40.0` / `1.0`.
+- **The board does NOT auto-enumerate `STRATEGY_KEYS`** — it offers a curated tuple `BOARD_STRATEGIES` (`live.py`). Surfacing the strategy on the board therefore requires **explicitly adding `"now_or_never_floored"` to `BOARD_STRATEGIES`** (one line). The board then offers it at the default `(F, λ)` because it calls `build_session_strategy` without floor/weight overrides. Exposing `floor` / `floor_weight` as **board sliders is a deferred polish** (non-goal for v1) — the board offers the strategy at its validated default only.
 
 ## 7. Testing (TDD throughout)
 
@@ -87,7 +90,14 @@ To test this strategy: run `A = now_or_never_floored`, `B = now_or_never` (and b
 
 ## 8. Validation plan (data-gathering, no verdict)
 
-Run `now_or_never_floored` vs `now_or_never` (and the bot reference) through the H2H harness for **2024 and 2025** (200 seeds × 200 sims, chunked runner in PowerShell with `KMP_DUPLICATE_LIB_OK=TRUE` + single-thread BLAS, per memory `h2h-backtest-native-crash`), over a small grid — starting `F ∈ {0, 20, 40, 60}`, `λ ∈ {0.5, 1, 2}` — and **log a new Test entry** in `reports/draft_strategy_tests.md` with the per-strategy / paired-bootstrap numbers per `(F, λ)`. Watch specifically whether a single `(F, λ)` helps in **both** seasons (transfer); if the best fixed `F` is season-split, that is the trigger to try the board-adaptive anchor (§2 fallback). Per the standing process rule, record only what it favors in isolation — **no adopt/reject decision**; that is the single end-of-investigation call across all strategies.
+A/B `now_or_never_floored` vs `now_or_never` (and the bot reference) through the H2H harness, always via the **chunked runner** in PowerShell with `KMP_DUPLICATE_LIB_OK=TRUE` + single-thread BLAS (the box BSODs mid-run; memory `h2h-backtest-native-crash`). The full `F(4)×λ(3)×2 seasons` grid at 200×200 is too heavy to run as one pass, so use **two stages**:
+
+1. **Coarse screen (cheap):** sweep the grid `F ∈ {0, 20, 40, 60}`, `λ ∈ {0.5, 1, 2}` at **reduced cost** — fewer seeds (e.g. 40–60) and `strategy-n-sims` at the harness default — on **2025 only**, to locate the 1–2 most promising `(F, λ)`. Coarse CIs are wide; this stage only ranks, it does not decide.
+2. **Full confirmation:** re-run only the best 1–2 `(F, λ)` at the standard **200 seeds × 200 sims on both 2024 and 2025**, paired-bootstrap vs `now_or_never` + the bot reference.
+
+**Data dependency:** the run needs the same ingested inputs Tests 7–9 used — `weekly_stats` + ESPN/Sleeper preseason projections + `schedules` for 2024 and 2025 under `data/` (present in the main checkout, absent from this worktree's `data/`); the A/B task must run where that data lives.
+
+**Log a new Test entry** in `reports/draft_strategy_tests.md` with the per-strategy / paired-bootstrap numbers per confirmed `(F, λ)`, and **set the shipped default** `floor` / `floor_weight` to the winning config. Watch specifically whether a single `(F, λ)` helps in **both** seasons (transfer); if the best fixed `F` is season-split, that is the trigger to try the board-adaptive anchor (§2 fallback). Per the standing process rule, record only what it favors in isolation — **no adopt/reject decision**; that is the single end-of-investigation call across all strategies.
 
 ## 9. Open questions / future refinements
 
