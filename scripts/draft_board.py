@@ -22,20 +22,24 @@ from projections.draft.assistant.live import (
     build_session_strategy,
 )
 from projections.draft.assistant.pick_timing import slot_for
+from projections.draft.assistant.presets import (
+    DEFAULT_SCORING,
+    DEFAULT_TEAMS,
+    SCORING_KEYS,
+    TEAM_SIZES,
+    get_preset,
+)
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, IdMapSchema, Position, VorpTableSchema
 
-_DEFAULT_VORP = "data/consensus_vorp_2026.parquet"
 _DEFAULT_ID_MAP = "data/raw/id_map.parquet"
-_DEFAULT_LEAGUE = "configs/league_espn_ppr_12team_skill.json"
 
 
-def _load_inputs(vorp_path: Path, id_map_path: Path, league_path: Path):  # type: ignore[no-untyped-def]
+def _load_inputs(vorp_path: Path, id_map_path: Path, league: LeagueConfig):  # type: ignore[no-untyped-def]
     id_map = IdMapSchema.validate(pd.read_parquet(id_map_path))
     pool = pd.read_parquet(vorp_path)
     pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
     pool = VorpTableSchema.validate(pool)
-    league = LeagueConfig.model_validate_json(Path(league_path).read_text())
     return id_map, pool, league
 
 
@@ -43,7 +47,7 @@ def _build_session(
     *,
     vorp_path: Path,
     id_map_path: Path,
-    league_path: Path,
+    league: LeagueConfig,
     my_slot: int,
     mode: str,
     strategy_name: str,
@@ -51,8 +55,9 @@ def _build_session(
     adp_jitter: float,
     season: int,
     data_root: Path,
+    league_config_path: Path = Path("."),
 ) -> LiveDraftSession:
-    id_map, pool, league = _load_inputs(vorp_path, id_map_path, league_path)
+    id_map, pool, league = _load_inputs(vorp_path, id_map_path, league)
     availability = None
     if strategy_name in MC_STRATEGIES:
         availability = load_store_availability(pool, season=season, data_root=data_root)
@@ -75,7 +80,7 @@ def _build_session(
         adp_jitter=adp_jitter,
         n_sims=n_sims,
         season=season,
-        league_config_path=Path(league_path),
+        league_config_path=league_config_path,
         vorp_path=vorp_path,
         id_map_path=id_map_path,
     )
@@ -101,10 +106,19 @@ def _sidebar() -> None:
         index=0,
         format_func=lambda m: "Co-pilot (live)" if m == "copilot" else "Mock",
     )
-    vorp_path = st.sidebar.text_input("Consensus VORP parquet", _DEFAULT_VORP)
+    scoring = st.sidebar.selectbox(
+        "Scoring",
+        SCORING_KEYS,
+        index=SCORING_KEYS.index(DEFAULT_SCORING),
+        format_func=lambda k: {"half": "Half-PPR", "ppr": "Full PPR", "std": "Standard"}[k],
+    )
+    n_teams = st.sidebar.selectbox("Teams", TEAM_SIZES, index=TEAM_SIZES.index(DEFAULT_TEAMS))
+    preset = get_preset(scoring, int(n_teams))
+    my_slot = st.sidebar.number_input("My draft slot", min_value=1, max_value=int(n_teams), value=1)
     id_map_path = st.sidebar.text_input("id_map parquet", _DEFAULT_ID_MAP)
-    league_path = st.sidebar.text_input("League config JSON", _DEFAULT_LEAGUE)
-    my_slot = st.sidebar.number_input("My draft slot", min_value=1, max_value=32, value=1)
+    with st.sidebar.expander("Advanced: custom VORP table"):
+        custom_vorp = st.text_input("VORP parquet (overrides preset)", "")
+    vorp_path = custom_vorp.strip() or str(preset.table_path)
     strategy_name = st.sidebar.selectbox("Strategy", BOARD_STRATEGIES, index=0)
     n_sims = st.sidebar.number_input(
         "n_sims (MC strategies)", min_value=50, max_value=2000, value=300, step=50
@@ -118,7 +132,7 @@ def _sidebar() -> None:
                 _build_session(
                     vorp_path=Path(vorp_path),
                     id_map_path=Path(id_map_path),
-                    league_path=Path(league_path),
+                    league=preset.league_config,
                     my_slot=int(my_slot),
                     mode=mode,
                     strategy_name=strategy_name,
@@ -128,7 +142,12 @@ def _sidebar() -> None:
                     data_root=Path("data"),
                 )
             )
-        except Exception as exc:  # surface any setup failure to the user
+        except FileNotFoundError as exc:
+            st.sidebar.error(
+                f"Missing VORP table {vorp_path}. Generate presets with: "
+                f"python scripts/generate_preset_vorp_tables.py — ({exc})"
+            )
+        except Exception as exc:  # surface any other setup failure
             st.sidebar.error(f"Setup failed: {exc}")
 
     _resume_controls()
