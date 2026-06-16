@@ -212,6 +212,13 @@ class LiveDraftSession:
         rnd = (self.current_pick - 1) // self.league.n_teams + 1
         return rnd, self.on_clock_slot
 
+    @property
+    def pick_in_round(self) -> int:
+        """1-based pick position within the current round (1..n_teams), counting up every round
+        regardless of snake direction. For the 'Round.Pick' display label, where '2.01' is the
+        first pick of round 2 (the team that drafted last in round 1), not the on-clock slot."""
+        return (self.current_pick - 1) % self.league.n_teams + 1
+
     def available_pool(self) -> pd.DataFrame:
         drafted = self.state().drafted_ids
         return self.pool[~self.pool["gsis_id"].isin(drafted)].reset_index(drop=True)

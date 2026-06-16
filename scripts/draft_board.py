@@ -162,11 +162,15 @@ def _status_bar(s: LiveDraftSession) -> None:
     if s.is_complete:
         st.subheader("✅ Draft complete")
         return
-    rnd, slot = s.round_and_slot()  # slot == on_clock_slot (the 2nd element)
+    rnd, slot = s.round_and_slot()  # slot == on_clock_slot (the on-the-clock team)
     who = "YOU" if s.is_my_pick else f"Team {slot}"
     nxt = s.next_pick_number
     until = "" if nxt is None else f" · your next pick: #{nxt}"
-    st.subheader(f"Pick {rnd}.{slot:02d} (#{s.current_pick}) · on the clock: {who}{until}")
+    # Label is Round.PickInRound (counts up every round, snake-direction-independent); the
+    # on-clock team slot is shown separately so the snake reversal is still visible.
+    st.subheader(
+        f"Pick {rnd}.{s.pick_in_round:02d} (#{s.current_pick}) · on the clock: {who}{until}"
+    )
 
 
 _SESSION_DIR = Path("data/draft_sessions")

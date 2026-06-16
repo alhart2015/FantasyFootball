@@ -188,6 +188,19 @@ def test_next_pick_number_snakes() -> None:
     assert s.next_pick_number == 18
 
 
+def test_pick_in_round_counts_up_through_the_snake_turn() -> None:
+    # 12-team league: pick_in_round must count 1..12 EVERY round (snake-direction-independent),
+    # not reverse in round 2. At the round 1->2 turn the on-clock slot reverses (12), but the
+    # display pick number is 1 (the first pick of round 2).
+    assert _session().pick_in_round == 1  # pick #1
+    assert _session(picks=[f"00-000{i:04d}" for i in range(1, 6)]).pick_in_round == 6  # pick #6
+    turn = _session(picks=[f"00-000{i:04d}" for i in range(1, 13)])  # 12 picks -> pick #13
+    assert turn.current_pick == 13
+    assert turn.round_and_slot()[0] == 2  # round 2
+    assert turn.pick_in_round == 1  # first pick of round 2 (NOT 12)
+    assert turn.on_clock_slot == 12  # snake reversed -> slot 12 is on the clock
+
+
 def test_is_complete_when_roster_full() -> None:
     total = _league().n_teams * _league().roster_size
     s = _session(picks=[f"00-000{i:04d}" for i in range(1, total + 1)])
