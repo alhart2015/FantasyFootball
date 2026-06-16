@@ -148,11 +148,20 @@ def _format_headline(
         f"{'PTS FOR':>10} {'dWIN% vs ' + reference:>16}"
     )
     rows = [f"[HERO-VS-BOTS -- ACTUAL, {n_teams} teams; bot = avg team is structural]", head]
+    # The paired-diff column needs the reference strategy in the run; if it's absent
+    # (e.g. a partial-strategy run) show "n/a" rather than a nan from an empty paired array.
+    ref_present = reference in seat_avg
     for name, m in sorted(seat_avg.items()):
-        d = paired_diff(df, scoring="actual", metric="win_pct", strategy=name, reference=reference)
+        if ref_present:
+            d = paired_diff(
+                df, scoring="actual", metric="win_pct", strategy=name, reference=reference
+            )
+            dcol = f"{d.point * 100:>+15.1f}"
+        else:
+            dcol = f"{'n/a':>16}"
         rows.append(
             f"{name:<22} {_pct(m.win_pct):>20} {_pct(m.playoff):>20} {_pct(m.championship):>20} "
-            f"{m.points_for.point:>10.1f} {d.point * 100:>+15.1f}"
+            f"{m.points_for.point:>10.1f} {dcol}"
         )
     rows.append(
         f"{'bot (avg team)':<22} {base.win_pct.point * 100:>5.1f}%{'':>14} "
