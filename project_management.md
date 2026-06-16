@@ -4,6 +4,22 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — Projected draft eval + scoring/size presets — shipped (2026-06-16, branch `feat/draft-eval-presets`, stacked on `feat/draft-board-ux`)
+
+**Status:** The end-of-draft "how good is this roster?" sim is now first-class + shown in the board, and scoring mode + league size are configurable. Built spec → spec-review (1 iter + Low fixes) → plan → plan-review (3 iters — the review caught a real bracket-vs-team-count bug a fix had introduced) → subagent-driven execution (9 tasks, each TDD + spec + code-quality review + a final whole-feature review). Spec/plan `docs/superpowers/specs|plans/2026-06-16-projected-draft-eval.*`.
+
+**What it does (the methodology, deliberately scoped):** a **projected-vs-projected** full-league Monte Carlo of a completed draft — each sim-week draws injury (availability) + over/under performance (the variance model), sets the **optimal starting lineup for every team**, higher projected total wins. Calendar: reg wks 1-13, playoffs 14-17 (top-6 make it, top-2 bye, championship = wks 16-17 combined). Returns per-seat reg-win%/make-playoffs%/bye%/championship%. **This measures roster quality UNDER OUR PROJECTIONS, not projection accuracy** (actual-vs-projected is out of scope; the real-outcome hero-vs-bots eval already covers that). Caveat learned while building it: the eval is somewhat circular (it rewards exactly what `season_value` optimizes) and slot-1 + an ADP field inflate win rates — so it confirms a draft is projection-optimal, NOT that it wins a real league.
+
+**What shipped:**
+- **Sim module** `src/projections/draft/assistant/league_projection.py` (`gauntlet_schedule` 1-factorization for any even n; `team_weekly_points` reusing the variance sampler + `_lineup_points_sampled`; `project_draft` records→seed→bracket; `SeatProjection`). Pure, tested (symmetric-league ≈ uniform baseline, determinism, stronger-roster-wins, ≥6-team guard). No re-implemented scoring.
+- **Presets** `presets.py` — 3×3 grid {half-PPR, full PPR, standard} × {10,12,16}, default **half-PPR/16**, one canonical skill roster (QB1/RB2/WR3/TE1/FLEX1/BENCH9). `scripts/generate_preset_vorp_tables.py` re-scores the raw 2026 ESPN+Sleeper snapshot per ruleset (mirrors `build_draft_basis`; half/standard genuinely re-score receptions — verified Chase 335→275→216 PPR→half→std) + attaches market ADP + names. The 9 tables live at `data/vorp_2026/{scoring}_{n}team.parquet` (**untracked artifacts — regenerate with the script**).
+- **Controller** `LiveDraftSession.project_league_outcomes` (reconstructs all teams, lazy store availability + `is_rookie`, raises if incomplete). `is_rookie` helper promoted to shared `assistant/rookies.py`.
+- **Board** sidebar Scoring + Teams dropdowns (replace the free-text paths; custom-VORP escape hatch) + a draft-complete "📊 Projected draft results" panel (button-triggered, cached) showing your 4 metrics vs baseline + the league table.
+
+**Gates:** subset (`tests/test_draft test_schemas test_scripts`) 662 passed / 1 net-skipped; schema-seam guard 236 passed; `mypy src tests` clean (319); ruff check + format clean. Real-data end-to-end check: 16-team half-PPR completed draft → projected eval via the store → champ_pct sums to 1.0 across 16 seats. **Deferred:** configurable playoff format; a table-regeneration workflow.
+
+---
+
 ## Draft Assistant — Live Draft Board UX pass (name fix + click-to-pick + best-available filter) — shipped (2026-06-16, branch `feat/draft-board-ux`)
 
 **Status:** Three board usability fixes, built spec → spec-review (2 iters) → plan → plan-review (2 iters) → subagent-driven execution via `superpowers-go`. Spec/plan `docs/superpowers/specs|plans/2026-06-16-draft-board-ux.*`. **Pure UI + name-data plumbing — no draft/strategy/engine-math change.**
