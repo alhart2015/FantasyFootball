@@ -259,6 +259,47 @@ def test_cli_season_value_timing_runs(tmp_path: Path, capsys: pytest.CaptureFixt
     assert "Player " in out  # ...and at least one data row rendered (id_map full_name)
 
 
+def test_cli_prefers_pool_full_name_over_id_map(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A placeholder-gsis rookie absent from id_map but named in the VORP pool prints its
+    pool name; in-id_map players still print (id_map fallback when the pool has no name)."""
+    state_path, _vorp_path, id_path = _setup(tmp_path)
+    # A vorp pool with the two id_map players + a rookie absent from id_map, plus its own
+    # full_name column (the consensus path now carries it — Task 2).
+    vorp = pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0000010", "00-0000020", "99-8467088"], dtype=_PYARROW_STR),
+            "position": pd.array(["RB", "WR", "RB"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [250.0, 252.0, 260.0],
+            "vorp": [50.0, 52.0, 60.0],
+            "replacement_fpts": [200.0, 200.0, 200.0],
+            "consensus_adp": pd.array([5.0, 7.0, 3.0], dtype=pd.Float64Dtype()),
+            "full_name": pd.array(["RB One", "WR One", "Rookie RB"], dtype=_PYARROW_STR),
+        }
+    )
+    vorp_path = tmp_path / "vorp_named.parquet"
+    vorp.to_parquet(vorp_path, index=False)
+
+    code = run(
+        [
+            "--state",
+            str(state_path),
+            "--vorp-table",
+            str(vorp_path),
+            "--id-map",
+            str(id_path),
+            "--strategy",
+            "raw_vorp",
+            "--top",
+            "5",
+        ]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "Rookie RB" in out  # named from the pool (absent from id_map)
+
+
 def test_parse_args_accepts_season_value_timing() -> None:
     from projections.draft.assistant.cli import _parse_args
 
