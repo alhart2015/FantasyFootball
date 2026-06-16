@@ -832,8 +832,8 @@ def test_attach_is_rookie_flags_players_without_prior_appearance(tmp_path: Path)
     pool = pd.DataFrame({"gsis_id": pd.array(["00-0000001", "99-8467088"], dtype=_PYARROW_STR)})
     out = attach_is_rookie(pool, season=2026, data_root=tmp_path)
     rookie = dict(zip(out["gsis_id"].astype(str), out["is_rookie"], strict=True))
-    assert rookie["00-0000001"] is False or rookie["00-0000001"] == False  # seen in 2024
-    assert rookie["99-8467088"] is True or rookie["99-8467088"] == True  # never seen -> rookie
+    assert not rookie["00-0000001"]  # seen in 2024 -> veteran
+    assert rookie["99-8467088"]  # never seen -> rookie
 ```
 
 - [ ] **Step 2: Run it, confirm FAIL**
@@ -928,9 +928,11 @@ git commit -m "refactor(draft): promote is_rookie helper to a shared module"
 
 Add to `tests/test_draft/test_assistant_live.py` (reuses `_session`, `_pool_with_names`, `_PYARROW_STR`; new imports inside the test):
 
+`_session`, `_pool_with_names`, `_id_map`, `_FakeStrategy`, `LiveDraftSession`, `validate_gsis_id`, and `_league` are already defined/imported in `test_assistant_live.py`. Build a small **even** league whose roster fits `_pool_with_names()` (39 players): 2 teams × roster_size 6 = 12 ≤ 39.
+
 ```python
 def test_project_league_outcomes_requires_complete_draft() -> None:
-    s = _session()
+    s = _session()  # picks=[] -> not complete
     with pytest.raises(ValueError, match="complete"):
         s.project_league_outcomes(n_sims=50)
 
@@ -938,36 +940,27 @@ def test_project_league_outcomes_requires_complete_draft() -> None:
 def test_project_league_outcomes_returns_seat_projection_for_my_slot() -> None:
     from projections.draft.assistant.availability import PlayerAvailability
     from projections.draft.assistant.league_projection import SeatProjection
-
-    # full draft: every pool player drafted, snake-ordered
-    full = list(_pool_with_names()["gsis_id"].astype(str))[: _league().n_teams * _league().roster_size]
-    s = _session(picks=full)
-    assert s.is_complete
-    avail = PlayerAvailability(p={g: 1.0 for g in s.pool["gsis_id"].astype(str)}, bye={})
-    res = s.project_league_outcomes(n_sims=200, availability=avail)
-    assert isinstance(res[s.my_slot], SeatProjection)
-    assert 0.0 <= res[s.my_slot].champ_pct <= 1.0
-```
-
-(If `_pool_with_names()` has fewer than `n_teams * roster_size` players for the test `_league()` (12 teams), pad it — but the live test's `_league()` is 12 teams with roster_size 11 = 132 and `_pool_with_names()` has 39; instead build the session with a smaller league. Use a 2-team helper config inline:)
-
-```python
-def test_project_league_outcomes_returns_seat_projection_for_my_slot() -> None:
-    from projections.draft.assistant.availability import PlayerAvailability
-    from projections.draft.assistant.league_projection import SeatProjection
     from projections.draft.league_config import LeagueConfig
     from projections.schemas import RosterSlot, Ruleset
 
     league = LeagueConfig(
-        name="t", n_teams=2,
-        roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.FLEX: 1, RosterSlot.BENCH: 1},
+        name="t",
+        n_teams=2,
+        roster_slots={
+            RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.WR: 1,
+            RosterSlot.FLEX: 1, RosterSlot.BENCH: 2,
+        },
         ruleset=Ruleset.espn_half(),
     )
     pool = _pool_with_names()
+    completed = [
+        validate_gsis_id(g)
+        for g in list(pool["gsis_id"].astype(str))[: 2 * league.roster_size]
+    ]
     s = LiveDraftSession(
         league=league, my_slot=1, id_map=_id_map(), pool=pool,
-        strategy=_FakeStrategy(), strategy_name="fake", mode="mock", adp_jitter=0.0,
-        picks=[validate_gsis_id(g) for g in list(pool["gsis_id"].astype(str))[: 2 * league.roster_size]],
+        strategy=_FakeStrategy(), strategy_name="fake", mode="mock",
+        adp_jitter=0.0, picks=completed,
     )
     assert s.is_complete
     avail = PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={})
@@ -975,8 +968,6 @@ def test_project_league_outcomes_returns_seat_projection_for_my_slot() -> None:
     assert isinstance(res[1], SeatProjection)
     assert 0.0 <= res[1].champ_pct <= 1.0
 ```
-
-Note: `gauntlet_schedule` requires even `n_teams`; 2 is even (1 round). Keep the requires-complete test as-is.
 
 - [ ] **Step 2: Run it, confirm FAIL**
 
@@ -1156,7 +1147,24 @@ git commit -m "feat(draft): preset scoring/size dropdowns in the board sidebar"
 
 - [ ] **Step 1: Write the failing smoke test**
 
-Add to `tests/test_scripts/test_draft_board_smoke.py` (reuses `_smoke_session`; build a SMALL completed session):
+First, **parameterize `_smoke_session`** so the results test can build a completable small league. In `tests/test_scripts/test_draft_board_smoke.py`, change the helper's signature and its `LeagueConfig.n_teams` (the existing 24-player pool + roster_size 11 means 2 teams × 11 = 22 ≤ 24 completes; the default 12 keeps existing smoke tests unchanged):
+
+```python
+def _smoke_session(picks: list[str] | None = None, my_slot: int = 1, n_teams: int = 12):  # type: ignore[no-untyped-def]
+    ...
+    league = LeagueConfig(
+        name="t",
+        n_teams=n_teams,   # was hard-coded 12
+        roster_slots={
+            RosterSlot.QB: 1, RosterSlot.RB: 2, RosterSlot.WR: 2,
+            RosterSlot.FLEX: 1, RosterSlot.BENCH: 5,
+        },
+        ruleset=Ruleset.espn_ppr(),
+    )
+    ...
+```
+
+Then add the results-panel test (`validate_gsis_id` is imported from `projections.schemas` inside `_smoke_session`'s module already; import it in the test too):
 
 ```python
 def test_board_results_panel_runs_projected_eval(tmp_path: Path) -> None:
@@ -1164,17 +1172,17 @@ def test_board_results_panel_runs_projected_eval(tmp_path: Path) -> None:
     from streamlit.testing.v1 import AppTest
 
     from projections.draft.assistant.availability import PlayerAvailability
+    from projections.schemas import validate_gsis_id
 
-    sess = _smoke_session(my_slot=1)
-    # complete the draft: draft the first n_teams*roster_size pool players in order
+    sess = _smoke_session(my_slot=1, n_teams=2)  # 2 x 11 = 22 <= 24-player fixture pool
     full = list(sess.pool["gsis_id"].astype(str))[: sess.league.n_teams * sess.league.roster_size]
-    sess.picks = [__import__("projections.schemas", fromlist=["validate_gsis_id"]).validate_gsis_id(g) for g in full]
+    sess.picks = [validate_gsis_id(g) for g in full]
     assert sess.is_complete
     at = AppTest.from_file("scripts/draft_board.py")
     at.session_state["session"] = sess
     at.session_state["session_token"] = "tok"
     at.session_state["autosave_path"] = str(tmp_path / "auto.json")
-    # inject a constant-availability object so the eval needs no store
+    # inject constant availability so the eval needs no store
     at.session_state["_eval_availability"] = PlayerAvailability(
         p={g: 1.0 for g in sess.pool["gsis_id"].astype(str)}, bye={}
     )
@@ -1182,13 +1190,11 @@ def test_board_results_panel_runs_projected_eval(tmp_path: Path) -> None:
     assert not at.exception
     at.button(key="run_projected_eval").click().run()
     assert not at.exception
-    # the panel shows a championship percentage for the hero seat
-    assert any("hampionship" in str(getattr(m, "value", "")) for m in at.markdown) or any(
-        "hampionship" in str(getattr(m, "label", "")) for m in at.metric
-    )
+    # the panel rendered a championship metric for the hero seat
+    assert any("Championship" in str(getattr(m, "label", "")) for m in at.metric)
 ```
 
-Note: `_smoke_session`'s `_league()` is 12-team with roster_size 11 (132 players) but the pool has only 24 — instead give `_smoke_session` a small even league so the draft completes. Add an optional `n_teams`/roster override OR build the session for 2 teams with a 12-man pool. Adjust `_smoke_session` to accept `n_teams: int = 12` and a roster small enough that `n_teams * roster_size <= len(pool)`; for this test pass `n_teams=2` so 2*roster_size <= 24. Keep existing smoke tests calling `_smoke_session()` working (default unchanged).
+If `at.metric` is not exposed in this Streamlit build, assert on the rendered markdown/dataframe instead (e.g. `any("Projected draft results" in str(getattr(m, "value", "")) for m in at.markdown)`) — but keep asserting the panel rendered after the eval ran without exception.
 
 - [ ] **Step 2: Run it, confirm FAIL**
 
