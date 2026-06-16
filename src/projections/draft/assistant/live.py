@@ -22,7 +22,10 @@ from projections.draft.assistant.pick_timing import my_next_pick, slot_for
 from projections.draft.assistant.roster_score import optimal_lineup_points
 from projections.draft.assistant.state import DraftState, build_draft_state
 from projections.draft.assistant.strategy import (
+    _DEFAULT_FLOOR,
+    _DEFAULT_FLOOR_WEIGHT,
     DraftStrategy,
+    NowOrNeverFlooredStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
     SeasonValueStrategy,
@@ -43,6 +46,7 @@ MC_STRATEGIES: frozenset[str] = frozenset(
 # but excluded — its A/B showed no draft benefit; see the spec §2 / memory).
 BOARD_STRATEGIES: tuple[str, ...] = (
     "now_or_never",
+    "now_or_never_floored",
     "raw_vorp",
     "season_value",
     "season_value_timing",
@@ -57,17 +61,25 @@ def build_session_strategy(
     availability: PlayerAvailability | None,
     n_sims: int,
     base_seed: int,
+    floor: float = _DEFAULT_FLOOR,
+    floor_weight: float = _DEFAULT_FLOOR_WEIGHT,
 ) -> DraftStrategy:
     """Map a strategy name (+ live params) to a DraftStrategy.
 
     Shared by the sidebar dropdown and the resume path. MC strategies
     (`season_value*`) require a non-null `availability` and fail loud otherwise.
+    `floor`/`floor_weight` apply only to `now_or_never_floored` (analytic; no availability).
     """
     if name == "raw_vorp":
         return RawVorpStrategy()
     if name == "now_or_never":
         spread = default_sigma(league.n_teams) if sigma is None else sigma
         return NowOrNeverStrategy(LogisticSurvival(sigma=spread))
+    if name == "now_or_never_floored":
+        spread = default_sigma(league.n_teams) if sigma is None else sigma
+        return NowOrNeverFlooredStrategy(
+            LogisticSurvival(sigma=spread), floor=floor, floor_weight=floor_weight
+        )
     if name in MC_STRATEGIES:
         if availability is None:
             raise ValueError(f"strategy {name!r} requires availability data (None given)")

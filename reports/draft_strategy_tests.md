@@ -212,6 +212,33 @@ Bots in fact *edge* nn on actual win% (paired −1.40 [−2.67, −0.11]); the s
 
 ---
 
+### Test 10 — `now_or_never_floored` vs `now_or_never` (H2H, 2024 + 2025) — the scarcity floor (TODO #42) — **HIGH VALUE**
+
+**What it is.** `now_or_never_floored` = `now_or_never` plus a one-sided hinge below an absolute VORP bar: `score = vorp − E[best survivor at pos by my next pick] − λ·max(0, F − vorp)`. It demotes sub-`F` players so the dynamic-scarcity term can no longer float a best-of-a-bad-tier pick (Test 7's TE over-investment) over a better player elsewhere. `λ=0` reproduces `now_or_never` byte-for-byte; `now_or_never` itself is the untouched A/B control. Branch `feat/now-or-never-floored` (PR #72); spec/plan `docs/superpowers/specs|plans/2026-06-16-now-or-never-floored.*`. **Both sides are analytic** (no per-pick MC), so this A/B is far lighter than the `season_value` runs.
+
+**Setup.** Standard F1 harness: 16-team half-PPR mirror-paired field (4 `now_or_never_floored` at seats {2,6,10,14} + 4 `now_or_never` at {4,8,12,16} + 8 constrained-ADP bots), ESPN preseason half-PPR + Sleeper ADP draft basis, lineups from ESPN weekly projections, scored vs `weekly_stats` half-PPR actuals, 14-week schedule → top-6 playoff → champion. Mirror-paired seats cancel the floored↔nn seat confound, so the per-strategy marginal means are directly comparable. `configs/league_espn_half_16team.json`.
+
+**Stage 1 — coarse screen (2025, 40 seeds, `F∈{0,20,40,60}×λ∈{0.5,1,2}`).** The floor helps, monotone in `F` then plateauing around F=40–60; `λ` matters less. F=0 (penalize only below-replacement) ≈ baseline. At **F≥40 every config beat `now_or_never` on all four axes** (win/playoff/champ/PF) — and beat the bot. Picked F=40 (the moderate plateau) for the full confirm.
+
+**Stage 2 — confirmation (200 seeds, both seasons, ACTUAL axis), floored vs nn vs bot:**
+
+| Season | Config | win% (floored / nn / bot) | playoff% | champ% | PF (floored / nn) |
+|--------|--------|---------------------------|----------|--------|-------------------|
+| **2025** | F=40, λ=1 | **55.9** [54.8,57.2] / 50.0 [48.9,51.2] / 47.0 | **51.1** / 39.1 / 29.9 | 8.8 / 8.1 / 4.1 | 1075.5 / 1018.0 |
+| **2025** | F=40, λ=2 | **56.2** [55.0,57.4] / 49.7 [48.5,51.0] / 47.0 | **51.2** / 37.5 / 30.6 | 9.5 / 7.4 / 4.1 | 1075.5 / 1017.0 |
+| **2024** | F=40, λ=1 | 62.9 [61.9,63.8] / 61.7 [60.8,62.6] / 37.7 | 68.4 / 63.1 / 9.2 | 13.0 / 9.1 / 1.4 | 1191.6 / 1180.8 |
+| **2024** | F=40, λ=2 | 62.4 / 62.4 / 37.6 | 66.9 / 65.5 / 8.8 | 12.6 / 9.8 / 1.3 | 1187.8 / 1184.9 |
+
+**Result — the floor makes `now_or_never` reliable.**
+- **2025 (where nn had failed — Test 7 found nn ≈ bot): a big, CI-separated win.** Floored lifts win% by **~+6 (CIs cleanly separated**, floored lo > nn hi), playoff% by **+12–14 (separated)**, PF by **~+57** — and decisively beats the bot (47%). The exact `nn ≈ bot` failure that motivated the slice is **fixed**. The PROJECTED axis agrees (2025 floored projected win 56.9 vs nn 53.4), so it's drafting a better roster, not riding luck.
+- **2024 (where nn already beat the field — Test 8): neutral-to-slightly-positive, never hurts.** λ=1: win +1.2, playoff +5.3, champ +3.9 (CIs overlap); λ=2: ~tie on win/PF. The floor only bites when nn over-reaches, and nn over-reached less in 2024 — so there's less to fix and no downside.
+- **Transfer: yes.** Big help where nn was weak (2025), harmless where nn was strong (2024). champ% is the noisiest axis (overlapping in both seasons).
+- **λ choice:** λ=1 and λ=2 are ~identical in 2025; λ=1 edges 2024 (win +1.2 vs tie). **Default set to F=40 / λ=1** (the softer, safer choice) — which was already the provisional default, so no constant change. `_DEFAULT_FLOOR=40.0`, `_DEFAULT_FLOOR_WEIGHT=1.0`.
+
+**No cross-strategy verdict** (standing decide-at-end rule) — this records what the test favors in isolation. But it is the strongest single result for the original goal: a scarcity floor turns `now_or_never` from "ties the ADP bot in 2025" into "clearly beats it in both seasons." Caveats: marginal-bootstrap CIs (not paired-diff); two seasons / one format; ESPN-half draft basis. Reproduce: `scripts/h2h_backtest_chunked.py --season {2024,2025} --league-config configs/league_espn_half_16team.json --n-seeds 200 --strategy-a now_or_never_floored --strategy-b now_or_never --floor 40 --floor-weight 1` (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
+
+---
+
 ## Future tests (backlog)
 
 ### F1 — Head-to-head season simulation (the realistic objective) — ✅ DONE → see **Test 7 (F1)** above. sv wins more games + playoff berths (both scorings); championship a wash (nn ≈ sv).

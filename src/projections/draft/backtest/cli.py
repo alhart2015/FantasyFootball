@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from projections.draft.assistant.strategy import _DEFAULT_FLOOR, _DEFAULT_FLOOR_WEIGHT
 from projections.draft.assistant.tournament import Interval
 from projections.draft.backtest.harness import (
     STRATEGY_KEYS,
@@ -64,6 +65,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=list(STRATEGY_KEYS),
         default="season_value",
         help="Draft strategy for seat-role B (default season_value).",
+    )
+    p.add_argument(
+        "--floor",
+        type=float,
+        default=_DEFAULT_FLOOR,
+        help="[now_or_never_floored] absolute VORP quality bar F.",
+    )
+    p.add_argument(
+        "--floor-weight",
+        type=float,
+        default=_DEFAULT_FLOOR_WEIGHT,
+        help="[now_or_never_floored] hinge weight (0 = plain now_or_never).",
     )
     return p.parse_args(argv)
 
@@ -121,6 +134,8 @@ def run(argv: list[str] | None = None) -> int:
         strategy_n_sims=args.strategy_n_sims,
         strategy_a=args.strategy_a,
         strategy_b=args.strategy_b,
+        floor=args.floor,
+        floor_weight=args.floor_weight,
     )
     print(format_result(result))
     return 0

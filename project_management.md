@@ -4,6 +4,22 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Assistant — `now_or_never_floored` strategy — shipped + A/B'd (2026-06-16, on branch `feat/now-or-never-floored`, PR #72)
+
+**Status:** TODO #42's scarcity-floor strategy is **built, wired, gated, and validated** — a new, separate, A/B-able `DraftStrategy` that is `now_or_never` plus a one-sided hinge penalty below an absolute VORP bar. Built spec → spec-review loop → plan → plan-review loop → inline execution via `superpowers-go`. Spec/plan at `docs/superpowers/specs|plans/2026-06-16-now-or-never-floored.*`. **A/B result: the floor makes `now_or_never` reliable** — big CI-separated win in 2025 (the season nn ≈ bot), neutral-to-slightly-positive in 2024 (where nn already won), never hurts. Full numbers in `reports/draft_strategy_tests.md` **Test 10**.
+
+**What it is:** `score = vorp - E[best survivor at pos by my next pick] - floor_weight·max(0, floor - vorp)`. The hinge demotes sub-`floor` players so the dynamic-scarcity term can no longer float a best-of-a-bad-tier player (the Test 7 TE over-investment, 23% of capital) over a better one elsewhere. **`floor_weight = 0` reproduces `now_or_never` byte-for-byte** (pinned test) — `now_or_never` itself is untouched (the A/B control). Provisional defaults `F=40` / `λ=1` live in `_DEFAULT_FLOOR` / `_DEFAULT_FLOOR_WEIGHT` (single source of truth, set from the A/B winner later).
+
+**What shipped (`src/projections/draft/assistant/` + `backtest/`):** `NowOrNeverFlooredStrategy` (`strategy.py`, reuses `expected_best_by_position` + `_finalize` unchanged; last-pick → raw VORP like nn; `__post_init__` guards `floor_weight>=0` + finiteness); registered in `STRATEGY_KEYS`, the assistant CLI (`--floor`/`--floor-weight`, auto-surfaced via `STRATEGY_KEYS`), the live board (`build_session_strategy` branch + added to `BOARD_STRATEGIES`; analytic, NOT in `MC_STRATEGIES`), and the H2H harness registry (`_build_strategy`/`collect_results`/`run_backtest` + both runners). The chunked runner forwards `--floor`/`--floor-weight` to workers and records them in the checkpoint manifest via a new pure `_run_key()` (resume with a changed floor now fails loud).
+
+**Gates:** `pytest -k "draft or ingest or store or schemas"` 567 passed / 11 network-skipped; `mypy src tests` clean (308 files); ruff check + format clean. Each task TDD (red→green→commit); the default `(now_or_never, season_value)` harness path stays byte-identical (existing equivalence tests green).
+
+**A/B done (Test 10):** two-stage on the 16-team half-PPR F1 harness (`configs/league_espn_half_16team.json`). Coarse 2025 screen (`F∈{0,20,40,60}×λ∈{0.5,1,2}`, 40 seeds) → floor helps monotone in F, plateau F=40–60. Full 200-seed confirm of F=40 (λ=1, λ=2) on both seasons, ACTUAL axis: **2025** floored win **55.9%** vs nn 50.0 (CI-separated), playoff 51.1 vs 39.1, PF +57, and beats the bot (47%) — fixes the Test 7 `nn ≈ bot` failure; **2024** neutral-to-slight (win 62.9 vs 61.7, CIs overlap), never hurts. λ=1 ≈ λ=2 in 2025, λ=1 edges 2024 → **default F=40/λ=1** (already the provisional default; `_DEFAULT_FLOOR=40.0`/`_DEFAULT_FLOOR_WEIGHT=1.0`, no constant change). **No cross-strategy adopt/reject verdict** (decide-at-end rule) — but this is the strongest single result for making `now_or_never` reliably beat ADP.
+
+**Reframes the standing `sv > nn > bot` tally:** with the floor, `now_or_never_floored` beats the bot in **both** seasons (the nn-over-bot gap was 2025-fragile). Whether floored now closes the gap to `season_value` is a future A/B (floored vs sv), not run here.
+
+---
+
 ## Draft Assistant — Live Draft Board (Slice 3, the UI) — shipped (2026-06-15, on branch `feat/live-draft-board`)
 
 **Status:** The final Draft Assistant slice — a Streamlit live-draft board over the existing engine, with **two modes** sharing one board: **co-pilot** (log every real pick; opponents get a one-click ADP smart-assist) and **mock** (opponents auto-drafted by the ADP bot; "advance to my pick" + end-of-draft scorecard). Built spec → spec-review loop → plan → plan-review loop → inline execution via `superpowers-go`. Spec/plan at `docs/superpowers/specs|plans/2026-06-15-live-draft-board.*`.

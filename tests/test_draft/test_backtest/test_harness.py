@@ -129,3 +129,41 @@ def test_aggregate_rejects_empty_results() -> None:
 
     with pytest.raises(ValueError, match="non-empty"):
         aggregate([], [], n_seeds=0, base_seed=0)
+
+
+def test_build_strategy_now_or_never_floored() -> None:
+    from projections.draft.assistant.strategy import NowOrNeverFlooredStrategy
+    from projections.draft.backtest.harness import _build_strategy
+
+    pool = _synthetic_pool(n_per_pos=4)
+    strat = _build_strategy(
+        "now_or_never_floored",
+        availability=stub_availability(pool),
+        n_teams=16,
+        strategy_n_sims=10,
+        base_seed=0,
+        floor=55.0,
+        floor_weight=2.0,
+    )
+    assert isinstance(strat, NowOrNeverFlooredStrategy)
+    assert strat.floor == 55.0 and strat.floor_weight == 2.0
+
+
+def test_build_strategy_floored_defaults_when_unset() -> None:
+    from projections.draft.assistant.strategy import (
+        _DEFAULT_FLOOR,
+        _DEFAULT_FLOOR_WEIGHT,
+        NowOrNeverFlooredStrategy,
+    )
+    from projections.draft.backtest.harness import _build_strategy
+
+    pool = _synthetic_pool(n_per_pos=4)
+    strat = _build_strategy(
+        "now_or_never_floored",
+        availability=stub_availability(pool),
+        n_teams=16,
+        strategy_n_sims=10,
+        base_seed=0,
+    )
+    assert isinstance(strat, NowOrNeverFlooredStrategy)
+    assert strat.floor == _DEFAULT_FLOOR and strat.floor_weight == _DEFAULT_FLOOR_WEIGHT

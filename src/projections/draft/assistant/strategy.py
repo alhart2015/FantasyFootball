@@ -12,6 +12,7 @@ as a sort key — its score already values open slots).
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass
 from functools import lru_cache
@@ -37,11 +38,18 @@ from projections.schemas import _PYARROW_STR, Position, RecommendationSchema
 # CLI, the backtest harness, and any other caller that needs to enumerate strategies.
 STRATEGY_KEYS = (
     "now_or_never",
+    "now_or_never_floored",
     "season_value",
     "season_value_var",
     "season_value_timing",
     "raw_vorp",
 )
+
+# PROVISIONAL defaults for the now_or_never_floored knobs — a mid-grid starting point,
+# replaced by the A/B winner (spec 2026-06-16 §8). Imported by build_session_strategy,
+# the harness registry, and both CLIs so there is ONE literal to update.
+_DEFAULT_FLOOR = 40.0
+_DEFAULT_FLOOR_WEIGHT = 1.0
 
 
 @runtime_checkable
@@ -262,6 +270,62 @@ class NowOrNeverStrategy:
 
         # score = vorp - E[best survivor at position], reusing the numpy arrays.
         df["score"] = vorp - np.array([e_best[pos_i] for pos_i in pos], dtype=float)
+        return _finalize(df, elig, display_p)
+
+
+@dataclass(frozen=True)
+class NowOrNeverFlooredStrategy:
+    """now_or_never plus an absolute quality floor (spec 2026-06-16).
+
+    score = vorp - E[best survivor at position by my next pick]
+            - floor_weight * max(0, floor - vorp)
+
+    The hinge demotes sub-``floor`` players so the dynamic-scarcity term can no longer
+    float a best-of-a-bad-tier player over a better one elsewhere. ``floor_weight == 0``
+    reproduces ``NowOrNeverStrategy`` exactly. The ~8-line score prelude is duplicated from
+    ``NowOrNeverStrategy`` *deliberately* — the spec keeps ``now_or_never`` byte-identical as
+    the A/B control, so we copy rather than extract-and-share (which would edit the control).
+    ``floor`` / ``floor_weight`` defaults are PROVISIONAL — set from the A/B.
+    """
+
+    survival: SurvivalModel
+    floor: float = _DEFAULT_FLOOR
+    floor_weight: float = _DEFAULT_FLOOR_WEIGHT
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.floor) or not math.isfinite(self.floor_weight):
+            raise ValueError(
+                f"floor and floor_weight must be finite; got floor={self.floor}, "
+                f"floor_weight={self.floor_weight}"
+            )
+        if self.floor_weight < 0:
+            raise ValueError(f"floor_weight must be >= 0; got {self.floor_weight}")
+
+    def recommend(
+        self, state: DraftState, pool: pd.DataFrame, config: LeagueConfig
+    ) -> pd.DataFrame:
+        df, elig = _eligible_subset(state, pool, config)
+        next_pick = my_next_pick(state.current_pick, state.my_slot, state.n_teams, state.rounds)
+        if next_pick is None:
+            # Last pick → raw VORP, floor not applied (matches now_or_never's fallback).
+            return _raw_vorp_result(df, elig)
+
+        adp = df["consensus_adp"]
+        internal_p = adp.map(
+            lambda a: self.survival.p_available(
+                float(a) if pd.notna(a) else float("nan"), next_pick
+            )
+        ).astype(float)
+        display_p = internal_p.where(adp.notna(), other=pd.NA)
+
+        pos = df["position"].to_numpy()
+        vorp = df["vorp"].to_numpy(dtype=float)
+        p = internal_p.to_numpy(dtype=float)
+        gsis = df["gsis_id"].to_numpy()
+        e_best = expected_best_by_position(pos, vorp, p, gsis)
+
+        penalty = self.floor_weight * np.maximum(0.0, self.floor - vorp)
+        df["score"] = vorp - np.array([e_best[pos_i] for pos_i in pos], dtype=float) - penalty
         return _finalize(df, elig, display_p)
 
 
