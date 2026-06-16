@@ -318,7 +318,7 @@ def _recommend_col(s: LiveDraftSession) -> None:
             st.info(f"Opponent on the clock. ADP suggests: **{name}**")
             if st.button(f"Confirm pick: {name}", key="confirm_adp", type="primary"):
                 _record_and_rerun(s, str(sug))
-        st.caption("…or click a player in **Best available** (right) to record a different pick.")
+        st.caption("…or click a player in **Best available** below to record a different pick.")
         return
     with st.spinner("Scoring candidates…"):
         token = st.session_state.get("session_token", "")
@@ -428,14 +428,14 @@ def main() -> None:
     _status_bar(s)
     _confirm_bar(s)
     _mock_controls(s)
-    left, center, right = st.columns([1.1, 2.0, 1.3])
+    left, center, right = st.columns([1.0, 2.5, 1.1])
     with left:
         _board_log_col(s)
     with center:
         _recommend_col(s)
+        _best_available_col(s)
     with right:
         _roster_col(s)
-        _best_available_col(s)
     _results_section(s)
     st.caption(f"Mode: {s.mode} · strategy: {s.strategy_name} · {len(s.picks)} picks made")
 
