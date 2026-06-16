@@ -2,9 +2,62 @@
 
 from __future__ import annotations
 
+import numpy as np
+import pandas as pd
 import pytest
 
-from projections.draft.assistant.league_projection import gauntlet_schedule
+from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.league_projection import gauntlet_schedule, team_weekly_points
+from projections.draft.assistant.performance_variance import VarianceParams
+from projections.schemas import _PYARROW_STR, RosterSlot
+
+_SLOTS = {
+    RosterSlot.QB: 1,
+    RosterSlot.RB: 2,
+    RosterSlot.WR: 3,
+    RosterSlot.TE: 1,
+    RosterSlot.FLEX: 1,
+    RosterSlot.BENCH: 9,
+}
+
+
+def _roster(gsis: list[str], pos: list[str], mean: list[float]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "gsis_id": pd.array(gsis, dtype=_PYARROW_STR),
+            "position": pd.array(pos, dtype=_PYARROW_STR),
+            "season_mean_fpts": mean,
+            "is_rookie": [False] * len(gsis),
+        }
+    )
+
+
+def test_team_weekly_points_shape_and_higher_means_score_more() -> None:
+    params = VarianceParams.load()
+    weeks = list(range(1, 14))
+    ids = [f"00-000{i:04d}" for i in range(1, 9)]
+    pos = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "RB"]
+    avail = PlayerAvailability(p={g: 1.0 for g in ids}, bye={})
+    strong = team_weekly_points(
+        _roster(ids, pos, [300.0] * 8),
+        avail,
+        params,
+        n_sims=400,
+        weeks=weeks,
+        roster_slots=_SLOTS,
+        rng=np.random.default_rng(0),
+    )
+    weak = team_weekly_points(
+        _roster(ids, pos, [120.0] * 8),
+        avail,
+        params,
+        n_sims=400,
+        weeks=weeks,
+        roster_slots=_SLOTS,
+        rng=np.random.default_rng(0),
+    )
+    assert strong.shape == (400, 13)
+    assert strong.mean() > weak.mean()  # higher projections -> more lineup points
 
 
 @pytest.mark.parametrize("n_teams", [10, 12, 16])
