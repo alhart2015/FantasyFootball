@@ -239,6 +239,33 @@ Bots in fact *edge* nn on actual win% (paired −1.40 [−2.67, −0.11]); the s
 
 ---
 
+### Test 11 — Hero-vs-bots eval (deployment-realistic; all 6 strategies, 2024 + 2025) — **HIGH VALUE / reframes the series**
+
+**Why this exists — the methodology fix.** Tests 1–10 seat *multiple strategies in one league* (4 A + 4 B + 8 bots). That answers "if A and B share a draft, who wins," but **not the question a drafter faces**: you run ONE strategy against ~15 humans (≈ ADP bots), not a field salted with copies of A and B. The mixed field confounds each strategy's outcome via pool contention (A and B cannibalize each other's targets) and schedule (you play other A/B teams, never in reality). This eval runs **each strategy as the sole hero** vs a 15-bot field, scored on the real-outcome H2H season, **swept across all 16 seats** (slot-averaged headline; per-seat retained), **CRN across strategies** (same league seed per seat+seed → paired). New harness: `src/projections/draft/backtest/hero_harness.py` + `scripts/hero_backtest.py` (branch `feat/hero-vs-bots-eval`; spec/plan `docs/superpowers/specs|plans/2026-06-16-hero-vs-bots-eval.*`). 16-team half-PPR, **N=25 seeds × 16 seats = 400 hero samples/strategy**, MC strategies at `strategy_n_sims=50`.
+
+**Result (ACTUAL axis, seat-averaged win% / playoff% / champ%; paired ΔWIN% vs `now_or_never`):**
+
+| 2025 | win% | playoff% | champ% | Δwin% vs nn | | 2024 | win% | playoff% | champ% | Δwin% vs nn |
+|------|------|----------|--------|-------------|-|------|------|----------|--------|-------------|
+| **raw_vorp** | **61.8** | 68.5 | 15.0 | **+1.9** | | **now_or_never_floored** | **77.6** | **96.2** | 18.5 | **+3.6** |
+| now_or_never | 59.9 | 60.2 | 15.8 | +0.0 | | now_or_never | 74.0 | 93.5 | 16.2 | +0.0 |
+| season_value_timing | 59.6 | 59.5 | 14.8 | −0.3 | | season_value_timing | 71.3 | 89.8 | **29.5** | −2.7 |
+| now_or_never_floored | 59.2 | 62.3 | 15.8 | −0.7 | | raw_vorp | 67.6 | 81.2 | 14.0 | −6.4 |
+| **season_value** | **54.3** | 45.8 | 6.2 | **−5.6** | | season_value | 67.2 | 86.8 | 11.0 | −6.8 |
+| season_value_var | 53.8 | 47.8 | 3.8 | −6.2 | | season_value_var | 66.2 | 83.5 | 15.8 | −7.8 |
+| bot (avg team) | 50.0 | 37.5 | 6.2 | — | | bot (avg team) | 50.0 | 37.5 | 6.2 | — |
+
+**The headline — the deployment-realistic ranking INVERTS the mixed-field story.**
+- **`season_value` is NOT the dominant strategy here.** In the mixed field (Tests 7–8) the tally was `sv > nn > bot`; run **solo vs bots**, `season_value` is **bottom-tier** — worst-but-one in 2025 (54.3%, −5.6 vs nn, barely above the 50% average team) and mid-pack in 2024 (−6.8 vs nn). Its mixed-field "win" came from beating *other strategies in a shared pool*, not from absolute roster quality vs a realistic field. **This is exactly the confound the eval was built to expose** — and it directly answers the original "floored vs season_value" question: in your real draft, the simpler value strategies beat `season_value`.
+- **Simple value wins.** `raw_vorp` is the **best** strategy in 2025 (61.8%) and `now_or_never`/`now_or_never_floored` lead 2024. Against an ADP-bot field, aggressive best-available value-grabbing is hard to beat; the elaborate season-value MC does not pay off in solo deployment.
+- **`season_value_var ≈ season_value` — the determinism control HOLDS in both seasons** (54.3 vs 53.8 in 2025; 67.2 vs 66.2 in 2024; within ~1% win%). Confirms the "no draft benefit" finding on a clean footing: the mean-preserving variance model does not re-rank picks. (It also validates the harness — MC noise is controlled, or sv_var would diverge.)
+- **`now_or_never_floored` is season-dependent** here: **+3.6 (best) in 2024**, −0.7 in 2025 (vs nn). Per-seat (retained in the parquet): in 2024 the floor helps most **at the wings** (+4.4 win% at seats 1–3/14–16, where you wait longest and scarcity over-reach is worst) vs +2.1 in the middle — consistent with the floor's mechanism; in 2025 it's seat-mixed (−1.5 wings / +1.4 middle).
+- **Every strategy clears the bot.** All beat the structural 50% average-team baseline, so all add value over ADP-drafting; the question is which adds most — and the answer is *not* `season_value`.
+
+**No cross-strategy adopt/reject verdict** (decide-at-end), but this is the most decision-relevant test in the series and it **reframes the standing `sv > nn` tally**: that ordering is a mixed-field artifact and does not survive the deployment-realistic framing. Caveats: N=25 / two seasons / one format; bots are a noisy-ADP human proxy (the biggest realism lever, and a future improvement); marginal-bootstrap CIs per strategy (the Δ-vs-nn column is the paired one). Per-seat results retained in `data/backtest/hero_eval/{2024,2025}.parquet`. Reproduce: `scripts/hero_backtest.py run --season {2025,2024} --league-config configs/league_espn_half_16team.json --n-seeds 25 --strategy-n-sims 50 --checkpoint-dir _hero_<season>` then `... report ...` (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
+
+---
+
 ## Future tests (backlog)
 
 ### F1 — Head-to-head season simulation (the realistic objective) — ✅ DONE → see **Test 7 (F1)** above. sv wins more games + playoff berths (both scorings); championship a wash (nn ≈ sv).
