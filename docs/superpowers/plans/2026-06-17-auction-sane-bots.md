@@ -256,7 +256,7 @@ from projections.draft.roster_eligibility import bot_eligible
             elig_values = {p.value for p in elig}
             sub = pool[avail & pos_str.isin(elig_values)]
 ```
-(The `if sub.empty: warnings.warn(...); sub = pool[avail]` fallback at lines 101-109 and the `counts[seat][pos_by_id[gid]] = ...` update at line 111 stay unchanged — `counts[seat]` remains string-keyed; only the call-site conversion is new.)
+(The `counts[seat][pos_by_id[gid]] = ...` update at line 111 stays unchanged — `counts[seat]` stays string-keyed. The `if sub.empty:` fallback at lines 101-109 stays, **except** its warning interpolates `sorted(elig)`: `elig` is now a `frozenset[Position]` (was `set[str]`), so change that one interpolation to `sorted(p.value for p in elig)` to keep the warning text byte-identical to before.)
 
 - [ ] **Step 6: Run the no-drift regression + the new test**
 
@@ -283,7 +283,7 @@ git commit -m "refactor(draft): snake field uses shared bot_eligible (Position-k
 - Produces: `SeatView(open_slots: int, eligible_positions: frozenset[Position])`; `bot_max_bid(...)` returns `0` when the player's position is not in `seat_view.eligible_positions`.
 - Consumes: `Position` (`projections.schemas`).
 
-- [ ] **Step 1: Update existing tests + add the gate tests** — in `tests/test_draft/test_assistant_auction_market.py`, every existing `SeatView(open_slots=...)` construction must now pass `eligible_positions` (use a permissive `frozenset({Position.RB, Position.WR})` matching the fixture player's position so existing assertions still hold). Add `from projections.schemas import Position`. Then add:
+- [ ] **Step 1: Add the gate tests** — in `tests/test_draft/test_assistant_auction_market.py`, add `from projections.schemas import Position`. The existing `SeatView(open_slots=...)` constructions need **no change** — Step 3 gives `eligible_positions` a default of all-positions (ungated), so they keep working. Add the two new gate tests (which pass `eligible_positions` explicitly):
 
 ```python
 def test_bot_abstains_when_position_not_eligible() -> None:
@@ -314,7 +314,7 @@ def test_bot_bids_when_position_eligible() -> None:
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_draft/test_assistant_auction_market.py -v`
-Expected: FAIL — `SeatView.__init__()` missing `eligible_positions` (and the new gate tests error/fail).
+Expected: FAIL — the two new tests raise `TypeError: SeatView.__init__() got an unexpected keyword argument 'eligible_positions'` (the field doesn't exist yet). The existing market tests still pass (they pass only `open_slots`).
 
 - [ ] **Step 3: Add the field + the gate** — edit `market.py`: add `from projections.schemas import Position` to the imports, then:
 
@@ -324,7 +324,7 @@ class SeatView:
     """Minimal per-seat view the bot reads (the engine handles feasible_max + eligibility)."""
 
     open_slots: int
-    eligible_positions: frozenset[Position]
+    eligible_positions: frozenset[Position] = frozenset(Position)  # default: all positions (ungated)
 
 
 def bot_max_bid(
@@ -345,11 +345,12 @@ def bot_max_bid(
     wtp = base * (1.0 + rng.normal(0.0, price_jitter))
     return round(max(float(config.min_bid), wtp))
 ```
+The `frozenset(Position)` default (every position = ungated = today's behavior) means existing `SeatView(open_slots=...)` constructions — including the engine's current call in `simulation.py` (line 107) — keep working unchanged, so the **full `pytest -v` stays green after Task 4** (auction sim + tournament tests still pass with ungated bots). Task 5 then passes the real per-bot eligible set. (`frozenset` is immutable, so it is a valid frozen-dataclass default; `open_slots` has no default and precedes it, so field ordering is legal.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pytest tests/test_draft/test_assistant_auction_market.py -v`
-Expected: PASS (existing tests with `eligible_positions` added + the two new gate tests).
+Run: `pytest tests/test_draft/test_assistant_auction_market.py -v`  then  `pytest -v -k "auction"`
+Expected: PASS — the market file (existing tests unchanged + the two new gate tests) AND the auction simulation/tournament suites (still green because the default keeps bots ungated until Task 5).
 
 - [ ] **Step 5: Gates + commit**
 
@@ -371,7 +372,21 @@ git commit -m "feat(auction): bot abstains on ineligible positions (SeatView.eli
 - Consumes: `bot_eligible`, `bot_position_bounds` (Tasks 1-2); `SeatView(open_slots, eligible_positions)` (Task 4).
 - Produces: unchanged public contracts (`_simulate_to_state -> AuctionState`, `simulate_auction -> dict[int, list[str]]`); bot rosters are now startable.
 
-- [ ] **Step 1: Write the failing tests** — append to `tests/test_draft/test_assistant_auction_simulation.py` (reuses the file's existing `_config`, `_pool`, `_baseline`, `StaticDollarBid`, `_simulate_to_state`, `_PYARROW_STR`):
+- [ ] **Step 1a: Widen the `_config` helper** — the new tests use non-default roster shapes. In `tests/test_draft/test_assistant_auction_simulation.py`, change `_config` to accept an optional `roster_slots` (the default is preserved verbatim, so every existing test in the file is unaffected):
+
+```python
+def _config(n_teams: int = 4, budget: int = 100, min_bid: int = 1, roster_slots=None) -> LeagueConfig:
+    return LeagueConfig(
+        name="t",
+        n_teams=n_teams,
+        budget=budget,
+        min_bid=min_bid,
+        roster_slots=roster_slots or {RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.BENCH: 1},
+        ruleset=Ruleset.espn_ppr(),
+    )
+```
+
+- [ ] **Step 1b: Write the failing tests** — append to the same file (reuses `_pool`, `_baseline`, `StaticDollarBid`, the file's `_MaxBidStub` — bids `10**9`; if it is not present, add `class _MaxBidStub:` with `def max_bid(self, view, player, pool, config) -> int: return 10**9` — plus `_simulate_to_state`, `simulate_auction`, `_PYARROW_STR`, `RosterSlot`, `Ruleset`):
 
 ```python
 import warnings
@@ -396,12 +411,17 @@ def test_every_bot_roster_is_startable() -> None:
 
 
 def test_forced_pick_completes_and_warns_when_pool_thin() -> None:
-    # A pool with only 1 WR but 4 teams each needing a WR starter: a bot will be forced.
-    cfg = _config(n_teams=4)  # need 4*3 = 12 players
-    rows = [{"gsis_id": "00-3000000", "position": "WR", "season_mean_fpts": 200.0, "vorp": 100.0, "replacement_fpts": 100.0}]
-    rows += [
+    # 2 teams, roster {RB:1, BENCH:1}: bench-eligible is RB only (no QB slot), so a QB is never
+    # rosterable. With exactly 2 RB + 2 QB, after both RBs are drafted each seat still needs a 2nd
+    # player but only (un-rosterable) QBs remain -> the forced-pick path fires (ungated) and the
+    # auction completes. Deterministic: no eligible position has an available player.
+    cfg = _config(n_teams=2, roster_slots={RosterSlot.RB: 1, RosterSlot.BENCH: 1})
+    rows = [
         {"gsis_id": f"00-2{i:06d}", "position": "RB", "season_mean_fpts": float(150 - i), "vorp": float(80 - i), "replacement_fpts": 100.0}
-        for i in range(19)
+        for i in range(2)
+    ] + [
+        {"gsis_id": f"00-1{i:06d}", "position": "QB", "season_mean_fpts": float(50 - i), "vorp": float(-10 - i), "replacement_fpts": 100.0}
+        for i in range(2)
     ]
     pool = pd.DataFrame(rows)
     pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
@@ -412,36 +432,39 @@ def test_forced_pick_completes_and_warns_when_pool_thin() -> None:
             StaticDollarBid(), 1, pool, cfg,
             baseline_dollars=_baseline(pool, cfg), price_jitter=0.0, rng=np.random.default_rng(0),
         )
-    assert all(len(r) == cfg.roster_size for r in league.values())  # completes
-    assert any("pool thin" in str(w.message) for w in caught)  # forced-pick warned
+    assert all(len(r) == cfg.roster_size for r in league.values())  # every seat filled (2 players)
+    assert any("pool thin" in str(w.message) for w in caught)  # the forced-pick path warned
 
 
 def test_hero_is_not_gated() -> None:
-    # A pool dominated by QBs and a static hero: the hero (ungated) may over-roster QB beyond a cap.
-    cfg = _config(n_teams=4, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.BENCH: 1})
+    # RB-heavy pool: RBs carry the top baseline, so they're nominated first. A max-bidding hero
+    # (high budget so its feasible_max never runs low) wins the top 3 nominations -> 3 RB, 0 WR.
+    # That exceeds the bot RB cap (max RB = 2 for {RB:1,WR:1,BENCH:1}) AND strands the WR starter,
+    # proving the hero has NO eligibility gate and NO starter reservation.
+    cfg = _config(n_teams=4, budget=1000)  # high budget -> hero wins the first 3 picks outright
     n = 40
-    gsis = [f"00-1{i:06d}" for i in range(n)]
     pool = pd.DataFrame({
-        "gsis_id": pd.array(gsis, dtype=_PYARROW_STR),
-        "position": pd.array(["QB"] * (n - 4) + ["RB"] * 4, dtype=_PYARROW_STR),
-        "season_mean_fpts": [float(300 - i) for i in range(n)],
+        "gsis_id": pd.array(
+            [f"00-2{i:06d}" if i < n - 4 else f"00-3{i:06d}" for i in range(n)], dtype=_PYARROW_STR
+        ),
+        "position": pd.array(["RB"] * (n - 4) + ["WR"] * 4, dtype=_PYARROW_STR),
+        "season_mean_fpts": [float(300 - i) for i in range(n)],  # RBs (first) score highest
         "vorp": [float(150 - i) for i in range(n)],
         "replacement_fpts": [100.0] * n,
     })
     state = _simulate_to_state(
-        StaticDollarBid(), 1, pool, cfg,
+        _MaxBidStub(), 1, pool, cfg,
         baseline_dollars=_baseline(pool, cfg), price_jitter=0.0, rng=np.random.default_rng(0),
     )
-    hero_qbs = sum(1 for (_g, p, _pr) in state.rosters[0] if p == "QB")
-    # bot QB max here is small; an ungated hero taking the cheapest-available QBs can exceed it
-    assert hero_qbs >= 1  # hero freely rosters QB with no positional cap (sanity: gate is bot-only)
+    hero = [p for (_g, p, _pr) in state.rosters[0]]
+    assert hero.count("RB") == 3 and hero.count("WR") == 0  # > bot RB cap (2), starter stranded
 ```
 (The existing determinism / conservation / full-league / feasible_max tests in this file must still pass after the change — run the whole file in Step 4.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_draft/test_assistant_auction_simulation.py -k "startable or forced or not_gated" -v`
-Expected: FAIL — the engine still builds `SeatView(open_slots=...)` without `eligible_positions` (TypeError), so the whole file errors at the engine call.
+Expected: FAIL — with Task 4's ungated-default `SeatView`, the engine runs (no TypeError) but has no positional gate, nomination-union, or forced-pick yet: `test_forced_pick...` fails (no `"pool thin"` warning is emitted) and `test_every_bot_roster_is_startable` fails (ungated bots aren't guaranteed an RB + WR). `test_hero_is_not_gated` may already pass (the hero is ungated before and after) — it's a guard that must stay green post-Task-5.
 
 - [ ] **Step 3: Rewrite the `_simulate_to_state` loop** — update `simulation.py` imports and replace the body of `_simulate_to_state` (everything from `validate_auction_inputs(...)` through `return state`). Add to the imports at the top of the file:
 
@@ -578,6 +601,7 @@ python scripts/auction_tournament.py --vorp-table data/vorp_2026/half_16team.par
     --league-config configs/league_espn_half_16team.json --my-seat 1 --season 2026 \
     --seeds 150 --n-sims 500 --seed 0 compare
 ```
+These are the **identical knobs to Run A** (recorded in `reports/auction_tournament_validation_2026.md` under "Run A" / the Reproduce recipe: `half_16team`, seat 1, 150 seeds, n_sims 500, seed 0, `price_jitter` default 0.15). Before running, confirm the `--vorp-table` / `--league-config` paths match what Run A used (per the tracking doc), so Run B differs from Run A *only* in the sane-bots code change.
 Expected: a per-model table + paired diffs, no winner line, in a few minutes. Capture the output.
 
 - [ ] **Step 3: Record Run B (data point, no verdict)** — in `reports/auction_tournament_validation_2026.md`, add Run B rows to the experiment-log table and a "Run B" note beneath Run A: the per-model means, the paired diffs, and **the comparison to Run A** — specifically whether the hero's `playoff %` / `champ %` moved back toward (or above) the uniform baseline (0.375 / 0.0625) now that bots are positionally disciplined. Frame strictly as data: "in isolation, with sane bots, the hero ..."; **no winner declared** (September decision). Note byes are still off (2026 schedule not ingested).
