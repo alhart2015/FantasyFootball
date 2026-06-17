@@ -65,10 +65,10 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
 | Pool | `data/consensus_vorp_2026.parquet` (or preset table) | `VorpTableSchema`; `consensus_adp` not required for auctions |
 | Baseline dollars | `generate_auction_values(pool, config)` | computed once per run, threaded in |
 | League | preset `(scoring, n_teams)` from the board registry | budget / min_bid / roster shape all from `LeagueConfig` |
-| `price_jitter` | _TBD_ | market-noise knob (auction analog of `adp_jitter`) |
-| `my_seat` | _TBD_ | seat sweep is a planned axis |
+| `price_jitter` | 0.15 (`DEFAULT_PRICE_JITTER` in `src/projections/draft/assistant/auction/market.py`) | market-noise knob (auction analog of `adp_jitter`) |
+| `my_seat` | 1 (CLI required; no default) | seat sweep is a planned axis |
 | `base_seed` | 0 | reproducibility |
-| `n_sims` (season MC) | _~500, with CRN_ | 2000 reserved for post-hoc deep-dives |
+| `n_sims` (season MC) | 500 (CLI default `--n-sims`) | 2000 reserved for post-hoc deep-dives |
 | Scoring | `project_draft` (league sim) | StartersValuer dropped |
 
 ## Experiment log
@@ -103,15 +103,26 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
 
 ## Reproduce
 
-_Recipe goes here once `scripts/auction_tournament.py` exists. Expected shape:_
-
 ```
 python scripts/auction_tournament.py \
-    --vorp-table <consensus_vorp.parquet> --league-config <league.json> \
-    --my-seat N [--seeds K] [--price-jitter F] [--seed BASE] \
-    [--n-sims M] [--season YYYY] \
+    --vorp-table data/vorp_2026/half_16team.parquet \
+    --league-config configs/league_espn_half_16team.json \
+    --my-seat 1 --season 2026 \
+    [--seeds K]          # default 50; use 20 for quick smoke, 100+ for tighter CIs
+    [--price-jitter F]   # default 0.15
+    [--seed BASE]        # default 0
+    [--n-sims M]         # default 500; use 200 for speed, 2000 for deep-dives
+    [--data-root PATH]   # default "data"; must have availability/byes partitions for 2026
     compare
 ```
 
-`compare` runs the three bid models and prints each model's per-metric mean + CI table and the paired
-differences. Paste the numbers into the log above with the exact flags used.
+`compare` races `static` / `inflation` / `marginal` against a shared seeded bot market and prints:
+- each model's per-metric mean + 95% bootstrap CI table
+- paired per-seed differences with CIs for every model pair
+
+No winner is declared. Paste the per-model table into the experiment log above with the exact flags used.
+
+**Swap the `--vorp-table` / `--league-config` pair together** — they must agree on scoring ruleset and
+team count (the budget, roster shape, and replacement level are all derived from `LeagueConfig`).
+Available preset pairs: `data/vorp_2026/{half,ppr,std}_{10,12,16}team.parquet` with
+`configs/league_espn_{half_16team,ppr_12team,half_10team}.json` (or any custom `LeagueConfig` JSON).

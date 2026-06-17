@@ -4,6 +4,18 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction Strategy — Slice 1 bid-model tournament harness — shipped (2026-06-17, branch `feat/auction-tournament`)
+
+**Status:** Auction bid-model data-gathering harness shipped (`src/projections/draft/assistant/auction/`). Spec `docs/superpowers/specs/2026-06-17-auction-strategy-tournament-design.md`. Data-gathering starts now; **no bid-model winner declared — decision deferred to September 2026**, close to the real draft.
+
+**What shipped:** `bid_strategy.py` (3 models + `BidStrategy` Protocol: `StaticDollarBid`, `InflationBid`, `MarginalValueBid`); `market.py` (noisy-WTP bot field + second-price clearing, `DEFAULT_PRICE_JITTER=0.15`); `simulation.py` (`simulate_auction` — full-league nominate/bid/award loop returning all rosters); `tournament.py` (`run_auction_tournament` — CRN-paired league-sim scoring via `project_draft`, per-metric means + 95% bootstrap CIs + paired diffs, no winner); `tournament_cli.py` + `scripts/auction_tournament.py` (`compare` subcommand). `mean_points` (expected regular-season points-for) added to `SeatProjection` / `project_draft`. `Interval` / `bootstrap_mean` / pool-size guard promoted to shared `assistant/_compare.py`.
+
+**Key decisions:** league-sim scoring via `project_draft` (full-league projected-vs-projected MC); `StartersValuer`/single-roster scalar scoring dropped (no added value over the league sim); no winner line in any output (enforced at both the result type and CLI format levels); `--season` is required (availability + byes need it); `my_seat` is 1-based in the CLI (0-based internally, converted at the boundary).
+
+**Gates:** 1656 passed / 17 skipped / 1 pre-existing failure (mypy 332 files clean; ruff check + format clean; pre-existing failure on `test_backtest_smoke_one_cell` = stale WR feature cache, TODO #40, unrelated to this branch). Real-data smoke: `data/vorp_2026/half_16team.parquet` + `configs/league_espn_half_16team.json`, seat 1, 20 seeds, n_sims=200 — completed, no winner (CIs all overlap). Tracking doc: `reports/auction_tournament_validation_2026.md`.
+
+---
+
 ## Draft Assistant — Projected draft eval + scoring/size presets — shipped (2026-06-16, branch `feat/draft-eval-presets`, stacked on `feat/draft-board-ux`)
 
 **Status:** The end-of-draft "how good is this roster?" sim is now first-class + shown in the board, and scoring mode + league size are configurable. Built spec → spec-review (1 iter + Low fixes) → plan → plan-review (3 iters — the review caught a real bracket-vs-team-count bug a fix had introduced) → subagent-driven execution (9 tasks, each TDD + spec + code-quality review + a final whole-feature review). Spec/plan `docs/superpowers/specs|plans/2026-06-16-projected-draft-eval.*`.
