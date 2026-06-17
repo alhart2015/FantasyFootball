@@ -3,7 +3,7 @@ import pandas as pd
 
 from projections.draft.assistant.auction.market import SeatView, bot_max_bid, resolve_bids
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import RosterSlot, Ruleset
+from projections.schemas import Position, RosterSlot, Ruleset
 
 
 def _config(min_bid: int = 1) -> LeagueConfig:
@@ -87,3 +87,27 @@ def test_resolve_lone_bidder_pays_min_bid() -> None:
 def test_resolve_ties_break_on_seat_index() -> None:
     winner, _ = resolve_bids({3: 20, 1: 20}, min_bid=1)
     assert winner == 1
+
+
+def test_bot_abstains_when_position_not_eligible() -> None:
+    bid = bot_max_bid(
+        SeatView(open_slots=3, eligible_positions=frozenset({Position.WR})),  # RB not eligible
+        _player(),  # position "RB"
+        _baseline(),
+        _config(),
+        np.random.default_rng(0),
+        price_jitter=0.0,
+    )
+    assert bid == 0
+
+
+def test_bot_bids_when_position_eligible() -> None:
+    bid = bot_max_bid(
+        SeatView(open_slots=3, eligible_positions=frozenset({Position.RB})),
+        _player(),  # position "RB"
+        _baseline(),
+        _config(),
+        np.random.default_rng(0),
+        price_jitter=0.0,
+    )
+    assert bid == 40  # baseline, unchanged when eligible

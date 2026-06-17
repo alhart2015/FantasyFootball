@@ -8,15 +8,18 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.league_config import LeagueConfig
+from projections.schemas import Position
 
 DEFAULT_PRICE_JITTER: float = 0.15  # fractional WTP spread; auction analog of adp_jitter
 
 
 @dataclass(frozen=True)
 class SeatView:
-    """Minimal per-seat view the bot reads (the engine handles feasible_max)."""
+    """Minimal per-seat view the bot reads (the engine handles feasible_max + eligibility)."""
 
     open_slots: int
+    # default = all positions; Task 5 passes the real per-bot set
+    eligible_positions: frozenset[Position] = frozenset(Position)
 
 
 def bot_max_bid(
@@ -28,8 +31,10 @@ def bot_max_bid(
     *,
     price_jitter: float,
 ) -> int:
-    """Value-rational WTP centered on the market dollar, with multiplicative noise."""
+    """Value-rational WTP centered on the market dollar; abstain (0) if full or position-gated."""
     if seat_view.open_slots <= 0:
+        return 0
+    if Position(player["position"]) not in seat_view.eligible_positions:
         return 0
     base = float(baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
     wtp = base * (1.0 + rng.normal(0.0, price_jitter))
