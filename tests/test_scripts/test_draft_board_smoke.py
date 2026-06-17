@@ -10,37 +10,37 @@ import pandas as pd
 import pytest
 
 
-def _smoke_session(picks: list[str] | None = None, my_slot: int = 1):  # type: ignore[no-untyped-def]
+def _smoke_session(picks: list[str] | None = None, my_slot: int = 1, n_teams: int = 12):  # type: ignore[no-untyped-def]
     from projections.draft.assistant.live import LiveDraftSession
     from projections.draft.assistant.strategy import RawVorpStrategy
     from projections.draft.league_config import LeagueConfig
     from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset, validate_gsis_id
 
-    ids = [f"00-000{i:04d}" for i in range(1, 25)]
-    positions = ["RB", "WR", "QB", "TE"] * 6
-    names = [f"Player {i}" for i in range(1, 25)]
+    ids = [f"00-000{i:04d}" for i in range(1, 73)]
+    positions = ["RB", "WR", "QB", "TE"] * 18
+    names = [f"Player {i}" for i in range(1, 73)]
     id_map = pd.DataFrame(
         {
             "gsis_id": pd.array(ids, dtype=_PYARROW_STR),
             "position": pd.array(positions, dtype=_PYARROW_STR),
             "full_name": pd.array(names, dtype=_PYARROW_STR),
-            "team": pd.array(["KC"] * 24, dtype=_PYARROW_STR),
+            "team": pd.array(["KC"] * 72, dtype=_PYARROW_STR),
         }
     )
     pool = pd.DataFrame(
         {
             "gsis_id": pd.array(ids, dtype=_PYARROW_STR),
             "position": pd.array(positions, dtype=_PYARROW_STR),
-            "season_mean_fpts": [300.0 - i for i in range(24)],
-            "vorp": [150.0 - i for i in range(24)],
-            "replacement_fpts": [100.0] * 24,
-            "consensus_adp": pd.array([float(i + 1) for i in range(24)], dtype=pd.Float64Dtype()),
+            "season_mean_fpts": [300.0 - i for i in range(72)],
+            "vorp": [150.0 - i for i in range(72)],
+            "replacement_fpts": [100.0] * 72,
+            "consensus_adp": pd.array([float(i + 1) for i in range(72)], dtype=pd.Float64Dtype()),
             "full_name": pd.array(names, dtype=_PYARROW_STR),
         }
     )
     league = LeagueConfig(
         name="t",
-        n_teams=12,
+        n_teams=n_teams,
         roster_slots={
             RosterSlot.QB: 1,
             RosterSlot.RB: 2,
@@ -118,3 +118,30 @@ def test_board_opponent_adp_shortcut_records(tmp_path: Path) -> None:
     at.button(key="confirm_adp").click().run()
     assert not at.exception
     assert len(at.session_state["session"].picks) == 1
+
+
+def test_board_results_panel_runs_projected_eval(tmp_path: Path) -> None:
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    from projections.draft.assistant.availability import PlayerAvailability
+    from projections.schemas import validate_gsis_id
+
+    sess = _smoke_session(my_slot=1, n_teams=6)  # 6 x 11 = 66 <= 72-player fixture pool
+    full = list(sess.pool["gsis_id"].astype(str))[: sess.league.n_teams * sess.league.roster_size]
+    sess.picks = [validate_gsis_id(g) for g in full]
+    assert sess.is_complete
+    at = AppTest.from_file("scripts/draft_board.py")
+    at.session_state["session"] = sess
+    at.session_state["session_token"] = "tok"
+    at.session_state["autosave_path"] = str(tmp_path / "auto.json")
+    # inject constant availability so the eval needs no store
+    at.session_state["_eval_availability"] = PlayerAvailability(
+        p={g: 1.0 for g in sess.pool["gsis_id"].astype(str)}, bye={}
+    )
+    at.run()
+    assert not at.exception
+    at.button(key="run_projected_eval").click().run()
+    assert not at.exception
+    # the panel rendered a championship metric for the hero seat
+    assert any("Championship" in str(getattr(m, "label", "")) for m in at.metric)

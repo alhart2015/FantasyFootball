@@ -22,20 +22,25 @@ from projections.draft.assistant.live import (
     build_session_strategy,
 )
 from projections.draft.assistant.pick_timing import slot_for
+from projections.draft.assistant.presets import (
+    DEFAULT_SCORING,
+    DEFAULT_TEAMS,
+    SCORING_KEYS,
+    TEAM_SIZES,
+    get_preset,
+    materialize_league_config,
+)
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, IdMapSchema, Position, VorpTableSchema
 
-_DEFAULT_VORP = "data/consensus_vorp_2026.parquet"
 _DEFAULT_ID_MAP = "data/raw/id_map.parquet"
-_DEFAULT_LEAGUE = "configs/league_espn_ppr_12team_skill.json"
 
 
-def _load_inputs(vorp_path: Path, id_map_path: Path, league_path: Path):  # type: ignore[no-untyped-def]
+def _load_inputs(vorp_path: Path, id_map_path: Path, league: LeagueConfig):  # type: ignore[no-untyped-def]
     id_map = IdMapSchema.validate(pd.read_parquet(id_map_path))
     pool = pd.read_parquet(vorp_path)
     pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
     pool = VorpTableSchema.validate(pool)
-    league = LeagueConfig.model_validate_json(Path(league_path).read_text())
     return id_map, pool, league
 
 
@@ -43,7 +48,7 @@ def _build_session(
     *,
     vorp_path: Path,
     id_map_path: Path,
-    league_path: Path,
+    league: LeagueConfig,
     my_slot: int,
     mode: str,
     strategy_name: str,
@@ -51,8 +56,9 @@ def _build_session(
     adp_jitter: float,
     season: int,
     data_root: Path,
+    league_config_path: Path = Path("."),
 ) -> LiveDraftSession:
-    id_map, pool, league = _load_inputs(vorp_path, id_map_path, league_path)
+    id_map, pool, league = _load_inputs(vorp_path, id_map_path, league)
     availability = None
     if strategy_name in MC_STRATEGIES:
         availability = load_store_availability(pool, season=season, data_root=data_root)
@@ -75,7 +81,7 @@ def _build_session(
         adp_jitter=adp_jitter,
         n_sims=n_sims,
         season=season,
-        league_config_path=Path(league_path),
+        league_config_path=league_config_path,
         vorp_path=vorp_path,
         id_map_path=id_map_path,
     )
@@ -101,10 +107,19 @@ def _sidebar() -> None:
         index=0,
         format_func=lambda m: "Co-pilot (live)" if m == "copilot" else "Mock",
     )
-    vorp_path = st.sidebar.text_input("Consensus VORP parquet", _DEFAULT_VORP)
+    scoring = st.sidebar.selectbox(
+        "Scoring",
+        SCORING_KEYS,
+        index=SCORING_KEYS.index(DEFAULT_SCORING),
+        format_func=lambda k: {"half": "Half-PPR", "ppr": "Full PPR", "std": "Standard"}[k],
+    )
+    n_teams = st.sidebar.selectbox("Teams", TEAM_SIZES, index=TEAM_SIZES.index(DEFAULT_TEAMS))
+    preset = get_preset(scoring, int(n_teams))
+    my_slot = st.sidebar.number_input("My draft slot", min_value=1, max_value=int(n_teams), value=1)
     id_map_path = st.sidebar.text_input("id_map parquet", _DEFAULT_ID_MAP)
-    league_path = st.sidebar.text_input("League config JSON", _DEFAULT_LEAGUE)
-    my_slot = st.sidebar.number_input("My draft slot", min_value=1, max_value=32, value=1)
+    with st.sidebar.expander("Advanced: custom VORP table"):
+        custom_vorp = st.text_input("VORP parquet (overrides preset)", "")
+    vorp_path = custom_vorp.strip() or str(preset.table_path)
     strategy_name = st.sidebar.selectbox("Strategy", BOARD_STRATEGIES, index=0)
     n_sims = st.sidebar.number_input(
         "n_sims (MC strategies)", min_value=50, max_value=2000, value=300, step=50
@@ -114,11 +129,15 @@ def _sidebar() -> None:
 
     if st.sidebar.button("Start / restart draft", type="primary"):
         try:
+            # Persist the preset's in-memory config to a real file so autosave/resume (which
+            # store the league config as a PATH) work for preset-started drafts.
+            league_config_path = materialize_league_config(preset)
             _install_session(
                 _build_session(
                     vorp_path=Path(vorp_path),
                     id_map_path=Path(id_map_path),
-                    league_path=Path(league_path),
+                    league=preset.league_config,
+                    league_config_path=league_config_path,
                     my_slot=int(my_slot),
                     mode=mode,
                     strategy_name=strategy_name,
@@ -128,7 +147,12 @@ def _sidebar() -> None:
                     data_root=Path("data"),
                 )
             )
-        except Exception as exc:  # surface any setup failure to the user
+        except FileNotFoundError as exc:
+            st.sidebar.error(
+                f"Missing VORP table {vorp_path}. Generate presets with: "
+                f"python scripts/generate_preset_vorp_tables.py — ({exc})"
+            )
+        except Exception as exc:  # surface any other setup failure
             st.sidebar.error(f"Setup failed: {exc}")
 
     _resume_controls()
@@ -138,11 +162,15 @@ def _status_bar(s: LiveDraftSession) -> None:
     if s.is_complete:
         st.subheader("✅ Draft complete")
         return
-    rnd, slot = s.round_and_slot()  # slot == on_clock_slot (the 2nd element)
+    rnd, slot = s.round_and_slot()  # slot == on_clock_slot (the on-the-clock team)
     who = "YOU" if s.is_my_pick else f"Team {slot}"
     nxt = s.next_pick_number
     until = "" if nxt is None else f" · your next pick: #{nxt}"
-    st.subheader(f"Pick {rnd}.{slot:02d} (#{s.current_pick}) · on the clock: {who}{until}")
+    # Label is Round.PickInRound (counts up every round, snake-direction-independent); the
+    # on-clock team slot is shown separately so the snake reversal is still visible.
+    st.subheader(
+        f"Pick {rnd}.{s.pick_in_round:02d} (#{s.current_pick}) · on the clock: {who}{until}"
+    )
 
 
 _SESSION_DIR = Path("data/draft_sessions")
@@ -181,6 +209,16 @@ def _resume_controls() -> None:
             _install_session(loaded, autosave_path=newest)
         except Exception as exc:  # surface any resume failure to the user
             st.sidebar.error(f"Resume failed: {exc}")
+
+
+@st.cache_data(show_spinner=False)
+def _cached_projection(session_token: str, picks: tuple[str, ...], n_sims: int) -> dict:  # type: ignore[type-arg]
+    """Cache the projected-league eval on (session, picks, n_sims). Pulls the live session +
+    an optional injected availability from session_state (tests inject; prod loads from store)."""
+    s: LiveDraftSession = st.session_state["session"]
+    avail = st.session_state.get("_eval_availability")
+    res = s.project_league_outcomes(n_sims=n_sims, availability=avail)
+    return {slot: vars(proj) for slot, proj in res.items()}
 
 
 @st.cache_data(show_spinner=False)
@@ -284,7 +322,7 @@ def _recommend_col(s: LiveDraftSession) -> None:
             st.info(f"Opponent on the clock. ADP suggests: **{name}**")
             if st.button(f"Confirm pick: {name}", key="confirm_adp", type="primary"):
                 _record_and_rerun(s, str(sug))
-        st.caption("…or click a player in **Best available** (right) to record a different pick.")
+        st.caption("…or click a player in **Best available** below to record a different pick.")
         return
     with st.spinner("Scoring candidates…"):
         token = st.session_state.get("session_token", "")
@@ -346,6 +384,42 @@ def _mock_controls(s: LiveDraftSession) -> None:
         st.rerun()
 
 
+def _results_section(s: LiveDraftSession) -> None:
+    if not s.is_complete:
+        return
+    st.markdown("### 📊 Projected draft results")
+    st.caption(
+        "Projected-vs-projected league sim (injury + performance variance, optimal lineup all "
+        "teams). Measures roster quality under our projections, not real outcomes."
+    )
+    n_sims = 2000
+    if not st.button("Run projected eval", key="run_projected_eval", type="primary"):
+        return
+    token = st.session_state.get("session_token", "")
+    with st.spinner("Simulating seasons…"):
+        res = _cached_projection(token, tuple(s.picks), n_sims)
+    n = s.league.n_teams
+    me = res[s.my_slot]
+    base = {"playoff": 6 / n, "bye": 2 / n, "champ": 1 / n}
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Reg-season win%", f"{me['reg_win_pct']:.1%}", "vs 50%")
+    c2.metric("Make playoffs", f"{me['make_playoffs_pct']:.1%}", f"vs {base['playoff']:.1%}")
+    c3.metric("First-round bye", f"{me['bye_pct']:.1%}", f"vs {base['bye']:.1%}")
+    c4.metric("Championship %", f"{me['champ_pct']:.1%}", f"vs {base['champ']:.1%}")
+    rows = [
+        {
+            "slot": slot,
+            "you": "★" if slot == s.my_slot else "",
+            "reg win%": f"{res[slot]['reg_win_pct']:.0%}",
+            "playoff%": f"{res[slot]['make_playoffs_pct']:.0%}",
+            "bye%": f"{res[slot]['bye_pct']:.0%}",
+            "champ%": f"{res[slot]['champ_pct']:.0%}",
+        }
+        for slot in range(1, n + 1)
+    ]
+    st.dataframe(pd.DataFrame(rows), hide_index=True)
+
+
 def main() -> None:
     st.set_page_config(page_title="Draft Board", layout="wide")
     st.title("🏈 Live Draft Board")
@@ -358,14 +432,15 @@ def main() -> None:
     _status_bar(s)
     _confirm_bar(s)
     _mock_controls(s)
-    left, center, right = st.columns([1.1, 2.0, 1.3])
+    left, center, right = st.columns([1.0, 2.5, 1.1])
     with left:
         _board_log_col(s)
     with center:
         _recommend_col(s)
+        _best_available_col(s)
     with right:
         _roster_col(s)
-        _best_available_col(s)
+    _results_section(s)
     st.caption(f"Mode: {s.mode} · strategy: {s.strategy_name} · {len(s.picks)} picks made")
 
 

@@ -188,6 +188,19 @@ def test_next_pick_number_snakes() -> None:
     assert s.next_pick_number == 18
 
 
+def test_pick_in_round_counts_up_through_the_snake_turn() -> None:
+    # 12-team league: pick_in_round must count 1..12 EVERY round (snake-direction-independent),
+    # not reverse in round 2. At the round 1->2 turn the on-clock slot reverses (12), but the
+    # display pick number is 1 (the first pick of round 2).
+    assert _session().pick_in_round == 1  # pick #1
+    assert _session(picks=[f"00-000{i:04d}" for i in range(1, 6)]).pick_in_round == 6  # pick #6
+    turn = _session(picks=[f"00-000{i:04d}" for i in range(1, 13)])  # 12 picks -> pick #13
+    assert turn.current_pick == 13
+    assert turn.round_and_slot()[0] == 2  # round 2
+    assert turn.pick_in_round == 1  # first pick of round 2 (NOT 12)
+    assert turn.on_clock_slot == 12  # snake reversed -> slot 12 is on the clock
+
+
 def test_is_complete_when_roster_full() -> None:
     total = _league().n_teams * _league().roster_size
     s = _session(picks=[f"00-000{i:04d}" for i in range(1, total + 1)])
@@ -506,3 +519,51 @@ def test_available_for_pick_cap_applied_after_filter_reaches_deep_player() -> No
     deep_wr = all_wrs.iloc[-1]["gsis_id"]  # lowest-VORP WR
     assert deep_wr not in set(cross_top3["gsis_id"])  # hidden by the cross-position cap
     assert deep_wr in set(all_wrs["gsis_id"])  # reachable once the position filter is applied
+
+
+def test_project_league_outcomes_requires_complete_draft() -> None:
+    s = _session()  # picks=[] -> not complete
+    with pytest.raises(ValueError, match="complete"):
+        s.project_league_outcomes(n_sims=50)
+
+
+def test_project_league_outcomes_returns_seat_projection_for_my_slot() -> None:
+    from projections.draft.assistant.availability import PlayerAvailability
+    from projections.draft.assistant.league_projection import SeatProjection
+    from projections.draft.league_config import LeagueConfig
+    from projections.schemas import RosterSlot, Ruleset
+
+    # The bracket needs >= 6 teams; 6 teams x roster_size 6 = 36 <= 39-player _pool_with_names().
+    league = LeagueConfig(
+        name="t",
+        n_teams=6,
+        roster_slots={
+            RosterSlot.QB: 1,
+            RosterSlot.RB: 1,
+            RosterSlot.WR: 1,
+            RosterSlot.TE: 1,
+            RosterSlot.FLEX: 1,
+            RosterSlot.BENCH: 1,
+        },
+        ruleset=Ruleset.espn_half(),
+    )
+    pool = _pool_with_names()
+    completed = [
+        validate_gsis_id(g) for g in list(pool["gsis_id"].astype(str))[: 6 * league.roster_size]
+    ]
+    s = LiveDraftSession(
+        league=league,
+        my_slot=1,
+        id_map=_id_map(),
+        pool=pool,
+        strategy=_FakeStrategy(),
+        strategy_name="fake",
+        mode="mock",
+        adp_jitter=0.0,
+        picks=completed,
+    )
+    assert s.is_complete
+    avail = PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={})
+    res = s.project_league_outcomes(n_sims=200, availability=avail)
+    assert isinstance(res[1], SeatProjection)
+    assert 0.0 <= res[1].champ_pct <= 1.0
