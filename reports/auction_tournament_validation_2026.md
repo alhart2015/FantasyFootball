@@ -81,6 +81,9 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
 | 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | static    | 892.6 [881.3, 903.2] | 0.38 | 0.15 | 0.03 | 0.01 | Run A — see note ↓ |
 | 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | marginal  | 876.3 [872.1, 880.2] | 0.37 | 0.11 | 0.02 | 0.01 | Run A |
 | 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | inflation | 855.3 [847.2, 863.4] | 0.35 | 0.09 | 0.01 | 0.01 | Run A |
+| 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | static    | 882.3 [869.9, 894.5] | 0.34 | 0.10 | 0.02 | 0.01 | Run B (sane bots) — see note ↓ |
+| 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | marginal  | 864.5 [858.8, 870.3] | 0.32 | 0.06 | 0.01 | 0.00 | Run B (sane bots) |
+| 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | inflation | 818.2 [809.3, 827.0] | 0.28 | 0.04 | 0.00 | 0.00 | Run B (sane bots) |
 
 **Run A — 2026-06-17** (`half_16team`, seat 1, 150 seeds, n_sims=500, price_jitter=0.15, budget=200, seed=0; **byes OFF** — 2026 schedule not ingested, injury risk still applied).
 
@@ -92,6 +95,24 @@ Paired per-seed differences (point [95% CI]; all exclude 0 except where noted) �
 *In isolation this run favors* **static ≥ marginal ≥ inflation** *on points & playoff%. Not a verdict (one seat, one preset, byes off; decide in September).*
 
 ⚠️ **Methodology flag (read before trusting levels):** the hero's **absolute** metrics sit *below* the uniform baseline (playoff 0.15 vs 0.375 expected at 6/16; champ 0.01 vs 0.0625). With 15 noisy-WTP bots, the *order-statistic max* of their bids on a stud exceeds `baseline_dollars`, so a value-bidding hero is outbid on the good players and ends with a below-average roster. This is the §3.6 bot-field caveat in action: **absolute numbers are bot-relative; only the paired diffs are interpretable.** Worth examining the bot model (and/or whether a competitive hero must bid above baseline) and a seat sweep before reading anything into levels.
+
+---
+
+**Run B — 2026-06-17** (`half_16team`, seat 1, 150 seeds, n_sims=500, price_jitter=0.15, budget=200, seed=0; **byes OFF** — 2026 schedule not ingested; **sane bots** — `bot_position_bounds` from `LeagueConfig` + shared `bot_eligible` iteration domain, branch `feat/auction-sane-bots`). Identical knobs to Run A; only the bot-field positional discipline changed.
+
+Per-model metrics (mean [95% CI]):
+- **static:** 882.3 pts [869.9, 894.5] · win 0.34 · playoff 0.10 · bye 0.02 · champ 0.01
+- **marginal:** 864.5 pts [858.8, 870.3] · win 0.32 · playoff 0.06 · bye 0.01 · champ 0.00
+- **inflation:** 818.2 pts [809.3, 827.0] · win 0.28 · playoff 0.04 · bye 0.00 · champ 0.00
+
+Paired per-seed differences (point [95% CI]; all CIs exclude 0):
+- **static − inflation:** +64.2 pts [+49.1, +78.8] · win +0.057 [+0.043, +0.071] · playoff +0.057 [+0.045, +0.071] · bye +0.012 [+0.009, +0.016] · champ +0.004 [+0.003, +0.006]
+- **static − marginal:** +17.8 pts [+4.4, +31.1] · win +0.017 [+0.004, +0.030] · playoff +0.034 [+0.021, +0.049] · bye +0.009 [+0.005, +0.013] · champ +0.003 [+0.001, +0.004]
+- **inflation − marginal:** −46.4 pts [−55.3, −37.5] · win −0.041 [−0.049, −0.032] · playoff −0.023 [−0.029, −0.017] · bye −0.003 [−0.004, −0.002] · champ −0.002 [−0.002, −0.001]
+
+*Run A vs Run B comparison:* With positionally-disciplined bots (Run B), the hero's absolute metrics declined slightly vs Run A (static playoff 0.10 vs 0.15; champ 0.01 vs 0.01). The hero did **not** recover to the uniform baseline (0.375 playoff / 0.0625 champ) — the bot-field remains a competitive handicap even with positional discipline, because bots now spend their budgets more efficiently on positionally-appropriate targets. The paired-diff ordering is unchanged: **static ≥ marginal ≥ inflation** on both points and playoff% in both runs. The static−inflation advantage widened in Run B (+64.2 pts vs +37.3 pts), while static−marginal was similar (+17.8 vs +16.3 pts). In isolation, with sane bots, the hero's absolute numbers are lower because the disciplined bots are harder competition; the model ranking direction is the same; no winner declared (byes still off; September decision).
+
+*In isolation this run also favors* **static ≥ marginal ≥ inflation** *on points & playoff%. Not a verdict.*
 
 ## Planned experiments / axes to sweep
 

@@ -4,9 +4,9 @@ Running project management list. Add items as they come up; remove or check off 
 
 ## Open
 
-### 49. Auction bid-model data-gathering — decision September 2026 (branch `feat/auction-tournament`)
+### 49. Auction bid-model data-gathering — decision September 2026 (branch `feat/auction-tournament`; sane-bots branch `feat/auction-sane-bots`)
 
-Harness shipped (`src/projections/draft/assistant/auction/`); tracking doc `reports/auction_tournament_validation_2026.md`. Run experiments through summer and make the bid-model call in September 2026. Axes to sweep: bid-model bake-off (`static` vs `inflation` vs `marginal`) at fixed preset+seat+jitter; `price_jitter` sweep; seat sweep; scoring×size presets. No winner declared until the September decision. See PM entry (2026-06-17) for decisions and gates.
+Harness shipped (`src/projections/draft/assistant/auction/`); tracking doc `reports/auction_tournament_validation_2026.md`. Sane-bots slice shipped: `bot_position_bounds` (league-driven per-position min/max) + `bot_eligible` (shared iteration-domain gate); Run B bake-off recorded (150 seeds, n_sims=500; static playoff 0.10/champ 0.01 vs Run A 0.15/0.01; ranking unchanged, static ≥ marginal ≥ inflation). Run experiments through summer and make the bid-model call in September 2026. Axes still to sweep: `price_jitter` sweep; seat sweep; scoring×size presets. Hero absolute metrics still below uniform baseline even with sane bots — better bot WTP model remains the single biggest realism lever. No winner declared until the September decision. See PM entries (2026-06-17) for decisions and gates.
 
 ### 48. Projected draft eval + scoring/size presets — ✅ DONE (branch `feat/draft-eval-presets`, stacked on `feat/draft-board-ux`)
 
