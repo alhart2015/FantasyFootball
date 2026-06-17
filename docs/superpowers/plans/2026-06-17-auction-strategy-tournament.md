@@ -255,7 +255,7 @@ In the imports block (after line 19, `from projections.draft.assistant.valuer im
 from projections.draft.assistant._compare import Interval, bootstrap_mean as _bootstrap_mean
 from projections.draft.assistant._compare import validate_pool_size
 ```
-Delete the local `@dataclass ... class Interval` block (lines 29-35) and the local `def _bootstrap_mean(...)` block (lines 94-103) — they now come from `_compare`. Keep `_N_BOOTSTRAP`/`_CI_PCTILES` only if still referenced elsewhere; if not, delete them (ruff F811/F401 will flag). Then change `_validate_pool` so its size arm delegates:
+Delete the local `@dataclass ... class Interval` block (lines 29-35) and the local `def _bootstrap_mean(...)` block (lines 94-103) — they now come from `_compare`. The module-level `_N_BOOTSTRAP`/`_CI_PCTILES` constants (lines 25-26) become unused once the local `_bootstrap_mean` is gone — and **ruff will NOT flag them** (F401 is for imports, F811 for redefinitions; neither covers an unused module-level constant). So delete both lines explicitly after confirming nothing else references them: `rg -n "_N_BOOTSTRAP|_CI_PCTILES" src/projections/draft/assistant/tournament.py` (expect no remaining hits). Then change `_validate_pool` so its size arm delegates:
 ```python
 def _validate_pool(pool: pd.DataFrame, config: LeagueConfig) -> None:
     """Hard preconditions shared by both entry points (spec §3.1, §3.3)."""
@@ -718,7 +718,9 @@ git commit -m "feat(auction): noisy-WTP bot + second-price clearing"
 - Consumes: `AuctionBidStrategy`/`AuctionView` (Task 3), `SeatView`/`bot_max_bid`/`resolve_bids` (Task 4), `validate_pool_size` (Task 2), `generate_auction_values` (`projections.draft.auction`), `LeagueConfig`.
 - Produces:
   - `validate_auction_inputs(pool: pd.DataFrame, config: LeagueConfig) -> None` — pool-size + budget-solvency (`budget >= min_bid * roster_size`) preconditions.
-  - `simulate_auction(strategy: AuctionBidStrategy, my_seat: int, pool: pd.DataFrame, config: LeagueConfig, *, baseline_dollars: pd.DataFrame, price_jitter: float, rng: np.random.Generator) -> dict[int, list[str]]` — one full auction; returns every seat's roster `{seat(1-based): [gsis_id, ...]}` (the `project_draft` input).
+  - `_simulate_to_state(...) -> AuctionState` — runs the full auction loop and returns the final mutable `AuctionState` (budgets + per-seat `(gsis_id, position, price)` rosters); the white-box seam tests assert on it.
+  - `simulate_auction(strategy: AuctionBidStrategy, my_seat: int, pool: pd.DataFrame, config: LeagueConfig, *, baseline_dollars: pd.DataFrame, price_jitter: float, rng: np.random.Generator) -> dict[int, list[str]]` — wraps `_simulate_to_state`; returns every seat's roster `{seat(1-based): [gsis_id, ...]}` (the `project_draft` input).
+  - Internal helpers (imported by tests): `AuctionState`, `_feasible_max(state, seat, roster_size, min_bid) -> int`, `_build_view(state, hero0, pool, bd, config) -> AuctionView`.
 
 - [ ] **Step 1: Write the failing tests** — `tests/test_draft/test_assistant_auction_simulation.py`:
 
@@ -728,10 +730,26 @@ import pandas as pd
 import pytest
 
 from projections.draft.auction import generate_auction_values
-from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
-from projections.draft.assistant.auction.simulation import simulate_auction, validate_auction_inputs
+from projections.draft.assistant.auction.bid_strategy import AuctionView, StaticDollarBid
+from projections.draft.assistant.auction.simulation import (
+    AuctionState,
+    _build_view,
+    _feasible_max,
+    _simulate_to_state,
+    simulate_auction,
+    validate_auction_inputs,
+)
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset
+
+
+class _MaxBidStub:
+    """A hero that always desires an astronomical bid; the engine clamps it to feasible_max."""
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        return 10**9
 
 
 def _config(n_teams: int = 4, budget: int = 100, min_bid: int = 1) -> LeagueConfig:
@@ -799,15 +817,69 @@ def test_determinism_same_seed_same_league() -> None:
     assert a == b
 
 
-def test_seat_index_is_one_based() -> None:
-    # my_seat=3 must address the 3rd seat (1-based); the returned dict is 1-based.
+def test_returned_dict_key_matches_internal_zero_based_state() -> None:
+    # Off-by-one guard (dict side): for EVERY seat, the 1-based league key k holds exactly the
+    # ids stored at the 0-based AuctionState.rosters[k-1]. A swapped conversion would diverge.
     cfg = _config(n_teams=4)
     pool = _pool(40)
-    league = simulate_auction(
-        StaticDollarBid(), 3, pool, cfg,
-        baseline_dollars=_baseline(pool, cfg), price_jitter=0.0, rng=np.random.default_rng(1),
+    bd = _baseline(pool, cfg)
+    my_seat = 3
+    state = _simulate_to_state(
+        StaticDollarBid(), my_seat, pool, cfg, baseline_dollars=bd, price_jitter=0.1, rng=np.random.default_rng(5)
     )
-    assert 3 in league and len(league[3]) == cfg.roster_size
+    league = simulate_auction(
+        StaticDollarBid(), my_seat, pool, cfg, baseline_dollars=bd, price_jitter=0.1, rng=np.random.default_rng(5)
+    )
+    for k, ids in league.items():
+        assert ids == [g for (g, _p, _pr) in state.rosters[k - 1]]
+
+
+def test_build_view_reads_the_hero_zero_based_seat() -> None:
+    # Off-by-one guard (hero side): _build_view(hero0=my_seat-1) reads the 0-based state seat.
+    cfg = _config(n_teams=4)  # roster_size 3
+    pool = _pool(40)
+    bd = _baseline(pool, cfg).set_index("gsis_id")
+    state = AuctionState.initial(cfg)
+    rb = str(pool.iloc[0]["gsis_id"])
+    state.rosters[2] = [(rb, "RB", 10)]  # seat index 2  ==  my_seat 3 - 1
+    state.budgets[2] = 90
+    view = _build_view(state, 2, pool, bd, cfg)
+    assert view.my_budget == 90
+    assert list(view.my_roster["gsis_id"].astype(str)) == [rb]
+
+
+def test_feasible_max_reserves_min_bid_for_remaining_slots() -> None:
+    cfg = _config(n_teams=4, min_bid=1)  # roster_size 3, all slots open, budget 100
+    state = AuctionState.initial(cfg)
+    # feasible_max = budget - min_bid*(open_slots-1) = 100 - 1*2 = 98
+    assert _feasible_max(state, 0, cfg.roster_size, cfg.min_bid) == 98
+
+
+def test_feasible_max_one_slot_left_is_whole_budget() -> None:
+    cfg = _config(n_teams=4)  # roster_size 3
+    state = AuctionState.initial(cfg)
+    state.rosters[0] = [("00-2000000", "RB", 10), ("00-3000001", "WR", 5)]  # 2 filled -> 1 open
+    state.budgets[0] = 85
+    assert _feasible_max(state, 0, cfg.roster_size, cfg.min_bid) == 85
+
+
+def test_feasible_max_at_reserve_floor_equals_min_bid() -> None:
+    cfg = _config(n_teams=4, budget=100, min_bid=1)  # roster_size 3
+    state = AuctionState.initial(cfg)
+    state.budgets[0] = 3  # budget == min_bid * open_slots(3) -> can only bid min_bid
+    assert _feasible_max(state, 0, cfg.roster_size, cfg.min_bid) == 1
+
+
+def test_over_budget_desired_is_clamped_no_overspend() -> None:
+    # A max-desiring hero never overspends: every seat's budget stays >= 0 and the hero still
+    # fills a full roster (the [min_bid, feasible_max] clamp held on every win).
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    state = _simulate_to_state(
+        _MaxBidStub(), 1, pool, cfg, baseline_dollars=_baseline(pool, cfg), price_jitter=0.0, rng=np.random.default_rng(0)
+    )
+    assert all(b >= 0 for b in state.budgets)
+    assert len(state.rosters[0]) == cfg.roster_size
 
 
 def test_solvency_holds_no_negative_budget_path() -> None:
@@ -819,6 +891,18 @@ def test_solvency_holds_no_negative_budget_path() -> None:
         baseline_dollars=_baseline(pool, cfg), price_jitter=0.0, rng=np.random.default_rng(0),
     )
     assert all(len(r) == cfg.roster_size for r in league.values())
+
+
+def test_total_spend_within_budget() -> None:
+    # Conservation (spec §4): per-seat spend <= budget, so total spend <= total_budget.
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    state = _simulate_to_state(
+        StaticDollarBid(), 1, pool, cfg, baseline_dollars=_baseline(pool, cfg), price_jitter=0.2, rng=np.random.default_rng(3)
+    )
+    per_seat = [sum(price for (_g, _p, price) in seat) for seat in state.rosters]
+    assert all(spend <= cfg.budget for spend in per_seat)
+    assert sum(per_seat) <= cfg.total_budget
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -894,7 +978,7 @@ def _build_view(
     )
 
 
-def simulate_auction(
+def _simulate_to_state(
     strategy: AuctionBidStrategy,
     my_seat: int,
     pool: pd.DataFrame,
@@ -903,7 +987,8 @@ def simulate_auction(
     baseline_dollars: pd.DataFrame,
     price_jitter: float,
     rng: np.random.Generator,
-) -> dict[int, list[str]]:
+) -> AuctionState:
+    """Run the full auction loop; return the final AuctionState (budgets + priced rosters)."""
     validate_auction_inputs(pool, config)
     n = config.n_teams
     rs = config.roster_size
@@ -911,7 +996,7 @@ def simulate_auction(
     hero0 = my_seat - 1  # the single 1-based -> 0-based conversion (spec §3.2)
 
     bd = baseline_dollars.set_index("gsis_id")
-    # nomination order: highest baseline dollar first (rebuilt-free; we skip drafted on the fly)
+    # nomination order: highest baseline dollar first (we skip drafted on the fly)
     nominate_order = bd.sort_values("auction_dollars", ascending=False).index.tolist()
     state = AuctionState.initial(config)
 
@@ -944,7 +1029,25 @@ def simulate_auction(
         state.drafted.add(nominee_id)
         state.nominator = (state.nominator + 1) % n
 
-    return {seat + 1: [g for (g, _p, _pr) in state.rosters[seat]] for seat in range(n)}
+    return state
+
+
+def simulate_auction(
+    strategy: AuctionBidStrategy,
+    my_seat: int,
+    pool: pd.DataFrame,
+    config: LeagueConfig,
+    *,
+    baseline_dollars: pd.DataFrame,
+    price_jitter: float,
+    rng: np.random.Generator,
+) -> dict[int, list[str]]:
+    """One full auction; return every seat's roster {seat(1-based): [gsis_id, ...]}."""
+    state = _simulate_to_state(
+        strategy, my_seat, pool, config,
+        baseline_dollars=baseline_dollars, price_jitter=price_jitter, rng=rng,
+    )
+    return {seat + 1: [g for (g, _p, _pr) in state.rosters[seat]] for seat in range(config.n_teams)}
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -981,7 +1084,7 @@ git commit -m "feat(auction): simulate_auction (full-league nominate/bid/award l
 import numpy as np
 import pandas as pd
 
-from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
+from projections.draft.assistant.auction.bid_strategy import AuctionView, StaticDollarBid
 from projections.draft.assistant.auction.tournament import (
     METRICS,
     AuctionTournamentResult,
@@ -993,7 +1096,9 @@ from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset
 
 
-def _config(n_teams: int = 4, budget: int = 100, roster_slots=None) -> LeagueConfig:
+def _config(n_teams: int = 6, budget: int = 100, roster_slots=None) -> LeagueConfig:
+    # n_teams >= 6 (and even) — project_draft requires >= PLAYOFF_SIZE teams and an even
+    # count for gauntlet_schedule; a smaller league raises in scoring.
     return LeagueConfig(
         name="t",
         n_teams=n_teams,
@@ -1026,7 +1131,7 @@ def _avail(pool: pd.DataFrame) -> PlayerAvailability:
 
 def test_result_has_per_model_per_metric_intervals_and_no_winner() -> None:
     pool = _pool(40)
-    cfg = _config(4)
+    cfg = _config(6)
     result = run_auction_tournament(
         {"static": StaticDollarBid()},
         pool, cfg,
@@ -1041,7 +1146,7 @@ def test_result_has_per_model_per_metric_intervals_and_no_winner() -> None:
 
 def test_paired_diffs_recorded_for_each_pair() -> None:
     pool = _pool(40)
-    cfg = _config(4)
+    cfg = _config(6)
     result = run_auction_tournament(
         {"a": StaticDollarBid(), "b": StaticDollarBid()},
         pool, cfg,
@@ -1058,8 +1163,8 @@ def test_league_driven_runs_under_two_configs() -> None:
     pool = _pool(60)
     avail, params = _avail(pool), VarianceParams.load()
     for cfg in (
-        _config(4, budget=100),
-        _config(6, budget=50, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.BENCH: 2}),
+        _config(6, budget=100),
+        _config(8, budget=50, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.BENCH: 2}),
     ):
         # ensure the QB config has QBs in the pool
         p = pool.copy()
@@ -1071,6 +1176,32 @@ def test_league_driven_runs_under_two_configs() -> None:
             availability=avail, params=params,
         )
         assert set(res.summaries["static"]) == set(METRICS)
+
+
+class _MinBidStub:
+    """A hero that always bids the minimum — it loses every contested nomination, so at a
+    fixed seed it reliably ends with a worse roster than a value-bidding hero."""
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        return config.min_bid
+
+
+def test_constant_edge_paired_diff_excludes_zero() -> None:
+    # Spec §4 "recorded comparison": a model with a constant per-seed edge -> the paired-diff CI
+    # excludes 0, and the diff is RECORDED (not labeled a winner).
+    pool = _pool(40)
+    cfg = _config(6)
+    result = run_auction_tournament(
+        {"static": StaticDollarBid(), "min": _MinBidStub()},
+        pool, cfg,
+        my_seat=1, n_seeds=6, price_jitter=0.0, base_seed=0, n_sims=60,
+        availability=_avail(pool), params=VarianceParams.load(),
+    )
+    diff = result.paired_diffs["static_vs_min"]["mean_points"]
+    assert diff.lo_95 > 0.0  # static reliably out-rosters a min-bidding hero
+    assert not hasattr(result, "winner")  # recorded as data; no winner declared
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1258,7 +1389,7 @@ def _write_pool(path) -> None:
 def _write_config(path) -> None:
     cfg = {
         "name": "t",
-        "n_teams": 4,
+        "n_teams": 6,  # project_draft requires >= 6 (PLAYOFF_SIZE) and even
         "budget": 100,
         "min_bid": 1,
         "roster_slots": {"RB": 1, "WR": 1, "BENCH": 1},
