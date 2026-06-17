@@ -7,6 +7,7 @@ from projections.draft.roster_eligibility import (
     SUPER_FLEX_ELIGIBLE,
     allocate_roster_slots,
     bot_eligible,
+    bot_position_bounds,
     eligible_positions,
 )
 from projections.schemas import Position, RosterSlot
@@ -107,3 +108,35 @@ def test_bot_eligible_ignores_positions_absent_from_bounds() -> None:
     assert Position.K not in bot_eligible(
         counts, 10, minimums={Position.QB: 1}, maximums={Position.QB: 3}
     )
+
+
+_SKILL = {
+    RosterSlot.QB: 1,
+    RosterSlot.RB: 2,
+    RosterSlot.WR: 3,
+    RosterSlot.TE: 1,
+    RosterSlot.FLEX: 1,
+    RosterSlot.BENCH: 9,
+}
+
+
+def test_bounds_skill_roster_min_and_max() -> None:
+    mn, mx = bot_position_bounds(_SKILL)
+    # FLEX anchored to RB
+    assert mn == {Position.QB: 1, Position.RB: 3, Position.WR: 3, Position.TE: 1}
+    # min + ceil bench share
+    assert mx == {Position.QB: 3, Position.RB: 7, Position.WR: 7, Position.TE: 3}
+
+
+def test_bounds_superflex_anchors_to_qb() -> None:
+    slots = dict(_SKILL)
+    del slots[RosterSlot.FLEX]
+    slots[RosterSlot.SUPER_FLEX] = 1
+    mn, _ = bot_position_bounds(slots)
+    assert mn[Position.QB] == 2  # 1 strict + 1 super-flex
+
+
+def test_bounds_sigma_max_at_least_roster_size() -> None:
+    _, mx = bot_position_bounds(_SKILL)
+    roster_size = sum(c for s, c in _SKILL.items() if s != RosterSlot.IR)
+    assert sum(mx.values()) >= roster_size  # caps always permit a full roster
