@@ -52,6 +52,8 @@ def bot_eligible(
 
 This is `_bot_eligible`'s exact logic, `Position`-keyed and parameterized. `backtest/draft_field.py` converts its `_MINP`/`_MAXP` string dicts to `dict[Position, int]` (same values) and calls this — **values unchanged ⇒ byte-identical field** (Phase 2 proves it).
 
+**Iteration domain (load-bearing).** The eligible set is drawn **strictly from the `minimums`/`maximums` keysets** — both branches iterate `minimums`/`maximums`, never `counts` or `Position`. So a position present in `counts` but absent from the bound maps (e.g. K/DST a snake bot drafted late, which aren't in `_MINP`/`_MAXP`) is **never returned**. This is exactly what preserves the snake field's behavior; an implementation that iterated `counts` or `Position` in the cap branch would make K/DST appear under-max and silently drift. (Phase 2's equivalence test pins this with a K/DST-holding bot.)
+
 ### 4.2 League-driven bounds (`roster_eligibility.py`)
 
 ```python
@@ -64,6 +66,7 @@ def bot_position_bounds(
 - **Minimums** — strict starting slots per position, with flex slots anchored to a canonical filler:
   - `min[pos] = roster_slots.get(RosterSlot(pos.value), 0)` for each `pos` whose `RosterSlot` is a position slot (`POSITION_SLOTS`);
   - add `roster_slots.get(RosterSlot.FLEX, 0)` to **RB** (the canonical flex), and `roster_slots.get(RosterSlot.SUPER_FLEX, 0)` to **QB** (the canonical super-flex);
+  - **the anchor add is unconditional and intentional:** RB's (or QB's) minimum may be nonzero *purely* from flex anchoring even in a league with **zero strict RB (or QB) starts** — RB/QB are flex/super-flex-eligible, so requiring depth there to cover the flex is the desired bound. A planner should not special-case "no strict starts at the anchor position."
   - positions with no starting slot get min 0 (and are not in the pool).
   - `Σ min == number of starting slots` (each strict + flex slot counted once).
 - **Maximums** — min plus the bench, distributed proportionally and rounded **up** so the caps always permit a full roster:
@@ -89,21 +92,25 @@ The snake field continues to use its own hand-tuned maps (it does **not** adopt 
 - Per nomination, for each open bot seat it computes
   `eligible = bot_eligible(counts, open_slots, minimums=minimums, maximums=maximums)`
   where `counts` is the `Counter[Position]` of that seat's roster and `open_slots` is its `picks_left`.
-- **`SeatView` gains `eligible_positions: frozenset[Position]`.** `bot_max_bid` returns `0` (abstain) when `Position(player["position"]) not in seat_view.eligible_positions`; otherwise it bids exactly as today (`value × (1+noise)`, then the engine clamps to `[min_bid, feasible_max]`).
-- The **hero** seat is unchanged — no eligibility gate; its `AuctionBidStrategy` bids freely.
+- **`SeatView` gains `eligible_positions: frozenset[Position]`.** `bot_max_bid` returns `0` (abstain) when `Position(player["position"]) not in seat_view.eligible_positions`; otherwise it bids exactly as today (`value × (1+noise)`).
+- **An abstention (`0`) drops the seat from the bid set entirely — it is *not* passed through the `[min_bid, feasible_max]` clamp.** The clamp (`max(min_bid, min(desired, feasible_max))`) would otherwise floor the `0` up to `min_bid` and defeat the gate. So the engine collects bids only from non-abstaining eligible seats, and applies the clamp only to those.
+- The **hero** seat is unchanged — no eligibility gate; its `AuctionBidStrategy` bids freely (and its bid *is* clamped as before).
 
-### 4.5 Nomination refinement (completion guarantee)
+### 4.5 Nomination + the forced-pick path (completion guarantee)
 
-With bots abstaining, a nominated player could draw **zero** bids. To guarantee a bidder (and thus completion), the shared default nominator nominates the **highest-baseline-dollar undrafted player that at least one open seat is eligible for** (the hero, being ungated, satisfies this for any player while it has open slots; once the hero is full, it's the highest-baseline player some open *bot* can roster).
+With bots abstaining, naive "nominate the highest baseline" could nominate a player **no open seat will bid on**. The fix is a single **forced-pick** path that relaxes nomination *and* bidding **in lockstep**. Each round the engine works from the **union of the open seats' eligible positions that still have an undrafted player** (the hero, being ungated, contributes *all* positions while it has open slots):
 
-This is still **not** strategic nomination — it only ensures the nominee is rosterable by the room. **Pool-thin fallback:** if (degenerately) no open seat is eligible for any undrafted player's position, relax to the plain highest-baseline undrafted player and emit a `warnings.warn(...)` naming the thin position — mirroring `draft_field.py`'s existing warning.
+- **Normal round** — nominate the highest-`auction_dollars` undrafted player whose position is in that union. By construction ≥1 open seat is eligible for it, so it draws ≥1 bid. (While the hero has open slots the union is all positions, so this reduces to "highest baseline undrafted.") The eligibility gate (§4.4) is honored.
+- **Forced pick** — if that union is empty (every open seat's eligible positions are exhausted from the pool — a thin-pool degeneracy), the engine sets a `forced` flag for this nomination, nominates the plain highest-`auction_dollars` undrafted player, and **the bid step bypasses the eligibility gate for every open seat** so they all bid regardless of position. A `warnings.warn(...)` names the thin position (mirroring `draft_field.py`). Because nomination and bidding relax together, a forced nominee still draws ≥1 bid.
 
-**Why completion is guaranteed:** any seat with `open_slots > 0` has `Σ counts < roster_size ≤ Σ max`, so by pigeonhole some position is under its max ⇒ its `bot_eligible` set is non-empty; in forced-deficit mode the deficit set is non-empty. So every open seat always has ≥1 eligible position, and (pool permitting) the nomination rule always finds a rosterable nominee with ≥1 bidder.
+This is still **not** strategic nomination — it only ensures the round resolves. The hero is never gated either way.
+
+**Why completion is guaranteed (both gates move together):** any seat with `open_slots > 0` has `Σ counts < roster_size ≤ Σ max`, so some position is under its max ⇒ its `bot_eligible` set is non-empty (in forced-deficit mode the deficit set is non-empty). On a **normal** round the union of those positions that *also have an undrafted player* is non-empty ⇒ ≥1 bidder. When that union is empty, the **forced** path un-gates every open seat ⇒ ≥1 bidder. So `resolve_bids` is never handed an empty bid set on either path, and every roster spot fills.
 
 ## 5. Edge cases / failure modes
 
-- **Zero-bid nominee** — prevented by §4.5; a defensive assertion guards `resolve_bids` against an empty bid set.
-- **Pool thin at a required position** — warn + relax the gate (the bot may miss a positional minimum), exactly as `draft_field.py` does. The auction still completes.
+- **Zero-bid nominee** — impossible: a normal round nominates only a position ≥1 open seat is eligible for, and the forced-pick path (§4.5) un-gates **all** open seats in lockstep with the relaxed nomination. A defensive assertion guards `resolve_bids` against an empty bid set — unreachable on either path, so it only catches a future logic bug.
+- **Pool thin at a required position** — the forced-pick path (§4.5) fires: nominate ungated + every open seat bids + `warn`. The bot may miss a positional minimum; the auction still completes.
 - **Position absent from `roster_slots`** (e.g. K/DST in a skill league) — min/max 0 ⇒ never eligible (and absent from the pool anyway).
 - **`Σmin == 0`** — impossible: `LeagueConfig` guarantees `roster_size ≥ 1` (≥1 non-IR slot); a config with bench-only/no-starting-slots is out of scope (and would make `project_draft` meaningless).
 - **Determinism** — gating is a deterministic function of `counts`/`picks_left`/bounds; same seed ⇒ same league (the existing determinism test still holds).
@@ -114,9 +121,9 @@ This is still **not** strategic nomination — it only ensures the nominee is ro
 
 - **`bot_eligible`** — deficit reservation (`picks_left ≤ Σdeficit` ⇒ only deficit positions), cap branch (`picks_left > Σdeficit` ⇒ positions under max), the boundary at `picks_left == Σdeficit`, and "a position at its max is excluded."
 - **`bot_position_bounds`** — skill roster ⇒ `min {QB:1,RB:3,WR:3,TE:1}`, `max {QB:3,RB:7,WR:7,TE:3}`; a SUPER_FLEX roster ⇒ QB min bumped; the invariant `Σmax ≥ roster_size` over a couple of shapes; a position absent from `roster_slots` ⇒ min/max 0.
-- **Snake no-drift** — re-run `backtest/draft_field.py`'s tests and the H2H backtest tests; add an equivalence assertion that `draft_mixed_field` produces the **identical** bot field for a fixed seed before/after the refactor (or assert the existing backtest outputs are unchanged).
-- **Auction bots** — a bot at its QB max abstains on a nominated QB (`bot_max_bid → 0`); a bot with `open_slots == unmet-minimum-count` only bids deficit positions; a **full auction yields a startable roster for every bot** (each bot can fill all its starting slots); the **hero is not gated** (a static hero can over-roster a position).
-- **Nomination / completion** — the nominee is always a position some open seat can roster; `resolve_bids` is never called with an empty bid set; the auction still fills every seat (existing conservation/solvency tests remain green).
+- **Snake no-drift** — re-run `backtest/draft_field.py`'s tests and the H2H backtest tests; add an equivalence assertion that `draft_mixed_field` produces the **identical** bot field for a fixed seed before/after the refactor. Include a case where a bot holds **K/DST** (positions absent from the bound maps) and assert the eligible set is identical old-vs-new — pinning the minimums/maximums-keyset iteration domain (§4.1).
+- **Auction bots** — a bot at its QB max abstains on a nominated QB (`bot_max_bid → 0`, and that `0` is dropped, not clamped to `min_bid`); a bot with `open_slots == unmet-minimum-count` only bids deficit positions; a **full auction yields a startable roster for every bot** (each bot can fill all its starting slots); the **hero is not gated** (a static hero can over-roster a position).
+- **Nomination / completion** — normal rounds nominate a position some open seat can roster; the **forced-pick path**: a fixture where the hero is full and a bot's only eligible position has no undrafted players ⇒ `forced` fires, every open seat bids the ungated nominee, a warning is emitted, and the auction completes with no empty bid set; the auction still fills every seat (existing conservation/solvency tests remain green).
 - **Bake-off re-run** (Phase 4, verify-level) — half-PPR/16, seat 1, same seeds as Run A; record Run B and compare the hero's metrics to Run A (does the hero return toward/above baseline?).
 
 All project gates: `pytest -v`, `mypy src tests` (strict), `ruff check src tests`, `ruff format --check src tests`. No schema/store path is touched.
