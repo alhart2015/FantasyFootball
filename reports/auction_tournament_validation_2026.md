@@ -41,8 +41,8 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
   `SeatProjection` per seat. **`StartersValuer`/single-roster scalar scoring is not used** — dropped by
   decision (no added value over the league sim).
 - **Metrics recorded for the hero seat** (the data we gather):
-  - **Exp season pts** — expected regular-season points *(requires a small `mean_points` addition to
-    `SeatProjection` / `project_draft`; today it returns the four rates + `mean_seed` only)*.
+  - **Exp season pts** — `SeatProjection.mean_points` (per-seat mean over sims of regular-season
+    points-for, weeks 1–13).
   - **Win %** — `reg_win_pct` (regular-season H2H win rate)
   - **Playoff %** — `make_playoffs_pct` (finish top-6)
   - **Bye %** — `bye_pct` (finish top-2)
@@ -58,7 +58,7 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
 - **Power note.** Champ % is the noisiest metric (≈`1/n` base rate); expected points and playoff % separate
   far more readily at a given seed/sim budget. Don't over-read a champ % gap that the CIs don't support.
 
-## Fixed setup (defaults — fill once the harness lands)
+## Fixed setup (defaults)
 
 | Knob | Default | Notes |
 |------|---------|-------|
@@ -78,7 +78,7 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
 
 | Date | Preset (scoring×size) | Seat | Seeds | n_sims | price_jitter | Model | Exp pts (95% CI) | Win % (CI) | Playoff % (CI) | Bye % (CI) | Champ % (CI) | Notes / what it favored |
 |------|------------------------|------|-------|--------|--------------|-------|------------------|------------|----------------|------------|--------------|--------------------------|
-| _—_  | _—_                    | _—_  | _—_   | _—_    | _—_          | _—_   | _(no runs yet — harness not built)_ | | | | | |
+| _—_  | _—_                    | _—_  | _—_   | _—_    | _—_          | _—_   | _(no runs yet — harness shipped; data-gathering begins)_ | | | | | |
 
 ## Planned experiments / axes to sweep
 
@@ -108,7 +108,7 @@ python scripts/auction_tournament.py \
     --vorp-table data/vorp_2026/half_16team.parquet \
     --league-config configs/league_espn_half_16team.json \
     --my-seat 1 --season 2026 \
-    [--seeds K]          # default 50; use 20 for quick smoke, 100+ for tighter CIs
+    [--seeds K]          # default 200; use 20 for quick smoke, 100+ for tighter CIs
     [--price-jitter F]   # default 0.15
     [--seed BASE]        # default 0
     [--n-sims M]         # default 500; use 200 for speed, 2000 for deep-dives
