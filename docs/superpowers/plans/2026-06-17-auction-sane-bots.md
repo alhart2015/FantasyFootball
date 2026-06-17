@@ -386,85 +386,104 @@ def _config(n_teams: int = 4, budget: int = 100, min_bid: int = 1, roster_slots=
     )
 ```
 
-- [ ] **Step 1b: Write the failing tests** — append to the same file (reuses `_pool`, `_baseline`, `StaticDollarBid`, the file's `_MaxBidStub` — bids `10**9`; if it is not present, add `class _MaxBidStub:` with `def max_bid(self, view, player, pool, config) -> int: return 10**9` — plus `_simulate_to_state`, `simulate_auction`, `_PYARROW_STR`, `RosterSlot`, `Ruleset`):
+- [ ] **Step 1b: Write the failing tests** — append the helpers (`_MinBidStub`, `_bd`, `_thin_pool`) and three tests below to the same file. Reuses `StaticDollarBid`, `_simulate_to_state`, `simulate_auction`, `_PYARROW_STR`, and the file's `_MaxBidStub` (bids `10**9`; if it is not present, add `class _MaxBidStub:` with `def max_bid(self, view, player, pool, config) -> int: return 10**9`). These tests **do not** call `_baseline`/`generate_auction_values` — they hand-build `baseline_dollars` via `_bd` to control the scenario and dodge the bench-fill precondition.
 
 ```python
-import warnings
+# Add `import warnings` to the top of the file if it isn't already imported. `RosterSlot`, `pd`,
+# `np`, `StaticDollarBid`, `_simulate_to_state`, `simulate_auction`, `_PYARROW_STR` are already
+# imported/defined in this test file — do not re-import them (ruff would flag a duplicate).
 
-import pytest
 
-from projections.schemas import Position
+class _MinBidStub:
+    """Hero that always bids the minimum — loses every contested player to the bots."""
+
+    def max_bid(self, view, player, pool, config) -> int:
+        return config.min_bid
+
+
+def _bd(ids: list[str], dollars: list[int]) -> pd.DataFrame:
+    """Hand-built baseline_dollars (gsis_id + auction_dollars) — bypasses generate_auction_values,
+    so a deliberately thin/skewed pool isn't rejected by its bench-fill check. The engine only reads
+    `auction_dollars` off this frame (set_index on gsis_id)."""
+    return pd.DataFrame({"gsis_id": pd.array(ids, dtype=_PYARROW_STR), "auction_dollars": dollars})
+
+
+def _thin_pool(ids: list[str], positions: list[str]) -> pd.DataFrame:
+    n = len(ids)
+    return pd.DataFrame(
+        {
+            "gsis_id": pd.array(ids, dtype=_PYARROW_STR),
+            "position": pd.array(positions, dtype=_PYARROW_STR),
+            "season_mean_fpts": [float(100 - i) for i in range(n)],
+            "vorp": [float(50 - i) for i in range(n)],
+            "replacement_fpts": [100.0] * n,
+        }
+    )
+
+
+# 5 RB (ids start 00-2…) + 1 WR (00-3…); RBs carry the top baseline so the WR is nominated last.
+_RB5_WR1 = ["00-2000000", "00-2000001", "00-2000002", "00-2000003", "00-2000004", "00-3000000"]
+_RB5_WR1_POS = ["RB", "RB", "RB", "RB", "RB", "WR"]
 
 
 def test_every_bot_roster_is_startable() -> None:
-    # n_teams=4, roster {RB:1, WR:1, BENCH:1} -> bounds min {RB:1,WR:1}; every bot must end
-    # with >=1 RB and >=1 WR (a fillable starting lineup). The hero (seat 1) is NOT checked.
-    cfg = _config(n_teams=4)
-    pool = _pool(40)
+    # n_teams=2, {RB:1, WR:1, BENCH:1}. A min-bidding hero (seat index 1, via my_seat=2) loses every
+    # RB, so the UNGATED bot (seat index 0) hoards 3 RB and strands its WR starter -> RED before
+    # Task 5. After Task 5 the gate forces the bot to reserve a WR -> the bot ends startable -> GREEN.
+    cfg = _config(n_teams=2, roster_slots={RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.BENCH: 1})
+    pool = _thin_pool(_RB5_WR1, _RB5_WR1_POS)
+    baseline = _bd(_RB5_WR1, [20, 19, 18, 17, 16, 5])
     state = _simulate_to_state(
-        StaticDollarBid(), 1, pool, cfg,
-        baseline_dollars=_baseline(pool, cfg), price_jitter=0.1, rng=np.random.default_rng(0),
+        _MinBidStub(), 2, pool, cfg, baseline_dollars=baseline, price_jitter=0.0, rng=np.random.default_rng(0)
     )
-    for seat in range(1, 4):  # bot seats are indices 1,2,3 (hero is index 0)
-        positions = [p for (_g, p, _pr) in state.rosters[seat]]
-        assert positions.count("RB") >= 1 and positions.count("WR") >= 1
+    bot = [p for (_g, p, _pr) in state.rosters[0]]  # seat index 0 is a bot (hero is index 1)
+    assert bot.count("RB") >= 1 and bot.count("WR") >= 1  # a fillable starting lineup
 
 
 def test_forced_pick_completes_and_warns_when_pool_thin() -> None:
-    # 2 teams, roster {RB:1, BENCH:1}: bench-eligible is RB only (no QB slot), so a QB is never
-    # rosterable. With exactly 2 RB + 2 QB, after both RBs are drafted each seat still needs a 2nd
-    # player but only (un-rosterable) QBs remain -> the forced-pick path fires (ungated) and the
-    # auction completes. Deterministic: no eligible position has an available player.
+    # n_teams=2, {RB:1, BENCH:1}: bench-eligible is RB only (no QB slot), so a QB is never bot-
+    # rosterable. With 2 RB + 2 QB, once both RBs are gone a bot's only eligible position (RB) is
+    # exhausted -> the forced-pick path fires (ungated) so the auction completes. Hand-built baseline
+    # so the thin pool isn't rejected by generate_auction_values' fill check.
     cfg = _config(n_teams=2, roster_slots={RosterSlot.RB: 1, RosterSlot.BENCH: 1})
-    rows = [
-        {"gsis_id": f"00-2{i:06d}", "position": "RB", "season_mean_fpts": float(150 - i), "vorp": float(80 - i), "replacement_fpts": 100.0}
-        for i in range(2)
-    ] + [
-        {"gsis_id": f"00-1{i:06d}", "position": "QB", "season_mean_fpts": float(50 - i), "vorp": float(-10 - i), "replacement_fpts": 100.0}
-        for i in range(2)
-    ]
-    pool = pd.DataFrame(rows)
-    pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
-    pool["position"] = pool["position"].astype(_PYARROW_STR)
+    ids = ["00-2000000", "00-2000001", "00-1000000", "00-1000001"]
+    pool = _thin_pool(ids, ["RB", "RB", "QB", "QB"])
+    baseline = _bd(ids, [50, 40, 0, 0])  # QBs out-of-pool ($0) -> nominated last
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         league = simulate_auction(
-            StaticDollarBid(), 1, pool, cfg,
-            baseline_dollars=_baseline(pool, cfg), price_jitter=0.0, rng=np.random.default_rng(0),
+            StaticDollarBid(), 1, pool, cfg, baseline_dollars=baseline, price_jitter=0.0, rng=np.random.default_rng(0)
         )
-    assert all(len(r) == cfg.roster_size for r in league.values())  # every seat filled (2 players)
-    assert any("pool thin" in str(w.message) for w in caught)  # the forced-pick path warned
+    assert all(len(r) == cfg.roster_size for r in league.values())  # every seat filled
+    assert any("pool thin" in str(w.message) for w in caught)  # forced-pick warned
 
 
 def test_hero_is_not_gated() -> None:
-    # RB-heavy pool: RBs carry the top baseline, so they're nominated first. A max-bidding hero
-    # (high budget so its feasible_max never runs low) wins the top 3 nominations -> 3 RB, 0 WR.
-    # That exceeds the bot RB cap (max RB = 2 for {RB:1,WR:1,BENCH:1}) AND strands the WR starter,
-    # proving the hero has NO eligibility gate and NO starter reservation.
-    cfg = _config(n_teams=4, budget=1000)  # high budget -> hero wins the first 3 picks outright
-    n = 40
-    pool = pd.DataFrame({
-        "gsis_id": pd.array(
-            [f"00-2{i:06d}" if i < n - 4 else f"00-3{i:06d}" for i in range(n)], dtype=_PYARROW_STR
-        ),
-        "position": pd.array(["RB"] * (n - 4) + ["WR"] * 4, dtype=_PYARROW_STR),
-        "season_mean_fpts": [float(300 - i) for i in range(n)],  # RBs (first) score highest
-        "vorp": [float(150 - i) for i in range(n)],
-        "replacement_fpts": [100.0] * n,
-    })
+    # Same 5-RB/1-WR pool with CHEAP RB baselines so a max-bidding hero (seat index 0, my_seat=1)
+    # affords all three. RBs are nominated before the WR, so the hero fills on 3 RB and strands its
+    # own WR starter — exceeding the bot RB cap (2) and ending non-startable, which the gate forbids
+    # for bots. Proves the hero has no eligibility gate / starter reservation; the gated bot still
+    # gets its WR. (Green before and after — a guard that the hero stays ungated post-Task-5.)
+    cfg = _config(n_teams=2, roster_slots={RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.BENCH: 1})
+    pool = _thin_pool(_RB5_WR1, _RB5_WR1_POS)
+    baseline = _bd(_RB5_WR1, [10, 9, 8, 7, 6, 5])  # cheap RBs (hero affords 3), WR last
     state = _simulate_to_state(
-        _MaxBidStub(), 1, pool, cfg,
-        baseline_dollars=_baseline(pool, cfg), price_jitter=0.0, rng=np.random.default_rng(0),
+        _MaxBidStub(), 1, pool, cfg, baseline_dollars=baseline, price_jitter=0.0, rng=np.random.default_rng(0)
     )
     hero = [p for (_g, p, _pr) in state.rosters[0]]
-    assert hero.count("RB") == 3 and hero.count("WR") == 0  # > bot RB cap (2), starter stranded
+    bot = [p for (_g, p, _pr) in state.rosters[1]]
+    assert hero.count("RB") == 3 and hero.count("WR") == 0  # ungated: > bot RB cap, starter stranded
+    assert bot.count("WR") >= 1  # the gated bot still reserves its WR starter
 ```
-(The existing determinism / conservation / full-league / feasible_max tests in this file must still pass after the change — run the whole file in Step 4.)
+(The existing determinism / conservation / full-league / feasible_max / seat-index tests in this file must still pass after Task 5 — run the whole file in Step 4. These three tests pass `baseline_dollars` by hand, so they never call `generate_auction_values` and are immune to its bench-fill precondition.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_draft/test_assistant_auction_simulation.py -k "startable or forced or not_gated" -v`
-Expected: FAIL — with Task 4's ungated-default `SeatView`, the engine runs (no TypeError) but has no positional gate, nomination-union, or forced-pick yet: `test_forced_pick...` fails (no `"pool thin"` warning is emitted) and `test_every_bot_roster_is_startable` fails (ungated bots aren't guaranteed an RB + WR). `test_hero_is_not_gated` may already pass (the hero is ungated before and after) — it's a guard that must stay green post-Task-5.
+Expected: FAIL — with Task 4's ungated-default `SeatView` the engine runs (no TypeError) but has no gate / nomination-union / forced-pick yet:
+- `test_forced_pick_completes_and_warns_when_pool_thin` — RED: the current engine drafts the QBs as ordinary picks and emits **no** `"pool thin"` warning, so the `any(... )` assertion fails.
+- `test_every_bot_roster_is_startable` — RED: ungated, the min-bidding hero loses every RB so the bot hoards 3 RB and ends with **0 WR**, failing the `count("WR") >= 1` assertion.
+- `test_hero_is_not_gated` — likely already GREEN (the hero is ungated before and after); it is a guard that must stay green post-Task-5.
 
 - [ ] **Step 3: Rewrite the `_simulate_to_state` loop** — update `simulation.py` imports and replace the body of `_simulate_to_state` (everything from `validate_auction_inputs(...)` through `return state`). Add to the imports at the top of the file:
 
