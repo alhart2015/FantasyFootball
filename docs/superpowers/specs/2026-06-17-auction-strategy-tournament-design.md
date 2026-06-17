@@ -111,8 +111,9 @@ schema-producing path.
   `season_mean_fpts` (the roster-scoring currency), `vorp`. **`consensus_adp` is *not* required** here —
   an auction has no draft order, so the all-null-ADP hard error from the snake harness does **not** carry
   over. The market signal is **dollars**, derived below. The pool must carry **`is_rookie`** for the
-  variance sampler (the controller attaches it via the projected-draft-eval's `_attach_is_rookie`; the
-  harness reuses that path).
+  variance sampler. **`run_auction_tournament` attaches it itself** at entry via the projected-draft-eval's
+  `_attach_is_rookie` (idempotent if already present) — the harness does not require the caller to
+  pre-attach it; it reuses that path exactly as `project_league_outcomes` does.
 - **Baseline dollars** — `generate_auction_values(pool, config)` produces the **full `AuctionValuesSchema`
   frame** (one `auction_dollars` per player under the league's budget/min-bid/roster shape, plus `in_pool`,
   `season_mean_fpts`, `vorp`). **This whole frame — not a bare gsis→dollar mapping — is the shared
@@ -195,8 +196,10 @@ class AuctionBidStrategy(Protocol):
 ```
 
 `AuctionView` is a **read-only** projection of `AuctionState` for the hero seat: `my_budget`,
-`my_open_slots`, `my_positions` (Counter), `my_roster` (rows, for v3's marginal), `drafted` (set),
-`budgets_by_seat` (for inflation), `baseline_dollars` (**the full §3.1 `AuctionValuesSchema` frame**). The
+`my_open_slots`, `my_positions` (Counter), `my_roster` (the **`pool` rows** for the hero's drafted
+`gsis_id`s — the shape `optimal_lineup_points` consumes, *not* the raw `(GsisId, Position, price)` state
+tuples), `drafted` (set), `budgets_by_seat` (for inflation), `baseline_dollars` (**the full §3.1
+`AuctionValuesSchema` frame**). The
 engine clamps the returned value to `feasible_max` (§3.2), so a model may return an "I'd go to $X" number
 without tracking the reserve itself. All three vary **only the valuation** — same nominator, same bot field,
 same clamp — so a measured difference is attributable to the bid model alone.
@@ -297,7 +300,10 @@ scoring is reused with **zero** changes.
 **Scoring — the projected-draft-eval league sim.** Each realization's full league is scored by
 `project_draft(rosters, pool, availability, params, *, league_config, n_sims, rng=season_rng)` →
 `{seat: SeatProjection}`; the harness reads the **hero seat** and records its metrics: **expected season
-points** (`mean_points`, the new field), **win %**, **playoff %**, **bye %**, **champ %**.
+points** (`mean_points`, the new field), **win %**, **playoff %**, **bye %**, **champ %**. `mean_points` is
+the per-seat **mean over sims of the team's total regular-season points-for** (weeks 1–13) — the same
+per-sim points-for `project_draft` already sums for seeding, surfaced as a field rather than recomputed (so
+the addition stays a thin readout, not new MC).
 
 - **Common random numbers on the season MC.** Define `season_rng(s) = default_rng(season_base_seed + s)`,
   keyed off the *auction* seed `s` and **shared across all strategies at seed `s`**, so the season-sim
