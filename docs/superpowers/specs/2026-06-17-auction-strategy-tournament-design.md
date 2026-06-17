@@ -131,7 +131,10 @@ schema-producing path.
 - **Preconditions (both validated up front):**
   - **Pool sufficiency.** A full auction fills `n_teams · roster_size` roster spots; the pool must hold at
     least that many players. Re-use the snake harness's `_validate_pool` **size arm** (promoted alongside
-    the stats helpers in §3.6); the all-null-ADP arm is snake-only and stays there.
+    the stats helpers in §3.6); the all-null-ADP arm is snake-only and stays there. The size check counts
+    **all** VORP-table rows, and the nominator/bid range is the **whole** baseline-dollars frame (`in_pool`
+    *and* not — out-of-pool rows are `min_bid` bench fillers); so every drafted `gsis_id` is guaranteed
+    present in the scoring `pool`, and `project_draft` never sees an id absent from the table.
   - **Budget solvency.** **`config.budget ≥ config.min_bid · config.roster_size`** — otherwise a seat
     cannot afford `min_bid` for every slot and the auction cannot complete (the `feasible_max` endgame
     invariant in §3.2 is preserved inductively but only holds if it holds at kickoff). This is the same
@@ -162,6 +165,14 @@ Two derived quantities the whole engine leans on, both read off `roster_slots`:
 
 At auction end, the state's `rosters` are projected to the `project_draft` input shape:
 `{seat_index + 1: [gsis_id, …]}` for **every** seat (§3.6).
+
+**Seat indexing — one convention, one conversion point.** `my_seat` — and the CLI `--my-seat N` — is
+**1-based** (`1..n_teams`), matching the snake `my_slot`, `project_draft`'s 1-based keys, and the
+run-param validation. The internal `AuctionState` lists (`budgets`, `rosters`) are **0-based**
+(`0..n_teams-1`). The **sole** conversion point: building the hero's `AuctionView` reads
+`rosters[my_seat - 1]` / `budgets[my_seat - 1]`, while the returned league dict and the scored projection
+stay 1-based and are read directly (`proj[my_seat]`, no offset). A guard test pins this (§4): the hero's
+roster in the returned league at key `my_seat` must be exactly the roster scored at `proj[my_seat]`.
 
 ### 3.3 Legality and positional need
 
@@ -231,14 +242,17 @@ A bot occupies every non-hero seat. Its willingness-to-pay is value-rational wit
 the auction analog of `opponent.bot_pick`'s noisy ADP:
 
 ```
-bot_max_bid(seat_view, player, baseline_dollars, rng, *, price_jitter) -> int
+bot_max_bid(seat_view, player, baseline_dollars, config, rng, *, price_jitter) -> int
 ```
 
 1. If the seat has no open slot, it does not bid (returns 0 / abstains).
 2. Center on the market value: `wtp = baseline_dollars[player] · (1 + rng.normal(0, price_jitter))`,
-   floored at `min_bid`, rounded to an int.
+   floored at `min_bid` (read from `config`), rounded to an int.
 3. The engine clamps `wtp` to the seat's `feasible_max` (§3.2), so a bot can never bid itself out of a
    fillable roster.
+
+`config` supplies `min_bid` (and `roster_slots`/`n_teams` for the seat-view derivations), mirroring the
+hero's `max_bid(view, player, pool, config)`; the bot carries no model state of its own.
 
 `price_jitter` (fractional WTP spread) is the auction analog of the snake harness's `adp_jitter` — the
 single market-noise knob — and is **distinct from any model parameter** the contestants carry. Realism, as
@@ -285,22 +299,29 @@ scoring is reused with **zero** changes.
 `{seat: SeatProjection}`; the harness reads the **hero seat** and records its metrics: **expected season
 points** (`mean_points`, the new field), **win %**, **playoff %**, **bye %**, **champ %**.
 
-- **Common random numbers on the season MC.** `season_rng = default_rng(season_base_seed + s)` is keyed off
-  the *auction* seed `s` and **shared across all strategies at seed `s`**, so the season-sim noise largely
-  cancels in the paired differences (most of the league overlaps between strategies; only the hero's
-  diverging wins differ). This makes a modest `n_sims` cheap.
+- **Common random numbers on the season MC.** Define `season_rng(s) = default_rng(season_base_seed + s)`,
+  keyed off the *auction* seed `s` and **shared across all strategies at seed `s`**, so the season-sim
+  noise largely cancels in the paired differences (most of the league overlaps between strategies; only the
+  hero's diverging wins differ). This makes a modest `n_sims` cheap. `season_base_seed` is a
+  `run_auction_tournament` parameter defaulting to **`base_seed + 1_000_000`** — a stream disjoint from the
+  auction market RNG (`default_rng(base_seed + s)`): the two sequences `{base_seed + s}` and
+  `{season_base_seed + s}` cannot overlap for any realistic `n_seeds`, so market noise and season noise stay
+  independent. (Reusing `base_seed` for both would couple the market draw and the season draw at each seed —
+  the footgun this default avoids.)
 - **`n_sims` budget.** Default **~500** (tunable). 2000 — the board default — is reserved for a post-hoc
   deep-dive on a roster of interest, not for the in-loop sweep. At `n_sims≈500`, `3 models × ~200 seeds` is
   a few minutes.
 
 ```
 run_auction_tournament(strategies: Mapping[str, AuctionBidStrategy], pool, config, *, my_seat, n_seeds,
-price_jitter, base_seed, n_sims, availability, params) -> AuctionTournamentResult
+price_jitter, base_seed, n_sims, availability, params,
+season_base_seed=base_seed + 1_000_000) -> AuctionTournamentResult
 ```
 
 For each strategy and seed `s`: `rng = default_rng(base_seed + s)` (same `s` ⇒ same market across
-strategies), `league = simulate_auction(...)`, `proj = project_draft(league, …, rng=season_rng(s))`,
-`metrics[strategy][s] = proj[my_seat]`. Then:
+strategies), `league = simulate_auction(..., rng=rng)`, `proj = project_draft(league, …,
+rng=season_rng(s))` with `season_rng(s) = default_rng(season_base_seed + s)` (shared across strategies),
+`metrics[strategy][s] = proj[my_seat]` (`my_seat` 1-based, read directly — §3.2). Then:
 
 - **Per-strategy, per-metric mean + percentile-bootstrap CI** (reusing the promoted `_bootstrap_mean` /
   `Interval`).
@@ -381,6 +402,11 @@ Synthetic fixtures only (project norm — no network, no real parquet in unit te
 - **Scoring wiring** — a completed `simulate_auction` league feeds `project_draft` unchanged and yields a
   `SeatProjection` for `my_seat`; `SeatProjection.mean_points` is present and finite; a stronger hero
   roster scores higher expected points / champ % than a deliberately weak one (sanity of the seam).
+- **Seat-index convention (off-by-one guard)** — for a `my_seat` that is *not* the first seat, the hero
+  roster returned at `league[my_seat]` (1-based) equals the roster the engine built for the hero, and is
+  the same one scored at `proj[my_seat]`; assert the hero's `AuctionView` was built from `rosters[my_seat-1]`
+  (0-based state) — i.e. the 1-based/0-based conversion (§3.2) is applied at exactly one point. (Pins the
+  latent off-by-one between 0-based `AuctionState` and 1-based `project_draft` keys.)
 - **Recorded comparison (no verdict)** — a synthetic fixture where one model holds a constant per-seed edge
   ⇒ the paired-diff CI excludes 0 **and the result records that diff** (the harness reports it; it does
   **not** label a "winner"); a zero-edge fixture ⇒ a diff CI bracketing 0. (Reuses the promoted `_compare`
