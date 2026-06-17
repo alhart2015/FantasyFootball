@@ -5,6 +5,7 @@ Returns every seat's roster as {seat(1-based): [gsis_id, ...]} — the project_d
 
 from __future__ import annotations
 
+import warnings
 from collections import Counter
 from dataclasses import dataclass
 
@@ -15,6 +16,8 @@ from projections.draft.assistant._compare import validate_pool_size
 from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy, AuctionView
 from projections.draft.assistant.auction.market import SeatView, bot_max_bid, resolve_bids
 from projections.draft.league_config import LeagueConfig
+from projections.draft.roster_eligibility import bot_eligible, bot_position_bounds
+from projections.schemas import Position
 
 
 def validate_auction_inputs(pool: pd.DataFrame, config: LeagueConfig) -> None:
@@ -80,19 +83,57 @@ def _simulate_to_state(
     min_bid = config.min_bid
     hero0 = my_seat - 1  # the single 1-based -> 0-based conversion (spec §3.2)
 
+    minimums, maximums = bot_position_bounds(config.roster_slots)
+    pos_by_id = {
+        str(g): Position(str(p)) for g, p in zip(pool["gsis_id"], pool["position"], strict=True)
+    }
     bd = baseline_dollars.set_index("gsis_id")
-    # nomination order: highest baseline dollar first (we skip drafted on the fly)
     nominate_order = bd.sort_values("auction_dollars", ascending=False).index.tolist()
+    all_positions = frozenset(Position)
     state = AuctionState.initial(config)
 
     while any(_open_slots(state, s, rs) > 0 for s in range(n)):
-        # 1. advance nominator to a seat that still has an open slot
+        # advance the nominator pointer to a seat that still has an open slot
         while _open_slots(state, state.nominator, rs) == 0:
             state.nominator = (state.nominator + 1) % n
-        nominee_id = next(g for g in nominate_order if g not in state.drafted)
+
+        # eligible positions per open seat (hero is ungated -> all positions); union over the room
+        seat_eligible: dict[int, frozenset[Position]] = {}
+        union: set[Position] = set()
+        for seat in range(n):
+            if _open_slots(state, seat, rs) <= 0:
+                continue
+            if seat == hero0:
+                seat_eligible[seat] = all_positions
+                union |= all_positions
+            else:
+                counts = {
+                    Position(p): c
+                    for p, c in Counter(p for (_g, p, _pr) in state.rosters[seat]).items()
+                }
+                elig = bot_eligible(
+                    counts, _open_slots(state, seat, rs), minimums=minimums, maximums=maximums
+                )
+                seat_eligible[seat] = elig
+                union |= elig
+
+        # nominate the highest-baseline undrafted player the room can roster; else forced (un-gated)
+        nominee_id = next(
+            (g for g in nominate_order if g not in state.drafted and pos_by_id[str(g)] in union),
+            None,
+        )
+        forced = nominee_id is None
+        if forced:
+            nominee_id = next(g for g in nominate_order if g not in state.drafted)
+            warnings.warn(
+                f"auction: no open seat can roster a remaining position; forcing nominee "
+                f"{nominee_id} ({pos_by_id[str(nominee_id)].value}) ungated (pool thin).",
+                stacklevel=2,
+            )
+        assert nominee_id is not None  # guaranteed: pool is non-empty while any seat has open slots
         player = pool.loc[pool["gsis_id"] == nominee_id].iloc[0]
 
-        # 2. collect clamped bids from every eligible seat
+        # collect bids: hero always bids; bots abstain (dropped) if position-gated unless forced
         bids: dict[int, int] = {}
         for seat in range(n):
             if _open_slots(state, seat, rs) <= 0:
@@ -102,18 +143,22 @@ def _simulate_to_state(
                 desired = strategy.max_bid(
                     _build_view(state, hero0, pool, bd, config), player, pool, config
                 )
+                bids[seat] = max(min_bid, min(int(desired), fmax))
             else:
+                elig = all_positions if forced else seat_eligible[seat]
                 desired = bot_max_bid(
-                    SeatView(open_slots=_open_slots(state, seat, rs)),
+                    SeatView(open_slots=_open_slots(state, seat, rs), eligible_positions=elig),
                     player,
                     bd,
                     config,
                     rng,
                     price_jitter=price_jitter,
                 )
-            bids[seat] = max(min_bid, min(int(desired), fmax))  # clamp to [min_bid, feasible_max]
+                if desired <= 0:  # abstain -> dropped before the clamp
+                    continue
+                bids[seat] = max(min_bid, min(int(desired), fmax))
 
-        # 3. resolve + award
+        assert bids, "resolve_bids requires >=1 bid; forced-pick path guarantees it"
         winner, price = resolve_bids(bids, min_bid)
         state.budgets[winner] -= price
         state.rosters[winner].append((nominee_id, str(player["position"]), price))
