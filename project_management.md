@@ -4,6 +4,16 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction Assistant — Auction Strategy Tournament — spec written (2026-06-17, branch `claude/pr-76-rebase-merge-606mfs`)
+
+**Status:** Spec only (`docs/superpowers/specs/2026-06-17-auction-strategy-tournament-design.md`). Opens the **auction** branch of the Draft Hub by cashing in the snake harness's documented simulate→score→compare seam (`2026-06-10-draft-strategy-tournament` §5.7): the draft-mechanism module swaps (nominate/bid loop for snake order); roster scoring (`StartersValuer`/`SeasonValuer`) and the bootstrap/winner stats are reused. Plan + execution still to come (spec → plan → execute, on the feature branch, to `main` only via PR).
+
+**What it proposes:** an offline bake-off where the **three bid models are the contestants** (user chose "build all three, test which is best"): **v1 `StaticDollarBid`** (bid to `generate_auction_values`' static SOS dollar), **v2 `InflationBid`** (re-price the static dollar by live surplus inflation = remaining-surplus-money / remaining-surplus-value), **v3 `MarginalValueBid`** (bid to the player's marginal optimal-lineup lift ÷ market points-per-dollar). All three vary **only the valuation** — shared "nominate highest remaining dollar" nominator + shared noisy-WTP bot market + a hard `feasible_max = budget − min_bid·(open_slots−1)` reserve clamp — so a measured difference is attributable to the bid model alone (isolate-the-variable, mirroring the snake harness holding the bot field fixed). New `AuctionBidStrategy` Protocol + `auction/{bid_strategy,market,simulation,tournament}.py`; second-price+min_bid English clearing; one seeded RNG → paired "same room, different me" counterfactual; no new schema.
+
+**Load-bearing scope cuts (called out in the spec):** (1) **v3 ships as a cheap starters-marginal surrogate** in the tournament — the principled availability-aware `SeasonValuer` marginal is per-candidate-per-nomination MC, infeasible in the `seeds×nominations×sims` loop (the depth-aware-strategy ≈9 hrs/slot lesson) — full-fidelity v3 is reserved for the future once-per-real-pick live assistant; honest cross-check is to *score* with `SeasonValuer` while v3 *bids* on the starters surrogate (avoids in-sample circularity). (2) **Strategic nomination is deferred** to a separate Slice 2 axis (bid winner becomes the fixed baseline, nominators become contestants). (3) **Bots are value-rational noisy-WTP**, not behavioral — inherits the snake-side "better human-opponent model" backlog (TODO #46). Promote `Interval`/`_bootstrap_mean`/paired-winner into a shared `assistant/_compare.py` consumed by both tournaments.
+
+---
+
 ## Draft Assistant — Projected draft eval + scoring/size presets — shipped (2026-06-16, branch `feat/draft-eval-presets`, stacked on `feat/draft-board-ux`)
 
 **Status:** The end-of-draft "how good is this roster?" sim is now first-class + shown in the board, and scoring mode + league size are configurable. Built spec → spec-review (1 iter + Low fixes) → plan → plan-review (3 iters — the review caught a real bracket-vs-team-count bug a fix had introduced) → subagent-driven execution (9 tasks, each TDD + spec + code-quality review + a final whole-feature review). Spec/plan `docs/superpowers/specs|plans/2026-06-16-projected-draft-eval.*`.
