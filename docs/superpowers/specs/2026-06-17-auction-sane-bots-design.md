@@ -33,6 +33,8 @@ Critically, this is **inconsistent with the snake side.** The snake *hero-vs-bot
 
 ## 4. Chosen approach / architecture
 
+**Paths (shorthand used below → real location):** `roster_eligibility.py` = `src/projections/draft/roster_eligibility.py`; `draft_field.py` = `src/projections/draft/backtest/draft_field.py`; `auction/market.py`, `auction/simulation.py` = `src/projections/draft/assistant/auction/{market,simulation}.py`. There is no top-level `auction/` package.
+
 ### 4.1 Shared selection algorithm (`roster_eligibility.py`)
 
 ```python
