@@ -76,9 +76,22 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
 > One row per (run, bid model). Record the config so each run is reproducible from this table alone.
 > "Favored" = what *this run* leaned toward, in isolation — not a standing conclusion.
 
-| Date | Preset (scoring×size) | Seat | Seeds | n_sims | price_jitter | Model | Exp pts (95% CI) | Win % (CI) | Playoff % (CI) | Bye % (CI) | Champ % (CI) | Notes / what it favored |
-|------|------------------------|------|-------|--------|--------------|-------|------------------|------------|----------------|------------|--------------|--------------------------|
-| _—_  | _—_                    | _—_  | _—_   | _—_    | _—_          | _—_   | _(no runs yet — harness shipped; data-gathering begins)_ | | | | | |
+| Date | Preset (scoring×size) | Seat | Seeds | n_sims | price_jitter | Model | Exp pts (95% CI) | Win % | Playoff % | Bye % | Champ % | Notes / what it favored |
+|------|------------------------|------|-------|--------|--------------|-------|------------------|-------|-----------|-------|---------|--------------------------|
+| 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | static    | 892.6 [881.3, 903.2] | 0.38 | 0.15 | 0.03 | 0.01 | Run A — see note ↓ |
+| 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | marginal  | 876.3 [872.1, 880.2] | 0.37 | 0.11 | 0.02 | 0.01 | Run A |
+| 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | inflation | 855.3 [847.2, 863.4] | 0.35 | 0.09 | 0.01 | 0.01 | Run A |
+
+**Run A — 2026-06-17** (`half_16team`, seat 1, 150 seeds, n_sims=500, price_jitter=0.15, budget=200, seed=0; **byes OFF** — 2026 schedule not ingested, injury risk still applied).
+
+Paired per-seed differences (point [95% CI]; all exclude 0 except where noted) — the trustworthy signal:
+- **static − inflation:** +37.3 pts [+23.1, +52.3] · playoff +0.058 [+0.042, +0.074] · bye +0.015 [+0.011, +0.019] · champ +0.006 [+0.004, +0.009]
+- **static − marginal:** +16.3 pts [+3.8, +28.4] · playoff +0.045 [+0.028, +0.062] · bye +0.013 [+0.008, +0.018] · champ +0.006 [+0.003, +0.008]
+- **inflation − marginal:** −21.0 pts [−30.2, −11.3] · playoff −0.013 [−0.021, −0.004] · bye ≈ 0 · champ ≈ 0
+
+*In isolation this run favors* **static ≥ marginal ≥ inflation** *on points & playoff%. Not a verdict (one seat, one preset, byes off; decide in September).*
+
+⚠️ **Methodology flag (read before trusting levels):** the hero's **absolute** metrics sit *below* the uniform baseline (playoff 0.15 vs 0.375 expected at 6/16; champ 0.01 vs 0.0625). With 15 noisy-WTP bots, the *order-statistic max* of their bids on a stud exceeds `baseline_dollars`, so a value-bidding hero is outbid on the good players and ends with a below-average roster. This is the §3.6 bot-field caveat in action: **absolute numbers are bot-relative; only the paired diffs are interpretable.** Worth examining the bot model (and/or whether a competitive hero must bid above baseline) and a seat sweep before reading anything into levels.
 
 ## Planned experiments / axes to sweep
 
