@@ -6,6 +6,7 @@ from projections.draft.roster_eligibility import (
     FLEX_ELIGIBLE,
     SUPER_FLEX_ELIGIBLE,
     allocate_roster_slots,
+    bot_eligible,
     eligible_positions,
 )
 from projections.schemas import Position, RosterSlot
@@ -81,3 +82,28 @@ def test_allocate_roster_slots_overflow_player_omitted() -> None:
     placements, open_, _ = allocate_roster_slots([("a", Position.QB), ("b", Position.QB)], slots)
     assert placements == [("a", Position.QB, RosterSlot.QB)]  # 2nd QB omitted
     assert open_[RosterSlot.QB] == 0
+
+
+_MN = {Position.QB: 1, Position.RB: 3, Position.WR: 3, Position.TE: 1}
+_MX = {Position.QB: 3, Position.RB: 6, Position.WR: 6, Position.TE: 3}
+
+
+def test_bot_eligible_reserves_final_picks_for_deficits() -> None:
+    counts = {Position.QB: 1, Position.RB: 1, Position.WR: 3, Position.TE: 1}  # RB deficit = 2
+    # picks_left == Σdeficit (2) -> forced: only positions still below minimum
+    assert bot_eligible(counts, 2, minimums=_MN, maximums=_MX) == frozenset({Position.RB})
+
+
+def test_bot_eligible_cap_branch_above_the_deficit_boundary() -> None:
+    counts = {Position.QB: 3, Position.RB: 1, Position.WR: 1, Position.TE: 0}  # QB at max (3)
+    # picks_left (10) > Σdeficit -> cap branch: every position still under its max, QB excluded
+    assert bot_eligible(counts, 10, minimums=_MN, maximums=_MX) == frozenset(
+        {Position.RB, Position.WR, Position.TE}
+    )
+
+
+def test_bot_eligible_ignores_positions_absent_from_bounds() -> None:
+    counts = {Position.QB: 1, Position.K: 2}  # K not in the bound maps
+    assert Position.K not in bot_eligible(
+        counts, 10, minimums={Position.QB: 1}, maximums={Position.QB: 3}
+    )

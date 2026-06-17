@@ -130,3 +130,23 @@ def eligible_positions(
         if rosterable:
             result[pos] = starting
     return result
+
+
+def bot_eligible(
+    counts: Mapping[Position, int],
+    picks_left: int,
+    *,
+    minimums: Mapping[Position, int],
+    maximums: Mapping[Position, int],
+) -> frozenset[Position]:
+    """Positions a roster-disciplined bot may take now (the snake draft_field rule, generalized).
+
+    Reserve the final picks for unmet minimums; otherwise allow any position still under its cap.
+    The eligible set is drawn strictly from the `minimums`/`maximums` keysets, so a position
+    present in `counts` but absent from the bound maps (e.g. K/DST when the bounds omit them)
+    is never returned.
+    """
+    deficit = {p: max(0, minimums.get(p, 0) - counts.get(p, 0)) for p in minimums}
+    if picks_left <= sum(deficit.values()):
+        return frozenset(p for p, d in deficit.items() if d > 0)
+    return frozenset(p for p in maximums if counts.get(p, 0) < maximums[p])
