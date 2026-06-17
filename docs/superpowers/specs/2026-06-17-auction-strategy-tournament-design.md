@@ -111,9 +111,11 @@ schema-producing path.
   `season_mean_fpts` (the roster-scoring currency), `vorp`. **`consensus_adp` is *not* required** here —
   an auction has no draft order, so the all-null-ADP hard error from the snake harness does **not** carry
   over. The market signal is **dollars**, derived below. The pool must carry **`is_rookie`** for the
-  variance sampler. **`run_auction_tournament` attaches it itself** at entry via the projected-draft-eval's
-  `_attach_is_rookie` (idempotent if already present) — the harness does not require the caller to
-  pre-attach it; it reuses that path exactly as `project_league_outcomes` does.
+  variance sampler. **The CLI attaches it** — `attach_is_rookie(pool, season=…, data_root=…)`
+  (`assistant/rookies.py`, public) — before calling the engine, exactly as it loads `availability` and
+  `params`; `run_auction_tournament` requires the pool to already carry `is_rookie` (a documented
+  precondition, mirroring `project_draft`), keeping the engine free of store access. This matches the
+  controller/engine split `project_league_outcomes` → `project_draft` already uses.
 - **Baseline dollars** — `generate_auction_values(pool, config)` produces the **full `AuctionValuesSchema`
   frame** (one `auction_dollars` per player under the league's budget/min-bid/roster shape, plus `in_pool`,
   `season_mean_fpts`, `vorp`). **This whole frame — not a bare gsis→dollar mapping — is the shared
@@ -160,9 +162,11 @@ Two derived quantities the whole engine leans on, both read off `roster_slots`:
 - **`feasible_max(seat) = budgets[seat] − min_bid · (open_slots(seat) − 1)`** — the most a seat can bid on
   the current player while still affording `min_bid` for every *remaining* spot. This single invariant
   makes the endgame fall out for free: a seat with `budget == min_bid · open_slots` has `feasible_max ==
-  min_bid` and can only take $1 players the rest of the way. **The engine enforces `feasible_max` as a
-  hard clamp on every bid** (hero and bot alike), so no bid model has to re-implement the reserve — it
-  returns its *desired* max and the engine clamps. A seat with `open_slots == 0` is out of the auction.
+  min_bid` and can only take $1 players the rest of the way. **The engine clamps every bid to
+  `[min_bid, feasible_max]`** (hero and bot alike): it floors at the minimum bid — so a model that returns
+  `0`/sub-`min_bid` for a cheap or out-of-pool ($0-baseline) player still bids the legal `min_bid` — and
+  caps at the reserve, so no bid model has to re-implement either bound; it returns its *desired* max and
+  the engine normalizes. A seat with `open_slots == 0` is out of the auction.
 
 At auction end, the state's `rosters` are projected to the `project_draft` input shape:
 `{seat_index + 1: [gsis_id, …]}` for **every** seat (§3.6).
