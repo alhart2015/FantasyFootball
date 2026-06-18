@@ -84,6 +84,12 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
 | 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | static    | 882.3 [869.9, 894.5] | 0.34 | 0.10 | 0.02 | 0.01 | Run B (sane bots) — see note ↓ |
 | 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | marginal  | 864.5 [858.8, 870.3] | 0.32 | 0.06 | 0.01 | 0.00 | Run B (sane bots) |
 | 2026-06-17 | half × 16 | 1 | 150 | 500 | 0.15 | inflation | 818.2 [809.3, 827.0] | 0.28 | 0.04 | 0.00 | 0.00 | Run B (sane bots) |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | overbid   | 1205.1 [1195.5, 1215.7] | 0.65 | 0.72 | 0.37 | 0.22 | Run C (pos-aware hero) — see note ↓ |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | anchors   | 1154.4 [1145.7, 1162.6] | 0.61 | 0.62 | 0.28 | 0.14 | Run C |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | vorpshare | 977.8 [970.9, 984.3] | 0.43 | 0.22 | 0.05 | 0.02 | Run C |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | static    | 965.4 [956.3, 976.3] | 0.42 | 0.20 | 0.04 | 0.02 | Run C (now gated) |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | marginal  | 903.1 [897.5, 908.7] | 0.36 | 0.10 | 0.01 | 0.01 | Run C (now gated) |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | inflation | 867.8 [862.2, 873.3] | 0.33 | 0.06 | 0.01 | 0.00 | Run C (now gated) |
 
 **Run A — 2026-06-17** (`half_16team`, seat 1, 150 seeds, n_sims=500, price_jitter=0.15, budget=200, seed=0; **byes OFF** — 2026 schedule not ingested, injury risk still applied).
 
@@ -113,6 +119,34 @@ Paired per-seed differences (point [95% CI]; all CIs exclude 0):
 *Run A vs Run B comparison:* With positionally-disciplined bots (Run B), the hero's absolute metrics declined slightly vs Run A (static playoff 0.10 vs 0.15; champ 0.01 vs 0.01). The hero did **not** recover to the uniform baseline (0.375 playoff / 0.0625 champ) — the bot-field remains a competitive handicap even with positional discipline, because bots now spend their budgets more efficiently on positionally-appropriate targets. The paired-diff ordering is unchanged: **static ≥ marginal ≥ inflation** on both points and playoff% in both runs. The static−inflation advantage widened in Run B (+64.2 pts vs +37.3 pts), while static−marginal was similar (+17.8 vs +16.3 pts). In isolation, with sane bots, the hero's absolute numbers are lower because the disciplined bots are harder competition; the model ranking direction is the same; no winner declared (byes still off; September decision).
 
 *In isolation this run also favors* **static ≥ marginal ≥ inflation** *on points & playoff%. Not a verdict.*
+
+---
+
+**Run C — 2026-06-18** (`half_16team`, seat 1, 60 seeds, n_sims=200, price_jitter=0.15, budget=200, seed=0; **byes OFF**; **position-aware hero** — every bidder, hero included, now obeys the shared `bot_eligible`/`bot_position_bounds` rule, branch `feat/auction-stars-and-scrubs`). Six contestants: the three value-anchored models (now position-gated) plus three budget-spending **stars-and-scrubs** models — `anchors` (AnchorBudgetBid, N=4), `overbid` (OverbidValueBid, k=1.3), `vorpshare` (VorpShareBid).
+
+Seed/sim counts are lower than Runs A/B (60×200 vs 150×500): the i9-14900KF Raptor Lake fault segfaults the 6-model run at 150×300 in one process (memory `h2h-backtest-native-crash`); 60×200 completes cleanly. CIs are wider but the separations are large.
+
+Per-model metrics (mean [95% CI on exp pts]; uniform baseline playoff 0.375 / champ 0.0625):
+- **overbid:** 1205 [1195.5, 1215.7] · win 0.65 · **playoff 0.72** · bye 0.37 · **champ 0.22**
+- **anchors:** 1154 [1145.7, 1162.6] · win 0.61 · **playoff 0.62** · bye 0.28 · champ 0.14
+- **vorpshare:** 978 [970.9, 984.3] · win 0.43 · playoff 0.22 · bye 0.05 · champ 0.02
+- **static:** 965 [956.3, 976.3] · win 0.42 · playoff 0.20 · bye 0.04 · champ 0.02
+- **marginal:** 903 [897.5, 908.7] · win 0.36 · playoff 0.10 · bye 0.01 · champ 0.01
+- **inflation:** 868 [862.2, 873.3] · win 0.33 · playoff 0.06 · bye 0.01 · champ 0.00
+
+Paired per-seed playoff% differences (point [95% CI]; all exclude 0 except where noted):
+- **overbid − anchors:** +0.092 [+0.068, +0.119] (overbid edges anchors)
+- **overbid − static:** +0.513 [+0.484, +0.538] · **anchors − static:** +0.421 [+0.385, +0.452]
+- **overbid − marginal:** +0.615 [+0.594, +0.635] · **overbid − inflation:** +0.652 [+0.633, +0.671]
+- **anchors − vorpshare:** +0.405 [+0.377, +0.428] · **overbid − vorpshare:** +0.497 [+0.477, +0.517]
+- **static − vorpshare:** −0.016 [−0.036, +0.004] (straddles 0 — indistinguishable)
+- **static − marginal:** +0.102 [+0.080, +0.126] · **static − inflation:** +0.139 [+0.121, +0.160] · **inflation − marginal:** −0.037 [−0.047, −0.026]
+
+*In isolation this run favors* **overbid > anchors ≫ vorpshare ≈ static > marginal > inflation** *on playoff% and points. Not a verdict (one seat, one preset, byes off, 60 seeds; decide in September).*
+
+**What changed and what it means (data, not a decision):** the two stars-and-scrubs models that spend the full budget on a few high-VORP anchors (`overbid`, `anchors`) put the hero **well above** the uniform baseline (overbid playoff 0.72 / champ 0.22; anchors 0.62 / 0.14) — the first hero strategies to clear it. This is the converse of Runs A/B: there the value-bidding hero sat below a random team; here a budget-committing hero dominates the *same* bot field. The value-anchored trio stays below baseline even with the position gate (`static` 0.20, `marginal` 0.10, `inflation` 0.06); the gate's main visible effect on them is removing the empty-TE / over-stacked-WR rosters (`static` rose from Run B's 0.10 to 0.20). `vorpshare` (proportional VORP allocation) lands between — better than the timid trio, far below the two aggressive ones.
+
+**Caveat:** absolute levels are **not** directly comparable to Runs A/B — gating the hero changes the nomination/award sequence and thus the points at which the auction RNG is consumed (the §3.6 bot-field caveat), and the bot WTP model is unchanged. The actionable read: a hero that commits its budget to anchors and bids *above* fair value to win them beats this bot field decisively. Which of `overbid`/`anchors` is best, how sensitive `overbid` is to `k` and `anchors` to `N`, and whether the edge holds across seats / presets / `price_jitter` are the next sweeps.
 
 ## Planned experiments / axes to sweep
 
