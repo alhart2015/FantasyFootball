@@ -41,6 +41,12 @@ def _total_open_slots(view: AuctionView, config: LeagueConfig) -> int:
     return config.n_teams * config.roster_size - len(view.drafted)
 
 
+def _surplus_money(view: AuctionView, config: LeagueConfig) -> int:
+    """Room-wide budget left beyond the min-bid reserve for every open slot (the inflation/marginal
+    denominator). Shared by v2 and v3 so the surplus definition can't drift between them."""
+    return sum(view.budgets_by_seat) - config.min_bid * _total_open_slots(view, config)
+
+
 @dataclass(frozen=True)
 class StaticDollarBid:
     """v1 — bid straight to the static SOS dollar."""
@@ -59,7 +65,7 @@ class InflationBid:
         self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
     ) -> int:
         min_bid = config.min_bid
-        money = sum(view.budgets_by_seat) - min_bid * _total_open_slots(view, config)
+        money = _surplus_money(view, config)
         bd = view.baseline_dollars
         undrafted_in_pool = bd[bd["in_pool"] & ~bd.index.isin(view.drafted)]
         value = float((undrafted_in_pool["auction_dollars"] - min_bid).sum())
@@ -83,7 +89,7 @@ class MarginalValueBid:
         lift = optimal_lineup_points(with_player, slots) - base_pts
         if lift <= 0.0:
             return min_bid
-        money = sum(view.budgets_by_seat) - min_bid * _total_open_slots(view, config)
+        money = _surplus_money(view, config)
         bd = view.baseline_dollars
         undrafted_in_pool_ids = bd[bd["in_pool"] & ~bd.index.isin(view.drafted)].index
         # Lift of a single player to an EMPTY lineup == its season_mean_fpts (every in-pool

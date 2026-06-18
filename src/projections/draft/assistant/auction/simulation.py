@@ -87,6 +87,8 @@ def _simulate_to_state(
     pos_by_id = {
         str(g): Position(str(p)) for g, p in zip(pool["gsis_id"], pool["position"], strict=True)
     }
+    # Row lookup by id, built once — avoids an O(pool) boolean scan to fetch the nominee each round.
+    pool_by_id = {str(g): row for g, row in pool.set_index("gsis_id", drop=False).iterrows()}
     bd = baseline_dollars.set_index("gsis_id")
     nominate_order = bd.sort_values("auction_dollars", ascending=False).index.tolist()
     all_positions = frozenset(Position)
@@ -131,7 +133,7 @@ def _simulate_to_state(
                 stacklevel=2,
             )
         assert nominee_id is not None  # guaranteed: pool is non-empty while any seat has open slots
-        player = pool.loc[pool["gsis_id"] == nominee_id].iloc[0]
+        player = pool_by_id[str(nominee_id)]
 
         # collect bids: hero always bids; bots abstain (dropped) if position-gated unless forced
         bids: dict[int, int] = {}

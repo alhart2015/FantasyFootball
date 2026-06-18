@@ -59,8 +59,8 @@ def format_compare(result: AuctionTournamentResult) -> str:
     lines.append(header)
     for name, metrics in result.summaries.items():
         cells = "".join(
-            f"{iv.point:>10.2f} [{iv.lo_95:.1f},{iv.hi_95:.1f}]".rjust(22)
-            for iv in (metrics[m] for m in METRICS)
+            f"{metrics[m].point:>10.2f} [{metrics[m].lo_95:.1f},{metrics[m].hi_95:.1f}]".rjust(22)
+            for m in METRICS
         )
         lines.append(f"{name:<12}{cells}")
     lines.append("")

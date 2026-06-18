@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
@@ -115,14 +116,11 @@ def run_auction_tournament(
         name: {m: bootstrap_mean(per[name][m], seed=base_seed) for m in METRICS}
         for name in strategies
     }
-    names = list(strategies)
     paired: dict[str, dict[str, Interval]] = {}
-    for i in range(len(names)):
-        for j in range(i + 1, len(names)):
-            a, b = names[i], names[j]
-            paired[f"{a}_vs_{b}"] = {
-                m: bootstrap_mean(per[a][m] - per[b][m], seed=base_seed) for m in METRICS
-            }
+    for a, b in combinations(strategies, 2):
+        paired[f"{a}_vs_{b}"] = {
+            m: bootstrap_mean(per[a][m] - per[b][m], seed=base_seed) for m in METRICS
+        }
 
     return AuctionTournamentResult(
         summaries=summaries,
