@@ -36,7 +36,7 @@
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to the import block at the top of `tests/test_draft/test_assistant_auction_bid_strategy.py` (currently lines 5–16) the new names `URGENCY_GAIN` and `_budget_urgency`:
+Add to the import block at the top of `tests/test_draft/test_assistant_auction_bid_strategy.py` (currently lines 5–16) the new names `URGENCY_GAIN` and `_budget_urgency` (leave `StudsAndDepthBid` for Task 3, where it is defined — importing it now would break collection):
 
 ```python
 from projections.draft.assistant.auction.bid_strategy import (
@@ -47,7 +47,6 @@ from projections.draft.assistant.auction.bid_strategy import (
     OverbidValueBid,
     PatientValueBid,
     StaticDollarBid,
-    StudsAndDepthBid,  # added in Task 3; import now so Tasks 1+3 share one import block
     URGENCY_GAIN,
     VorpShareBid,
     _budget_urgency,
@@ -55,8 +54,6 @@ from projections.draft.assistant.auction.bid_strategy import (
     _vorp_threshold,
 )
 ```
-
-> NOTE: `StudsAndDepthBid` does not exist until Task 3. If you are executing Task 1 in isolation and `pytest` collection fails on that import, temporarily drop the `StudsAndDepthBid` line and re-add it in Task 3. (Under subagent-driven execution the tasks run in order, so importing it now keeps the import block edited once.)
 
 Append these tests (they use the existing `_vpool`/`_vconfig`/`_aview` helpers at lines 135–201):
 
@@ -362,7 +359,7 @@ git commit -m "feat(auction): seven contestants deploy budget via _budget_urgenc
 
 **Files:**
 - Modify: `src/projections/draft/assistant/auction/bid_strategy.py` (add the dataclass, after `PatientValueBid`)
-- Test: `tests/test_draft/test_assistant_auction_bid_strategy.py` (add tests; import already added in Task 1)
+- Test: `tests/test_draft/test_assistant_auction_bid_strategy.py` (add `StudsAndDepthBid` to the import block, then add tests)
 
 **Interfaces:**
 - Consumes: `_vorp_threshold`, `_budget_urgency`, `AuctionView`, `LeagueConfig`.
@@ -372,7 +369,15 @@ git commit -m "feat(auction): seven contestants deploy budget via _budget_urgenc
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_draft/test_assistant_auction_bid_strategy.py`:
+First add `StudsAndDepthBid` to the bid_strategy import block in `tests/test_draft/test_assistant_auction_bid_strategy.py` (alphabetical, after `StaticDollarBid`):
+
+```python
+    StaticDollarBid,
+    StudsAndDepthBid,
+    URGENCY_GAIN,
+```
+
+Then append these tests:
 
 ```python
 # ---------------------------------------------------------------------------
@@ -432,7 +437,7 @@ def test_studs_depth_satisfies_protocol() -> None:
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `pytest tests/test_draft/test_assistant_auction_bid_strategy.py -k studs -v`
-Expected: FAIL — `NameError`/`ImportError` for `StudsAndDepthBid` (if the Task 1 import was deferred, re-add it now).
+Expected: FAIL — `ImportError: cannot import name 'StudsAndDepthBid'` (the dataclass doesn't exist yet; the import added in Step 1 breaks collection).
 
 - [ ] **Step 3: Add the `StudsAndDepthBid` dataclass**
 
@@ -515,9 +520,20 @@ def test_default_models_are_the_eight_contestants() -> None:
     }
 ```
 
-- [ ] **Step 2: Write the failing engine integration tests**
+- [ ] **Step 2: Write the engine integration tests + their import**
 
-In `tests/test_draft/test_assistant_auction_simulation.py`, add `StudsAndDepthBid` to the bid_strategy import (currently lines 7–11) and append two tests. The hero is seat 1 → state index 0; spend = `cfg.budget - state.budgets[0]`.
+In `tests/test_draft/test_assistant_auction_simulation.py`, first add `StudsAndDepthBid` to the bid_strategy import (currently lines 7–11):
+
+```python
+from projections.draft.assistant.auction.bid_strategy import (
+    AnchorBudgetBid,
+    AuctionView,
+    StaticDollarBid,
+    StudsAndDepthBid,
+)
+```
+
+Then append two tests. The hero is seat 1 → state index 0; spend = `cfg.budget - state.budgets[0]`. (These are *integration verification* of Task 3's `StudsAndDepthBid` through the real engine — not new-behavior TDD; they may pass on first run, which is expected.)
 
 ```python
 def test_studs_and_depth_deploys_budget_and_is_startable() -> None:
@@ -561,10 +577,10 @@ def test_studs_and_depth_is_deterministic() -> None:
     assert a.rosters == b.rosters
 ```
 
-- [ ] **Step 3: Run to verify failure**
+- [ ] **Step 3: Run to verify the registry test is red**
 
-Run: `pytest tests/test_draft/test_assistant_auction_tournament_cli.py::test_default_models_are_the_eight_contestants tests/test_draft/test_assistant_auction_simulation.py -k "studs_and_depth" -v`
-Expected: FAIL — `studsdepth` missing from `_MODELS`; `ImportError`/`NameError` for `StudsAndDepthBid` in the simulation test.
+Run: `pytest "tests/test_draft/test_assistant_auction_tournament_cli.py::test_default_models_are_the_eight_contestants" -v`
+Expected: FAIL — `studsdepth` not in `_MODELS` (the set assertion fails). This is the meaningful red. (The two integration tests verify Task-3 behavior through the engine and may already pass — that's expected; they gate at Step 6 once the registry is wired.)
 
 - [ ] **Step 4: Wire the CLI**
 
@@ -594,32 +610,19 @@ Add the registry entry (after line 51, inside `_MODELS`):
 }
 ```
 
-Update the two "seven" strings: the module docstring (line 5, "races the seven bid models" → "races the eight bid models") and the `compare` subparser help (line 125, `help="Race the seven bid models; record per-metric data."` → `help="Race the eight bid models; record per-metric data."`).
+Update the two "seven" strings: the module docstring (line 4, "races the seven bid models" → "races the eight bid models") and the `compare` subparser help (line 125, `help="Race the seven bid models; record per-metric data."` → `help="Race the eight bid models; record per-metric data."`). Then `grep -n seven src/projections/draft/assistant/auction/tournament_cli.py` to confirm no other "seven" remains.
 
-- [ ] **Step 5: Add `StudsAndDepthBid` to the simulation test import**
-
-In `tests/test_draft/test_assistant_auction_simulation.py` (import block lines 7–11):
-
-```python
-from projections.draft.assistant.auction.bid_strategy import (
-    AnchorBudgetBid,
-    AuctionView,
-    StaticDollarBid,
-    StudsAndDepthBid,
-)
-```
-
-- [ ] **Step 6: Run to verify the targeted tests pass**
+- [ ] **Step 5: Run to verify the targeted tests pass**
 
 Run: `pytest tests/test_draft/test_assistant_auction_tournament_cli.py -v tests/test_draft/test_assistant_auction_simulation.py -k "studs_and_depth" -v`
 Expected: PASS. If `studs_spend >= 0.75 * cfg.budget` fails, do **not** seed-shop — investigate whether the strategy is genuinely leaving cash idle (a real finding worth a note in the spec's open question); if confirmed working but the synthetic pool simply caps deployment lower, lower the floor with a comment recording the observed spend.
 
-- [ ] **Step 7: Run the full touched-module suite (catches the protocol + no-winner CLI tests)**
+- [ ] **Step 6: Run the full touched-module suite (catches the protocol + no-winner CLI tests)**
 
 Run: `pytest tests/test_draft/test_assistant_auction_tournament_cli.py tests/test_draft/test_assistant_auction_simulation.py tests/test_draft/test_assistant_auction_bid_strategy.py -v`
 Expected: PASS (incl. `test_every_default_model_satisfies_the_protocol` now covering 8 models, and `test_format_compare_has_no_winner_line`).
 
-- [ ] **Step 8: Gates + commit**
+- [ ] **Step 7: Gates + commit**
 
 Run: `ruff check src tests && ruff format --check src tests && mypy src tests`
 Expected: zero violations.
