@@ -121,6 +121,23 @@ def _vorp_threshold(pool: pd.DataFrame, k: int) -> float:
     return float(vorps.nlargest(k).iloc[-1])
 
 
+URGENCY_GAIN = 3.0
+
+
+def _budget_urgency(view: AuctionView, config: LeagueConfig) -> float:
+    """Late-draft budget-deployment factor (spec §A). Exactly 1.0 at the draft start
+    (`my_open_slots == roster_size` -> progress 0) and when broke (no surplus beyond the
+    $1-per-open-slot floor); escalates toward 1.0 + URGENCY_GAIN as the roster fills *and* idle
+    cash remains. Bounded [1.0, 1.0 + URGENCY_GAIN) for my_open_slots >= 1 (both factors in [0,1));
+    the engine's [min_bid, feasible_max] clamp bounds the resulting bid. The surplus<=0 guard runs
+    before the surplus/my_budget term, so my_budget==0 never divides by zero."""
+    surplus = view.my_budget - config.min_bid * view.my_open_slots
+    if surplus <= 0:
+        return 1.0
+    progress = 1.0 - view.my_open_slots / config.roster_size
+    return 1.0 + URGENCY_GAIN * progress * (surplus / view.my_budget)
+
+
 @dataclass(frozen=True)
 class AnchorBudgetBid:
     """Stars-and-scrubs: pour budget into `n_anchors` top-VORP players, $1 the rest (spec §B)."""

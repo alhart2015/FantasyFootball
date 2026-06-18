@@ -3,6 +3,7 @@ from collections import Counter
 import pandas as pd
 
 from projections.draft.assistant.auction.bid_strategy import (
+    URGENCY_GAIN,
     AnchorBudgetBid,
     AuctionView,
     InflationBid,
@@ -11,6 +12,7 @@ from projections.draft.assistant.auction.bid_strategy import (
     PatientValueBid,
     StaticDollarBid,
     VorpShareBid,
+    _budget_urgency,
     _undrafted,
     _vorp_threshold,
 )
@@ -339,3 +341,51 @@ def test_patient_hero_scrub_bids_min() -> None:
     view = _aview(pool, budget=100, open_slots=8)
     # vorp 5 (player 6) is below the scrub cutoff (90) -> scrub -> min_bid.
     assert PatientValueBid().max_bid(view, pool.iloc[5], pool, _vconfig()) == _vconfig().min_bid
+
+
+# ---------------------------------------------------------------------------
+# _budget_urgency (shared late-draft deployment factor)
+# ---------------------------------------------------------------------------
+
+
+def test_budget_urgency_is_one_at_draft_start() -> None:
+    # progress == 0 (my_open_slots == roster_size) -> exactly 1.0, regardless of surplus.
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)  # roster_size 8 -> progress 0
+    assert _budget_urgency(view, _vconfig()) == 1.0
+
+
+def test_budget_urgency_is_one_when_broke() -> None:
+    # surplus = budget - min_bid*open_slots <= 0 -> 1.0 (don't escalate what you can't afford).
+    pool = _vpool()
+    view = _aview(pool, budget=5, open_slots=8)  # 5 - 1*8 = -3 <= 0
+    assert _budget_urgency(view, _vconfig()) == 1.0
+
+
+def test_budget_urgency_exceeds_one_for_overfunded_partial_roster() -> None:
+    pool = _vpool()
+    view = _aview(pool, budget=90, open_slots=4)  # surplus 86 > 0, progress 0.5
+    assert _budget_urgency(view, _vconfig()) > 1.0
+
+
+def test_budget_urgency_increases_with_progress() -> None:
+    pool = _vpool()
+    cfg = _vconfig()
+    fewer_slots = _budget_urgency(_aview(pool, budget=100, open_slots=2), cfg)  # progress 0.75
+    more_slots = _budget_urgency(_aview(pool, budget=100, open_slots=6), cfg)  # progress 0.25
+    assert fewer_slots > more_slots
+
+
+def test_budget_urgency_increases_with_surplus() -> None:
+    pool = _vpool()
+    cfg = _vconfig()
+    rich = _budget_urgency(_aview(pool, budget=100, open_slots=4), cfg)  # ratio 96/100
+    poor = _budget_urgency(_aview(pool, budget=20, open_slots=4), cfg)  # ratio 16/20
+    assert rich > poor
+
+
+def test_budget_urgency_is_bounded_below_one_plus_gain() -> None:
+    pool = _vpool()
+    cfg = _vconfig()
+    extreme = _budget_urgency(_aview(pool, budget=10_000, open_slots=1), cfg)
+    assert 1.0 <= extreme < 1.0 + URGENCY_GAIN
