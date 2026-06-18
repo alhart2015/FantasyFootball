@@ -8,6 +8,7 @@ from projections.draft.assistant.auction.bid_strategy import (
     AnchorBudgetBid,
     AuctionView,
     StaticDollarBid,
+    StudsAndDepthBid,
 )
 from projections.draft.assistant.auction.market import (
     AggressiveBot,
@@ -510,4 +511,45 @@ def test_mixed_field_is_deterministic() -> None:
     )
     a = _simulate_to_state(StaticDollarBid(), 1, pool, cfg, rng=np.random.default_rng(5), **kw)
     b = _simulate_to_state(StaticDollarBid(), 1, pool, cfg, rng=np.random.default_rng(5), **kw)
+    assert a.rosters == b.rosters
+
+
+def test_studs_and_depth_deploys_budget_and_is_startable() -> None:
+    # Realistic market (mixed field + value-weighted-random nomination). StudsAndDepthBid should
+    # deploy most of its budget (the Run-E failure mode was idle cash) and field a startable roster,
+    # spending far more than a floor-bidder hero on the same seed.
+    cfg = _config(n_teams=8, roster_slots={RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.BENCH: 3})
+    pool = _pool(80)
+    baseline = _realistic_baseline(pool)
+    kw = dict(
+        baseline_dollars=baseline,
+        price_jitter=0.15,
+        nomination_temp=1.0,
+        bot_archetypes=[AggressiveBot(), PatientValueBot(), BalancedBot()],
+    )
+    studs = _simulate_to_state(
+        StudsAndDepthBid(), 1, pool, cfg, rng=np.random.default_rng(11), **kw
+    )
+    floor = _simulate_to_state(_MinBidStub(), 1, pool, cfg, rng=np.random.default_rng(11), **kw)
+    studs_spend = cfg.budget - studs.budgets[0]
+    floor_spend = cfg.budget - floor.budgets[0]
+    assert studs_spend > floor_spend  # actually deploys budget vs a min-bidder
+    assert studs_spend >= 0.75 * cfg.budget  # ~full-budget deployment (no large idle cash)
+    hero = [p for (_g, p, _pr) in studs.rosters[0]]
+    assert len(hero) == cfg.roster_size  # filled
+    assert hero.count("RB") >= 2 and hero.count("WR") >= 2  # startable starting lineup
+
+
+def test_studs_and_depth_is_deterministic() -> None:
+    cfg = _config(n_teams=8, roster_slots={RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.BENCH: 3})
+    pool = _pool(80)
+    bl = _realistic_baseline(pool)
+    kw = dict(
+        baseline_dollars=bl,
+        price_jitter=0.15,
+        nomination_temp=1.0,
+        bot_archetypes=[AggressiveBot(), PatientValueBot(), BalancedBot()],
+    )
+    a = _simulate_to_state(StudsAndDepthBid(), 1, pool, cfg, rng=np.random.default_rng(5), **kw)
+    b = _simulate_to_state(StudsAndDepthBid(), 1, pool, cfg, rng=np.random.default_rng(5), **kw)
     assert a.rosters == b.rosters
