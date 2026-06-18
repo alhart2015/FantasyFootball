@@ -59,8 +59,9 @@ def test_sample_nominee_temp_one_favors_value_but_samples_tail() -> None:
     assert (picks.count("lo1") + picks.count("lo2")) > 0  # but the tail does come up
 
 
-def test_nomination_temp_zero_matches_legacy_draft() -> None:
-    # temp=0 must reproduce the pre-change draft exactly (same RNG stream, no nomination draw).
+def test_nomination_temp_zero_is_deterministic() -> None:
+    # temp=0 consumes no nomination RNG, so two runs at the same seed are identical. (Backward-compat
+    # to pre-change behavior is guarded by the rest of the engine suite, which runs at default temp=0.)
     cfg = _config(n_teams=4, roster_slots={RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.BENCH: 2})
     pool = _pool(40)
     baseline = _baseline(pool, cfg)
@@ -74,7 +75,7 @@ def test_nomination_temp_zero_matches_legacy_draft() -> None:
 
 - [ ] **Step 2: Run to verify they fail.**
 
-Run: `python -m pytest tests/test_draft/test_assistant_auction_simulation.py -k "sample_nominee or temp_zero_matches" -n0 -q`
+Run: `python -m pytest tests/test_draft/test_assistant_auction_simulation.py -k "sample_nominee or temp_zero_is_deterministic" -n0 -q`
 Expected: FAIL — `cannot import name '_sample_nominee'` / `nomination_temp` is an unexpected kwarg.
 
 - [ ] **Step 3: Add `_sample_nominee` and thread `nomination_temp`.**
@@ -299,7 +300,8 @@ class PatientValueBot:
         noise = 1.0 + rng.normal(0.0, price_jitter)
         if tier == "stud":
             return round(max(float(config.min_bid), value * self.understud * noise))
-        if tier == "mid" and seat_view.budget > config.min_bid * seat_view.open_slots:
+        reserve = seat_view.budget - config.min_bid * (seat_view.open_slots - 1)
+        if tier == "mid" and reserve > value:  # value-aware reserve (spec §Part 2)
             return round(max(float(config.min_bid), value * (1.0 + self.midtier_premium) * noise))
         return config.min_bid
 
