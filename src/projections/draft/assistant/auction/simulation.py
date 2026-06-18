@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import warnings
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -14,7 +15,13 @@ import pandas as pd
 
 from projections.draft.assistant._compare import validate_pool_size
 from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy, AuctionView
-from projections.draft.assistant.auction.market import SeatView, bot_max_bid, resolve_bids
+from projections.draft.assistant.auction.market import (
+    AggressiveBot,
+    BotArchetype,
+    SeatView,
+    assign_bot_archetypes,
+    resolve_bids,
+)
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import bot_eligible, bot_position_bounds
 from projections.schemas import Position
@@ -89,6 +96,7 @@ def _simulate_to_state(
     price_jitter: float,
     rng: np.random.Generator,
     nomination_temp: float = 0.0,
+    bot_archetypes: Sequence[BotArchetype] | None = None,
 ) -> AuctionState:
     """Run the full auction loop; return the final AuctionState (budgets + priced rosters)."""
     validate_auction_inputs(pool, config)
@@ -96,6 +104,13 @@ def _simulate_to_state(
     rs = config.roster_size
     min_bid = config.min_bid
     hero0 = my_seat - 1  # the single 1-based -> 0-based conversion (spec §3.2)
+
+    bot_seats = [s for s in range(n) if s != hero0]
+    if bot_archetypes is None:
+        seat_arch: dict[int, BotArchetype] = {s: AggressiveBot() for s in bot_seats}
+    else:
+        _assigned = assign_bot_archetypes(len(bot_seats), bot_archetypes)
+        seat_arch = {s: _assigned[i] for i, s in enumerate(bot_seats)}
 
     minimums, maximums = bot_position_bounds(config.roster_slots)
     pos_by_id = {
@@ -167,8 +182,12 @@ def _simulate_to_state(
                 )
                 bids[seat] = max(min_bid, min(int(desired), fmax))
             else:
-                desired = bot_max_bid(
-                    SeatView(open_slots=_open_slots(state, seat, rs), eligible_positions=elig),
+                desired = seat_arch[seat].max_bid(
+                    SeatView(
+                        open_slots=_open_slots(state, seat, rs),
+                        eligible_positions=elig,
+                        budget=state.budgets[seat],
+                    ),
                     player,
                     bd,
                     config,
@@ -199,6 +218,7 @@ def simulate_auction(
     price_jitter: float,
     rng: np.random.Generator,
     nomination_temp: float = 0.0,
+    bot_archetypes: Sequence[BotArchetype] | None = None,
 ) -> dict[int, list[str]]:
     """One full auction; return every seat's roster {seat(1-based): [gsis_id, ...]}."""
     state = _simulate_to_state(
@@ -210,5 +230,6 @@ def simulate_auction(
         price_jitter=price_jitter,
         rng=rng,
         nomination_temp=nomination_temp,
+        bot_archetypes=bot_archetypes,
     )
     return {seat + 1: [g for (g, _p, _pr) in state.rosters[seat]] for seat in range(config.n_teams)}
