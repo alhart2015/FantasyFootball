@@ -20,6 +20,19 @@ from projections.draft.roster_eligibility import bot_eligible, bot_position_boun
 from projections.schemas import Position
 
 
+def _sample_nominee(
+    candidates: list[str], val_by_id: dict[str, float], temp: float, rng: np.random.Generator
+) -> str:
+    """Pick the next nominee. temp<=0 -> the highest-value candidate (candidates are pre-sorted
+    value-desc), consuming no RNG. temp>0 -> sample with weight max(value, 0.5)**(1/temp)."""
+    if temp <= 0.0:
+        return candidates[0]
+    weights = np.array(
+        [max(val_by_id[str(g)], 0.5) ** (1.0 / temp) for g in candidates], dtype=float
+    )
+    return candidates[int(rng.choice(len(candidates), p=weights / weights.sum()))]
+
+
 def validate_auction_inputs(pool: pd.DataFrame, config: LeagueConfig) -> None:
     """Pool-size and budget-solvency preconditions (spec §3.1)."""
     validate_pool_size(pool, config)
@@ -75,6 +88,7 @@ def _simulate_to_state(
     baseline_dollars: pd.DataFrame,
     price_jitter: float,
     rng: np.random.Generator,
+    nomination_temp: float = 0.0,
 ) -> AuctionState:
     """Run the full auction loop; return the final AuctionState (budgets + priced rosters)."""
     validate_auction_inputs(pool, config)
@@ -86,6 +100,12 @@ def _simulate_to_state(
     minimums, maximums = bot_position_bounds(config.roster_slots)
     pos_by_id = {
         str(g): Position(str(p)) for g, p in zip(pool["gsis_id"], pool["position"], strict=True)
+    }
+    val_by_id = {
+        str(g): float(v)
+        for g, v in zip(
+            baseline_dollars["gsis_id"], baseline_dollars["auction_dollars"], strict=True
+        )
     }
     # Row lookup by id, built once — avoids an O(pool) boolean scan to fetch the nominee each round.
     pool_by_id = {str(g): row for g, row in pool.set_index("gsis_id", drop=False).iterrows()}
@@ -116,11 +136,10 @@ def _simulate_to_state(
             union |= elig
 
         # nominate the highest-baseline undrafted player the room can roster; else forced (un-gated)
-        nominee_id = next(
-            (g for g in nominate_order if g not in state.drafted and pos_by_id[str(g)] in union),
-            None,
-        )
-        forced = nominee_id is None
+        candidates = [
+            g for g in nominate_order if g not in state.drafted and pos_by_id[str(g)] in union
+        ]
+        forced = not candidates
         if forced:
             nominee_id = next(g for g in nominate_order if g not in state.drafted)
             warnings.warn(
@@ -128,6 +147,8 @@ def _simulate_to_state(
                 f"{nominee_id} ({pos_by_id[str(nominee_id)].value}) ungated (pool thin).",
                 stacklevel=2,
             )
+        else:
+            nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
         assert nominee_id is not None  # guaranteed: pool is non-empty while any seat has open slots
         player = pool_by_id[str(nominee_id)]
 
@@ -177,6 +198,7 @@ def simulate_auction(
     baseline_dollars: pd.DataFrame,
     price_jitter: float,
     rng: np.random.Generator,
+    nomination_temp: float = 0.0,
 ) -> dict[int, list[str]]:
     """One full auction; return every seat's roster {seat(1-based): [gsis_id, ...]}."""
     state = _simulate_to_state(
@@ -187,5 +209,6 @@ def simulate_auction(
         baseline_dollars=baseline_dollars,
         price_jitter=price_jitter,
         rng=rng,
+        nomination_temp=nomination_temp,
     )
     return {seat + 1: [g for (g, _p, _pr) in state.rosters[seat]] for seat in range(config.n_teams)}
