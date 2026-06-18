@@ -136,7 +136,14 @@ def _vpool() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "gsis_id": pd.array(
-                ["00-0000001", "00-0000002", "00-0000003", "00-0000004", "00-0000005", "00-0000006"],
+                [
+                    "00-0000001",
+                    "00-0000002",
+                    "00-0000003",
+                    "00-0000004",
+                    "00-0000005",
+                    "00-0000006",
+                ],
                 dtype=_PYARROW_STR,
             ),
             "position": pd.array(["RB", "WR", "QB", "RB", "WR", "TE"], dtype=_PYARROW_STR),
