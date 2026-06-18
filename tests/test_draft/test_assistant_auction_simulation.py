@@ -13,6 +13,7 @@ from projections.draft.assistant.auction.simulation import (
     AuctionState,
     _build_view,
     _feasible_max,
+    _sample_nominee,
     _simulate_to_state,
     simulate_auction,
     validate_auction_inputs,
@@ -383,3 +384,37 @@ def test_gated_hero_is_deterministic() -> None:
         rng=np.random.default_rng(7),
     )
     assert a.rosters == b.rosters  # same seed -> identical draft
+
+
+def test_sample_nominee_temp_zero_is_argmax() -> None:
+    # candidates are pre-sorted value-desc; temp=0 must return the first (no RNG draw).
+    cands = ["A", "B", "C"]
+    val = {"A": 50.0, "B": 20.0, "C": 1.0}
+    assert _sample_nominee(cands, val, 0.0, np.random.default_rng(0)) == "A"
+
+
+def test_sample_nominee_single_candidate() -> None:
+    assert _sample_nominee(["X"], {"X": 0.0}, 1.0, np.random.default_rng(0)) == "X"
+
+
+def test_sample_nominee_temp_one_favors_value_but_samples_tail() -> None:
+    cands = ["hi", "lo1", "lo2"]
+    val = {"hi": 100.0, "lo1": 1.0, "lo2": 1.0}
+    rng = np.random.default_rng(0)
+    picks = [_sample_nominee(cands, val, 1.0, rng) for _ in range(500)]
+    assert picks.count("hi") > picks.count("lo1") + picks.count("lo2")  # value-weighted
+    assert (picks.count("lo1") + picks.count("lo2")) > 0  # but the tail does come up
+
+
+def test_nomination_temp_zero_is_deterministic() -> None:
+    # temp=0 consumes no nomination RNG, so two runs at the same seed are identical. (Backward-compat
+    # to pre-change behavior is guarded by the rest of the engine suite, which runs at default temp=0.)
+    cfg = _config(n_teams=4, roster_slots={RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.BENCH: 2})
+    pool = _pool(40)
+    baseline = _baseline(pool, cfg)
+    kw = dict(baseline_dollars=baseline, price_jitter=0.15)
+    legacy = _simulate_to_state(StaticDollarBid(), 1, pool, cfg, rng=np.random.default_rng(3), **kw)
+    temp0 = _simulate_to_state(
+        StaticDollarBid(), 1, pool, cfg, rng=np.random.default_rng(3), nomination_temp=0.0, **kw
+    )
+    assert legacy.rosters == temp0.rosters
