@@ -221,3 +221,31 @@ class PatientValueBid:
             if reserve >= bid:
                 base = bid
         return round(base * _budget_urgency(view, config))
+
+
+@dataclass(frozen=True)
+class StudsAndDepthBid:
+    """The 'good bot as a hero' (spec §C): secure a few studs near fair value (a modest premium to
+    actually win the anchor), bid fair value across mid-tier depth (no $1-dumping), $1 the scrubs —
+    then deploy the whole budget via _budget_urgency as the draft winds down."""
+
+    stud_premium: float = 0.2
+    stud_frac: float = 0.10
+    scrub_frac: float = 0.20
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        min_bid = config.min_bid
+        n = len(pool)
+        stud_cut = _vorp_threshold(pool, round(self.stud_frac * n))
+        scrub_cut = _vorp_threshold(pool, round((1.0 - self.scrub_frac) * n))
+        v = float(player["vorp"])
+        auction_dollars = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        if v >= stud_cut:  # stud: modest premium to actually win the anchor (unlike static)
+            base: float = auction_dollars * (1.0 + self.stud_premium)
+        elif v < scrub_cut:  # scrub: floor it
+            base = float(min_bid)
+        else:  # mid-tier depth: fair value, no $1-dumping
+            base = float(auction_dollars)
+        return round(base * _budget_urgency(view, config))

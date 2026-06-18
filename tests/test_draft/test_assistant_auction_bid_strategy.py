@@ -11,6 +11,7 @@ from projections.draft.assistant.auction.bid_strategy import (
     OverbidValueBid,
     PatientValueBid,
     StaticDollarBid,
+    StudsAndDepthBid,
     VorpShareBid,
     _budget_urgency,
     _undrafted,
@@ -400,3 +401,57 @@ def test_budget_urgency_is_bounded_below_one_plus_gain() -> None:
     cfg = _vconfig()
     extreme = _budget_urgency(_aview(pool, budget=10_000, open_slots=1), cfg)
     assert 1.0 <= extreme < 1.0 + URGENCY_GAIN
+
+
+# ---------------------------------------------------------------------------
+# StudsAndDepthBid (the "good bot as a hero")
+# ---------------------------------------------------------------------------
+
+
+def test_studs_premium_for_a_stud() -> None:
+    # vorp 120 >= stud_cut 120 -> auction_dollars 30 * (1 + 0.2). Empty roster -> urgency 1.0.
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)
+    bid = StudsAndDepthBid().max_bid(view, pool.iloc[0], pool, _vconfig())
+    assert bid == round(30 * (1.0 + 0.2))  # 36
+
+
+def test_studs_fair_value_for_midtier() -> None:
+    # vorp 110 in (10, 120) -> fair value = auction_dollars 28, no $1-dump. Empty -> urgency 1.0.
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)
+    bid = StudsAndDepthBid().max_bid(view, pool.iloc[1], pool, _vconfig())
+    assert bid == 28
+
+
+def test_studs_min_bid_for_a_scrub() -> None:
+    # vorp 5 < scrub_cut 10 -> min_bid. Empty roster -> urgency 1.0.
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)
+    bid = StudsAndDepthBid().max_bid(view, pool.iloc[5], pool, _vconfig())
+    assert bid == _vconfig().min_bid
+
+
+def test_studs_depth_scales_up_under_overfunded_partial_roster() -> None:
+    # Same mid-tier player, but a partial overfunded view (open 5/8, surplus 85) -> urgency > 1.
+    pool = _vpool()
+    cfg = _vconfig()
+    view = _aview(pool, budget=90, open_slots=5)
+    bid = StudsAndDepthBid().max_bid(view, pool.iloc[1], pool, cfg)
+    assert bid == round(28 * _budget_urgency(view, cfg))
+    assert bid > 28  # deploys the surplus rather than leaving it idle
+
+
+def test_studs_depth_tiny_pool_has_no_studs() -> None:
+    # round(stud_frac * 1) == 0 -> _vorp_threshold(pool, 0) == +inf -> nothing clears the stud bar.
+    one = _vpool().iloc[[0]].reset_index(drop=True)
+    view = _aview(one, budget=100, open_slots=8)
+    # vorp 120 is NOT a stud here (stud_cut +inf); scrub_cut = pool min 120 -> v<120 false -> mid.
+    bid = StudsAndDepthBid().max_bid(view, one.iloc[0], one, _vconfig())
+    assert bid == 30  # fair value (auction_dollars), urgency 1.0
+
+
+def test_studs_depth_satisfies_protocol() -> None:
+    from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
+
+    assert isinstance(StudsAndDepthBid(), AuctionBidStrategy)
