@@ -97,18 +97,19 @@ Parameters (`n_anchors`, `k`, `stud_count`) are constructor args with the defaul
 ### C. Tournament + CLI wiring
 
 - `run_auction_tournament` already accepts `strategies: Mapping[str, AuctionBidStrategy]` and is model-agnostic — no change to its body.
-- The CLI `compare` subcommand's default model set grows from three to **six**: `static`, `inflation`, `marginal`, `anchors`, `overbid`, `vorpshare`. (Keep an optional `--models a,b,c` subset flag if it already exists; otherwise default to all six — do not add new flags beyond what's needed.)
-- `reports/auction_tournament_validation_2026.md` gains a new run table (Run C) with all six models. Framed as data; **no winner**.
+- The CLI `compare` subcommand defaults to all **six** models: `static`, `inflation`, `marginal`, `anchors`, `overbid`, `vorpshare`. **Do not add new flags.** If a `--models a,b,c` subset flag already exists in the CLI, keep it working with the six as the default set; otherwise no flag is added.
+- `reports/auction_tournament_validation_2026.md` gains a new run table (Run C) with all six models. Framed as data; **no winner**. Note in the run that gating the hero changes the nomination/award sequence (and therefore the points at which the auction RNG is consumed), so Run C's **absolute** metrics are bot-relative/within-run and **not** level-comparable to Runs A/B — only same-run paired diffs are interpretable (the existing §3.6 bot-field caveat).
 
 ## Requirements
 
 R1. Every open seat — hero included — has its eligible position set computed by `bot_eligible(counts, picks_left, minimums=…, maximums=…)`; the hero is no longer assigned `all_positions` outside the forced path.
 R2. In the bid loop both hero and bots abstain (no bid recorded) when `pos_by_id[nominee] ∉ elig`, where `elig = all_positions if forced else seat_eligible[seat]`.
-R3. The nomination union is built from every open seat's (now gated) eligible set; the forced-pick path still un-gates all open seats and still guarantees `bids` is non-empty (the `assert bids` must remain unreachable on valid input).
+R3. The nomination union is built from every open seat's (now gated) eligible set; the forced-pick path still un-gates all open seats and still guarantees `bids` is non-empty (the `assert bids` must remain unreachable on valid input). This holds because `bot_position_bounds` guarantees Σmax ≥ roster_size, so `bot_eligible` never returns the empty set for a seat that still has open slots — the hero therefore always contributes ≥1 position to the union (it can never be gated into bidding on nothing while it has roster holes).
 R4. `AnchorBudgetBid`, `OverbidValueBid`, `VorpShareBid` exist in `bid_strategy.py`, satisfy the `AuctionBidStrategy` protocol, are frozen dataclasses, and behave exactly as specified in §B (including the division/zero/negative-VORP guards).
 R5. Bid models keep the `max_bid(view, player, pool, config) -> int` signature; no model implements its own position gate (the engine owns it).
 R6. The CLI `compare` races all six models by default and prints the existing per-model table + paired-diff output for the six.
 R7. Snake-draft (`backtest/draft_field.py`) and bot (`market.py::bot_max_bid`, `resolve_bids`) behavior is byte-identical — untouched.
+R7a. The sane-bots-slice test `tests/test_draft/test_assistant_auction_simulation.py::test_hero_is_not_gated` (which guards "the hero stays ungated") is **intentionally superseded** by this slice and must be **replaced** (not deleted) with `test_hero_is_gated_like_a_bot`, asserting the hero now obeys `bot_eligible` — e.g. a hero whose position is at max abstains, and a hero never finishes over a position max or with a minimum starter unfilled. Per CLAUDE.md the test change is justified by an explicit design-decision reversal: the prior slice deliberately left the hero ungated to isolate the bid model; this slice deliberately gates it (Goal 1). Record this rationale in the test docstring.
 R8. Determinism: for a fixed `(strategy, seed)` the resulting rosters are identical run-to-run (hero bids are a pure function of state; only the bot market consumes RNG).
 R9. Conventions: `GsisId` canonical; `Position`/`RosterSlot` enums not strings; `pd.StringDtype("pyarrow")` for gsis columns; `df = SCHEMA.validate(df)` at any boundary that emits a frame; no `df.to_parquet` outside the store.
 
@@ -135,7 +136,8 @@ Engine-level position-gate tests (in the simulation/harness tests):
 - Determinism: same `(strategy, seed)` → identical rosters (re-run equality).
 
 Regression:
-- Existing `static`/`inflation`/`marginal` tests still pass; any test that assumed an ungated hero is updated with a stated reason.
+- Existing `static`/`inflation`/`marginal` tests still pass (now with the gate added).
+- `test_hero_is_not_gated` is replaced by `test_hero_is_gated_like_a_bot` per R7a (the one named test that asserts the now-superseded behavior). Scan for any other test that constructs a hero exceeding a position max and update it with a stated reason.
 - The full backtest suite (snake field) is unchanged (no drift).
 
 Gates: `pytest -v`, `mypy src tests` (strict), `ruff check src tests`, `ruff format --check src tests`; plus `pytest -v -k "ingest or store or schemas"` if any schema/store path is touched (none expected).
