@@ -5,9 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from projections.draft.backtest.draft_field import draft_mixed_field, seat_layout
+from projections.draft.backtest.draft_field import _MAXP, _MINP, draft_mixed_field, seat_layout
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import _PYARROW_STR, RosterSlot, VorpTableSchema
+from projections.draft.roster_eligibility import bot_eligible
+from projections.schemas import _PYARROW_STR, Position, RosterSlot, VorpTableSchema
 
 
 def _config_16_half() -> LeagueConfig:
@@ -124,3 +125,12 @@ def test_hero_seat_layout_rejects_out_of_range_seat() -> None:
         hero_seat_layout(hero_seat=0, hero_label="x", n_teams=12)
     with pytest.raises(ValueError, match="hero_seat"):
         hero_seat_layout(hero_seat=13, hero_label="x", n_teams=12)
+
+
+def test_snake_bounds_are_position_keyed_and_exclude_k_dst() -> None:
+    # The snake field's tuned values, now Position-keyed; K/DST a bot holds are never returned.
+    assert _MINP == {Position.QB: 1, Position.RB: 3, Position.WR: 3, Position.TE: 1}
+    assert _MAXP == {Position.QB: 3, Position.RB: 6, Position.WR: 6, Position.TE: 3}
+    counts = {Position.QB: 1, Position.RB: 3, Position.WR: 3, Position.TE: 1, Position.K: 1}
+    elig = bot_eligible(counts, 5, minimums=_MINP, maximums=_MAXP)
+    assert Position.K not in elig  # iteration domain = bound keysets, not counts

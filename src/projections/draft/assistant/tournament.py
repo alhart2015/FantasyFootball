@@ -16,23 +16,21 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from projections.draft.assistant._compare import (
+    Interval as Interval,
+)
+from projections.draft.assistant._compare import (
+    bootstrap_mean,
+    validate_pool_size,
+)
 from projections.draft.assistant.simulation import simulate_draft
 from projections.draft.assistant.strategy import DraftStrategy, NowOrNeverStrategy
 from projections.draft.assistant.survival import LogisticSurvival
 from projections.draft.assistant.valuer import RosterValuer, StartersValuer
 from projections.draft.league_config import LeagueConfig
 
-_N_BOOTSTRAP = 1000
-_CI_PCTILES = (2.5, 97.5)
-
-
-@dataclass(frozen=True)
-class Interval:
-    """A point estimate with a central 95% bootstrap CI."""
-
-    point: float
-    lo_95: float
-    hi_95: float
+# Private alias kept for backward-compat with backtest and test modules that import it.
+_bootstrap_mean = bootstrap_mean
 
 
 @dataclass(frozen=True)
@@ -62,11 +60,7 @@ class SigmaTuningResult:
 
 def _validate_pool(pool: pd.DataFrame, config: LeagueConfig) -> None:
     """Hard preconditions shared by both entry points (spec §3.1, §3.3)."""
-    # Pool size first: it's the more fundamental gate, so an empty/mis-filtered
-    # file reports "0 players" rather than the vacuously-true "no ADP signal".
-    need = config.n_teams * config.roster_size
-    if len(pool) < need:
-        raise ValueError(f"pool has {len(pool)} players; need >= {need} to fill a full draft")
+    validate_pool_size(pool, config)
     if "consensus_adp" not in pool.columns or bool(pool["consensus_adp"].isna().all()):
         raise ValueError(
             "pool has no consensus_adp signal; the tournament needs market ADP to drive the field"
@@ -89,18 +83,6 @@ def _validate_run_params(
         raise ValueError(f"n_seeds must be >= 1; got {n_seeds}")
     if adp_jitter < 0:
         raise ValueError(f"adp_jitter must be >= 0; got {adp_jitter}")
-
-
-def _bootstrap_mean(values: np.ndarray, *, n_bootstrap: int = _N_BOOTSTRAP, seed: int) -> Interval:
-    """Percentile-bootstrap CI of the mean of `values` (pass `a - b` for a paired diff)."""
-    v = np.asarray(values, dtype=np.float64)
-    rng = np.random.default_rng(seed)
-    n = v.shape[0]
-    boot = np.empty(n_bootstrap, dtype=np.float64)
-    for b in range(n_bootstrap):
-        boot[b] = v[rng.integers(0, n, size=n)].mean()
-    lo, hi = np.percentile(boot, _CI_PCTILES)
-    return Interval(point=float(v.mean()), lo_95=float(lo), hi_95=float(hi))
 
 
 def _strategy_values(

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from math import ceil
 from typing import TypeVar
 
 from projections.schemas import Position, RosterSlot
@@ -130,3 +131,52 @@ def eligible_positions(
         if rosterable:
             result[pos] = starting
     return result
+
+
+def bot_position_bounds(
+    roster_slots: Mapping[RosterSlot, int],
+) -> tuple[dict[Position, int], dict[Position, int]]:
+    """League-driven per-position (minimums, maximums) for a roster-disciplined bot.
+
+    min = strict starting slots + flex anchored (FLEX -> RB, SUPER_FLEX -> QB); the anchor add is
+    unconditional. max = min + bench distributed proportionally to min, rounded up so every cap
+    leaves room for a full roster (Σmax >= roster_size).
+    """
+    minimums: dict[Position, int] = {}
+    for slot in POSITION_SLOTS:
+        count = roster_slots.get(slot, 0)
+        if count > 0:
+            minimums[Position(slot.value)] = count
+    flex = roster_slots.get(RosterSlot.FLEX, 0)
+    if flex:
+        minimums[Position.RB] = minimums.get(Position.RB, 0) + flex
+    superflex = roster_slots.get(RosterSlot.SUPER_FLEX, 0)
+    if superflex:
+        minimums[Position.QB] = minimums.get(Position.QB, 0) + superflex
+
+    sum_min = sum(minimums.values())
+    bench = roster_slots.get(RosterSlot.BENCH, 0)
+    maximums = {
+        pos: m + (ceil(bench * m / sum_min) if sum_min > 0 else 0) for pos, m in minimums.items()
+    }
+    return minimums, maximums
+
+
+def bot_eligible(
+    counts: Mapping[Position, int],
+    picks_left: int,
+    *,
+    minimums: Mapping[Position, int],
+    maximums: Mapping[Position, int],
+) -> frozenset[Position]:
+    """Positions a roster-disciplined bot may take now (the snake draft_field rule, generalized).
+
+    Reserve the final picks for unmet minimums; otherwise allow any position still under its cap.
+    The eligible set is drawn strictly from the `minimums`/`maximums` keysets, so a position
+    present in `counts` but absent from the bound maps (e.g. K/DST when the bounds omit them)
+    is never returned.
+    """
+    deficit = {p: max(0, minimums.get(p, 0) - counts.get(p, 0)) for p in minimums}
+    if picks_left <= sum(deficit.values()):
+        return frozenset(p for p, d in deficit.items() if d > 0)
+    return frozenset(p for p in maximums if counts.get(p, 0) < maximums[p])

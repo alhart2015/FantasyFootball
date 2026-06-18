@@ -6,6 +6,8 @@ from projections.draft.roster_eligibility import (
     FLEX_ELIGIBLE,
     SUPER_FLEX_ELIGIBLE,
     allocate_roster_slots,
+    bot_eligible,
+    bot_position_bounds,
     eligible_positions,
 )
 from projections.schemas import Position, RosterSlot
@@ -81,3 +83,60 @@ def test_allocate_roster_slots_overflow_player_omitted() -> None:
     placements, open_, _ = allocate_roster_slots([("a", Position.QB), ("b", Position.QB)], slots)
     assert placements == [("a", Position.QB, RosterSlot.QB)]  # 2nd QB omitted
     assert open_[RosterSlot.QB] == 0
+
+
+_MN = {Position.QB: 1, Position.RB: 3, Position.WR: 3, Position.TE: 1}
+_MX = {Position.QB: 3, Position.RB: 6, Position.WR: 6, Position.TE: 3}
+
+
+def test_bot_eligible_reserves_final_picks_for_deficits() -> None:
+    counts = {Position.QB: 1, Position.RB: 1, Position.WR: 3, Position.TE: 1}  # RB deficit = 2
+    # picks_left == Σdeficit (2) -> forced: only positions still below minimum
+    assert bot_eligible(counts, 2, minimums=_MN, maximums=_MX) == frozenset({Position.RB})
+
+
+def test_bot_eligible_cap_branch_above_the_deficit_boundary() -> None:
+    counts = {Position.QB: 3, Position.RB: 1, Position.WR: 1, Position.TE: 0}  # QB at max (3)
+    # picks_left (10) > Σdeficit -> cap branch: every position still under its max, QB excluded
+    assert bot_eligible(counts, 10, minimums=_MN, maximums=_MX) == frozenset(
+        {Position.RB, Position.WR, Position.TE}
+    )
+
+
+def test_bot_eligible_ignores_positions_absent_from_bounds() -> None:
+    counts = {Position.QB: 1, Position.K: 2}  # K not in the bound maps
+    assert Position.K not in bot_eligible(
+        counts, 10, minimums={Position.QB: 1}, maximums={Position.QB: 3}
+    )
+
+
+_SKILL = {
+    RosterSlot.QB: 1,
+    RosterSlot.RB: 2,
+    RosterSlot.WR: 3,
+    RosterSlot.TE: 1,
+    RosterSlot.FLEX: 1,
+    RosterSlot.BENCH: 9,
+}
+
+
+def test_bounds_skill_roster_min_and_max() -> None:
+    mn, mx = bot_position_bounds(_SKILL)
+    # FLEX anchored to RB
+    assert mn == {Position.QB: 1, Position.RB: 3, Position.WR: 3, Position.TE: 1}
+    # min + ceil bench share
+    assert mx == {Position.QB: 3, Position.RB: 7, Position.WR: 7, Position.TE: 3}
+
+
+def test_bounds_superflex_anchors_to_qb() -> None:
+    slots = dict(_SKILL)
+    del slots[RosterSlot.FLEX]
+    slots[RosterSlot.SUPER_FLEX] = 1
+    mn, _ = bot_position_bounds(slots)
+    assert mn[Position.QB] == 2  # 1 strict + 1 super-flex
+
+
+def test_bounds_sigma_max_at_least_roster_size() -> None:
+    _, mx = bot_position_bounds(_SKILL)
+    roster_size = sum(c for s, c in _SKILL.items() if s != RosterSlot.IR)
+    assert sum(mx.values()) >= roster_size  # caps always permit a full roster

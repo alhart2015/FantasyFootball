@@ -16,10 +16,11 @@ from projections.draft.assistant.pick_timing import slot_for
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.strategy import DraftStrategy
 from projections.draft.league_config import LeagueConfig
+from projections.draft.roster_eligibility import bot_eligible
 from projections.schemas import GsisId, Position, validate_gsis_id
 
-_MINP = {"QB": 1, "RB": 3, "WR": 3, "TE": 1}
-_MAXP = {"QB": 3, "RB": 6, "WR": 6, "TE": 3}
+_MINP = {Position.QB: 1, Position.RB: 3, Position.WR: 3, Position.TE: 1}
+_MAXP = {Position.QB: 3, Position.RB: 6, Position.WR: 6, Position.TE: 3}
 
 
 def seat_layout(
@@ -48,14 +49,6 @@ def hero_seat_layout(*, hero_seat: int, hero_label: str, n_teams: int) -> dict[i
     if not 1 <= hero_seat <= n_teams:
         raise ValueError(f"hero_seat must be in [1, {n_teams}]; got {hero_seat}")
     return {s: (hero_label if s == hero_seat else "bot") for s in range(1, n_teams + 1)}
-
-
-def _bot_eligible(counts: dict[str, int], picks_left: int) -> set[str]:
-    """Return the set of positions the ADP bot may select given roster constraints."""
-    deficit = {p: max(0, _MINP[p] - counts.get(p, 0)) for p in _MINP}
-    if picks_left <= sum(deficit.values()):
-        return {p for p in _MINP if deficit[p] > 0}
-    return {p for p in _MINP if counts.get(p, 0) < _MAXP[p]}
 
 
 def draft_mixed_field(
@@ -96,12 +89,14 @@ def draft_mixed_field(
             my_roster_pos[seat].append(Position(pos_by_id[gid]))
         else:
             avail = ~pool["gsis_id"].isin(drafted_set)
-            elig = _bot_eligible(counts[seat], rs - len(rosters[seat]))
-            sub = pool[avail & pos_str.isin(elig)]
+            counts_pos = {Position(p): c for p, c in counts[seat].items()}
+            elig = bot_eligible(counts_pos, rs - len(rosters[seat]), minimums=_MINP, maximums=_MAXP)
+            elig_values = {p.value for p in elig}
+            sub = pool[avail & pos_str.isin(elig_values)]
             if sub.empty:
                 warnings.warn(
                     f"draft_mixed_field: bot at seat {seat}, pick {pick}: "
-                    f"no available player at required positions {sorted(elig)}; "
+                    f"no available player at required positions {sorted(p.value for p in elig)}; "
                     f"picking best available — this bot roster will miss a positional minimum "
                     f"(pool is too thin at that position).",
                     stacklevel=2,
