@@ -103,6 +103,14 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
 | 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | anchors   | 640.0 [615.4, 665.2] | 0.21 | 0.02 | 0.00 | 0.00 | Run E (realistic mkt) |
 | 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | inflation | 556.2 [514.0, 601.9] | 0.16 | 0.03 | 0.01 | 0.00 | Run E (realistic mkt) |
 | 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | marginal  | 519.7 [499.9, 540.9] | 0.12 | 0.00 | 0.00 | 0.00 | Run E (realistic mkt) |
+| 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | inflation  | 810.4 [781.7, 837.3] | 0.36 | 0.12 | 0.02 | 0.01 | Run F (urgency + studsdepth) — see note ↓ |
+| 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | vorpshare  | 801.9 [767.4, 837.2] | 0.35 | 0.13 | 0.03 | 0.01 | Run F (urgency) |
+| 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | static     | 800.3 [774.3, 824.9] | 0.35 | 0.11 | 0.02 | 0.01 | Run F (urgency) |
+| 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | patient    | 800.3 [778.6, 819.5] | 0.35 | 0.09 | 0.01 | 0.00 | Run F (urgency) |
+| 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | marginal   | 787.7 [758.4, 814.9] | 0.34 | 0.08 | 0.01 | 0.01 | Run F (urgency) |
+| 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | overbid    | 769.0 [738.5, 799.4] | 0.32 | 0.09 | 0.02 | 0.01 | Run F (urgency) |
+| 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | studsdepth | 767.0 [741.7, 792.9] | 0.32 | 0.08 | 0.01 | 0.01 | Run F (new contestant) |
+| 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | anchors    | 673.8 [646.1, 699.7] | 0.23 | 0.03 | 0.00 | 0.00 | Run F (urgency) |
 
 **Run A — 2026-06-17** (`half_16team`, seat 1, 150 seeds, n_sims=500, price_jitter=0.15, budget=200, seed=0; **byes OFF** — 2026 schedule not ingested, injury risk still applied).
 
@@ -198,6 +206,26 @@ Paired playoff% (point [95% CI]): static−patient +0.036 [−0.000, +0.071] (�
 
 **Caveat — absolute levels.** All seven sit *below* the uniform baseline (best `static` 0.14 vs 0.375). A realistic mixed field of 15 sane bots is hard for one seat, and absolute levels are **not** comparable to Runs A–D (different market model + nomination RNG). The interpretable signal is the within-run re-ranking. That all hero strategies trail a realistic field is itself a finding: beating a room of sane managers from one seat is genuinely hard — the open questions are whether a smarter hero (or a seat/preset sweep) closes the gap, and whether the mixed-bot field is calibrated against real prices. **No winner declared** (September).
 
+**Run F — 2026-06-18** (`half_16team`, seat 1, **40 seeds** — reduced from 60 because the dev box's Raptor Lake fault crashed the 60-seed process mid-run; that is a hardware event, not a code bug (see memory `h2h-backtest-native-crash`) — n_sims=200, price_jitter=0.15, budget=200; **byes OFF**; **REALISTIC MARKET** identical to Run E (`nomination_temp=1.0` + mixed bot field ⅓ aggressive / ⅓ patient value-hunter / ⅓ balanced); branch `feat/auction-budget-urgency`). **Eight contestants** — the seven prior models, now all gated through the new `_budget_urgency` late-draft deployment factor (spec §A–B), plus the new `studsdepth` (StudsAndDepthBid, spec §C: a modest stud premium over fair value + fair-value mid-tier depth + $1 scrubs — the "good bot as hero"). Fair share: playoff 0.375 / champ 0.0625.
+
+Per-model metrics (mean [95% CI on exp pts]), sorted by exp pts:
+- **inflation:** 810 [781.7, 837.3] · win 0.36 · playoff 0.12 · champ 0.01
+- **vorpshare:** 802 [767.4, 837.2] · win 0.35 · playoff 0.13 · champ 0.01
+- **static:** 800 [774.3, 824.9] · win 0.35 · playoff 0.11 · champ 0.01
+- **patient:** 800 [778.6, 819.5] · win 0.35 · playoff 0.09 · champ 0.00
+- **marginal:** 788 [758.4, 814.9] · win 0.34 · playoff 0.08 · champ 0.01
+- **overbid:** 769 [738.5, 799.4] · win 0.32 · playoff 0.09 · champ 0.01
+- **studsdepth:** 767 [741.7, 792.9] · win 0.32 · playoff 0.08 · champ 0.01
+- **anchors:** 674 [646.1, 699.7] · win 0.23 · playoff 0.03 · champ 0.00
+
+Paired playoff% (point [95% CI]): the top three are statistically tied — static−inflation −0.015 [−0.042, +0.013], static−vorpshare −0.025 [−0.076, +0.019], static−patient +0.022 [−0.011, +0.055]. Significant gaps: inflation−marginal +0.039 [+0.006, +0.070], vorpshare−patient +0.047 [+0.011, +0.084], vorpshare−studsdepth +0.050 [+0.012, +0.095], and **everyone ≫ anchors** (static−anchors +0.076 [+0.048, +0.106]; inflation−anchors +0.091 [+0.057, +0.128]). In isolation: **inflation ≈ vorpshare ≈ static ≳ patient ≈ overbid ≈ marginal ≈ studsdepth ≫ anchors** — a tight, mostly-overlapping band with `anchors` the lone outlier.
+
+**Headline — urgency compresses the field by rescuing the under-spenders.** The budget-urgency factor forces idle cash into bids as the roster fills, and the models it helps most are exactly the ones that hoarded budget in Run E. Comparing playoff% Run E→Run F: `inflation` 0.03→0.12, `marginal` 0.00→0.08 (both leapt from the bottom of Run E to mid-pack/top), `vorpshare` 0.05→0.13 (now top). The strategies that already deployed their budget barely moved (`static` 0.14→0.11, `patient` 0.10→0.09). The clear Run E ordering ("boring `static`/`patient` win, `marginal`/`inflation` lose") has **collapsed into a tight band** (top seven within playoff 0.08–0.13, all CIs overlapping). Only `anchors` is left behind — it already over-concentrates into a few anchors early, so urgency can't rescue a roster that's already all-in. This is the feature working as designed: deploying idle cash most helps the strategies that were sitting on it.
+
+**studsdepth lands mid-pack — no winner.** The "good bot as hero" is statistically indistinguishable from `overbid` and `marginal` on both points and playoff%, trails `inflation` on both and `static`/`patient` on points significantly, and beats only `anchors`. It is competitive, not dominant — consistent with the standing finding that no single bid model separates from the pack under a realistic market.
+
+**Caveats.** (1) 40 seeds (not 60) widen the CIs vs Run E, and absolute levels are **not** comparable to Runs A–E — urgency now changes every model's bids and the seed count differs, so the interpretable signal is the within-run re-ranking and the field compression, not the level. (2) The whole field still sits *below* the uniform baseline (best playoff 0.13 vs 0.375): beating a room of 15 sane bots from one seat remains hard, and urgency narrows the spread between hero strategies without lifting the seat above the field. **No winner declared** — data-gathering only; the strategy call is September 2026.
+
 ## Planned experiments / axes to sweep
 
 - **Bid-model bake-off** (the core): `static` vs `inflation` vs `marginal`, all three metrics, at a fixed
@@ -234,7 +262,7 @@ python scripts/auction_tournament.py \
     compare
 ```
 
-`compare` races `static` / `inflation` / `marginal` against a shared seeded bot market and prints:
+`compare` races the eight contestants (`static` / `inflation` / `marginal` / `anchors` / `overbid` / `vorpshare` / `patient` / `studsdepth`) against a shared seeded bot market and prints:
 - each model's per-metric mean + 95% bootstrap CI table
 - paired per-seed differences with CIs for every model pair
 
