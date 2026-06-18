@@ -1,6 +1,6 @@
 # Auction budget-urgency + studs/depth hero — design
 
-**Status:** approved (brainstormed 2026-06-18). **Spec only — NOT yet through spec-review / plan / execute** (paused for repo cleanup at the user's request).
+**Status:** approved (brainstormed 2026-06-18); **passed `superpowers-spec-review` 2026-06-18** (no Critical/High/Medium; Low residuals: integration threshold wording, the `open_slots==0` bound edge, stale dependency note). Proceeding to plan + execute via `superpowers-go`.
 **Owner:** draft-hub / auction.
 **Depends on:** the realistic-market slice (PR #79 / `feat/auction-realistic-market`) — needs `nomination_temp`, the mixed bot field, and the seven existing hero models incl. `PatientValueBid`. Branch will rebase onto `main` once #78+#79 land.
 **Source context:** `reports/auction_tournament_validation_2026.md` (Run E eye-test), prior specs `2026-06-17-auction-stars-and-scrubs-design.md`, `2026-06-18-auction-realistic-market-design.md`.
