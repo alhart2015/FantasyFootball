@@ -5,8 +5,9 @@ import pandas as pd
 import pytest
 
 from projections.draft.assistant._compare import Interval
+from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
 from projections.draft.assistant.auction.tournament import AuctionTournamentResult
-from projections.draft.assistant.auction.tournament_cli import format_compare, run
+from projections.draft.assistant.auction.tournament_cli import _MODELS, format_compare, run
 from projections.schemas import _PYARROW_STR
 
 
@@ -38,6 +39,14 @@ def _write_config(path: Path) -> None:
         "ruleset": "espn_ppr",
     }
     path.write_text(json.dumps(cfg))
+
+
+def test_default_models_are_the_six_contestants() -> None:
+    assert set(_MODELS) == {"static", "inflation", "marginal", "anchors", "overbid", "vorpshare"}
+
+
+def test_every_default_model_satisfies_the_protocol() -> None:
+    assert all(isinstance(m, AuctionBidStrategy) for m in _MODELS.values())
 
 
 def test_format_compare_has_no_winner_line() -> None:

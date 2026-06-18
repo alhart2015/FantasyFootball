@@ -1,7 +1,7 @@
 """CLI engine for the auction bid-model tournament (spec §3.7). Mirrors tournament_cli.py.
 
 `run([...])` loads the VORP pool + LeagueConfig, attaches is_rookie, loads availability +
-variance params (store-backed), then races static/inflation/marginal and prints per-metric
+variance params (store-backed), then races the six bid models and prints per-metric
 means + CIs and paired diffs. No winner is printed (data-gathering, spec §5.1).
 """
 
@@ -13,10 +13,13 @@ from pathlib import Path
 import pandas as pd
 
 from projections.draft.assistant.auction.bid_strategy import (
+    AnchorBudgetBid,
     AuctionBidStrategy,
     InflationBid,
     MarginalValueBid,
+    OverbidValueBid,
     StaticDollarBid,
+    VorpShareBid,
 )
 from projections.draft.assistant.auction.market import DEFAULT_PRICE_JITTER
 from projections.draft.assistant.auction.tournament import (
@@ -34,6 +37,9 @@ _MODELS: dict[str, AuctionBidStrategy] = {
     "static": StaticDollarBid(),
     "inflation": InflationBid(),
     "marginal": MarginalValueBid(),
+    "anchors": AnchorBudgetBid(),
+    "overbid": OverbidValueBid(),
+    "vorpshare": VorpShareBid(),
 }
 
 
@@ -99,7 +105,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Store root for availability/rookies.",
     )
     sub = p.add_subparsers(dest="mode", required=True)
-    sub.add_parser("compare", help="Race static/inflation/marginal; record per-metric data.")
+    sub.add_parser("compare", help="Race the six bid models; record per-metric data.")
     return p.parse_args(argv)
 
 

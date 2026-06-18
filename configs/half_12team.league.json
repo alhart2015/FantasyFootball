@@ -1,0 +1,28 @@
+{
+  "name": "half_12team_2026",
+  "n_teams": 12,
+  "budget": 200,
+  "min_bid": 1,
+  "roster_slots": {
+    "QB": 1,
+    "RB": 2,
+    "WR": 3,
+    "TE": 1,
+    "FLEX": 1,
+    "BENCH": 9
+  },
+  "ruleset": {
+    "name": "ESPN_HALF",
+    "passing_yds_per_pt": 25.0,
+    "passing_td_pts": 4.0,
+    "interception_pts": -2.0,
+    "rushing_yds_per_pt": 10.0,
+    "rushing_td_pts": 6.0,
+    "receiving_yds_per_pt": 10.0,
+    "receiving_td_pts": 6.0,
+    "reception_pts": 0.5,
+    "fumble_lost_pts": -2.0,
+    "two_pt_pts": 2.0,
+    "return_td_pts": 6.0
+  }
+}
