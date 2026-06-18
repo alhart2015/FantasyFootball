@@ -4,6 +4,7 @@ import pandas as pd
 from projections.draft.assistant.auction.market import (
     AggressiveBot,
     BalancedBot,
+    BotArchetype,
     PatientValueBot,
     SeatView,
     assign_bot_archetypes,
@@ -143,62 +144,105 @@ def _p(gid: str, pos: str = "RB") -> pd.Series:
 def test_aggressive_matches_legacy_bot_max_bid() -> None:
     bl, cfg = _tiered_baseline(), _config()
     agg = AggressiveBot().max_bid(
-        SeatView(open_slots=3, budget=100), _p("00-0000000"), bl, cfg, np.random.default_rng(0),
+        SeatView(open_slots=3, budget=100),
+        _p("00-0000000"),
+        bl,
+        cfg,
+        np.random.default_rng(0),
         price_jitter=0.0,
     )
     legacy = bot_max_bid(
-        SeatView(open_slots=3), _p("00-0000000"), bl, cfg, np.random.default_rng(0), price_jitter=0.0
+        SeatView(open_slots=3),
+        _p("00-0000000"),
+        bl,
+        cfg,
+        np.random.default_rng(0),
+        price_jitter=0.0,
     )
     assert agg == legacy == 60
 
 
 def test_patient_underbids_a_stud() -> None:
     bid = PatientValueBot().max_bid(
-        SeatView(open_slots=3, budget=100), _p("00-0000000"), _tiered_baseline(), _config(),
-        np.random.default_rng(0), price_jitter=0.0,
+        SeatView(open_slots=3, budget=100),
+        _p("00-0000000"),
+        _tiered_baseline(),
+        _config(),
+        np.random.default_rng(0),
+        price_jitter=0.0,
     )
     assert bid == 30  # value 60 (stud) * understud 0.5 == 30, below market
 
 
 def test_patient_pays_premium_for_midtier_with_reserve() -> None:
     bid = PatientValueBot().max_bid(
-        SeatView(open_slots=3, budget=100), _p("00-0000002"), _tiered_baseline(), _config(),
-        np.random.default_rng(0), price_jitter=0.0,
+        SeatView(open_slots=3, budget=100),
+        _p("00-0000002"),
+        _tiered_baseline(),
+        _config(),
+        np.random.default_rng(0),
+        price_jitter=0.0,
     )
     assert bid == round(40 * 1.35)  # value 40 (mid) * (1+0.35) == 54, above market
 
 
 def test_patient_midtier_without_reserve_bids_min() -> None:
     bid = PatientValueBot().max_bid(
-        SeatView(open_slots=3, budget=3), _p("00-0000002"), _tiered_baseline(), _config(),
-        np.random.default_rng(0), price_jitter=0.0,
+        SeatView(open_slots=3, budget=3),
+        _p("00-0000002"),
+        _tiered_baseline(),
+        _config(),
+        np.random.default_rng(0),
+        price_jitter=0.0,
     )
     assert bid == _config().min_bid  # budget (3) not > min_bid*open_slots (3) -> no reserve
 
 
 def test_patient_scrub_and_ineligible() -> None:
     cfg = _config()
-    assert PatientValueBot().max_bid(
-        SeatView(open_slots=3, budget=100), _p("00-0000008"), _tiered_baseline(), cfg,
-        np.random.default_rng(0), price_jitter=0.0,
-    ) == cfg.min_bid  # value 5 -> scrub -> min_bid
-    assert PatientValueBot().max_bid(
-        SeatView(open_slots=3, budget=100, eligible_positions=frozenset({Position.WR})),
-        _p("00-0000000", "RB"), _tiered_baseline(), cfg, np.random.default_rng(0), price_jitter=0.0,
-    ) == 0  # RB not eligible -> abstain
+    assert (
+        PatientValueBot().max_bid(
+            SeatView(open_slots=3, budget=100),
+            _p("00-0000008"),
+            _tiered_baseline(),
+            cfg,
+            np.random.default_rng(0),
+            price_jitter=0.0,
+        )
+        == cfg.min_bid
+    )  # value 5 -> scrub -> min_bid
+    assert (
+        PatientValueBot().max_bid(
+            SeatView(open_slots=3, budget=100, eligible_positions=frozenset({Position.WR})),
+            _p("00-0000000", "RB"),
+            _tiered_baseline(),
+            cfg,
+            np.random.default_rng(0),
+            price_jitter=0.0,
+        )
+        == 0
+    )  # RB not eligible -> abstain
 
 
 def test_balanced_caps_at_pace_ceiling() -> None:
     bid = BalancedBot(pace=2.0).max_bid(
-        SeatView(open_slots=3, budget=20), _p("00-0000000"), _tiered_baseline(), _config(),
-        np.random.default_rng(0), price_jitter=0.0,
+        SeatView(open_slots=3, budget=20),
+        _p("00-0000000"),
+        _tiered_baseline(),
+        _config(),
+        np.random.default_rng(0),
+        price_jitter=0.0,
     )
     assert bid == 13  # min(value 60, 2*(20/3)=13.33) -> 13, paced (won't blow the bank)
 
 
 def test_assign_bot_archetypes_round_robins() -> None:
-    mix = [AggressiveBot(), PatientValueBot(), BalancedBot()]
+    mix: list[BotArchetype] = [AggressiveBot(), PatientValueBot(), BalancedBot()]
     out = assign_bot_archetypes(5, mix)
     assert [type(a).__name__ for a in out] == [
-        "AggressiveBot", "PatientValueBot", "BalancedBot", "AggressiveBot", "PatientValueBot"
+        "AggressiveBot",
+        "PatientValueBot",
+        "BalancedBot",
+        "AggressiveBot",
+        "PatientValueBot",
     ]

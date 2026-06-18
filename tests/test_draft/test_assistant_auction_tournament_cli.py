@@ -7,7 +7,12 @@ import pytest
 from projections.draft.assistant._compare import Interval
 from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
 from projections.draft.assistant.auction.tournament import AuctionTournamentResult
-from projections.draft.assistant.auction.tournament_cli import _MODELS, _parse_args, format_compare, run
+from projections.draft.assistant.auction.tournament_cli import (
+    _MODELS,
+    _parse_args,
+    format_compare,
+    run,
+)
 from projections.schemas import _PYARROW_STR
 
 
@@ -59,7 +64,17 @@ def test_every_default_model_satisfies_the_protocol() -> None:
 
 def test_nomination_temp_defaults_to_one() -> None:
     args = _parse_args(
-        ["--vorp-table", "x", "--league-config", "y", "--my-seat", "1", "--season", "2026", "compare"]
+        [
+            "--vorp-table",
+            "x",
+            "--league-config",
+            "y",
+            "--my-seat",
+            "1",
+            "--season",
+            "2026",
+            "compare",
+        ]
     )
     assert args.nomination_temp == 1.0
 
