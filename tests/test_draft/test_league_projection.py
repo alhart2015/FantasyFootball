@@ -183,3 +183,40 @@ def test_project_draft_requires_at_least_six_teams() -> None:
             n_sims=50,
             rng=np.random.default_rng(0),
         )
+
+
+def test_seat_projection_has_mean_points() -> None:
+    rosters, pool = _symmetric_league(12)
+    params = VarianceParams.load()
+    avail = PlayerAvailability(p={g: 0.95 for g in pool["gsis_id"]}, bye={})
+    out = project_draft(
+        rosters,
+        pool,
+        avail,
+        params,
+        league_config=_config(12),
+        n_sims=200,
+        rng=np.random.default_rng(0),
+    )
+    sp = out[1]
+    assert sp.mean_points > 0.0
+    assert np.isfinite(sp.mean_points)
+
+
+def test_mean_points_rewards_a_stronger_roster() -> None:
+    rosters, pool = _symmetric_league(12)
+    # Lift seat 1's players' projected points; everyone else unchanged.
+    boost = pool["gsis_id"].isin(rosters[1])
+    pool.loc[boost, "season_mean_fpts"] = pool.loc[boost, "season_mean_fpts"] * 1.5
+    params = VarianceParams.load()
+    avail = PlayerAvailability(p={g: 0.95 for g in pool["gsis_id"]}, bye={})
+    out = project_draft(
+        rosters,
+        pool,
+        avail,
+        params,
+        league_config=_config(12),
+        n_sims=300,
+        rng=np.random.default_rng(0),
+    )
+    assert out[1].mean_points > out[2].mean_points

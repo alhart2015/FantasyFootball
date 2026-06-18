@@ -100,6 +100,7 @@ class SeatProjection:
     bye_pct: float
     champ_pct: float
     mean_seed: float
+    mean_points: float
 
 
 def project_draft(
@@ -183,5 +184,6 @@ def project_draft(
             bye_pct=float(has_bye.mean()),
             champ_pct=float((champ_of == s).mean()),
             mean_seed=float(seed_of_s.mean()),
+            mean_points=float(pf[s].mean()),
         )
     return out
