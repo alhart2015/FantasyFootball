@@ -96,6 +96,13 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
 | 2026-06-18 | half × 12 | 1 | 60 | 200 | 0.15 | vorpshare | 1460.9 [1455.3, 1467.0] | 0.59 | 0.72 | 0.25 | 0.14 | Run D |
 | 2026-06-18 | half × 12 | 1 | 60 | 200 | 0.15 | inflation | 1424.5 [1419.9, 1428.9] | 0.56 | 0.65 | 0.20 | 0.11 | Run D |
 | 2026-06-18 | half × 12 | 1 | 60 | 200 | 0.15 | marginal  | 1409.0 [1404.2, 1413.9] | 0.55 | 0.62 | 0.18 | 0.09 | Run D |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | static    | 806.6 [778.6, 835.1] | 0.35 | 0.14 | 0.03 | 0.02 | Run E (realistic mkt) — see note ↓ |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | patient   | 800.8 [776.0, 826.9] | 0.35 | 0.10 | 0.02 | 0.01 | Run E (realistic mkt) |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | overbid   | 760.6 [735.3, 784.6] | 0.31 | 0.08 | 0.02 | 0.01 | Run E (realistic mkt) |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | vorpshare | 655.2 [617.0, 691.3] | 0.23 | 0.05 | 0.01 | 0.00 | Run E (realistic mkt) |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | anchors   | 640.0 [615.4, 665.2] | 0.21 | 0.02 | 0.00 | 0.00 | Run E (realistic mkt) |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | inflation | 556.2 [514.0, 601.9] | 0.16 | 0.03 | 0.01 | 0.00 | Run E (realistic mkt) |
+| 2026-06-18 | half × 16 | 1 | 60 | 200 | 0.15 | marginal  | 519.7 [499.9, 540.9] | 0.12 | 0.00 | 0.00 | 0.00 | Run E (realistic mkt) |
 
 **Run A — 2026-06-17** (`half_16team`, seat 1, 150 seeds, n_sims=500, price_jitter=0.15, budget=200, seed=0; **byes OFF** — 2026 schedule not ingested, injury risk still applied).
 
@@ -171,6 +178,25 @@ Paired playoff% (point [95% CI]; all exclude 0 except static≈vorpshare): overb
 *In isolation favors* **overbid > anchors > static ≈ vorpshare > inflation > marginal.** Not a verdict.
 
 **Cross-preset finding — the edge compresses in a shallower league.** Stars-and-scrubs still leads, but the gap over the value-anchored trio shrinks sharply vs Run C's 16-team field: `overbid − static` playoff is **+0.143 here vs +0.52 in 16-team**. In a 12-team league the pool is shallow enough that even `static`/`marginal`/`inflation` clear the ~0.50 playoff line (0.62–0.72); the deep 16-team field punishes mediocre drafting far harder. Read: **strategy choice matters most in deep leagues.** At the top, hero and the best bot are within MC noise on champ% (the 12-team top tier is tightly packed).
+
+---
+
+**Run E — 2026-06-18** (`half_16team`, seat 1, 60 seeds, n_sims=200, price_jitter=0.15, budget=200; **byes OFF**; **REALISTIC MARKET** — value-weighted-random nomination (`nomination_temp=1.0`) + a mixed bot field (⅓ aggressive / ⅓ patient value-hunter / ⅓ balanced); branch `feat/auction-realistic-market`). Seven contestants: the six prior models + the new `patient` (PatientValueBid). This run removes the $1-mid-tier artifact that Runs A–D's all-aggressive + value-descending market produced (Marvin Harrison no longer clears at $1). Fair share: playoff 0.375 / champ 0.0625.
+
+Per-model metrics (mean [95% CI on exp pts]):
+- **static:** 807 [778.6, 835.1] · win 0.35 · playoff 0.14 · champ 0.02
+- **patient:** 801 [776.0, 826.9] · win 0.35 · playoff 0.10 · champ 0.01
+- **overbid:** 761 [735.3, 784.6] · win 0.31 · playoff 0.08 · champ 0.01
+- **vorpshare:** 655 [617.0, 691.3] · win 0.23 · playoff 0.05 · champ 0.00
+- **anchors:** 640 [615.4, 665.2] · win 0.21 · playoff 0.02 · champ 0.00
+- **inflation:** 556 [514.0, 601.9] · win 0.16 · playoff 0.03 · champ 0.00
+- **marginal:** 520 [499.9, 540.9] · win 0.12 · playoff 0.00 · champ 0.00
+
+Paired playoff% (point [95% CI]): static−patient +0.036 [−0.000, +0.071] (≈tied at top); static−overbid +0.055 [+0.025, +0.086]; overbid−patient −0.019 [−0.045, +0.006] (≈tied); static−anchors +0.115; anchors−overbid −0.060 (overbid > anchors); patient−marginal +0.100. In isolation: **static ≈ patient > overbid > vorpshare > inflation ≈ anchors > marginal.**
+
+**Headline — the realistic market re-ranks everything (confirms the $1-stud artifact).** In Run C's rigged market `overbid`/`anchors` DOMINATED (playoff 0.72 / 0.62). Here, once mid-tier studs cost real money, they **collapse**: `overbid` 0.72→0.08 (#3), `anchors` 0.62→0.02 (near-last — its over-concentration on a few anchors is punished hardest when it can't backfill cheap). The "boring" strategies win: `static` (bid fair value) and the new `patient` (hold budget for mid-round value) are top, statistically tied. Stars-and-scrubs was an exploit of the broken market, not a durable edge.
+
+**Caveat — absolute levels.** All seven sit *below* the uniform baseline (best `static` 0.14 vs 0.375). A realistic mixed field of 15 sane bots is hard for one seat, and absolute levels are **not** comparable to Runs A–D (different market model + nomination RNG). The interpretable signal is the within-run re-ranking. That all hero strategies trail a realistic field is itself a finding: beating a room of sane managers from one seat is genuinely hard — the open questions are whether a smarter hero (or a seat/preset sweep) closes the gap, and whether the mixed-bot field is calibrated against real prices. **No winner declared** (September).
 
 ## Planned experiments / axes to sweep
 
