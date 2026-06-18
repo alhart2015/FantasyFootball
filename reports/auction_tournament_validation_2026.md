@@ -111,6 +111,14 @@ Same mechanism for all three (shared nominator, shared bot field, same `feasible
 | 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | overbid    | 769.0 [738.5, 799.4] | 0.32 | 0.09 | 0.02 | 0.01 | Run F (urgency) |
 | 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | studsdepth | 767.0 [741.7, 792.9] | 0.32 | 0.08 | 0.01 | 0.01 | Run F (new contestant) |
 | 2026-06-18 | half × 16 | 1 | 40 | 200 | 0.15 | anchors    | 673.8 [646.1, 699.7] | 0.23 | 0.03 | 0.00 | 0.00 | Run F (urgency) |
+| 2026-06-18 | half × 12 | 1 | 40 | 200 | 0.15 | vorpshare  | 1213.2 [1171.1, 1252.8] | 0.48 | 0.44 | 0.12 | 0.05 | Run G (12-team urgency) — see note ↓ |
+| 2026-06-18 | half × 12 | 1 | 40 | 200 | 0.15 | patient    | 1170.1 [1147.5, 1194.0] | 0.45 | 0.39 | 0.04 | 0.01 | Run G (urgency) |
+| 2026-06-18 | half × 12 | 1 | 40 | 200 | 0.15 | inflation  | 1102.0 [1063.8, 1135.4] | 0.38 | 0.27 | 0.03 | 0.01 | Run G (urgency) |
+| 2026-06-18 | half × 12 | 1 | 40 | 200 | 0.15 | static     | 1095.9 [1055.8, 1129.6] | 0.37 | 0.26 | 0.04 | 0.01 | Run G (urgency) |
+| 2026-06-18 | half × 12 | 1 | 40 | 200 | 0.15 | studsdepth | 1079.1 [1043.1, 1112.0] | 0.37 | 0.25 | 0.03 | 0.01 | Run G (new contestant) |
+| 2026-06-18 | half × 12 | 1 | 40 | 200 | 0.15 | overbid    | 1063.6 [1030.9, 1092.1] | 0.35 | 0.21 | 0.02 | 0.01 | Run G (urgency) |
+| 2026-06-18 | half × 12 | 1 | 40 | 200 | 0.15 | marginal   | 1061.1 [1030.0, 1095.3] | 0.35 | 0.20 | 0.02 | 0.01 | Run G (urgency) |
+| 2026-06-18 | half × 12 | 1 | 40 | 200 | 0.15 | anchors    | 971.0 [945.3, 998.0] | 0.27 | 0.10 | 0.01 | 0.00 | Run G (urgency) |
 
 **Run A — 2026-06-17** (`half_16team`, seat 1, 150 seeds, n_sims=500, price_jitter=0.15, budget=200, seed=0; **byes OFF** — 2026 schedule not ingested, injury risk still applied).
 
@@ -226,6 +234,24 @@ Paired playoff% (point [95% CI]): the top three are statistically tied — stati
 
 **Caveats.** (1) 40 seeds (not 60) widen the CIs vs Run E, and absolute levels are **not** comparable to Runs A–E — urgency now changes every model's bids and the seed count differs, so the interpretable signal is the within-run re-ranking and the field compression, not the level. (2) The whole field still sits *below* the uniform baseline (best playoff 0.13 vs 0.375): beating a room of 15 sane bots from one seat remains hard, and urgency narrows the spread between hero strategies without lifting the seat above the field. **No winner declared** — data-gathering only; the strategy call is September 2026.
 
+**Run G — 2026-06-18** (`half_12team`, seat 1, 40 seeds, n_sims=200, price_jitter=0.15, budget=200; **byes OFF**; **REALISTIC MARKET** identical to Runs E/F; **eight contestants** identical to Run F, incl. `_budget_urgency` + `studsdepth`; branch `feat/auction-budget-urgency`). **Run F's exact knobs, only the league size changes: 12 teams instead of 16.** Fair share at 12 teams: **playoff 0.50 / bye 0.167 / champ 0.083** (vs 16-team's 0.375 / 0.125 / 0.0625). VORP table `data/vorp_2026/half_12team.parquet` was rebuilt on this machine from the on-disk ESPN+Sleeper consensus snapshot (asof 2026-06-09), re-scored to ESPN_HALF via the scoring layer (`expected_points`; verified `half == ppr − 0.5·receptions` to machine precision) since `data/raw/external_projections` wasn't present to re-run `generate_preset_vorp_tables.py`.
+
+Per-model metrics (mean [95% CI on exp pts]), sorted by exp pts:
+- **vorpshare:** 1213 [1171.1, 1252.8] · win 0.48 · playoff 0.44 · bye 0.12 · champ 0.05
+- **patient:** 1170 [1147.5, 1194.0] · win 0.45 · playoff 0.39 · bye 0.04 · champ 0.01
+- **inflation:** 1102 [1063.8, 1135.4] · win 0.38 · playoff 0.27 · bye 0.03 · champ 0.01
+- **static:** 1096 [1055.8, 1129.6] · win 0.37 · playoff 0.26 · bye 0.04 · champ 0.01
+- **studsdepth:** 1079 [1043.1, 1112.0] · win 0.37 · playoff 0.25 · bye 0.03 · champ 0.01
+- **overbid:** 1064 [1030.9, 1092.1] · win 0.35 · playoff 0.21 · bye 0.02 · champ 0.01
+- **marginal:** 1061 [1030.0, 1095.3] · win 0.35 · playoff 0.20 · bye 0.02 · champ 0.01
+- **anchors:** 971 [945.3, 998.0] · win 0.27 · playoff 0.10 · bye 0.01 · champ 0.00
+
+**Headline — the shallower league SPREADS the field instead of compressing it, and `vorpshare`/`patient` break away.** Where Run F's 16-team field collapsed into a tight playoff band (0.08–0.13), at 12 teams two strategies separate cleanly: **`vorpshare` (playoff 0.44, champ 0.05) and `patient` (0.39) lead a value-bidding pack** (`inflation`/`static`/`studsdepth` ≈ 0.25–0.27), trailing down to `anchors` (0.10). `vorpshare` significantly beats every model on playoff% (paired CIs exclude 0) **except** `patient`, where it ties on playoff but wins on points (+43 [+0.4, +82.6]), bye (+0.079 [+0.041, +0.119]), and champ (+0.041 [+0.021, +0.061]). Two patterns persist from Run F: **`anchors` is dead last** (over-concentration, nothing for urgency to deploy), and **`studsdepth` lands mid-pack** with no separation.
+
+**The hero is far more competitive in the shallower league — but the best strategy still sits below fair share.** Best playoff% is **0.44 vs the 0.50 baseline** (and best reg-win 0.48 vs ~0.50) — *nearly* at par, versus 16-team where the best hero managed only 0.13 against a 0.375 baseline. That the gap to baseline shrinks so much as the field thins (15 bots → 11) is itself evidence that the sub-baseline result is driven substantially by **deep-field bot contention** (the §3.6 / Run E–F caveat: 15 noisy-WTP bids order-statistic over `baseline_dollars`, so a value-bidding hero is outbid on studs), not purely by weak hero strategy. It also says **strategy choice matters more in a 12-team league** — the spread between best and worst hero (0.44 vs 0.10) dwarfs 16-team's (0.13 vs 0.03). **No winner declared** — one seat, byes off, 40 seeds; the call is September 2026. **Reproduce:** swap `--vorp-table data/vorp_2026/half_12team.parquet --league-config configs/half_12team.league.json` into the command below.
+
+**Two directions this raises (user, 2026-06-18; tracked in `TODO.md`).** (1) **Average across all available seasons.** Year-to-year results swing wildly (Run A→B→C→D→E→F); a single 2026 snapshot is one noisy draw. Re-run every backtest across all seasons we have data for and average, so the strategy ranking reflects a multi-year mean rather than one year's projection set. (2) **Learn the strategy directly (RL).** That hand-authored bid models all cluster at or below the field's fair share suggests we're not searching the strategy space well by hand — a reinforcement-learning agent that learns a bid policy against the bot market (and ultimately self-play) may find an edge the fixed heuristics can't.
+
 ## Planned experiments / axes to sweep
 
 - **Bid-model bake-off** (the core): `static` vs `inflation` vs `marginal`, all three metrics, at a fixed
@@ -246,6 +272,12 @@ Paired playoff% (point [95% CI]): the top three are statistically tied — stati
 - **Better bot market** — a behavior-calibrated WTP model so absolute numbers reflect a real room.
 - **Full-fidelity v3** — availability-aware `SeasonValuer`-marginal, reserved for the live auction
   assistant (evaluated once per real pick).
+- **Multi-year averaging (user, 2026-06-18)** — results swing hard year-to-year (Runs A–G); re-run the
+  bake-off across every season we have projection data for and average the per-model metrics, so the
+  ranking reflects a multi-year mean rather than one noisy 2026 draw. The single biggest reliability lever.
+- **Learn the bid policy (RL) (user, 2026-06-18)** — hand-authored bid models all cluster at/below the
+  field's fair share; a reinforcement-learning agent that learns a bidding policy against the bot market
+  (then self-play) may find an edge the fixed heuristics miss. Larger new slice; design separately.
 
 ## Reproduce
 
