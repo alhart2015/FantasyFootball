@@ -102,3 +102,78 @@ class MarginalValueBid:
         if points_per_dollar <= 0.0:
             return min_bid
         return round(min_bid + lift / points_per_dollar)
+
+
+def _undrafted(pool: pd.DataFrame, drafted: frozenset[str]) -> pd.DataFrame:
+    """Pool rows whose gsis_id is not yet drafted (same isin pattern as InflationBid)."""
+    return pool[~pool["gsis_id"].isin(drafted)]
+
+
+def _vorp_threshold(pool: pd.DataFrame, k: int) -> float:
+    """The k-th highest `vorp` in the pool — the cutoff for 'top-k by VORP'. If the pool has
+    fewer than k players, the pool minimum (so every player clears the bar). k<=0 -> +inf
+    (nothing clears)."""
+    if k <= 0:
+        return float("inf")
+    vorps = pool["vorp"]
+    if len(vorps) <= k:
+        return float(vorps.min())
+    return float(vorps.nlargest(k).iloc[-1])
+
+
+@dataclass(frozen=True)
+class AnchorBudgetBid:
+    """Stars-and-scrubs: pour budget into `n_anchors` top-VORP players, $1 the rest (spec §B)."""
+
+    n_anchors: int = 4
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        min_bid = config.min_bid
+        threshold = _vorp_threshold(pool, self.n_anchors * config.n_teams)
+        anchors_held = int((view.my_roster["vorp"] >= threshold).sum())
+        anchors_remaining = max(0, self.n_anchors - anchors_held)
+        open_slots = view.my_open_slots
+        feasible_max = view.my_budget - min_bid * (open_slots - 1)
+        if float(player["vorp"]) >= threshold and anchors_remaining > 0:
+            reserve = min_bid * max(0, open_slots - anchors_remaining)
+            cap = (view.my_budget - reserve) / anchors_remaining
+            return round(min(cap, float(feasible_max)))
+        return min_bid
+
+
+@dataclass(frozen=True)
+class OverbidValueBid:
+    """Pay up for studs (top-VORP), plain value for others; engine clamp handles broke (spec §B)."""
+
+    k: float = 1.3
+    stud_count: int | None = None
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        stud_count = self.stud_count if self.stud_count is not None else 3 * config.n_teams
+        threshold = _vorp_threshold(pool, stud_count)
+        value = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        if float(player["vorp"]) >= threshold:
+            return round(value * self.k)
+        return value
+
+
+@dataclass(frozen=True)
+class VorpShareBid:
+    """Allocate the remaining budget proportionally to VORP across the top-`open_slots` targets."""
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        min_bid = config.min_bid
+        targets = _undrafted(pool, view.drafted).nlargest(view.my_open_slots, "vorp")
+        if str(player["gsis_id"]) not in {str(g) for g in targets["gsis_id"]}:
+            return min_bid
+        denom = float(targets["vorp"].clip(lower=0.0).sum())
+        if denom <= 0.0:
+            return min_bid
+        share = max(0.0, float(player["vorp"])) / denom
+        return round(view.my_budget * share)
