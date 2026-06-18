@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from projections.draft.assistant.auction.bid_strategy import AuctionView, StaticDollarBid
+from projections.draft.assistant.auction.bid_strategy import (
+    AnchorBudgetBid,
+    AuctionView,
+    StaticDollarBid,
+)
 from projections.draft.assistant.auction.simulation import (
     AuctionState,
     _build_view,
@@ -313,15 +317,14 @@ def test_forced_pick_completes_and_warns_when_pool_thin() -> None:
     assert any("pool thin" in str(w.message) for w in caught)  # forced-pick warned
 
 
-def test_hero_is_not_gated() -> None:
-    # Same 5-RB/1-WR pool with CHEAP RB baselines so a max-bidding hero (seat index 0, my_seat=1)
-    # affords all three. RBs are nominated before the WR, so the hero fills on 3 RB and strands
-    # its own WR starter — exceeding the bot RB cap (2) and ending non-startable, which the gate
-    # forbids for bots. Proves the hero has no eligibility gate / starter reservation; the gated
-    # bot still gets its WR. (Green before and after — guard that the hero stays ungated post-T5.)
+def test_hero_is_gated_like_a_bot() -> None:
+    # SUPERSEDES test_hero_is_not_gated (sane-bots slice, spec R7a). That slice deliberately left
+    # the hero ungated to isolate the bid model; this slice (Goal 1) gates it with the SAME
+    # bot_eligible/bot_position_bounds rule. Same cheap-RB pool: pre-gate the max-bidding hero took
+    # 3 RB / 0 WR; gated it must stop at the RB max (2 for {RB:1,WR:1,BENCH:1}) and reserve its WR.
     cfg = _config(n_teams=2, roster_slots={RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.BENCH: 1})
     pool = _thin_pool(_RB5_WR1, _RB5_WR1_POS)
-    baseline = _bd(_RB5_WR1, [10, 9, 8, 7, 6, 5])  # cheap RBs (hero affords 3), WR last
+    baseline = _bd(_RB5_WR1, [10, 9, 8, 7, 6, 5])
     state = _simulate_to_state(
         _MaxBidStub(),
         1,
@@ -332,7 +335,51 @@ def test_hero_is_not_gated() -> None:
         rng=np.random.default_rng(0),
     )
     hero = [p for (_g, p, _pr) in state.rosters[0]]
-    bot = [p for (_g, p, _pr) in state.rosters[1]]
-    # ungated: hero exceeds bot RB cap, WR starter stranded
-    assert hero.count("RB") == 3 and hero.count("WR") == 0
-    assert bot.count("WR") >= 1  # the gated bot still reserves its WR starter
+    assert hero.count("RB") <= 2  # gated: never exceeds the RB max
+    assert hero.count("WR") >= 1  # gated: reserves the WR starter (no empty starting slot)
+
+
+def test_gated_anchor_hero_builds_a_startable_roster() -> None:
+    # AnchorBudgetBid through the full engine: respects the gate (startable, within max) and still
+    # concentrates budget (pays up for an anchor instead of spreading $1s). _pool carries vorp.
+    cfg = _config(n_teams=4, roster_slots={RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.BENCH: 2})
+    pool = _pool(40)  # RB/WR only; need >= 4*6 = 24 players
+    baseline = _baseline(pool, cfg)
+    state = _simulate_to_state(
+        AnchorBudgetBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=baseline,
+        price_jitter=0.0,
+        rng=np.random.default_rng(0),
+    )
+    hero = [p for (_g, p, _pr) in state.rosters[0]]
+    assert len(hero) == cfg.roster_size  # filled
+    assert hero.count("RB") <= 3 and hero.count("WR") <= 3  # within the gate max (min+bench share)
+    assert hero.count("RB") >= 2 and hero.count("WR") >= 2  # minimum starters reserved
+
+
+def test_gated_hero_is_deterministic() -> None:
+    cfg = _config(n_teams=4, roster_slots={RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.BENCH: 2})
+    pool = _pool(40)
+    baseline = _baseline(pool, cfg)
+    a = _simulate_to_state(
+        AnchorBudgetBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=baseline,
+        price_jitter=0.15,
+        rng=np.random.default_rng(7),
+    )
+    b = _simulate_to_state(
+        AnchorBudgetBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=baseline,
+        price_jitter=0.15,
+        rng=np.random.default_rng(7),
+    )
+    assert a.rosters == b.rosters  # same seed -> identical draft
