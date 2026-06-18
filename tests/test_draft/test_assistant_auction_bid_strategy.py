@@ -116,8 +116,11 @@ def test_marginal_zero_lift_player_bids_min_bid() -> None:
     # Hero already holds the best RB and WR (starters full); a worse RB adds 0 lineup lift.
     my_roster = pool.iloc[[0, 1]]
     view = _view(my_roster, budget=50, drafted={"00-0000001", "00-0000002"}, baseline=baseline)
-    bid = MarginalValueBid().max_bid(view, pool.iloc[2], pool, _config())
-    assert bid == _config().min_bid
+    cfg = _config()
+    bid = MarginalValueBid().max_bid(view, pool.iloc[2], pool, cfg)
+    # urgency feature: late-draft (open 1 of 3, surplus 49) the zero-lift base min_bid is scaled up
+    assert bid == round(cfg.min_bid * _budget_urgency(view, cfg))
+    assert bid > cfg.min_bid
 
 
 def test_marginal_improving_player_bids_above_min_bid() -> None:
@@ -252,8 +255,10 @@ def test_anchor_switches_to_scrubs_once_anchors_held() -> None:
         open_slots=6,
         drafted=("00-0000001", "00-0000002"),
     )
-    bid = AnchorBudgetBid(n_anchors=2).max_bid(view, pool.iloc[2], pool, _vconfig())  # anchor-grade
-    assert bid == _vconfig().min_bid
+    cfg = _vconfig()
+    bid = AnchorBudgetBid(n_anchors=2).max_bid(view, pool.iloc[2], pool, cfg)  # anchor-grade
+    # urgency feature: anchors held (anchors_remaining 0) -> base min_bid, scaled up late (open 6/8)
+    assert bid == round(cfg.min_bid * _budget_urgency(view, cfg))
 
 
 def test_overbid_pays_up_for_studs_value_for_others() -> None:
@@ -282,7 +287,10 @@ def test_vorpshare_off_target_player_bids_min() -> None:
     # open 2 -> targets = top-2 vorp (players 1,2). Player 3 (vorp 90) is off-target.
     pool = _vpool()
     view = _aview(pool, budget=100, open_slots=2)
-    assert VorpShareBid().max_bid(view, pool.iloc[2], pool, _vconfig()) == _vconfig().min_bid
+    cfg = _vconfig()
+    bid = VorpShareBid().max_bid(view, pool.iloc[2], pool, cfg)
+    # urgency feature: off-target base min_bid scaled up late (open 2/8, surplus 98)
+    assert bid == round(cfg.min_bid * _budget_urgency(view, cfg))
 
 
 def test_vorpshare_zero_target_vorp_bids_min() -> None:
@@ -306,7 +314,10 @@ def test_vorpshare_zero_target_vorp_bids_min() -> None:
             index=pd.Index(["00-0000007", "00-0000008"], name="gsis_id"),
         ),
     )
-    assert VorpShareBid().max_bid(view, pool.iloc[0], pool, _vconfig()) == _vconfig().min_bid
+    cfg = _vconfig()
+    bid = VorpShareBid().max_bid(view, pool.iloc[0], pool, cfg)
+    # urgency feature: zero-target-vorp base min_bid scaled up late (open 2/8, surplus 98)
+    assert bid == round(cfg.min_bid * _budget_urgency(view, cfg))
 
 
 # ---------------------------------------------------------------------------

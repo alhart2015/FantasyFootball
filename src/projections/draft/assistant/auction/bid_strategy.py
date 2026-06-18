@@ -54,7 +54,8 @@ class StaticDollarBid:
     def max_bid(
         self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
     ) -> int:
-        return int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        base = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        return round(base * _budget_urgency(view, config))
 
 
 @dataclass(frozen=True)
@@ -71,7 +72,8 @@ class InflationBid:
         value = float((undrafted_in_pool["auction_dollars"] - min_bid).sum())
         inflation = money / value if value > 0 else 1.0
         base = int(bd.loc[player["gsis_id"], "auction_dollars"])
-        return round(min_bid + (base - min_bid) * inflation)
+        bid = min_bid + (base - min_bid) * inflation
+        return round(bid * _budget_urgency(view, config))
 
 
 @dataclass(frozen=True)
@@ -87,21 +89,21 @@ class MarginalValueBid:
         cand = pool[pool["gsis_id"] == player["gsis_id"]]
         with_player = pd.concat([view.my_roster, cand], ignore_index=True)
         lift = optimal_lineup_points(with_player, slots) - base_pts
-        if lift <= 0.0:
-            return min_bid
-        money = _surplus_money(view, config)
-        bd = view.baseline_dollars
-        undrafted_in_pool_ids = bd[bd["in_pool"] & ~bd.index.isin(view.drafted)].index
-        # Lift of a single player to an EMPTY lineup == its season_mean_fpts (every in-pool
-        # position has a starting slot), so the board's surplus value in lineup-points is the
-        # sum of undrafted in-pool projected points. Cheap, and equal to summing single-player
-        # optimal_lineup_points one by one.
-        on_board = pool[pool["gsis_id"].isin(undrafted_in_pool_ids)]
-        value_points = float(on_board["season_mean_fpts"].sum())
-        points_per_dollar = value_points / money if money > 0 else 0.0
-        if points_per_dollar <= 0.0:
-            return min_bid
-        return round(min_bid + lift / points_per_dollar)
+        base: float = float(min_bid)
+        if lift > 0.0:
+            money = _surplus_money(view, config)
+            bd = view.baseline_dollars
+            undrafted_in_pool_ids = bd[bd["in_pool"] & ~bd.index.isin(view.drafted)].index
+            # Lift of a single player to an EMPTY lineup == its season_mean_fpts (every in-pool
+            # position has a starting slot), so the board's surplus value in lineup-points is the
+            # sum of undrafted in-pool projected points. Cheap, and equal to summing single-player
+            # optimal_lineup_points one by one.
+            on_board = pool[pool["gsis_id"].isin(undrafted_in_pool_ids)]
+            value_points = float(on_board["season_mean_fpts"].sum())
+            points_per_dollar = value_points / money if money > 0 else 0.0
+            if points_per_dollar > 0.0:
+                base = min_bid + lift / points_per_dollar
+        return round(base * _budget_urgency(view, config))
 
 
 def _undrafted(pool: pd.DataFrame, drafted: frozenset[str]) -> pd.DataFrame:
@@ -152,12 +154,12 @@ class AnchorBudgetBid:
         anchors_held = int((view.my_roster["vorp"] >= threshold).sum())
         anchors_remaining = max(0, self.n_anchors - anchors_held)
         open_slots = view.my_open_slots
+        base: float = float(min_bid)
         if float(player["vorp"]) >= threshold and anchors_remaining > 0:
             reserve = min_bid * max(0, open_slots - anchors_remaining)
-            cap = (view.my_budget - reserve) / anchors_remaining
             # unclamped desire; engine clamps to [min_bid, feasible_max] (module contract)
-            return round(cap)
-        return min_bid
+            base = (view.my_budget - reserve) / anchors_remaining
+        return round(base * _budget_urgency(view, config))
 
 
 @dataclass(frozen=True)
@@ -173,9 +175,8 @@ class OverbidValueBid:
         stud_count = self.stud_count if self.stud_count is not None else 3 * config.n_teams
         threshold = _vorp_threshold(pool, stud_count)
         value = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
-        if float(player["vorp"]) >= threshold:
-            return round(value * self.k)
-        return value
+        base = value * self.k if float(player["vorp"]) >= threshold else float(value)
+        return round(base * _budget_urgency(view, config))
 
 
 @dataclass(frozen=True)
@@ -187,13 +188,13 @@ class VorpShareBid:
     ) -> int:
         min_bid = config.min_bid
         targets = _undrafted(pool, view.drafted).nlargest(view.my_open_slots, "vorp")
-        if str(player["gsis_id"]) not in {str(g) for g in targets["gsis_id"]}:
-            return min_bid
-        denom = float(targets["vorp"].clip(lower=0.0).sum())
-        if denom <= 0.0:
-            return min_bid
-        share = max(0.0, float(player["vorp"])) / denom
-        return round(view.my_budget * share)
+        base: float = float(min_bid)
+        if str(player["gsis_id"]) in {str(g) for g in targets["gsis_id"]}:
+            denom = float(targets["vorp"].clip(lower=0.0).sum())
+            if denom > 0.0:
+                share = max(0.0, float(player["vorp"])) / denom
+                base = view.my_budget * share
+        return round(base * _budget_urgency(view, config))
 
 
 @dataclass(frozen=True)
@@ -212,9 +213,11 @@ class PatientValueBid:
         stud_cut = _vorp_threshold(pool, round(self.stud_frac * n))
         scrub_cut = _vorp_threshold(pool, round((1.0 - self.scrub_frac) * n))
         v = float(player["vorp"])
-        if v >= stud_cut or v < scrub_cut:  # stud (let it go) or scrub
-            return min_bid
-        value = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
-        bid = round(value * (1.0 + self.midtier_premium))
-        reserve = view.my_budget - min_bid * (view.my_open_slots - 1)
-        return bid if reserve >= bid else min_bid
+        base = min_bid
+        if not (v >= stud_cut or v < scrub_cut):  # mid-tier: not a stud (let go), not a scrub
+            value = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+            bid = round(value * (1.0 + self.midtier_premium))
+            reserve = view.my_budget - min_bid * (view.my_open_slots - 1)
+            if reserve >= bid:
+                base = bid
+        return round(base * _budget_urgency(view, config))
