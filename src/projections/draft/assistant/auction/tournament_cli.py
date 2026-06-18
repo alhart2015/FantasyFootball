@@ -1,8 +1,9 @@
 """CLI engine for the auction bid-model tournament (spec §3.7). Mirrors tournament_cli.py.
 
 `run([...])` loads the VORP pool + LeagueConfig, attaches is_rookie, loads availability +
-variance params (store-backed), then races the six bid models and prints per-metric
-means + CIs and paired diffs. No winner is printed (data-gathering, spec §5.1).
+variance params (store-backed), then races the seven bid models against a mixed bot field
+with randomized nomination and prints per-metric means + CIs and paired diffs.
+No winner is printed (data-gathering, spec §5.1).
 """
 
 from __future__ import annotations
@@ -18,10 +19,17 @@ from projections.draft.assistant.auction.bid_strategy import (
     InflationBid,
     MarginalValueBid,
     OverbidValueBid,
+    PatientValueBid,
     StaticDollarBid,
     VorpShareBid,
 )
-from projections.draft.assistant.auction.market import DEFAULT_PRICE_JITTER
+from projections.draft.assistant.auction.market import (
+    DEFAULT_PRICE_JITTER,
+    AggressiveBot,
+    BalancedBot,
+    BotArchetype,
+    PatientValueBot,
+)
 from projections.draft.assistant.auction.tournament import (
     METRICS,
     AuctionTournamentResult,
@@ -40,7 +48,10 @@ _MODELS: dict[str, AuctionBidStrategy] = {
     "anchors": AnchorBudgetBid(),
     "overbid": OverbidValueBid(),
     "vorpshare": VorpShareBid(),
+    "patient": PatientValueBid(),
 }
+
+_REALISTIC_FIELD: list[BotArchetype] = [AggressiveBot(), PatientValueBot(), BalancedBot()]
 
 
 def _load_pool(path: Path) -> pd.DataFrame:
@@ -96,6 +107,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=DEFAULT_PRICE_JITTER,
         help="Bot WTP noise (fractional).",
     )
+    p.add_argument(
+        "--nomination-temp",
+        type=float,
+        default=1.0,
+        help="Nomination randomness (0=value-first; 1=value-weighted random).",
+    )
     p.add_argument("--seed", type=int, default=0, help="Base RNG seed.")
     p.add_argument("--n-sims", type=int, default=500, help="Monte-Carlo seasons per league (CRN).")
     p.add_argument(
@@ -105,7 +122,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Store root for availability/rookies.",
     )
     sub = p.add_subparsers(dest="mode", required=True)
-    sub.add_parser("compare", help="Race the six bid models; record per-metric data.")
+    sub.add_parser("compare", help="Race the seven bid models; record per-metric data.")
     return p.parse_args(argv)
 
 
@@ -127,6 +144,8 @@ def run(argv: list[str] | None = None) -> int:
         n_sims=args.n_sims,
         availability=availability,
         params=params,
+        nomination_temp=args.nomination_temp,
+        bot_archetypes=_REALISTIC_FIELD,
     )
     print(format_compare(result))
     return 0

@@ -6,7 +6,7 @@ winner (spec §5.1) — the adopt decision is the user's, in September.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -15,6 +15,7 @@ import pandas as pd
 
 from projections.draft.assistant._compare import Interval, bootstrap_mean
 from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
+from projections.draft.assistant.auction.market import BotArchetype
 from projections.draft.assistant.auction.simulation import simulate_auction, validate_auction_inputs
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.league_projection import project_draft
@@ -78,6 +79,8 @@ def run_auction_tournament(
     availability: PlayerAvailability,
     params: VarianceParams,
     season_base_seed: int | None = None,
+    nomination_temp: float = 0.0,
+    bot_archetypes: Sequence[BotArchetype] | None = None,
 ) -> AuctionTournamentResult:
     if season_base_seed is None:
         season_base_seed = base_seed + 1_000_000
@@ -98,6 +101,8 @@ def run_auction_tournament(
                 baseline_dollars=baseline_dollars,
                 price_jitter=price_jitter,
                 rng=np.random.default_rng(base_seed + s),
+                nomination_temp=nomination_temp,
+                bot_archetypes=bot_archetypes,
             )
             proj = project_draft(
                 league,

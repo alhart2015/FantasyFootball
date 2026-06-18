@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import warnings
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -14,10 +15,29 @@ import pandas as pd
 
 from projections.draft.assistant._compare import validate_pool_size
 from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy, AuctionView
-from projections.draft.assistant.auction.market import SeatView, bot_max_bid, resolve_bids
+from projections.draft.assistant.auction.market import (
+    AggressiveBot,
+    BotArchetype,
+    SeatView,
+    assign_bot_archetypes,
+    resolve_bids,
+)
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import bot_eligible, bot_position_bounds
 from projections.schemas import Position
+
+
+def _sample_nominee(
+    candidates: list[str], val_by_id: dict[str, float], temp: float, rng: np.random.Generator
+) -> str:
+    """Pick the next nominee. temp<=0 -> the highest-value candidate (candidates are pre-sorted
+    value-desc), consuming no RNG. temp>0 -> sample with weight max(value, 0.5)**(1/temp)."""
+    if temp <= 0.0:
+        return candidates[0]
+    weights = np.array(
+        [max(val_by_id[str(g)], 0.5) ** (1.0 / temp) for g in candidates], dtype=float
+    )
+    return candidates[int(rng.choice(len(candidates), p=weights / weights.sum()))]
 
 
 def validate_auction_inputs(pool: pd.DataFrame, config: LeagueConfig) -> None:
@@ -75,6 +95,8 @@ def _simulate_to_state(
     baseline_dollars: pd.DataFrame,
     price_jitter: float,
     rng: np.random.Generator,
+    nomination_temp: float = 0.0,
+    bot_archetypes: Sequence[BotArchetype] | None = None,
 ) -> AuctionState:
     """Run the full auction loop; return the final AuctionState (budgets + priced rosters)."""
     validate_auction_inputs(pool, config)
@@ -83,9 +105,22 @@ def _simulate_to_state(
     min_bid = config.min_bid
     hero0 = my_seat - 1  # the single 1-based -> 0-based conversion (spec §3.2)
 
+    bot_seats = [s for s in range(n) if s != hero0]
+    if bot_archetypes is None:
+        seat_arch: dict[int, BotArchetype] = {s: AggressiveBot() for s in bot_seats}
+    else:
+        _assigned = assign_bot_archetypes(len(bot_seats), bot_archetypes)
+        seat_arch = {s: _assigned[i] for i, s in enumerate(bot_seats)}
+
     minimums, maximums = bot_position_bounds(config.roster_slots)
     pos_by_id = {
         str(g): Position(str(p)) for g, p in zip(pool["gsis_id"], pool["position"], strict=True)
+    }
+    val_by_id = {
+        str(g): float(v)
+        for g, v in zip(
+            baseline_dollars["gsis_id"], baseline_dollars["auction_dollars"], strict=True
+        )
     }
     # Row lookup by id, built once — avoids an O(pool) boolean scan to fetch the nominee each round.
     pool_by_id = {str(g): row for g, row in pool.set_index("gsis_id", drop=False).iterrows()}
@@ -116,11 +151,10 @@ def _simulate_to_state(
             union |= elig
 
         # nominate the highest-baseline undrafted player the room can roster; else forced (un-gated)
-        nominee_id = next(
-            (g for g in nominate_order if g not in state.drafted and pos_by_id[str(g)] in union),
-            None,
-        )
-        forced = nominee_id is None
+        candidates = [
+            g for g in nominate_order if g not in state.drafted and pos_by_id[str(g)] in union
+        ]
+        forced = not candidates
         if forced:
             nominee_id = next(g for g in nominate_order if g not in state.drafted)
             warnings.warn(
@@ -128,6 +162,8 @@ def _simulate_to_state(
                 f"{nominee_id} ({pos_by_id[str(nominee_id)].value}) ungated (pool thin).",
                 stacklevel=2,
             )
+        else:
+            nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
         assert nominee_id is not None  # guaranteed: pool is non-empty while any seat has open slots
         player = pool_by_id[str(nominee_id)]
 
@@ -146,8 +182,12 @@ def _simulate_to_state(
                 )
                 bids[seat] = max(min_bid, min(int(desired), fmax))
             else:
-                desired = bot_max_bid(
-                    SeatView(open_slots=_open_slots(state, seat, rs), eligible_positions=elig),
+                desired = seat_arch[seat].max_bid(
+                    SeatView(
+                        open_slots=_open_slots(state, seat, rs),
+                        eligible_positions=elig,
+                        budget=state.budgets[seat],
+                    ),
                     player,
                     bd,
                     config,
@@ -177,6 +217,8 @@ def simulate_auction(
     baseline_dollars: pd.DataFrame,
     price_jitter: float,
     rng: np.random.Generator,
+    nomination_temp: float = 0.0,
+    bot_archetypes: Sequence[BotArchetype] | None = None,
 ) -> dict[int, list[str]]:
     """One full auction; return every seat's roster {seat(1-based): [gsis_id, ...]}."""
     state = _simulate_to_state(
@@ -187,5 +229,7 @@ def simulate_auction(
         baseline_dollars=baseline_dollars,
         price_jitter=price_jitter,
         rng=rng,
+        nomination_temp=nomination_temp,
+        bot_archetypes=bot_archetypes,
     )
     return {seat + 1: [g for (g, _p, _pr) in state.rosters[seat]] for seat in range(config.n_teams)}
