@@ -177,3 +177,27 @@ class VorpShareBid:
             return min_bid
         share = max(0.0, float(player["vorp"])) / denom
         return round(view.my_budget * share)
+
+
+@dataclass(frozen=True)
+class PatientValueBid:
+    """Holds budget through the stud frenzy; pays up for mid-tier value when reserve remains."""
+
+    midtier_premium: float = 0.35
+    stud_frac: float = 0.10
+    scrub_frac: float = 0.50
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        min_bid = config.min_bid
+        n = len(pool)
+        stud_cut = _vorp_threshold(pool, round(self.stud_frac * n))
+        scrub_cut = _vorp_threshold(pool, round((1.0 - self.scrub_frac) * n))
+        v = float(player["vorp"])
+        if v >= stud_cut or v < scrub_cut:  # stud (let it go) or scrub
+            return min_bid
+        value = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        bid = round(value * (1.0 + self.midtier_premium))
+        reserve = view.my_budget - min_bid * (view.my_open_slots - 1)
+        return bid if reserve >= bid else min_bid
