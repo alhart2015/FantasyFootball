@@ -9,6 +9,12 @@ from projections.draft.assistant.auction.bid_strategy import (
     AuctionView,
     StaticDollarBid,
 )
+from projections.draft.assistant.auction.market import (
+    AggressiveBot,
+    BalancedBot,
+    PatientValueBot,
+    _value_tier,
+)
 from projections.draft.assistant.auction.simulation import (
     AuctionState,
     _build_view,
@@ -407,8 +413,8 @@ def test_sample_nominee_temp_one_favors_value_but_samples_tail() -> None:
 
 
 def test_nomination_temp_zero_is_deterministic() -> None:
-    # temp=0 consumes no nomination RNG, so two runs at the same seed are identical. (Backward-compat
-    # to pre-change behavior is guarded by the rest of the engine suite, which runs at default temp=0.)
+    # temp=0 consumes no nomination RNG, so two runs at the same seed are identical.
+    # (Backward-compat to pre-change behavior is guarded by the engine suite at default temp=0.)
     cfg = _config(n_teams=4, roster_slots={RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.BENCH: 2})
     pool = _pool(40)
     baseline = _baseline(pool, cfg)
@@ -418,3 +424,90 @@ def test_nomination_temp_zero_is_deterministic() -> None:
         StaticDollarBid(), 1, pool, cfg, rng=np.random.default_rng(3), nomination_temp=0.0, **kw
     )
     assert legacy.rosters == temp0.rosters
+
+
+def _realistic_baseline(pool: pd.DataFrame) -> pd.DataFrame:
+    """Hand-crafted baseline with a realistic stud/mid/scrub value spread.
+
+    generate_auction_values() compresses all 80-player values into $11-$17 for this
+    synthetic pool (equal fpts spacing => equal budget allocation), so every mid-tier
+    player clears above $1 under any bot field — zero discriminating power.
+    A proper spread ($1-$83) puts lower mid-tier players near the floor so
+    PatientValueBot's 1.35x premium genuinely lifts them above min_bid.
+    """
+    gids = list(pool["gsis_id"].astype(str))
+    n = len(gids)
+    dollars: list[int] = []
+    for i in range(n):
+        if i < 8:  # studs: $55-$83
+            dollars.append(55 + (7 - i) * 4)
+        elif i < 35:  # mid-tier: $15-$4
+            dollars.append(max(4, int(15 - (i - 8) * 0.4)))
+        else:  # scrubs: $1-$3
+            dollars.append(max(1, 3 - min(i - 35, 2)))
+    return pd.DataFrame(
+        {
+            "gsis_id": pd.array(gids, dtype=_PYARROW_STR),
+            "auction_dollars": dollars,
+            "in_pool": [True] * n,
+        }
+    )
+
+
+def test_mixed_field_bids_midtier_off_the_dollar_floor() -> None:
+    # THE CORE FIX: legacy (all-aggressive) vs realistic (mixed field with PatientValueBot).
+    # Mid-tier players should clear ABOVE min_bid far more often under the mixed field.
+    # Uses _realistic_baseline() — a hand-crafted stud/mid/scrub spread — because
+    # generate_auction_values() compresses all values to $11-$17 for this synthetic pool,
+    # making every mid-tier player clear above $1 regardless of field (no discriminating power).
+    cfg = _config(n_teams=8, roster_slots={RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.BENCH: 3})
+    pool = _pool(80)
+    baseline = _realistic_baseline(pool)
+    bd_idx = baseline.set_index("gsis_id")
+
+    def midtier_above_floor(state: AuctionState) -> int:
+        n = 0
+        for seat in range(cfg.n_teams):
+            for gsis, _pos, price in state.rosters[seat]:
+                val = float(bd_idx.loc[gsis, "auction_dollars"])
+                if _value_tier(val, baseline, 0.10, 0.50) == "mid" and price > cfg.min_bid:
+                    n += 1
+        return n
+
+    legacy = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=baseline,
+        price_jitter=0.15,
+        rng=np.random.default_rng(11),
+    )
+    mixed = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=baseline,
+        price_jitter=0.15,
+        rng=np.random.default_rng(11),
+        nomination_temp=1.0,
+        bot_archetypes=[AggressiveBot(), PatientValueBot(), BalancedBot()],
+    )
+    assert midtier_above_floor(mixed) > midtier_above_floor(legacy)
+    assert midtier_above_floor(mixed) >= 1
+
+
+def test_mixed_field_is_deterministic() -> None:
+    cfg = _config(n_teams=8, roster_slots={RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.BENCH: 3})
+    pool = _pool(80)
+    bl = _realistic_baseline(pool)
+    kw = dict(
+        baseline_dollars=bl,
+        price_jitter=0.15,
+        nomination_temp=1.0,
+        bot_archetypes=[AggressiveBot(), PatientValueBot(), BalancedBot()],
+    )
+    a = _simulate_to_state(StaticDollarBid(), 1, pool, cfg, rng=np.random.default_rng(5), **kw)
+    b = _simulate_to_state(StaticDollarBid(), 1, pool, cfg, rng=np.random.default_rng(5), **kw)
+    assert a.rosters == b.rosters
