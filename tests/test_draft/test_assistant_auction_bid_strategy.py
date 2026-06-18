@@ -8,6 +8,7 @@ from projections.draft.assistant.auction.bid_strategy import (
     InflationBid,
     MarginalValueBid,
     OverbidValueBid,
+    PatientValueBid,
     StaticDollarBid,
     VorpShareBid,
     _undrafted,
@@ -304,3 +305,37 @@ def test_vorpshare_zero_target_vorp_bids_min() -> None:
         ),
     )
     assert VorpShareBid().max_bid(view, pool.iloc[0], pool, _vconfig()) == _vconfig().min_bid
+
+
+# ---------------------------------------------------------------------------
+# PatientValueBid tests
+# ---------------------------------------------------------------------------
+
+
+def test_patient_hero_holds_on_a_stud() -> None:
+    # _vpool vorps: 120,110,90,20,10,5 (6 players). stud_frac 0.10 -> round(0.6)=1 -> top-1 cutoff
+    # = _vorp_threshold(pool,1)=120; vorp 120 is a stud -> min_bid.
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)
+    assert PatientValueBid().max_bid(view, pool.iloc[0], pool, _vconfig()) == _vconfig().min_bid
+
+
+def test_patient_hero_pays_premium_for_midtier_with_reserve() -> None:
+    # scrub_frac 0.50 -> (1-0.50)*6=3 -> scrub cutoff = _vorp_threshold(pool,3)=90; stud cutoff 120.
+    # vorp 110 (player 2) is in (90,120) -> mid. auction_dollars for it = 28 -> round(28*1.35)=38.
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)
+    assert PatientValueBid().max_bid(view, pool.iloc[1], pool, _vconfig()) == round(28 * 1.35)
+
+
+def test_patient_hero_midtier_without_reserve_bids_min() -> None:
+    pool = _vpool()
+    view = _aview(pool, budget=8, open_slots=8)  # reserve = 8 - 1*7 = 1 < the premium bid
+    assert PatientValueBid().max_bid(view, pool.iloc[1], pool, _vconfig()) == _vconfig().min_bid
+
+
+def test_patient_hero_scrub_bids_min() -> None:
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)
+    # vorp 5 (player 6) is below the scrub cutoff (90) -> scrub -> min_bid.
+    assert PatientValueBid().max_bid(view, pool.iloc[5], pool, _vconfig()) == _vconfig().min_bid
