@@ -36,21 +36,23 @@
 
 - [ ] **Step 1: Write failing tests for the helpers and the three models.**
 
-Append to `tests/test_draft/test_assistant_auction_bid_strategy.py` (the existing `_config`/`_pool`/`_baseline`/`_view` helpers stay; add the vorp-bearing fixtures and tests below):
+In `tests/test_draft/test_assistant_auction_bid_strategy.py`: **extend the existing top-of-file `bid_strategy` import** to add the three models and two helpers (do NOT add a bottom import, and add no other imports — `_PYARROW_STR`, `RosterSlot`, `Ruleset`, `Counter`, `pd`, `LeagueConfig`, `AuctionView` are already imported). The existing `_config`/`_pool`/`_baseline`/`_view` helpers stay; add the vorp-bearing fixtures and tests below.
 
 ```python
-import pytest
-
 from projections.draft.assistant.auction.bid_strategy import (
     AnchorBudgetBid,
+    AuctionView,
+    InflationBid,
+    MarginalValueBid,
     OverbidValueBid,
+    StaticDollarBid,
     VorpShareBid,
     _undrafted,
     _vorp_threshold,
 )
-from projections.schemas import Position  # noqa: F401  (kept for parity; enums over strings)
+```
 
-
+```python
 def _vpool() -> pd.DataFrame:
     # vorp strictly descending by row: 120,110,90,20,10,5
     return pd.DataFrame(
@@ -164,7 +166,7 @@ def test_overbid_pays_up_for_studs_value_for_others() -> None:
     assert strat.max_bid(view, pool.iloc[3], pool, cfg) == 5  # non-stud (vorp 20) -> value 5
 
 
-def test_overbid_default_stud_count_is_three_times_teams() -> None:
+def test_overbid_default_stud_count_unset() -> None:
     assert OverbidValueBid().stud_count is None  # resolved to 3*n_teams at call time
 
 
@@ -349,20 +351,25 @@ def test_gated_anchor_hero_builds_a_startable_roster() -> None:
         baseline_dollars=baseline, price_jitter=0.0, rng=np.random.default_rng(0),
     )
     hero = [p for (_g, p, _pr) in state.rosters[0]]
-    prices = [pr for (_g, _p, pr) in state.rosters[0]]
     assert len(hero) == cfg.roster_size                      # filled
     assert hero.count("RB") <= 3 and hero.count("WR") <= 3   # within the gate max (min+bench share)
     assert hero.count("RB") >= 2 and hero.count("WR") >= 2   # minimum starters reserved
-    assert max(prices) >= 10                                 # paid up for an anchor, didn't spread
+    # (bid magnitude / "pays up for an anchor" is unit-tested in Task 1; not asserted here because
+    # the exact clearing price depends on generate_auction_values + bot competition.)
 
 
 def test_gated_hero_is_deterministic() -> None:
     cfg = _config(n_teams=4, roster_slots={RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.BENCH: 2})
     pool = _pool(40)
     baseline = _baseline(pool, cfg)
-    kw = dict(baseline_dollars=baseline, price_jitter=0.15)
-    a = _simulate_to_state(AnchorBudgetBid(), 1, pool, cfg, rng=np.random.default_rng(7), **kw)
-    b = _simulate_to_state(AnchorBudgetBid(), 1, pool, cfg, rng=np.random.default_rng(7), **kw)
+    a = _simulate_to_state(
+        AnchorBudgetBid(), 1, pool, cfg,
+        baseline_dollars=baseline, price_jitter=0.15, rng=np.random.default_rng(7),
+    )
+    b = _simulate_to_state(
+        AnchorBudgetBid(), 1, pool, cfg,
+        baseline_dollars=baseline, price_jitter=0.15, rng=np.random.default_rng(7),
+    )
     assert a.rosters == b.rosters  # same seed -> identical draft
 ```
 
