@@ -135,11 +135,11 @@ class AnchorBudgetBid:
         anchors_held = int((view.my_roster["vorp"] >= threshold).sum())
         anchors_remaining = max(0, self.n_anchors - anchors_held)
         open_slots = view.my_open_slots
-        feasible_max = view.my_budget - min_bid * (open_slots - 1)
         if float(player["vorp"]) >= threshold and anchors_remaining > 0:
             reserve = min_bid * max(0, open_slots - anchors_remaining)
             cap = (view.my_budget - reserve) / anchors_remaining
-            return round(min(cap, float(feasible_max)))
+            # unclamped desire; engine clamps to [min_bid, feasible_max] (module contract)
+            return round(cap)
         return min_bid
 
 
