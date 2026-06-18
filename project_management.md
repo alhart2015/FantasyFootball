@@ -4,6 +4,20 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction Strategy — Budget-urgency factor + StudsAndDepthBid + Run F — shipped (2026-06-18, branch `feat/auction-budget-urgency`, PR #81)
+
+**Status:** Budget-urgency slice shipped. Spec/plan `docs/superpowers/specs|plans/2026-06-18-auction-budget-urgency.*`. Data-gathering — **no bid-model winner declared; decision remains deferred to September 2026.** Built on the unreliable dev box, re-verified + finished on reliable hardware (handoff via `INSTRUCTIONS.md`, removed before the PR).
+
+**What shipped:** `_budget_urgency(view, config) -> float` in `bid_strategy.py` (`URGENCY_GAIN = 3.0`) — a late-draft deployment factor: exactly `1.0` at draft start (`my_open_slots == roster_size`) and when broke (`surplus <= 0`), escalating only when a hero is overfunded *and* the draft is winding down; bounded `[1.0, 1.0 + URGENCY_GAIN)`, with the engine's `[min_bid, feasible_max]` clamp bounding the resulting bid. All 7 existing contestants refactored to a single-exit `round(base * _budget_urgency(...))` (empty-roster bids unchanged → existing tests preserved). New 8th contestant `StudsAndDepthBid` ("the good bot, as a hero": stud premium / fair-value mid-tier depth / `min_bid` scrubs, all × urgency). Wired `studsdepth` into the eight-model `compare` CLI.
+
+**Key decisions:** urgency lives entirely in the hero-strategy layer — bots (`market.py`), the engine (`_simulate_to_state`/`resolve_bids`), the scorer, and the snake field are untouched. Urgency never lowers a bid (≥ 1.0). No new schema; `GsisId` canonical; enums not strings.
+
+**Run F (data point, no verdict):** eight-model bake-off vs the realistic market at 40 seeds (the 60-seed run crashed on the old box's Raptor Lake CPU fault — a hardware event, not a code bug). Budget-urgency **compresses the field** by forcing the cash-hoarders to deploy: `inflation` playoff 0.03→0.12, `marginal` 0.00→0.08, `vorpshare` 0.05→0.13 vs Run E; the already-spending `static`/`patient` barely move. `studsdepth` lands mid-pack; `anchors` stays last. **No winner declared.** Open question (recorded in the report): if the urgency-refined field still trails the bots, that strengthens the case the mixed-bot field is mis-calibrated (too strong) until anchored on real published auction values — the next realism slice.
+
+**Gates (re-verified on reliable hardware):** full suite `pytest -q` (xdist) = **1711 passed / 22 skipped / 1 failed**; the lone failure is the pre-existing `test_backtest_smoke_one_cell` (pandera `SchemaError: column 'preseason_implied_team_total' not in dataframe` — a feature-pipeline/cache issue, confirmed fails identically on `main`, branch touches no feature/backtest code). `tests/test_models/test_ensemble_model_smoke.py` = 13 passed (the old box's parallel-load failures were a CPU-fault artifact, not a bug). Auction subset 63 passed. mypy clean (332 files); ruff check + format clean.
+
+---
+
 ## Auction Strategy — Sane-bots slice + Run B bake-off — shipped (2026-06-17, branch `feat/auction-sane-bots`)
 
 **Status:** Auction sane-bots slice shipped: league-driven `bot_position_bounds` + shared `bot_eligible`; snake field unchanged; Run B recorded.

@@ -3,6 +3,7 @@ from collections import Counter
 import pandas as pd
 
 from projections.draft.assistant.auction.bid_strategy import (
+    URGENCY_GAIN,
     AnchorBudgetBid,
     AuctionView,
     InflationBid,
@@ -10,7 +11,9 @@ from projections.draft.assistant.auction.bid_strategy import (
     OverbidValueBid,
     PatientValueBid,
     StaticDollarBid,
+    StudsAndDepthBid,
     VorpShareBid,
+    _budget_urgency,
     _undrafted,
     _vorp_threshold,
 )
@@ -114,8 +117,11 @@ def test_marginal_zero_lift_player_bids_min_bid() -> None:
     # Hero already holds the best RB and WR (starters full); a worse RB adds 0 lineup lift.
     my_roster = pool.iloc[[0, 1]]
     view = _view(my_roster, budget=50, drafted={"00-0000001", "00-0000002"}, baseline=baseline)
-    bid = MarginalValueBid().max_bid(view, pool.iloc[2], pool, _config())
-    assert bid == _config().min_bid
+    cfg = _config()
+    bid = MarginalValueBid().max_bid(view, pool.iloc[2], pool, cfg)
+    # urgency feature: late-draft (open 1 of 3, surplus 49) the zero-lift base min_bid is scaled up
+    assert bid == round(cfg.min_bid * _budget_urgency(view, cfg))
+    assert bid > cfg.min_bid
 
 
 def test_marginal_improving_player_bids_above_min_bid() -> None:
@@ -250,8 +256,10 @@ def test_anchor_switches_to_scrubs_once_anchors_held() -> None:
         open_slots=6,
         drafted=("00-0000001", "00-0000002"),
     )
-    bid = AnchorBudgetBid(n_anchors=2).max_bid(view, pool.iloc[2], pool, _vconfig())  # anchor-grade
-    assert bid == _vconfig().min_bid
+    cfg = _vconfig()
+    bid = AnchorBudgetBid(n_anchors=2).max_bid(view, pool.iloc[2], pool, cfg)  # anchor-grade
+    # urgency feature: anchors held (anchors_remaining 0) -> base min_bid, scaled up late (open 6/8)
+    assert bid == round(cfg.min_bid * _budget_urgency(view, cfg))
 
 
 def test_overbid_pays_up_for_studs_value_for_others() -> None:
@@ -280,7 +288,10 @@ def test_vorpshare_off_target_player_bids_min() -> None:
     # open 2 -> targets = top-2 vorp (players 1,2). Player 3 (vorp 90) is off-target.
     pool = _vpool()
     view = _aview(pool, budget=100, open_slots=2)
-    assert VorpShareBid().max_bid(view, pool.iloc[2], pool, _vconfig()) == _vconfig().min_bid
+    cfg = _vconfig()
+    bid = VorpShareBid().max_bid(view, pool.iloc[2], pool, cfg)
+    # urgency feature: off-target base min_bid scaled up late (open 2/8, surplus 98)
+    assert bid == round(cfg.min_bid * _budget_urgency(view, cfg))
 
 
 def test_vorpshare_zero_target_vorp_bids_min() -> None:
@@ -304,7 +315,10 @@ def test_vorpshare_zero_target_vorp_bids_min() -> None:
             index=pd.Index(["00-0000007", "00-0000008"], name="gsis_id"),
         ),
     )
-    assert VorpShareBid().max_bid(view, pool.iloc[0], pool, _vconfig()) == _vconfig().min_bid
+    cfg = _vconfig()
+    bid = VorpShareBid().max_bid(view, pool.iloc[0], pool, cfg)
+    # urgency feature: zero-target-vorp base min_bid scaled up late (open 2/8, surplus 98)
+    assert bid == round(cfg.min_bid * _budget_urgency(view, cfg))
 
 
 # ---------------------------------------------------------------------------
@@ -339,3 +353,105 @@ def test_patient_hero_scrub_bids_min() -> None:
     view = _aview(pool, budget=100, open_slots=8)
     # vorp 5 (player 6) is below the scrub cutoff (90) -> scrub -> min_bid.
     assert PatientValueBid().max_bid(view, pool.iloc[5], pool, _vconfig()) == _vconfig().min_bid
+
+
+# ---------------------------------------------------------------------------
+# _budget_urgency (shared late-draft deployment factor)
+# ---------------------------------------------------------------------------
+
+
+def test_budget_urgency_is_one_at_draft_start() -> None:
+    # progress == 0 (my_open_slots == roster_size) -> exactly 1.0, regardless of surplus.
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)  # roster_size 8 -> progress 0
+    assert _budget_urgency(view, _vconfig()) == 1.0
+
+
+def test_budget_urgency_is_one_when_broke() -> None:
+    # surplus = budget - min_bid*open_slots <= 0 -> 1.0 (don't escalate what you can't afford).
+    pool = _vpool()
+    view = _aview(pool, budget=5, open_slots=8)  # 5 - 1*8 = -3 <= 0
+    assert _budget_urgency(view, _vconfig()) == 1.0
+
+
+def test_budget_urgency_exceeds_one_for_overfunded_partial_roster() -> None:
+    pool = _vpool()
+    view = _aview(pool, budget=90, open_slots=4)  # surplus 86 > 0, progress 0.5
+    assert _budget_urgency(view, _vconfig()) > 1.0
+
+
+def test_budget_urgency_increases_with_progress() -> None:
+    pool = _vpool()
+    cfg = _vconfig()
+    fewer_slots = _budget_urgency(_aview(pool, budget=100, open_slots=2), cfg)  # progress 0.75
+    more_slots = _budget_urgency(_aview(pool, budget=100, open_slots=6), cfg)  # progress 0.25
+    assert fewer_slots > more_slots
+
+
+def test_budget_urgency_increases_with_surplus() -> None:
+    pool = _vpool()
+    cfg = _vconfig()
+    rich = _budget_urgency(_aview(pool, budget=100, open_slots=4), cfg)  # ratio 96/100
+    poor = _budget_urgency(_aview(pool, budget=20, open_slots=4), cfg)  # ratio 16/20
+    assert rich > poor
+
+
+def test_budget_urgency_is_bounded_below_one_plus_gain() -> None:
+    pool = _vpool()
+    cfg = _vconfig()
+    extreme = _budget_urgency(_aview(pool, budget=10_000, open_slots=1), cfg)
+    assert 1.0 <= extreme < 1.0 + URGENCY_GAIN
+
+
+# ---------------------------------------------------------------------------
+# StudsAndDepthBid (the "good bot as a hero")
+# ---------------------------------------------------------------------------
+
+
+def test_studs_premium_for_a_stud() -> None:
+    # vorp 120 >= stud_cut 120 -> auction_dollars 30 * (1 + 0.2). Empty roster -> urgency 1.0.
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)
+    bid = StudsAndDepthBid().max_bid(view, pool.iloc[0], pool, _vconfig())
+    assert bid == round(30 * (1.0 + 0.2))  # 36
+
+
+def test_studs_fair_value_for_midtier() -> None:
+    # vorp 110 in (10, 120) -> fair value = auction_dollars 28, no $1-dump. Empty -> urgency 1.0.
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)
+    bid = StudsAndDepthBid().max_bid(view, pool.iloc[1], pool, _vconfig())
+    assert bid == 28
+
+
+def test_studs_min_bid_for_a_scrub() -> None:
+    # vorp 5 < scrub_cut 10 -> min_bid. Empty roster -> urgency 1.0.
+    pool = _vpool()
+    view = _aview(pool, budget=100, open_slots=8)
+    bid = StudsAndDepthBid().max_bid(view, pool.iloc[5], pool, _vconfig())
+    assert bid == _vconfig().min_bid
+
+
+def test_studs_depth_scales_up_under_overfunded_partial_roster() -> None:
+    # Same mid-tier player, but a partial overfunded view (open 5/8, surplus 85) -> urgency > 1.
+    pool = _vpool()
+    cfg = _vconfig()
+    view = _aview(pool, budget=90, open_slots=5)
+    bid = StudsAndDepthBid().max_bid(view, pool.iloc[1], pool, cfg)
+    assert bid == round(28 * _budget_urgency(view, cfg))
+    assert bid > 28  # deploys the surplus rather than leaving it idle
+
+
+def test_studs_depth_tiny_pool_has_no_studs() -> None:
+    # round(stud_frac * 1) == 0 -> _vorp_threshold(pool, 0) == +inf -> nothing clears the stud bar.
+    one = _vpool().iloc[[0]].reset_index(drop=True)
+    view = _aview(one, budget=100, open_slots=8)
+    # vorp 120 is NOT a stud here (stud_cut +inf); scrub_cut = pool min 120 -> v<120 false -> mid.
+    bid = StudsAndDepthBid().max_bid(view, one.iloc[0], one, _vconfig())
+    assert bid == 30  # fair value (auction_dollars), urgency 1.0
+
+
+def test_studs_depth_satisfies_protocol() -> None:
+    from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
+
+    assert isinstance(StudsAndDepthBid(), AuctionBidStrategy)

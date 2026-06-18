@@ -1,7 +1,7 @@
 """CLI engine for the auction bid-model tournament (spec §3.7). Mirrors tournament_cli.py.
 
 `run([...])` loads the VORP pool + LeagueConfig, attaches is_rookie, loads availability +
-variance params (store-backed), then races the seven bid models against a mixed bot field
+variance params (store-backed), then races the eight bid models against a mixed bot field
 with randomized nomination and prints per-metric means + CIs and paired diffs.
 No winner is printed (data-gathering, spec §5.1).
 """
@@ -21,6 +21,7 @@ from projections.draft.assistant.auction.bid_strategy import (
     OverbidValueBid,
     PatientValueBid,
     StaticDollarBid,
+    StudsAndDepthBid,
     VorpShareBid,
 )
 from projections.draft.assistant.auction.market import (
@@ -49,6 +50,7 @@ _MODELS: dict[str, AuctionBidStrategy] = {
     "overbid": OverbidValueBid(),
     "vorpshare": VorpShareBid(),
     "patient": PatientValueBid(),
+    "studsdepth": StudsAndDepthBid(),
 }
 
 _REALISTIC_FIELD: list[BotArchetype] = [AggressiveBot(), PatientValueBot(), BalancedBot()]
@@ -122,7 +124,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Store root for availability/rookies.",
     )
     sub = p.add_subparsers(dest="mode", required=True)
-    sub.add_parser("compare", help="Race the seven bid models; record per-metric data.")
+    sub.add_parser("compare", help="Race the eight bid models; record per-metric data.")
     return p.parse_args(argv)
 
 
