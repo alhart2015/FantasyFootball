@@ -44,9 +44,9 @@ RNG note: nomination sampling consumes from the same seeded `rng` as the bot bid
 
 ### Part 2 — Mixed bot field (`market.py` + `simulation.py`)
 
-Generalize the single `bot_max_bid` into archetype objects sharing one signature. `SeatView` gains `budget: int` (remaining $) so reserve-aware archetypes can pace; default keeps the existing fields.
+Generalize the single `bot_max_bid` into archetype objects sharing one signature. `SeatView` gains **`budget: int = 0`** (remaining $) so reserve-aware archetypes can pace; the default (`0`) keeps existing `SeatView(...)` constructions compiling and is ignored by `AggressiveBot`. The engine always passes the real `state.budgets[seat]` for every archetype.
 
-Define a `BotArchetype` protocol: `max_bid(seat_view, player, baseline_dollars, config, rng, *, price_jitter) -> int`. Each abstains (returns 0) when `open_slots <= 0` or the player's position ∉ `eligible_positions` (the existing gate, unchanged). Value tier is computed from `baseline_dollars` (the archetype ranks the nominee's `auction_dollars` against the in-pool field):
+Define a `BotArchetype` protocol: `max_bid(seat_view, player, baseline_dollars, config, rng, *, price_jitter) -> int`. Each abstains (returns 0) when `open_slots <= 0` or the player's position ∉ `eligible_positions` (the existing gate, unchanged). **Value tier** is computed from `baseline_dollars`: rank the in-pool players (`in_pool == True`) by `auction_dollars` descending; with `r = nominee's 0-based rank` and `N = in-pool count`, the nominee is a **stud** if `r < stud_frac*N`, a **scrub** if `r >= (1 - scrub_frac)*N`, else **mid-tier**:
 
 - **`AggressiveBot`** — *exactly today's* `bot_max_bid`: `round(max(min_bid, value*(1+N(0,jitter))))`. Blows budget early. (The current function is retained/wrapped so its behavior is byte-identical.)
 - **`PatientValueBot(understud=0.5, midtier_premium=0.35, stud_frac=0.10, scrub_frac=0.50)`** — tier the nominee by value percentile among in-pool players:
@@ -55,15 +55,17 @@ Define a `BotArchetype` protocol: `max_bid(seat_view, player, baseline_dollars, 
   - **mid-tier** (the middle band): if it still has reserve (`budget - min_bid*(open_slots-1) > value`), bid `round(value * (1+midtier_premium) * (1+N(0,jitter)))` — *pays a premium to win value*; else `min_bid`. This is what bids Harrison up.
 - **`BalancedBot(pace=2.0)`** — `AggressiveBot`'s WTP but capped to a pace ceiling so it can't blow the bank on one player: `min(value*(1+noise), pace * (budget / open_slots))`. Holds money across the draft.
 
-`assign_bot_archetypes(n_bots: int, *, mix) -> list[BotArchetype]` deterministically assigns an archetype to each bot seat by index (round-robin over the mix so the composition is exact and reproducible). Default engine arg `bot_archetypes: Sequence[BotArchetype] | None = None` ⇒ **all `AggressiveBot`** (current behavior; existing tests unchanged). The bake-off passes a mixed field; default mix ≈ ⅓ aggressive / ⅓ patient / ⅓ balanced (exact split pinned in the plan; tunable).
+`assign_bot_archetypes(n_bots: int, mix: Sequence[BotArchetype]) -> list[BotArchetype]` deterministically assigns an archetype to each bot seat by index — round-robin over `mix` (a sequence of archetype instances, e.g. `[AggressiveBot(), PatientValueBot(), BalancedBot()]`) so the composition is exact and reproducible. Default engine arg `bot_archetypes: Sequence[BotArchetype] | None = None` ⇒ **all `AggressiveBot`** (current behavior; existing tests unchanged). The bake-off passes a mixed field; default mix ≈ ⅓ aggressive / ⅓ patient / ⅓ balanced (exact split pinned in the plan; tunable).
 
 The bid loop dispatches each bot seat through its assigned archetype instead of the lone `bot_max_bid`; the hero path is unchanged.
 
 ### Part 3 — Patient value-hunter hero contestant (`bid_strategy.py`)
 
-`PatientValueBid()` — the AuctionBidStrategy analog of `PatientValueBot`, but reading VORP from the pool (consistent with the other hero models) and `AuctionView`:
-- tier the nominee by VORP rank (reuse `_vorp_threshold`): **stud** (top tier) → `min_bid` (let it go; hold budget); **mid-tier** (next band) → bid up to a VORP-share of remaining budget while reserve remains (pays for value); **scrub** → `min_bid`.
-- Spends late, on mid-round value — the human who waits. Shares the tier/reserve *concept* with `PatientValueBot`; a small shared helper (tier boundaries / reserve test) is factored if it stays clean across the two interfaces, else implemented in parallel (noted, not forced).
+`PatientValueBid(midtier_premium=0.35, stud_frac=0.10, scrub_frac=0.50)` — the AuctionBidStrategy analog of `PatientValueBot`, tiering by VORP rank over the **full pool** via `_vorp_threshold` (static, matching `AnchorBudgetBid`'s existing pattern — `stud` cutoff = `_vorp_threshold(pool, round(stud_frac*len(pool)))`, `scrub` cutoff = `_vorp_threshold(pool, round((1-scrub_frac)*len(pool)))`) and reading dollars from `view.baseline_dollars`:
+- **stud** (top `stud_frac` by VORP) → `min_bid` (let it go; hold budget).
+- **mid-tier** (between `stud_frac` and `1 - scrub_frac`) → `bid = round(auction_dollars * (1 + midtier_premium))` **if** reserve covers it (`view.my_budget - config.min_bid*(view.my_open_slots - 1) >= bid`), else `min_bid`.
+- **scrub** (bottom `scrub_frac`) → `min_bid`.
+- Spends late, on mid-round value — the human who waits. Mirrors `PatientValueBot`'s shape; a shared tier-classification helper is factored if it stays clean across the two interfaces (bot tiers on `auction_dollars`, hero on VORP), else implemented in parallel (noted, not forced).
 
 ### Part 4 — Wiring + re-run
 
@@ -102,10 +104,11 @@ Unit (hand-built small pool + config; no I/O):
 - **`PatientValueBid`:** `min_bid` on a stud, pays up a mid-tier with reserve, `min_bid` scrub.
 
 Integration (engine):
-- **The core fix:** in a draft with a mixed field + `temp>0`, a mid-tier player does **not** clear at `min_bid` (the Harrison-at-$1 artifact is gone) — assert a representative mid-tier nominee clears above `min_bid`.
+- **The core fix (comparative, robust):** run the *same seed* twice — once with the legacy market (all-`AggressiveBot`, `temp=0`) and once with the mixed field + `temp>0`. Classify each drafted player's value tier (the §Part 2 rule). Assert the count of **mid-tier players that cleared above `min_bid`** is **strictly greater** under the mixed field, and is ≥1. (Directly tests that patient bots bid mid-round value up off the $1 floor.)
 - **Completeness:** `assert bids` never fires; the forced-pick "pool thin" path still works.
 - **Determinism:** same `(strategy, seed, nomination_temp, mix)` ⇒ identical rosters.
-- **Backward-compat:** with legacy defaults (`temp=0`, all-aggressive) the engine reproduces the current tests; `AggressiveBot` output matches the retained `bot_max_bid`.
+- **Backward-compat:** with legacy defaults (`temp=0`, all-aggressive) the engine reproduces the current tests; `AggressiveBot` output matches the retained `bot_max_bid`; `temp=0` consumes **no** nomination RNG, so the bot-bid stream (and every existing determinism test) is byte-identical.
+- **CLI test update:** `test_default_models_are_the_six_contestants` is renamed `test_default_models_are_the_seven_contestants` and adds `patient` (additive new contestant — a feature change, not a regression).
 
 Gates: `pytest -v` (the touched test modules; plus `-k "auction or simulation or market"`), `mypy src tests`, `ruff check src tests`, `ruff format --check src tests`.
 
