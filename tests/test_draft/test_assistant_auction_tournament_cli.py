@@ -141,3 +141,58 @@ def test_cli_compare_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         ]
     )
     assert rc == 0
+
+
+def test_parse_args_bot_prices_defaults_to_espn() -> None:
+    args = _parse_args(
+        [
+            "--vorp-table",
+            "x.parquet",
+            "--league-config",
+            "c.json",
+            "--my-seat",
+            "1",
+            "--season",
+            "2026",
+            "compare",
+        ]
+    )
+    assert args.bot_prices == "espn"
+
+
+def test_parse_args_bot_prices_accepts_model() -> None:
+    args = _parse_args(
+        [
+            "--vorp-table",
+            "x.parquet",
+            "--league-config",
+            "c.json",
+            "--my-seat",
+            "1",
+            "--season",
+            "2026",
+            "--bot-prices",
+            "model",
+            "compare",
+        ]
+    )
+    assert args.bot_prices == "model"
+
+
+def test_parse_args_bot_prices_rejects_unknown() -> None:
+    with pytest.raises(SystemExit):
+        _parse_args(
+            [
+                "--vorp-table",
+                "x.parquet",
+                "--league-config",
+                "c.json",
+                "--my-seat",
+                "1",
+                "--season",
+                "2026",
+                "--bot-prices",
+                "sos",
+                "compare",
+            ]
+        )
