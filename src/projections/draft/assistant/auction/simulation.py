@@ -180,7 +180,18 @@ def _simulate_to_state(
                 stacklevel=2,
             )
         else:
-            nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
+            nom = state.nominator
+            nom_fmax = _feasible_max(state, nom, rs, min_bid)
+            broke_nominator = adp_ok and nom != hero0 and nom_fmax == min_bid
+            target = (
+                snake_boards[nom].best_available(frozenset(state.drafted), seat_eligible[nom])
+                if broke_nominator
+                else None
+            )
+            if target is not None:
+                nominee_id = target
+            else:
+                nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
         assert nominee_id is not None  # guaranteed: pool is non-empty while any seat has open slots
         player = pool_by_id[str(nominee_id)]
 

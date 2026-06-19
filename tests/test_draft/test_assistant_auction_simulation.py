@@ -757,3 +757,58 @@ def test_snake_regime_changes_outcomes_vs_no_adp() -> None:
         nomination_temp=1.0,
     )
     assert with_adp != without  # the snake regime re-routes who drafts whom
+
+
+def test_broke_nominator_auction_completes() -> None:
+    # All-broke auction with a broke bot on the clock each round: the broke-nominator override must
+    # produce a valid, rosterable nominee every round and fill every roster (no KeyError / assert).
+    import numpy as np
+
+    from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
+
+    pool, config = _pool_with_adp(), _broke_config()
+    state = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        config,
+        baseline_dollars=generate_auction_values(pool, config),
+        price_jitter=0.15,
+        rng=np.random.default_rng(5),
+        nomination_temp=1.0,
+        snake_rng=np.random.default_rng([5, 7]),
+    )
+    assert all(len(r) == config.roster_size for r in state.rosters)
+
+
+def test_no_adp_pool_is_byte_identical_regardless_of_snake_rng() -> None:
+    # Regime fully disabled without ADP -> the snake_rng value cannot matter (boards never built),
+    # even in an all-broke config where the regime WOULD otherwise be active.
+    import numpy as np
+
+    from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
+
+    config = _broke_config()
+    no_adp = _pool_with_adp().drop(columns=["consensus_adp"])
+    a = simulate_auction(
+        StaticDollarBid(),
+        1,
+        no_adp,
+        config,
+        rng=np.random.default_rng(9),
+        baseline_dollars=generate_auction_values(no_adp, config),
+        price_jitter=0.15,
+        nomination_temp=1.0,
+    )
+    b = simulate_auction(
+        StaticDollarBid(),
+        1,
+        no_adp,
+        config,
+        rng=np.random.default_rng(9),
+        snake_rng=np.random.default_rng([9, 7]),
+        baseline_dollars=generate_auction_values(no_adp, config),
+        price_jitter=0.15,
+        nomination_temp=1.0,
+    )
+    assert a == b
