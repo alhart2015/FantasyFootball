@@ -36,8 +36,11 @@ _SKILL_STARTERS: dict[RosterSlot, int] = {
 # so the pre-generated tables stay valid across bench changes.
 _BENCH_BY_SIZE: dict[int, int] = {10: 9, 12: 9, 16: 5}
 _DEFAULT_BENCH = 9
-# Relative to the repo root; callers that perform I/O must resolve it against the project root.
-_TABLE_DIR = Path("data/vorp_2026")
+
+
+def _table_dir(season: int) -> Path:
+    """Per-season VORP-table directory, cwd-relative (the board + generator read/write here)."""
+    return Path(f"data/vorp_{season}")
 
 
 @dataclass(frozen=True)
@@ -49,17 +52,17 @@ class DraftPreset:
     table_path: Path
 
 
-def _skill_config(scoring_key: str, n_teams: int) -> LeagueConfig:
+def _skill_config(scoring_key: str, n_teams: int, season: int) -> LeagueConfig:
     roster = {**_SKILL_STARTERS, RosterSlot.BENCH: _BENCH_BY_SIZE.get(n_teams, _DEFAULT_BENCH)}
     return LeagueConfig(
-        name=f"{scoring_key}_{n_teams}team_2026",
+        name=f"{scoring_key}_{n_teams}team_{season}",
         n_teams=n_teams,
         roster_slots=roster,
         ruleset=_RULESETS[scoring_key],
     )
 
 
-def get_preset(scoring_key: str, n_teams: int) -> DraftPreset:
+def get_preset(scoring_key: str, n_teams: int, season: int = 2026) -> DraftPreset:
     if scoring_key not in _RULESETS:
         raise ValueError(f"unknown scoring key {scoring_key!r}; expected one of {SCORING_KEYS}")
     if n_teams not in TEAM_SIZES:
@@ -68,8 +71,8 @@ def get_preset(scoring_key: str, n_teams: int) -> DraftPreset:
         scoring_key=scoring_key,
         n_teams=n_teams,
         label=f"{_SCORING_LABELS[scoring_key]} / {n_teams}-team",
-        league_config=_skill_config(scoring_key, n_teams),
-        table_path=_TABLE_DIR / f"{scoring_key}_{n_teams}team.parquet",
+        league_config=_skill_config(scoring_key, n_teams, season),
+        table_path=_table_dir(season) / f"{scoring_key}_{n_teams}team.parquet",
     )
 
 

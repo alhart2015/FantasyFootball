@@ -70,3 +70,17 @@ def test_materialize_league_config_writes_a_resumable_path(tmp_path: Path) -> No
     assert path.exists() and path.is_file()
     loaded = LeagueConfig.model_validate_json(path.read_text())
     assert loaded == preset.league_config
+
+
+def test_get_preset_season_param_drives_path_and_name() -> None:
+    p = get_preset("half", 12, season=2023)
+    assert p.table_path == Path("data/vorp_2023/half_12team.parquet")
+    assert p.league_config.name == "half_12team_2023"
+    std21 = get_preset("std", 16, season=2021)
+    assert std21.table_path == Path("data/vorp_2021/std_16team.parquet")
+
+
+def test_get_preset_defaults_to_2026_byte_for_byte() -> None:
+    p = get_preset("half", 16)  # the board's 2-arg call
+    assert p.table_path == Path("data/vorp_2026/half_16team.parquet")
+    assert p.league_config.name == "half_16team_2026"
