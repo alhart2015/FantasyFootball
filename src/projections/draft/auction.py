@@ -29,6 +29,11 @@ _OUTPUT_COLUMNS: tuple[str, ...] = (
     "value_delta",
 )
 
+# For ESPN-anchored bot pricing: an ESPN-unranked player's bot value falls back to this fraction
+# of our own VORP-based model auction value (instead of a flat min_bid). Keeps the unranked tier
+# cheap but ORDERED, so bots prefer real depth over camp bodies. Tunable; swept toward 0.4-0.5.
+_UNRANKED_MODEL_DISCOUNT = 0.4
+
 
 def _allocate_surplus(value_signal: pd.Series, config: LeagueConfig) -> pd.Series:
     """Split the auction surplus across in-pool players in proportion to a non-negative value
@@ -139,9 +144,11 @@ def espn_anchored_bot_prices(pool: pd.DataFrame, config: LeagueConfig) -> pd.Ser
     """Per-player bot reference dollars anchored on real ESPN auction values (TODO #49c Slice 2).
 
     Returns a ``gsis_id``-indexed ``Int64`` Series over EVERY row of ``pool``: in-pool players get
-    an SOS allocation of the budget over ``espn_auction_dollars`` (NA / absent column -> 0 weight,
-    so unpriced players park at ``min_bid``); out-of-pool players get 0 (bots reading it bid
-    ``min_bid``, as today). Call on the same ``pool`` frame passed to ``generate_auction_values``.
+    an SOS allocation of the budget over a value signal that is the real ``espn_auction_dollars``
+    where ESPN ranked the player, else ``_UNRANKED_MODEL_DISCOUNT`` x our own VORP-based model value
+    (so unranked players are cheap but ORDERED — bots prefer real depth over camp bodies instead of
+    treating every unranked player as an interchangeable ``min_bid``). Out-of-pool players get 0.
+    Call on the same ``pool`` frame passed to ``generate_auction_values``.
 
     Raises ``ValueError`` on degenerate drift (propagated from ``_allocate_surplus``); espn-mode
     callers catch it and fall back to model pricing.
@@ -151,16 +158,19 @@ def espn_anchored_bot_prices(pool: pd.DataFrame, config: LeagueConfig) -> pd.Ser
     pool_mask = pool["gsis_id"].isin(pool_set)
     pool_df = pool.loc[pool_mask].copy()
 
+    # Our VORP-based model auction value, used as the discounted fallback where ESPN is silent.
+    model_by_id = generate_auction_values(pool, config).set_index("gsis_id")["auction_dollars"]
+    model = pd.Series(
+        model_by_id.reindex(pool_df["gsis_id"]).to_numpy(dtype="float64"), index=pool_df.index
+    )
     if "espn_auction_dollars" in pool_df.columns:
-        value_signal = (
-            pool_df["espn_auction_dollars"]
-            .astype("Float64")
-            .fillna(0)
-            .clip(lower=0.0)
-            .astype("float64")
-        )
+        espn = pool_df["espn_auction_dollars"].astype("Float64")
+        ranked = (espn.notna() & (espn > 0)).fillna(False).astype(bool)
+        espn_signal = espn.fillna(0).clip(lower=0.0).astype("float64")
     else:
-        value_signal = pd.Series(0.0, index=pool_df.index, dtype="float64")
+        ranked = pd.Series(False, index=pool_df.index)
+        espn_signal = pd.Series(0.0, index=pool_df.index, dtype="float64")
+    value_signal = espn_signal.where(ranked, _UNRANKED_MODEL_DISCOUNT * model)
     in_pool_dollars = _allocate_surplus(value_signal, config)
 
     in_pool_dollars = in_pool_dollars.set_axis(pd.Index(pool_df["gsis_id"], name="gsis_id"))
