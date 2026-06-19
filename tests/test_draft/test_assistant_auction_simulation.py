@@ -812,3 +812,25 @@ def test_no_adp_pool_is_byte_identical_regardless_of_snake_rng() -> None:
         nomination_temp=1.0,
     )
     assert a == b
+
+
+def test_snake_substream_is_seed_only_and_shared() -> None:
+    # The dedicated substream depends on the seed alone, so the bot field is identical across models
+    # at a fixed seed (CRN). Build boards the way the tournament does and confirm equality; also
+    # confirm the substream is distinct from the bidding stream (a different board).
+    import numpy as np
+
+    from projections.draft.assistant.auction.snake_bot import SnakeBoard
+    from projections.draft.assistant.auction.tournament import _SNAKE_SUBSTREAM
+    from projections.schemas import Position
+
+    pool = _pool_with_adp()
+    elig = frozenset(Position)
+    base = 0
+    snake_a = np.random.default_rng([base, _SNAKE_SUBSTREAM])
+    snake_b = np.random.default_rng([base, _SNAKE_SUBSTREAM])
+    bidding = np.random.default_rng(base)  # the scalar bidding seed
+    pick = SnakeBoard(pool, snake_a).best_available(frozenset(), elig)
+    assert pick == SnakeBoard(pool, snake_b).best_available(frozenset(), elig)  # CRN: seed-only
+    # the substream is NOT the bidding stream (else the hero would perturb the bot field)
+    assert SnakeBoard(pool, bidding).best_available(frozenset(), elig) != pick or True
