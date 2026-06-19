@@ -278,6 +278,26 @@ Per-model metrics (mean [95% CI on exp pts]), sorted by exp pts:
 
 **Caveats (data, not a decision).** (1) **Not comparable to Runs F/G's levels** — this run uses **seat 6** (F/G used seat 1), a **fresh** consensus table (asof 2026-06-19 vs F/G's 2026-06-09), and **n_sims=500** (vs 200). The valid comparison is the *within-Run-H* espn-vs-model A/B (same seat/table/seeds/n_sims), not Run H vs F/G. (2) **Byes OFF** (2026 schedule not ingested) — injury availability is applied, byes are not. (3) **40 seeds, one seat** — the per-model playoff%s carry ~±0.05–0.10 sampling spread; treat the Δ pattern (most value heroes improve, esp. 16-team) as the signal, not any single cell. (4) The diagnostic's biggest deltas are all rookies because the 2026 `id_map` still carries them as placeholder gsis; veteran ESPN↔ours agreement is tighter. **No winner declared** — this confirms the bot *market* is now realistically exploitable (the #49c realism lever worked), not that any one hero strategy is the answer; the strategy call remains September 2026, and folding ESPN-anchored bots into the multi-year averaging (#49a) is the next reliability step.
 
+**Run H follow-up — `PatientValueBid` is mis-tuned; mid-tier *breadth* (`scrub_frac`) is the biggest strategy lever found (2026-06-19, 12-team, ESPN bots).** Run H's 12-team leader `patient` only deploys ~$136 of $200 (it floors studs *and* the bottom 50% by VORP as scrubs at $1). Investigating whether the idle budget is a problem produced a clear, CI-separated result.
+
+- **`scrub_frac` sweep (hold `stud_frac=0.10`; 30 seeds × 300 sims):** lowering `scrub_frac` (treat more of the pool as contested mid-tier instead of $1-scrubs) monotonically lifts playoff% **0.64 (sf=0.50, shipped default) → 0.83 (sf=0.0)** and raises spend ~$144 → ~$161. `midtier_premium` is a *wash-to-slightly-negative* (bidding harder per player overpays; it's breadth, not depth-of-bid, that wins).
+- **Star-cap sweep (hold `scrub_frac=0`, `prem=0.35`; 40 seeds × 300 sims):** lowering the stud-floor count to contest the top players *does* deploy the budget (`floor_top_45` → $190, `floor_top_35` → $195), but playoff% stays **flat ~0.80–0.83** across `floor_top_35..60`, with the slight optimum at the *lower*-spend `floor_top_55–58`. So spending the last ~$30 on a contested stud is a **lateral trade, not an upgrade** — the idle cash was a symptom, not the problem.
+- **Full test (40 seeds, n_sims=500, the 8 shipped contestants + the tuned `patient_deep` = `scrub_frac=0`, ESPN bots, seat 6):** `patient_deep` is the runaway field leader.
+
+  | model | pts | reg-win | playoff | bye | champ |
+  |---|---|---|---|---|---|
+  | **patient_deep** | 1111 | 0.65 | **0.83** | 0.33 | 0.15 |
+  | patient (shipped) | 991 | 0.55 | 0.62 | 0.16 | 0.07 |
+  | vorpshare | 929 | 0.49 | 0.47 | 0.14 | 0.07 |
+  | inflation | 905 | 0.48 | 0.45 | 0.13 | 0.06 |
+  | static | 894 | 0.47 | 0.43 | 0.12 | 0.05 |
+  | marginal / overbid / studsdepth | ~855 | ~0.44 | 0.35–0.37 | ≤0.08 | ≤0.04 |
+  | anchors | 711 | 0.32 | 0.15 | 0.02 | 0.01 |
+
+  Paired diff `patient_deep − patient` (CRN) is **CI-separated on every metric**: playoff **+0.205 [+0.172, +0.241]**, bye +0.168 [+0.145, +0.191], champ +0.078 [+0.066, +0.090], reg-win +0.098, points +120.
+
+**Mechanism:** ESPN-anchored bots overpay for the studs ESPN prices high and leave a deep, *cheap* mid-tier; a breadth-maximizing hero hoovers up that mid-tier value for a far higher-floor roster than any stud-buyer. **Status (data, no default change):** the shipped `PatientValueBid(scrub_frac=0.50)` is the *worst* setting swept and a strong candidate for re-tuning to `scrub_frac≈0` (or adding a `patient_deep` contestant) — **deferred to the September strategy decision.** Scope caveat: 12-team only, ESPN-anchored field only, one 2026 snapshot, seat 6; 16-team auction not tested (the auction tuning question is 12-team-specific for this league).
+
 ## Planned experiments / axes to sweep
 
 - **Bid-model bake-off** (the core): `static` vs `inflation` vs `marginal`, all three metrics, at a fixed
