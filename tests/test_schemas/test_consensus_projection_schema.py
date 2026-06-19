@@ -61,3 +61,47 @@ def test_gsis_id_must_be_unique() -> None:
     df.loc[1, "gsis_id"] = "00-0036900"  # duplicate
     with pytest.raises((SchemaError, SchemaErrors)):
         ConsensusProjectionSchema.validate(df)
+
+
+def test_consensus_schema_auction_columns_optional_and_float64() -> None:
+    base = {
+        "gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]"),
+        "season": pd.array([2026], dtype="Int64"),
+        "asof": pd.array(["2026-06-09"], dtype="string[pyarrow]"),
+        "full_name": pd.array(["P"], dtype="string[pyarrow]"),
+        "position": pd.array(["RB"], dtype="string[pyarrow]"),
+        "consensus_adp": pd.array([5.0], dtype="Float64"),
+        "consensus_rank": pd.array([1], dtype="Int64"),
+        "n_adp_sources": pd.array([1], dtype="Int64"),
+        "has_points": [True],
+        "projected_points_ppr": pd.array([200.0], dtype="Float64"),
+        **{
+            f: pd.array([pd.NA], dtype="Float64")
+            for f in (
+                "passing_yards",
+                "passing_tds",
+                "interceptions",
+                "rushing_yards",
+                "rushing_tds",
+                "receptions",
+                "receiving_yards",
+                "receiving_tds",
+                "fumbles_lost",
+            )
+        },
+        "is_placeholder_gsis": [False],
+        "ruleset": pd.array(["ESPN_HALF"], dtype="string[pyarrow]"),
+    }
+    # Without the auction columns: must validate (Optional).
+    ConsensusProjectionSchema.validate(pd.DataFrame(base))
+    # With them: validates and stays Float64.
+    withcols = pd.DataFrame(
+        {
+            **base,
+            "espn_auction_value_avg": pd.array([58.67], dtype="Float64"),
+            "espn_auction_value_ppr": pd.array([57.0], dtype="Float64"),
+            "espn_auction_value_std": pd.array([55.0], dtype="Float64"),
+        }
+    )
+    out = ConsensusProjectionSchema.validate(withcols)
+    assert str(out["espn_auction_value_avg"].dtype) == "Float64"

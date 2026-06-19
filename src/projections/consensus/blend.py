@@ -37,9 +37,14 @@ _OUTPUT_COLUMNS: tuple[str, ...] = (
     "has_points",
     "projected_points_ppr",
     *STAT_FIELDS,
+    "espn_auction_value_avg",
+    "espn_auction_value_ppr",
+    "espn_auction_value_std",
     "is_placeholder_gsis",
     "ruleset",
 )
+
+_ESPN_AUCTION_COLS = ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std")
 
 
 def _empty_output() -> pd.DataFrame:
@@ -60,6 +65,12 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
     # reset it). groupby preserves whatever index we set here, so doing this once keeps the
     # vectorized mask index-safe regardless of caller.
     external = external.reset_index(drop=True)
+
+    # ESPN-only auction columns are Optional; a stale snapshot or an existing caller's frame may
+    # omit them. Seed to NA so the per-group reads below never KeyError (R3/R6/R8).
+    for col in _ESPN_AUCTION_COLS:
+        if col not in external.columns:
+            external[col] = pd.NA
 
     season = int(external["season"].iloc[0])
     asof = str(external["asof"].iloc[0])
@@ -107,6 +118,9 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
             "is_placeholder_gsis": bool(identity_row["is_placeholder_gsis"]),
             "ruleset": ruleset.name,
         }
+        for col in _ESPN_AUCTION_COLS:
+            non_null = grp[col].dropna()
+            rec[col] = non_null.iloc[0] if not non_null.empty else pd.NA
         for field in STAT_FIELDS:
             rec[field] = statline.get(field, pd.NA)
         records.append(rec)
@@ -123,5 +137,7 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
     df["season"] = df["season"].astype("Int64")
     df["n_adp_sources"] = df["n_adp_sources"].astype("Int64")
     df["consensus_rank"] = df["consensus_rank"].astype("Int64")
+    for col in _ESPN_AUCTION_COLS:
+        df[col] = df[col].astype("Float64")
 
     return df[list(_OUTPUT_COLUMNS)]

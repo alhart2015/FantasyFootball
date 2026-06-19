@@ -882,6 +882,10 @@ class ConsensusProjectionSchema(pa.DataFrameModel):
     receiving_yards: Series[pd.Float64Dtype] = pa.Field(nullable=True)
     receiving_tds: Series[pd.Float64Dtype] = pa.Field(nullable=True)
     fumbles_lost: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    # Optional (not-required): ESPN-only auction values carried from external_projections.
+    espn_auction_value_avg: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
+    espn_auction_value_ppr: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
+    espn_auction_value_std: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
     is_placeholder_gsis: Series[bool]
     ruleset: Series[str] = pa.Field(isin=_RULESET_NAME_VALUES)
 
