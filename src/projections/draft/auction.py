@@ -174,8 +174,11 @@ def espn_anchored_bot_prices(
     if model_values is None:
         model_values = generate_auction_values(pool, config)
     model_col = model_values.set_index("gsis_id")["auction_dollars"]
+    # fillna(0): a caller-supplied model_values missing an in-pool player degrades that player to a
+    # min_bid signal rather than poisoning the whole allocation with NaN (no-op for matched inputs).
     model = pd.Series(
-        model_col.reindex(pool_df["gsis_id"]).to_numpy(dtype="float64"), index=pool_df.index
+        model_col.reindex(pool_df["gsis_id"]).fillna(0).to_numpy(dtype="float64"),
+        index=pool_df.index,
     )
     if "espn_auction_dollars" in pool_df.columns:
         espn = pool_df["espn_auction_dollars"].astype("Float64")
