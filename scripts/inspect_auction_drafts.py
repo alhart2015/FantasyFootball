@@ -99,12 +99,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--base-seed", type=int, default=0)
     p.add_argument("--bot-prices", choices=("espn", "model"), default="espn")
     p.add_argument("--layout", choices=("slots", "flat"), default="slots", help="roster view.")
+    p.add_argument(
+        "--bench",
+        type=int,
+        default=None,
+        help="override the preset bench-slot count (VORP is starter-demand, so the table is "
+        "unchanged; only the auction budget spread + injury depth shift).",
+    )
     p.add_argument("--data-root", type=Path, default=Path("data"))
     args = p.parse_args(argv)
 
     preset = get_preset(args.scoring, args.size, season=args.season)
     pool = _load_pool(preset.table_path)
     config = preset.league_config
+    if args.bench is not None:
+        config = config.model_copy(
+            update={"roster_slots": {**config.roster_slots, RosterSlot.BENCH: args.bench}}
+        )
     pool = attach_is_rookie(pool, season=args.season, data_root=args.data_root)
     availability = load_store_availability(pool, season=args.season, data_root=args.data_root)
     params = VarianceParams.load()
