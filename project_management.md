@@ -4,6 +4,20 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction Strategy — Multi-year bake-off + `patient_deep` + ESPN-pricing fix (#49a / #49c) — shipped (2026-06-19, branch `feat/patient-deep-contestant`)
+
+**Status:** the multi-year averaging (#49a) is run; the tuned `patient_deep` (`PatientValueBid(scrub_frac=0)`) is now a **standing 9th contestant** (`_MODELS`); and a **bot-pricing methodology fix** (#49c) corrects how ESPN-unranked players are valued. Also added `scripts/inspect_auction_drafts.py` (best/worst-draft roster inspector, `--layout slots`, `--bench` override). Consumes the per-season tables from PR #84.
+
+**Methodology fix (#49c, the important one):** `espn_anchored_bot_prices` previously gave every ESPN-*unranked* player a flat `min_bid` → bots couldn't distinguish a real backup from a camp body and rostered random $1 scrubs (a bot started a 3rd-string QB; surfaced via the inspector). Now unranked players fall back to `_UNRANKED_MODEL_DISCOUNT` (0.4) × our VORP-based model value — cheap but **ordered**, so bots field real depth. Preserves the hero's edge (the exploited rookies are ESPN-priced-cheap, not unranked). **This changed all ESPN-anchored numbers** — the flat-$1 field had been inflating the stud-buying heroes.
+
+**Result, corrected pricing (data; strongest the harness has produced):** across **6 seasons (2021–2026), 12-team half-PPR, ESPN bots, 20 seeds × 300 sims, seat 6**, `patient_deep` **dominates by a wide, stable margin** — mean playoff **0.825 (+0.25 over #2** `patient` 0.577), champ 0.164, **sd 0.020**, and **#1 in all 6 seasons** (0.81–0.86). The buggy first run had `inflation`/`static` at an apparent 0.70/0.69 (#2/#3) with a spurious "era-shift"; corrected, they sit at a flat ~0.50 (#4/#5) — the era-shift was largely the flat-$1 artifact, and the fix *strengthened* the `patient_deep` conclusion. Full table + correction note in `reports/auction_tournament_validation_2026.md`.
+
+**Caveats:** auction-value basis varies by season (pre-2023 crowd-only, 2025 expert-only); 2026 has no schedule yet (empty byes); 20×300 is directional; the unranked-discount (0.4) is itself a tunable knob worth sweeping.
+
+**September decision:** `patient_deep` is the clear front-runner — adopt it or re-tune `patient` to `scrub_frac≈0`. Deferred to September per policy. Open: sweep the 0.4 unranked-discount; 16-team auction; higher seeds for tight CIs; `patient_deep` underspends badly at low bench counts (idle-budget tuning).
+
+---
+
 ## Auction Strategy — Multi-year auction-test data ingest (#49a prereq) — shipped (2026-06-19, branch `feat/multi-year-auction-ingest`)
 
 **Status:** the **data-ingest prerequisite** for #49a (multi-year averaging) is done — every season we have projection data for now has a per-season preset VORP table + league config with `espn_auction_dollars`, ready to feed a multi-year auction bake-off. The averaging *runner itself* is still #49a's open slice (not this work). Spec/plan `docs/superpowers/specs|plans/2026-06-19-multi-year-auction-ingest.*`. Built via the full **`superpowers-go`** pipeline: spec → **superpowers-spec-review** (2 iterations to clean) → writing-plans → **superpowers-plan-review** (3 iterations; caught a `SchemaError` Critical, a 16-team pool-fill bug, and an mypy `no_implicit_reexport` issue *before* any code) → subagent-driven execution (3 code tasks, each TDD + spec + quality review) → final whole-branch review (**READY TO MERGE**).

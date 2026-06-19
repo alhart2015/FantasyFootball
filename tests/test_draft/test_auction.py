@@ -431,11 +431,11 @@ def test_reference_prices_duplicate_gsis_id_rejected() -> None:
 
 
 def _hand_pool_with_espn() -> tuple[LeagueConfig, pd.DataFrame]:
-    """4-player pool (2 QB + 2 RB). total_budget = n_teams*budget = 2*100 = 200, min_bid 1 ->
-    surplus 196. Two priced players (espn 60, 36) absorb the surplus; two unpriced (NA) park at
-    min_bid. Drift is 0:
-      value_signal=[60,0,36,0]; sum=96; extra=[60,0,36,0]/96*196=[122.5,0,73.5,0];
-      dollars=round([123.5,1,74.5,1])=[124,1,74,1] (round-half-even); sum=200.
+    """4-player pool (2 QB + 2 RB). total_budget = n_teams*budget = 2*100 = 200, min_bid 1.
+    Two players carry ESPN values (60, 36); two are ESPN-unranked (NA) and fall back to
+    _UNRANKED_MODEL_DISCOUNT (0.4) x their VORP-based model value (model = [71, 57, 43, 29]).
+      value_signal = [60, 0.4*57=22.8, 36, 0.4*29=11.6]; the SOS allocation sums to 200 and
+      yields bot prices [91, 35, 55, 19] (ESPN-priced dominate; unranked ordered by model value).
     """
     cfg = _make_config(
         n_teams=2, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.BENCH: 0}
@@ -458,19 +458,24 @@ def test_espn_bot_prices_sum_to_total_budget() -> None:
     assert int(out.sum()) == cfg.total_budget
 
 
-def test_espn_bot_prices_unpriced_park_at_min_bid() -> None:
+def test_espn_bot_prices_unranked_ordered_by_model_value() -> None:
+    """ESPN-unranked players no longer park at a flat min_bid: they fall back to a discounted
+    model value, so the higher-VORP unranked player outprices the lower-VORP one (bots can tell
+    real depth from camp bodies instead of treating all unranked players as interchangeable)."""
     cfg, df = _hand_pool_with_espn()
     out = espn_anchored_bot_prices(df, cfg)
-    assert out["00-1000002"] == cfg.min_bid
-    assert out["00-2000002"] == cfg.min_bid
+    assert out["00-1000002"] == 35  # unranked QB, model 57 -> 0.4*57 signal
+    assert out["00-2000002"] == 19  # unranked RB, model 29 -> lower
+    assert out["00-1000002"] > out["00-2000002"] > cfg.min_bid
 
 
-def test_espn_bot_prices_priced_split_surplus_and_are_monotonic() -> None:
+def test_espn_bot_prices_priced_outrank_unranked_and_are_monotonic() -> None:
     cfg, df = _hand_pool_with_espn()
     out = espn_anchored_bot_prices(df, cfg)
-    assert out["00-1000001"] == 124  # round(min_bid + (60/96)*196)
-    assert out["00-2000001"] == 74  # round(min_bid + (36/96)*196)
-    assert out["00-1000001"] > out["00-2000001"]  # higher ESPN $ -> higher bot $
+    assert out["00-1000001"] == 91  # ESPN $60 -> top bot price
+    assert out["00-2000001"] == 55  # ESPN $36
+    # signal order [60, 36, 22.8 (unranked QB), 11.6 (unranked RB)] -> strictly decreasing prices
+    assert out["00-1000001"] > out["00-2000001"] > out["00-1000002"] > out["00-2000002"]
 
 
 def test_espn_bot_prices_dtype_is_int64() -> None:
@@ -500,15 +505,15 @@ def test_espn_bot_prices_every_in_pool_at_least_min_bid() -> None:
     assert all(out[g] >= cfg.min_bid for g in pool_ids)
 
 
-def test_espn_bot_prices_absent_column_uniform_fallback() -> None:
+def test_espn_bot_prices_absent_column_falls_back_to_model() -> None:
+    """No ESPN column at all -> every player is 'unranked', so the discounted-model fallback
+    (the 0.4 discount normalizes away when uniform) yields pure VORP-based model pricing."""
     cfg, df = _hand_pool_with_espn()
     df = df.drop(columns=["espn_auction_dollars"])
     out = espn_anchored_bot_prices(df, cfg)
-    # all-zero weight -> uniform split of total_budget (200) over 4 in-pool players:
-    # surplus 196 / 4 = 49 + min_bid 1 = 50 each; drift 0
+    model = generate_auction_values(df, cfg).set_index("gsis_id")["auction_dollars"]
     assert int(out.sum()) == cfg.total_budget
-    in_pool = out[out > 0] if (out > 0).any() else out
-    assert sorted(in_pool.tolist()) in ([50, 50, 50, 50], [49, 50, 50, 51])
+    assert all(out[g] == model[g] for g in df["gsis_id"])  # equals model auction values
 
 
 def test_espn_bot_prices_deep_league_inflation() -> None:
