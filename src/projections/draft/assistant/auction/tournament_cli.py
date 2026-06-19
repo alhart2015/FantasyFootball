@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
 
@@ -39,6 +40,7 @@ from projections.draft.assistant.auction.tournament import (
 from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
+from projections.draft.auction import generate_auction_values, has_usable_espn_prices
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 
@@ -92,6 +94,30 @@ def format_compare(result: AuctionTournamentResult) -> str:
     return "\n".join(lines)
 
 
+def _format_espn_diagnostic(pool: pd.DataFrame, config: LeagueConfig) -> str:
+    """Largest our$-vs-ESPN$ gaps (value_delta = our SOS dollars - ESPN dollars). Skipped when
+    the pool carries no usable espn_auction_dollars."""
+    if not has_usable_espn_prices(pool):
+        return "ESPN diagnostic: no usable espn_auction_dollars on the pool (skipped)."
+    ref = pool.loc[
+        pool["espn_auction_dollars"].notna(), ["gsis_id", "espn_auction_dollars"]
+    ].rename(columns={"espn_auction_dollars": "reference_dollars"})
+    diag = generate_auction_values(pool, config, reference_prices=ref)
+    priced = diag[diag["reference_dollars"].notna()].sort_values("value_delta")
+    lines = ["ESPN vs ours (value_delta = our SOS $ - ESPN $); most negative = ESPN richer:"]
+
+    def _fmt(row: pd.Series) -> str:
+        return (
+            f"  {row['gsis_id']}: ours ${int(row['auction_dollars'])} "
+            f"ESPN ${int(row['reference_dollars'])} delta {int(row['value_delta']):+d}"
+        )
+
+    # head(5)+tail(5) overlap when fewer than 10 priced players; show each row once instead.
+    shown = priced if len(priced) <= 10 else pd.concat([priced.head(5), priced.tail(5)])
+    lines.extend(_fmt(row) for _, row in shown.iterrows())
+    return "\n".join(lines)
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Auction bid-model data-gathering harness.")
     p.add_argument("--vorp-table", type=Path, required=True, help="Consensus VORP parquet.")
@@ -123,6 +149,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=Path("data"),
         help="Store root for availability/rookies.",
     )
+    p.add_argument(
+        "--bot-prices",
+        choices=("espn", "model"),
+        default="espn",
+        help="Bot pricing anchor: 'espn' (real ESPN auction values) or 'model' (shared SOS).",
+    )
     sub = p.add_subparsers(dest="mode", required=True)
     sub.add_parser("compare", help="Race the eight bid models; record per-metric data.")
     return p.parse_args(argv)
@@ -135,6 +167,7 @@ def run(argv: list[str] | None = None) -> int:
     pool = attach_is_rookie(pool, season=args.season, data_root=args.data_root)
     availability = load_store_availability(pool, season=args.season, data_root=args.data_root)
     params = VarianceParams.load()
+    bot_prices: Literal["espn", "model"] = "espn" if args.bot_prices == "espn" else "model"
     result = run_auction_tournament(
         _MODELS,
         pool,
@@ -148,6 +181,10 @@ def run(argv: list[str] | None = None) -> int:
         params=params,
         nomination_temp=args.nomination_temp,
         bot_archetypes=_REALISTIC_FIELD,
+        bot_prices=bot_prices,
     )
     print(format_compare(result))
+    if bot_prices == "espn":
+        print()
+        print(_format_espn_diagnostic(pool, config))
     return 0

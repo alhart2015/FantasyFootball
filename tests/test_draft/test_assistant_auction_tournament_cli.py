@@ -9,11 +9,13 @@ from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
 from projections.draft.assistant.auction.tournament import AuctionTournamentResult
 from projections.draft.assistant.auction.tournament_cli import (
     _MODELS,
+    _format_espn_diagnostic,
     _parse_args,
     format_compare,
     run,
 )
 from projections.schemas import _PYARROW_STR
+from tests.test_draft.test_assistant_auction_tournament import _config, _pool
 
 
 def _write_pool(path: Path) -> None:
@@ -141,3 +143,80 @@ def test_cli_compare_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         ]
     )
     assert rc == 0
+
+
+def test_parse_args_bot_prices_defaults_to_espn() -> None:
+    args = _parse_args(
+        [
+            "--vorp-table",
+            "x.parquet",
+            "--league-config",
+            "c.json",
+            "--my-seat",
+            "1",
+            "--season",
+            "2026",
+            "compare",
+        ]
+    )
+    assert args.bot_prices == "espn"
+
+
+def test_parse_args_bot_prices_accepts_model() -> None:
+    args = _parse_args(
+        [
+            "--vorp-table",
+            "x.parquet",
+            "--league-config",
+            "c.json",
+            "--my-seat",
+            "1",
+            "--season",
+            "2026",
+            "--bot-prices",
+            "model",
+            "compare",
+        ]
+    )
+    assert args.bot_prices == "model"
+
+
+def _diag_pool(n: int = 40) -> pd.DataFrame:
+    """The tournament test's `_pool` plus a populated `espn_auction_dollars` Int64 column, so the
+    diagnostic takes the real (non-skipped) path."""
+    pool = _pool(n)
+    pool["espn_auction_dollars"] = pd.array([int(60 - i) for i in range(n)], dtype="Int64")
+    return pool
+
+
+def test_format_espn_diagnostic_real_readout() -> None:
+    pool = _diag_pool(40)
+    out = _format_espn_diagnostic(pool, _config())
+    assert "ESPN vs ours" in out  # the real header, not the "skipped" message
+    assert "delta" in out
+    assert "skipped" not in out
+
+
+def test_format_espn_diagnostic_skipped_without_espn_column() -> None:
+    pool = _diag_pool(40).drop(columns=["espn_auction_dollars"])
+    out = _format_espn_diagnostic(pool, _config())
+    assert "skipped" in out
+
+
+def test_parse_args_bot_prices_rejects_unknown() -> None:
+    with pytest.raises(SystemExit):
+        _parse_args(
+            [
+                "--vorp-table",
+                "x.parquet",
+                "--league-config",
+                "c.json",
+                "--my-seat",
+                "1",
+                "--season",
+                "2026",
+                "--bot-prices",
+                "sos",
+                "compare",
+            ]
+        )

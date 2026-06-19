@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from projections.draft.assistant.auction.bid_strategy import AuctionView, StaticDollarBid
 from projections.draft.assistant.auction.tournament import (
@@ -156,3 +157,106 @@ def test_constant_edge_paired_diff_excludes_zero() -> None:
     diff = result.paired_diffs["static_vs_min"]["mean_points"]
     assert diff.lo_95 > 0.0  # static reliably out-rosters a min-bidding hero
     assert not hasattr(result, "winner")  # recorded as data; no winner declared
+
+
+def _pool_with_inverted_espn(n: int = 40) -> pd.DataFrame:
+    """Pool whose ESPN $ are INVERTED vs vorp (best-vorp player gets the lowest ESPN $), so the
+    ESPN-anchored bot market diverges hard from SOS."""
+    p = _pool(n)
+    espn = [int(5 + i) for i in range(n)]  # ascending: worst SOS player priced highest
+    p["espn_auction_dollars"] = pd.array(espn, dtype="Int64")
+    return p
+
+
+def test_bot_prices_unknown_raises() -> None:
+    pool = _pool(40)
+    cfg = _config(6)
+    with pytest.raises(ValueError, match="bot_prices"):
+        run_auction_tournament(
+            {"static": StaticDollarBid()},
+            pool,
+            cfg,
+            my_seat=1,
+            n_seeds=2,
+            price_jitter=0.1,
+            base_seed=0,
+            n_sims=20,
+            availability=_avail(pool),
+            params=VarianceParams.load(),
+            bot_prices="sos",  # type: ignore[arg-type]  # deliberately invalid: exercises the runtime guard
+        )
+
+
+def test_bot_prices_espn_without_column_warns_and_matches_model() -> None:
+    pool = _pool(40)
+    cfg = _config(6)
+    params = VarianceParams.load()
+    avail = _avail(pool)
+    with pytest.warns(UserWarning, match="espn"):
+        espn = run_auction_tournament(
+            {"static": StaticDollarBid()},
+            pool,
+            cfg,
+            my_seat=1,
+            n_seeds=3,
+            price_jitter=0.1,
+            base_seed=0,
+            n_sims=30,
+            availability=avail,
+            params=params,
+            bot_prices="espn",
+        )
+    model = run_auction_tournament(
+        {"static": StaticDollarBid()},
+        pool,
+        cfg,
+        my_seat=1,
+        n_seeds=3,
+        price_jitter=0.1,
+        base_seed=0,
+        n_sims=30,
+        availability=avail,
+        params=params,
+        bot_prices="model",
+    )
+    assert (
+        espn.summaries["static"]["mean_points"].point
+        == model.summaries["static"]["mean_points"].point
+    )
+
+
+def test_bot_prices_espn_with_column_differs_from_model() -> None:
+    pool = _pool_with_inverted_espn(40)
+    cfg = _config(6)
+    params = VarianceParams.load()
+    avail = _avail(pool)
+    espn = run_auction_tournament(
+        {"static": StaticDollarBid()},
+        pool,
+        cfg,
+        my_seat=1,
+        n_seeds=4,
+        price_jitter=0.1,
+        base_seed=0,
+        n_sims=30,
+        availability=avail,
+        params=params,
+        bot_prices="espn",
+    )
+    model = run_auction_tournament(
+        {"static": StaticDollarBid()},
+        pool,
+        cfg,
+        my_seat=1,
+        n_seeds=4,
+        price_jitter=0.1,
+        base_seed=0,
+        n_sims=30,
+        availability=avail,
+        params=params,
+        bot_prices="model",
+    )
+    assert (
+        espn.summaries["static"]["mean_points"].point
+        != model.summaries["static"]["mean_points"].point
+    )

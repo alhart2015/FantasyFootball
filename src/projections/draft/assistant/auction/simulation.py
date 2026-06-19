@@ -97,6 +97,7 @@ def _simulate_to_state(
     rng: np.random.Generator,
     nomination_temp: float = 0.0,
     bot_archetypes: Sequence[BotArchetype] | None = None,
+    bot_dollars: pd.Series | None = None,
 ) -> AuctionState:
     """Run the full auction loop; return the final AuctionState (budgets + priced rosters)."""
     validate_auction_inputs(pool, config)
@@ -126,6 +127,12 @@ def _simulate_to_state(
     pool_by_id = {str(g): row for g, row in pool.set_index("gsis_id", drop=False).iterrows()}
     bd = baseline_dollars.set_index("gsis_id")
     nominate_order = bd.sort_values("auction_dollars", ascending=False).index.tolist()
+    if bot_dollars is None:
+        bd["bot_dollars"] = bd["auction_dollars"]
+    else:
+        bd["bot_dollars"] = (
+            bot_dollars.reindex(bd.index).fillna(bd["auction_dollars"]).astype(pd.Int64Dtype())
+        )
     all_positions = frozenset(Position)
     state = AuctionState.initial(config)
 
@@ -219,6 +226,7 @@ def simulate_auction(
     rng: np.random.Generator,
     nomination_temp: float = 0.0,
     bot_archetypes: Sequence[BotArchetype] | None = None,
+    bot_dollars: pd.Series | None = None,
 ) -> dict[int, list[str]]:
     """One full auction; return every seat's roster {seat(1-based): [gsis_id, ...]}."""
     state = _simulate_to_state(
@@ -231,5 +239,6 @@ def simulate_auction(
         rng=rng,
         nomination_temp=nomination_temp,
         bot_archetypes=bot_archetypes,
+        bot_dollars=bot_dollars,
     )
     return {seat + 1: [g for (g, _p, _pr) in state.rosters[seat]] for seat in range(config.n_teams)}

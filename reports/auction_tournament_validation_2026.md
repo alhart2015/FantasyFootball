@@ -252,6 +252,52 @@ Per-model metrics (mean [95% CI on exp pts]), sorted by exp pts:
 
 **Two directions this raises (user, 2026-06-18; tracked in `TODO.md`).** (1) **Average across all available seasons.** Year-to-year results swing wildly (Run A→B→C→D→E→F); a single 2026 snapshot is one noisy draw. Re-run every backtest across all seasons we have data for and average, so the strategy ranking reflects a multi-year mean rather than one year's projection set. (2) **Learn the strategy directly (RL).** That hand-authored bid models all cluster at or below the field's fair share suggests we're not searching the strategy space well by hand — a reinforcement-learning agent that learns a bid policy against the bot market (and ultimately self-play) may find an edge the fixed heuristics can't.
 
+**Run H — 2026-06-19** (`half_12team` **and** `half_16team`, seat 6, 40 seeds, n_sims=500, price_jitter=0.15, budget=200; **byes OFF** — 2026 schedule not ingested; **REALISTIC MARKET** identical to Runs E–G: `nomination_temp=1.0` + mixed bot field (⅓ aggressive / ⅓ patient value-hunter / ⅓ balanced); **eight contestants** identical to Runs F/G incl. `_budget_urgency` + `studsdepth`; branch `feat/auction-bot-real-price-anchor`, TODO #49c Slice 2). **This is the first run with ESPN-anchored bots — the A/B that breaks the shared-value problem.** Both preset tables were regenerated from a **fresh `external_projections` re-ingest** (`asof 2026-06-19`, 199 crowd / 160 expert ESPN auction values), so `espn_auction_dollars` is populated (~201 priced of ~204–208 in-pool). The experiment is a clean one-variable A/B at each league size: `--bot-prices espn` (bots price off real ESPN auction values, SOS-allocated, $1 floor for unpriced) **vs** `--bot-prices model` (the prior shared-value bots — bots price off the hero's own SOS `auction_dollars` ± noise). Same table, same seat, same seeds; **only the bot pricing changes.** The hero always uses our SOS model. Fair share: 12-team playoff 0.50 / champ 0.083; 16-team playoff 0.375 / champ 0.0625.
+
+**Playoff% by model — ESPN-anchored bots vs shared-value (model) bots** (Δ = espn − model):
+
+| | 12-team (fair share 0.50) | | | 16-team (fair share 0.375) | | |
+|---|---|---|---|---|---|---|
+| model | espn | model | Δ | espn | model | Δ |
+| static     | 0.43 | 0.43 | 0.00 | **0.48** | 0.35 | **+0.13** |
+| inflation  | 0.45 | 0.54 | −0.09 | **0.50** | 0.55 | −0.05 |
+| marginal   | 0.37 | 0.21 | **+0.16** | 0.29 | 0.12 | **+0.17** |
+| anchors    | 0.15 | 0.18 | −0.03 | 0.11 | 0.12 | −0.01 |
+| overbid    | 0.36 | 0.36 | 0.00 | **0.40** | 0.28 | **+0.12** |
+| vorpshare  | 0.47 | 0.50 | −0.03 | 0.18 | 0.30 | **−0.12** |
+| patient    | **0.62** | 0.53 | **+0.09** | 0.35 | 0.20 | **+0.15** |
+| studsdepth | 0.35 | 0.31 | +0.04 | **0.41** | 0.31 | **+0.10** |
+
+(Bold espn cells clear fair share.) Per-model mean points and full CIs for all five metrics are in `/tmp/run_h/h_{12,16}_{espn,model}.txt` from this run; the headline metric is playoff%.
+
+**Headline — ESPN-anchored bots are *exploitable*, and the hero's edge appears for the first time in the realistic market.** Against the shared-value bots (Runs E–G's field), no hero cleared fair share in the realistic 16-team market (Run F best playoff 0.13 at seat 1). Here, switching *only* the bots' price anchor to real ESPN values, **most value-bidding heroes improve and several clear fair share**: 16-team `static` 0.35→**0.48**, `marginal` 0.12→0.29, `overbid` 0.28→**0.40**, `patient` 0.20→**0.35**, `studsdepth` 0.31→**0.41** (field-mean Δ ≈ **+0.06** playoff); 12-team `patient` 0.53→**0.62** (above the 0.50 baseline) and `marginal` 0.21→0.37. This is exactly the #49c thesis: a *predictably biased* market is beatable where a *randomly noisy* one is not. The shared-value bots gave the hero no informational edge (they priced off its own numbers); ESPN-anchored bots have a real, systematic bias the SOS hero exploits.
+
+**Mechanism (the diagnostic).** The CLI's ESPN-vs-ours readout shows where the bias lives: ESPN underprices a cluster of players our model rates — e.g. several at ESPN $1–8 that our SOS values at $21–30 (value_delta +19 to +23) — while paying up ($36–53) for the studs its crowd loves. The largest disagreements are **rookies** (placeholder `99-` gsis): ESPN's crowd auction values are sparse/low for unproven rookies, but our projections rate them, so the SOS hero grabs them cheap while the ESPN-anchored bots leave them on the board. That deep-pool/rookie bargain is the hero's edge.
+
+**Who it helps and who it doesn't.** `patient` (the value-hunter that holds budget for mid-tier value) benefits most — it is literally built to wait for the bargains ESPN-anchoring creates (best in 12-team at 0.62; +0.15 in 16-team). `marginal` (bids to marginal lineup lift) gains big in both sizes (+0.16 / +0.17). The two that *don't* improve are instructive: `inflation` does slightly **worse** vs ESPN bots (its live surplus-inflation repricing is calibrated to the SOS market it now diverges from), and `vorpshare` drops in 16-team (−0.12 — spreading budget proportionally doesn't concentrate on the ESPN bargains). The edge is also **larger in the deeper 16-team field** (field-mean Δ +0.06 vs ~+0.02 in 12-team): more contention + more deep pool = more ESPN mispricing to exploit. The **deep-league inflation property** (spec, accepted-not-guarded) showed up as expected — the ESPN-anchored bot vector tops out at $73 (12-team) / $100 (16-team) per player, above ESPN's nominal stud values, because the surplus concentrates on the priced players.
+
+**Caveats (data, not a decision).** (1) **Not comparable to Runs F/G's levels** — this run uses **seat 6** (F/G used seat 1), a **fresh** consensus table (asof 2026-06-19 vs F/G's 2026-06-09), and **n_sims=500** (vs 200). The valid comparison is the *within-Run-H* espn-vs-model A/B (same seat/table/seeds/n_sims), not Run H vs F/G. (2) **Byes OFF** (2026 schedule not ingested) — injury availability is applied, byes are not. (3) **40 seeds, one seat** — the per-model playoff%s carry ~±0.05–0.10 sampling spread; treat the Δ pattern (most value heroes improve, esp. 16-team) as the signal, not any single cell. (4) The diagnostic's biggest deltas are all rookies because the 2026 `id_map` still carries them as placeholder gsis; veteran ESPN↔ours agreement is tighter. **No winner declared** — this confirms the bot *market* is now realistically exploitable (the #49c realism lever worked), not that any one hero strategy is the answer; the strategy call remains September 2026, and folding ESPN-anchored bots into the multi-year averaging (#49a) is the next reliability step.
+
+**Run H follow-up — `PatientValueBid` is mis-tuned; mid-tier *breadth* (`scrub_frac`) is the biggest strategy lever found (2026-06-19, 12-team, ESPN bots).** Run H's 12-team leader `patient` only deploys ~$136 of $200 (it floors studs *and* the bottom 50% by VORP as scrubs at $1). Investigating whether the idle budget is a problem produced a clear, CI-separated result.
+
+- **`scrub_frac` sweep (hold `stud_frac=0.10`; 30 seeds × 300 sims):** lowering `scrub_frac` (treat more of the pool as contested mid-tier instead of $1-scrubs) monotonically lifts playoff% **0.64 (sf=0.50, shipped default) → 0.83 (sf=0.0)** and raises spend ~$144 → ~$161. `midtier_premium` is a *wash-to-slightly-negative* (bidding harder per player overpays; it's breadth, not depth-of-bid, that wins).
+- **Star-cap sweep (hold `scrub_frac=0`, `prem=0.35`; 40 seeds × 300 sims):** lowering the stud-floor count to contest the top players *does* deploy the budget (`floor_top_45` → $190, `floor_top_35` → $195), but playoff% stays **flat ~0.80–0.83** across `floor_top_35..60`, with the slight optimum at the *lower*-spend `floor_top_55–58`. So spending the last ~$30 on a contested stud is a **lateral trade, not an upgrade** — the idle cash was a symptom, not the problem.
+- **Full test (40 seeds, n_sims=500, the 8 shipped contestants + the tuned `patient_deep` = `scrub_frac=0`, ESPN bots, seat 6):** `patient_deep` is the runaway field leader.
+
+  | model | pts | reg-win | playoff | bye | champ |
+  |---|---|---|---|---|---|
+  | **patient_deep** | 1111 | 0.65 | **0.83** | 0.33 | 0.15 |
+  | patient (shipped) | 991 | 0.55 | 0.62 | 0.16 | 0.07 |
+  | vorpshare | 929 | 0.49 | 0.47 | 0.14 | 0.07 |
+  | inflation | 905 | 0.48 | 0.45 | 0.13 | 0.06 |
+  | static | 894 | 0.47 | 0.43 | 0.12 | 0.05 |
+  | marginal / overbid / studsdepth | ~855 | ~0.44 | 0.35–0.37 | ≤0.08 | ≤0.04 |
+  | anchors | 711 | 0.32 | 0.15 | 0.02 | 0.01 |
+
+  Paired diff `patient_deep − patient` (CRN) is **CI-separated on every metric**: playoff **+0.205 [+0.172, +0.241]**, bye +0.168 [+0.145, +0.191], champ +0.078 [+0.066, +0.090], reg-win +0.098, points +120.
+
+**Mechanism:** ESPN-anchored bots overpay for the studs ESPN prices high and leave a deep, *cheap* mid-tier; a breadth-maximizing hero hoovers up that mid-tier value for a far higher-floor roster than any stud-buyer. **Status (data, no default change):** the shipped `PatientValueBid(scrub_frac=0.50)` is the *worst* setting swept and a strong candidate for re-tuning to `scrub_frac≈0` (or adding a `patient_deep` contestant) — **deferred to the September strategy decision.** Scope caveat: 12-team only, ESPN-anchored field only, one 2026 snapshot, seat 6; 16-team auction not tested (the auction tuning question is 12-team-specific for this league).
+
 ## Planned experiments / axes to sweep
 
 - **Bid-model bake-off** (the core): `static` vs `inflation` vs `marginal`, all three metrics, at a fixed

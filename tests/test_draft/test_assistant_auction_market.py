@@ -28,7 +28,7 @@ def _config(min_bid: int = 1) -> LeagueConfig:
 
 def _baseline() -> pd.DataFrame:
     return pd.DataFrame(
-        {"in_pool": [True], "auction_dollars": [40]},
+        {"in_pool": [True], "auction_dollars": [40], "bot_dollars": [40]},
         index=pd.Index(["00-0000001"], name="gsis_id"),
     )
 
@@ -51,7 +51,7 @@ def test_bot_centers_on_baseline_with_zero_jitter() -> None:
 
 def test_bot_floors_at_min_bid() -> None:
     base = pd.DataFrame(
-        {"in_pool": [False], "auction_dollars": [0]},
+        {"in_pool": [False], "auction_dollars": [0], "bot_dollars": [0]},
         index=pd.Index(["00-0000001"], name="gsis_id"),
     )
     bid = bot_max_bid(
@@ -131,8 +131,9 @@ def _tiered_baseline() -> pd.DataFrame:
     # 10 in-pool players, values descending: ranks 0=stud(>=0.10*10=1 -> rank 0 only),
     # ranks 5..9 = scrub (>= (1-0.50)*10 = 5), ranks 1..4 = mid.
     ids = [f"00-000000{i}" for i in range(10)]
+    dollars = [60, 50, 40, 30, 25, 20, 15, 10, 5, 2]
     return pd.DataFrame(
-        {"in_pool": [True] * 10, "auction_dollars": [60, 50, 40, 30, 25, 20, 15, 10, 5, 2]},
+        {"in_pool": [True] * 10, "auction_dollars": dollars, "bot_dollars": dollars},
         index=pd.Index(ids, name="gsis_id"),
     )
 

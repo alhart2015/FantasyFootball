@@ -27,7 +27,7 @@ class AuctionView:
     my_roster: pd.DataFrame  # pool rows for the hero's drafted gsis_ids
     drafted: frozenset[str]
     budgets_by_seat: tuple[int, ...]
-    baseline_dollars: pd.DataFrame  # full AuctionValuesSchema frame, indexed by gsis_id
+    baseline_dollars: pd.DataFrame  # indexed engine frame: AuctionValuesSchema cols + bot_dollars
 
 
 @runtime_checkable
