@@ -4,6 +4,18 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction Strategy — Multi-year bake-off + `patient_deep` contestant (#49a) — shipped (2026-06-19, branch `feat/patient-deep-contestant`)
+
+**Status:** the multi-year averaging (#49a) is run, and the tuned `patient_deep` (`PatientValueBid(scrub_frac=0)`) is now a **standing 9th contestant** in every bake-off (`_MODELS` in `tournament_cli.py`). Consumes the per-season tables from the data-ingest slice (PR #84).
+
+**Result (data; strongest the harness has produced):** across **6 seasons (2021–2026), 12-team half-PPR, ESPN-anchored bots, 20 seeds × 300 sims, seat 6**, `patient_deep` **dominates every axis at once** — mean playoff **0.841** (next best `inflation` 0.697), champ **0.176**, **lowest cross-season sd 0.027** (6× tighter than `inflation`/`static` ~0.17), **#1 in 4 of 6 seasons** (top-3 in all six). It beats the shipped `patient` (`scrub_frac=0.50`) by **+0.19 playoff** — the single-season tuning finding (Run-H follow-up) generalizes across six seasons and three auction-value regimes. The high-ceiling `inflation`/`static` win only the crowd-only early seasons (2021–2023, 0.85–0.90) and **collapse to ~0.47 in 2025–2026** — exactly the year-to-year swing the multi-year average was built to expose. Full table in `reports/auction_tournament_validation_2026.md` (Multi-year bake-off section).
+
+**Caveats:** auction-value basis varies by season (pre-2023 crowd-only, 2025 expert-only); 2026 has no schedule yet (empty byes); 20×300 is directional (ranking, not tight CIs) — but `patient_deep`'s separation is far outside the noise.
+
+**September decision:** `patient_deep` is now the clear front-runner — either re-tune the `patient` default to `scrub_frac≈0` or adopt `patient_deep` as the recommended hero. Decision still deferred to September per policy. Untested: 16-team auction (12-team is this league's auction size); higher seeds for tight CIs.
+
+---
+
 ## Auction Strategy — Multi-year auction-test data ingest (#49a prereq) — shipped (2026-06-19, branch `feat/multi-year-auction-ingest`)
 
 **Status:** the **data-ingest prerequisite** for #49a (multi-year averaging) is done — every season we have projection data for now has a per-season preset VORP table + league config with `espn_auction_dollars`, ready to feed a multi-year auction bake-off. The averaging *runner itself* is still #49a's open slice (not this work). Spec/plan `docs/superpowers/specs|plans/2026-06-19-multi-year-auction-ingest.*`. Built via the full **`superpowers-go`** pipeline: spec → **superpowers-spec-review** (2 iterations to clean) → writing-plans → **superpowers-plan-review** (3 iterations; caught a `SchemaError` Critical, a 16-team pool-fill bug, and an mypy `no_implicit_reexport` issue *before* any code) → subagent-driven execution (3 code tasks, each TDD + spec + quality review) → final whole-branch review (**READY TO MERGE**).
