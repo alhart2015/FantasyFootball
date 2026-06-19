@@ -478,17 +478,7 @@ def test_empty_input_returns_empty_conforming_frame() -> None:
     ConsensusProjectionSchema.validate(out)  # empty frame still conforms
 
 
-_AUCTION_STATS = (
-    "passing_yards",
-    "passing_tds",
-    "interceptions",
-    "rushing_yards",
-    "rushing_tds",
-    "receptions",
-    "receiving_yards",
-    "receiving_tds",
-    "fumbles_lost",
-)
+_AUCTION_STATS = tuple(STAT_FIELDS)
 
 
 def _ext_row(

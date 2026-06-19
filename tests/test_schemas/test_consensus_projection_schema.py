@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from pandera.errors import SchemaError, SchemaErrors
 
-from projections.schemas import ConsensusProjectionSchema
+from projections.schemas import STAT_FIELDS, ConsensusProjectionSchema
 
 
 def _valid_frame() -> pd.DataFrame:
@@ -75,20 +75,7 @@ def test_consensus_schema_auction_columns_optional_and_float64() -> None:
         "n_adp_sources": pd.array([1], dtype="Int64"),
         "has_points": [True],
         "projected_points_ppr": pd.array([200.0], dtype="Float64"),
-        **{
-            f: pd.array([pd.NA], dtype="Float64")
-            for f in (
-                "passing_yards",
-                "passing_tds",
-                "interceptions",
-                "rushing_yards",
-                "rushing_tds",
-                "receptions",
-                "receiving_yards",
-                "receiving_tds",
-                "fumbles_lost",
-            )
-        },
+        **{f: pd.array([pd.NA], dtype="Float64") for f in STAT_FIELDS},
         "is_placeholder_gsis": [False],
         "ruleset": pd.array(["ESPN_HALF"], dtype="string[pyarrow]"),
     }
