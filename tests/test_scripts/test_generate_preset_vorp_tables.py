@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 # script import (scripts/ on sys.path via conftest)
 from generate_preset_vorp_tables import resolve_espn_auction_dollars
@@ -185,3 +186,52 @@ def test_vorp_schema_espn_auction_dollars_optional() -> None:
     withcol = pd.DataFrame({**base, "espn_auction_dollars": pd.array([57], dtype="Int64")})
     out = VorpTableSchema.validate(withcol)
     assert str(out["espn_auction_dollars"].dtype) == "Int64"
+
+
+def test_build_preset_table_accepts_season_and_still_validates() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(repo_root / "scripts"))
+    from generate_preset_vorp_tables import build_preset_table
+
+    table = build_preset_table(_synthetic_external(), "half", 12, season=2023)
+    VorpTableSchema.validate(table)
+    assert "espn_auction_dollars" in table.columns
+
+
+def test_main_writes_per_season_tables_and_configs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    repo_root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(repo_root / "scripts"))
+    import generate_preset_vorp_tables as gp
+
+    from projections.draft.assistant import presets
+
+    # The generator reads the external snapshot via read_latest_partition then runs
+    # ExternalProjectionSchema.validate; feed the synthetic frame directly (no on-disk partition)
+    # and redirect the table dir to tmp_path. _synthetic_external() builds stat/draft-rank cols as
+    # object dtype with pd.NA — ExternalProjectionSchema declares them float64 and cannot coerce
+    # object+<NA>, so pd.to_numeric(errors="coerce") them to real nullable floats first (.astype
+    # alone still raises on <NA>).
+    external = _synthetic_external()
+    external["season"] = 2023
+    external["asof"] = "2023-01-01"
+    for c in (*STAT_FIELDS, "espn_draft_rank"):
+        external[c] = pd.to_numeric(external[c], errors="coerce")
+    monkeypatch.setattr(gp, "read_latest_partition", lambda *a, **k: external)
+    monkeypatch.setattr(presets, "_table_dir", lambda season: tmp_path / f"vorp_{season}")
+    # The 120-player synthetic fixture fills 10/12-team pools but NOT 16-team (FLEX can't fill);
+    # restrict main's grid to half/12-team so it builds a buildable preset — the per-season write
+    # path (dir + .league.json) is what this test verifies, not the full 9-preset grid.
+    monkeypatch.setattr(gp, "SCORING_KEYS", ("half",))
+    monkeypatch.setattr(gp, "TEAM_SIZES", (12,))
+
+    rc = gp.main(["--season", "2023", "--data-root", str(tmp_path)])
+    assert rc == 0
+    tbl = tmp_path / "vorp_2023" / "half_12team.parquet"
+    cfg = tmp_path / "vorp_2023" / "half_12team.league.json"
+    assert tbl.exists() and cfg.exists()
+    assert "espn_auction_dollars" in pd.read_parquet(tbl).columns
+    assert json.loads(cfg.read_text())["name"] == "half_12team_2023"  # config carries the season
