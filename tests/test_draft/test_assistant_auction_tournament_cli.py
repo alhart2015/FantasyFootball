@@ -9,11 +9,13 @@ from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
 from projections.draft.assistant.auction.tournament import AuctionTournamentResult
 from projections.draft.assistant.auction.tournament_cli import (
     _MODELS,
+    _format_espn_diagnostic,
     _parse_args,
     format_compare,
     run,
 )
-from projections.schemas import _PYARROW_STR
+from projections.draft.league_config import LeagueConfig
+from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset
 
 
 def _write_pool(path: Path) -> None:
@@ -177,6 +179,52 @@ def test_parse_args_bot_prices_accepts_model() -> None:
         ]
     )
     assert args.bot_prices == "model"
+
+
+def _diag_pool(n: int = 40) -> pd.DataFrame:
+    """VorpTableSchema-shaped pool (mirrors the tournament test's `_pool`) with a populated
+    `espn_auction_dollars` Int64 column, so the diagnostic takes the real (non-skipped) path."""
+    pos = ["RB" if i % 2 else "WR" for i in range(n)]
+    prefix = {"RB": 2, "WR": 3}
+    gsis = [f"00-{prefix[pos[i]]}{i:06d}" for i in range(n)]
+    return pd.DataFrame(
+        {
+            "gsis_id": pd.array(gsis, dtype=_PYARROW_STR),
+            "position": pd.array(pos, dtype=_PYARROW_STR),
+            "season_mean_fpts": [float(300 - i) for i in range(n)],
+            "vorp": [float(150 - i) for i in range(n)],
+            "replacement_fpts": [100.0] * n,
+            "is_rookie": [False] * n,
+            "espn_auction_dollars": pd.array([int(60 - i) for i in range(n)], dtype="Int64"),
+        }
+    )
+
+
+def _diag_config() -> LeagueConfig:
+    # n_teams >= 6 (and even) — mirrors the tournament test's known-valid `_config`.
+    return LeagueConfig(
+        name="t",
+        n_teams=6,
+        budget=100,
+        min_bid=1,
+        roster_slots={RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.BENCH: 1},
+        ruleset=Ruleset.espn_ppr(),
+    )
+
+
+def test_format_espn_diagnostic_real_readout() -> None:
+    pool = _diag_pool(40)
+    config = _diag_config()
+    out = _format_espn_diagnostic(pool, config)
+    assert "ESPN vs ours" in out  # the real header, not the "skipped" message
+    assert "delta" in out
+    assert "skipped" not in out
+
+
+def test_format_espn_diagnostic_skipped_without_espn_column() -> None:
+    pool = _diag_pool(40).drop(columns=["espn_auction_dollars"])
+    out = _format_espn_diagnostic(pool, _diag_config())
+    assert "skipped" in out
 
 
 def test_parse_args_bot_prices_rejects_unknown() -> None:

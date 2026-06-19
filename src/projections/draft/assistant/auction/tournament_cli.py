@@ -109,16 +109,19 @@ def _format_espn_diagnostic(pool: pd.DataFrame, config: LeagueConfig) -> str:
     priced = diag[diag["reference_dollars"].notna()].copy()
     priced = priced.sort_values("value_delta")
     lines = ["ESPN vs ours (value_delta = our SOS $ - ESPN $); most negative = ESPN richer:"]
-    for _, row in priced.head(5).iterrows():
-        lines.append(
+
+    def _fmt(row: pd.Series) -> str:
+        return (
             f"  {row['gsis_id']}: ours ${int(row['auction_dollars'])} "
             f"ESPN ${int(row['reference_dollars'])} delta {int(row['value_delta']):+d}"
         )
-    for _, row in priced.tail(5).iterrows():
-        lines.append(
-            f"  {row['gsis_id']}: ours ${int(row['auction_dollars'])} "
-            f"ESPN ${int(row['reference_dollars'])} delta {int(row['value_delta']):+d}"
-        )
+
+    # head(5)+tail(5) overlap when fewer than 10 priced players; show each row once instead.
+    if len(priced) <= 10:
+        rows = (row for _, row in priced.iterrows())
+    else:
+        rows = (row for _, row in pd.concat([priced.head(5), priced.tail(5)]).iterrows())
+    lines.extend(_fmt(row) for row in rows)
     return "\n".join(lines)
 
 
