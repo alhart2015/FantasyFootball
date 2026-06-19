@@ -23,9 +23,38 @@ from projections.schemas import (
     _PYARROW_STR,
     ConsensusProjectionSchema,
     ExternalProjectionSchema,
+    Ruleset,
     VorpTableSchema,
 )
 from projections.store import read_latest_partition
+
+_ESPN_AUCTION_COLS = ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std")
+
+
+def resolve_espn_auction_dollars(frame: pd.DataFrame, ruleset: Ruleset) -> pd.Series:
+    """Resolve one per-player ESPN auction dollar from the consensus frame: crowd average when
+    present and >0, else the ruleset's expert value (PPR for ESPN_PPR/ESPN_HALF, STANDARD for
+    STANDARD), else NA. Vectorized; NA-safe Int64 (rounds the fractional crowd average). An
+    absent input column is treated as all-NA. `frame` must be the consensus frame — the columns
+    do not survive consensus_to_season_projections onto the VORP table."""
+    n = len(frame)
+
+    def _col(name: str) -> pd.Series:
+        if name in frame.columns:
+            return frame[name].astype("Float64")
+        return pd.Series([pd.NA] * n, dtype="Float64", index=frame.index)
+
+    crowd = _col("espn_auction_value_avg")
+    if ruleset.name in ("ESPN_PPR", "ESPN_HALF"):
+        expert = _col("espn_auction_value_ppr")
+    elif ruleset.name == "STANDARD":
+        expert = _col("espn_auction_value_std")
+    else:
+        expert = pd.Series([pd.NA] * n, dtype="Float64", index=frame.index)
+
+    use_crowd = crowd.notna() & (crowd > 0)
+    value = expert.where(~use_crowd, crowd)  # crowd where use_crowd, else expert
+    return value.round().astype("Int64")
 
 
 def build_preset_table(external: pd.DataFrame, scoring_key: str, n_teams: int) -> pd.DataFrame:
@@ -37,7 +66,11 @@ def build_preset_table(external: pd.DataFrame, scoring_key: str, n_teams: int) -
     )
     season_proj = consensus_to_season_projections(consensus)
     table = generate_vorp_table(season_proj, preset.league_config)
-    cols = consensus[["gsis_id", "consensus_adp", "full_name"]]
+    consensus = consensus.copy()
+    consensus["espn_auction_dollars"] = resolve_espn_auction_dollars(
+        consensus, preset.league_config.ruleset
+    )
+    cols = consensus[["gsis_id", "consensus_adp", "full_name", "espn_auction_dollars"]]
     table = table.merge(cols, on="gsis_id", how="left")
     table["gsis_id"] = table["gsis_id"].astype(_PYARROW_STR)
     return VorpTableSchema.validate(table)

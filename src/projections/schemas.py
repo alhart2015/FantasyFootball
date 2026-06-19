@@ -993,6 +993,10 @@ class VorpTableSchema(pa.DataFrameModel):
     # display name, incl. placeholder-gsis rookies absent from id_map). Weekly-path VORP
     # tables omit it and still validate. Nullable: a player with no consensus name is NA.
     full_name: Series[str] | None = pa.Field(nullable=True)
+    # Optional (not-required): the resolved ESPN human auction value, populated only on the
+    # consensus-fed preset path. Weekly-path VORP tables omit it and still validate. Slice 1
+    # lands it here; Slice 2 feeds it to generate_auction_values as reference_prices.
+    espn_auction_dollars: Series[pd.Int64Dtype] | None = pa.Field(ge=0, nullable=True)
 
     class Config:
         strict = "filter"

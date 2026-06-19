@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from projections.schemas import STAT_FIELDS, VorpTableSchema
+# script import (scripts/ on sys.path via conftest)
+from generate_preset_vorp_tables import resolve_espn_auction_dollars
+
+from projections.schemas import STAT_FIELDS, Ruleset, VorpTableSchema
 
 _STAT_COLS = list(STAT_FIELDS)
 
@@ -88,3 +91,63 @@ def test_preset_table_validates_and_carries_names_and_adp() -> None:
     VorpTableSchema.validate(table)
     assert "full_name" in table.columns and table["full_name"].notna().any()
     assert "consensus_adp" in table.columns
+
+
+def _frame(**cols: object) -> pd.DataFrame:
+    return pd.DataFrame({k: pd.array(v, dtype="Float64") for k, v in cols.items()})
+
+
+def test_resolve_prefers_crowd_when_positive() -> None:
+    frame = _frame(
+        espn_auction_value_avg=[58.67], espn_auction_value_ppr=[40.0], espn_auction_value_std=[30.0]
+    )
+    out = resolve_espn_auction_dollars(frame, Ruleset.espn_half())
+    assert out.iloc[0] == 59  # 58.67 rounded
+    assert str(out.dtype) == "Int64"
+
+
+def test_resolve_falls_back_to_ppr_expert_for_half_when_crowd_zero() -> None:
+    frame = _frame(
+        espn_auction_value_avg=[pd.NA], espn_auction_value_ppr=[40.0], espn_auction_value_std=[30.0]
+    )
+    out = resolve_espn_auction_dollars(frame, Ruleset.espn_half())
+    assert out.iloc[0] == 40
+
+
+def test_resolve_uses_std_expert_for_standard() -> None:
+    frame = _frame(
+        espn_auction_value_avg=[pd.NA], espn_auction_value_ppr=[40.0], espn_auction_value_std=[30.0]
+    )
+    out = resolve_espn_auction_dollars(frame, Ruleset.standard())
+    assert out.iloc[0] == 30
+
+
+def test_resolve_na_when_no_value() -> None:
+    frame = _frame(
+        espn_auction_value_avg=[pd.NA],
+        espn_auction_value_ppr=[pd.NA],
+        espn_auction_value_std=[pd.NA],
+    )
+    out = resolve_espn_auction_dollars(frame, Ruleset.espn_half())
+    assert pd.isna(out.iloc[0])
+
+
+def test_resolve_all_na_when_columns_absent() -> None:
+    frame = pd.DataFrame({"gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]")})
+    out = resolve_espn_auction_dollars(frame, Ruleset.espn_half())
+    assert pd.isna(out.iloc[0])
+    assert str(out.dtype) == "Int64"
+
+
+def test_vorp_schema_espn_auction_dollars_optional() -> None:
+    base = {
+        "gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]"),
+        "position": pd.array(["RB"], dtype="string[pyarrow]"),
+        "season_mean_fpts": [200.0],
+        "vorp": [50.0],
+        "replacement_fpts": [150.0],
+    }
+    VorpTableSchema.validate(pd.DataFrame(base))  # weekly-path frame, no column -> validates
+    withcol = pd.DataFrame({**base, "espn_auction_dollars": pd.array([57], dtype="Int64")})
+    out = VorpTableSchema.validate(withcol)
+    assert str(out["espn_auction_dollars"].dtype) == "Int64"
