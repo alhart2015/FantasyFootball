@@ -54,9 +54,11 @@ from projections.draft.auction import espn_anchored_bot_prices, generate_auction
 
 
 def _hand_pool_with_espn() -> tuple[LeagueConfig, pd.DataFrame]:
-    """4-player pool (2 QB + 2 RB), budget 100, min_bid 1 -> surplus 96. Two priced players
-    (espn 60, 36) absorb the surplus; two unpriced (NA) park at min_bid. Drift is 0:
-      value_signal = [60, 0, 36, 0]; sum=96; extra=[60,0,36,0]; dollars=[61,1,37,1]; sum=100.
+    """4-player pool (2 QB + 2 RB). total_budget = n_teams*budget = 2*100 = 200, min_bid 1 ->
+    surplus 196. Two priced players (espn 60, 36) absorb the surplus; two unpriced (NA) park at
+    min_bid. Drift is 0:
+      value_signal=[60,0,36,0]; sum=96; extra=[60,0,36,0]/96*196=[122.5,0,73.5,0];
+      dollars=round([123.5,1,74.5,1])=[124,1,74,1] (round-half-even); sum=200.
     """
     cfg = _make_config(
         n_teams=2, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.BENCH: 0}
@@ -89,8 +91,8 @@ def test_espn_bot_prices_unpriced_park_at_min_bid() -> None:
 def test_espn_bot_prices_priced_split_surplus_and_are_monotonic() -> None:
     cfg, df = _hand_pool_with_espn()
     out = espn_anchored_bot_prices(df, cfg)
-    assert out["00-1000001"] == 61  # min_bid + (60/96)*96
-    assert out["00-2000001"] == 37  # min_bid + (36/96)*96
+    assert out["00-1000001"] == 124  # round(min_bid + (60/96)*196)
+    assert out["00-2000001"] == 74  # round(min_bid + (36/96)*196)
     assert out["00-1000001"] > out["00-2000001"]  # higher ESPN $ -> higher bot $
 
 
@@ -126,10 +128,11 @@ def test_espn_bot_prices_absent_column_uniform_fallback() -> None:
     cfg, df = _hand_pool_with_espn()
     df = df.drop(columns=["espn_auction_dollars"])
     out = espn_anchored_bot_prices(df, cfg)
-    # all-zero weight -> uniform split of total_budget over 4 in-pool players
+    # all-zero weight -> uniform split of total_budget (200) over 4 in-pool players:
+    # surplus 196 / 4 = 49 + min_bid 1 = 50 each; drift 0
     assert int(out.sum()) == cfg.total_budget
     in_pool = out[out > 0] if (out > 0).any() else out
-    assert sorted(in_pool.tolist()) in ([25, 25, 25, 25], [24, 25, 25, 26])
+    assert sorted(in_pool.tolist()) in ([50, 50, 50, 50], [49, 50, 50, 51])
 
 
 def test_espn_bot_prices_deep_league_inflation() -> None:
@@ -735,21 +738,35 @@ python -c "import pandas as pd; d=pd.read_parquet('data/vorp_2026/half_16team.pa
 ```
 If the 16-team table raises during generation (a position can't fill the 16-team pool, R8), note it and fall back to 12-team only for Run H, recording the limitation.
 
-- [ ] **Step 2: Run the bake-off at half-PPR 12-team and 16-team**
+- [ ] **Step 2: Get the matching league-config JSON for each preset**
+
+The `--league-config` must be the **exact** `LeagueConfig` the preset used to build its table (same `n_teams`/`ruleset`/`roster_slots`), or the pool-size/budget will mismatch. Do not guess a filename — derive it from the preset definition. Inspect `src/projections/draft/assistant/presets.py` for the helper that materializes a preset's config to JSON (e.g. `materialize_league_config`) and the `get_preset(scoring_key, n_teams)` accessor, then write the two configs next to the tables:
+
+```bash
+python - <<'PY'
+from projections.draft.assistant.presets import get_preset, materialize_league_config
+for n in (12, 16):
+    path = materialize_league_config(get_preset("half", n))
+    print(n, path)
+PY
+```
+Use whatever path that prints (likely `data/vorp_2026/half_12team.league.json` / `half_16team.league.json`). If `materialize_league_config` has a different name/signature, adapt — the goal is "a JSON of `get_preset('half', n).league_config`". `configs/half_12team.league.json` already exists and may be reused for 12-team if it matches the regenerated table.
+
+- [ ] **Step 3: Run the bake-off at half-PPR 12-team and 16-team**
 
 ```bash
 python -m projections.draft.assistant.auction.tournament_cli \
   --vorp-table data/vorp_2026/half_12team.parquet \
-  --league-config configs/league_espn_half_12team_skill.json \
+  --league-config data/vorp_2026/half_12team.league.json \
   --my-seat 6 --season 2026 --seeds 40 --bot-prices espn compare
 ```
-(and the same with `half_16team.parquet` + the 16-team config + an appropriate `--my-seat`). Use the league-config paths that match the preset tables — check `configs/` for the exact half-PPR 12/16-team filenames (the presets in `scripts/generate_preset_vorp_tables.py` reference them). Capture stdout (per-model table + the ESPN-vs-ours diagnostic). For a direct A/B reference, also run one with `--bot-prices model`.
+Repeat with `half_16team.parquet` + `half_16team.league.json` + an appropriate `--my-seat` (1..16). Capture stdout (per-model table + the ESPN-vs-ours diagnostic). For a direct A/B reference, also run each with `--bot-prices model`.
 
-- [ ] **Step 3: Write Run H into the validation report**
+- [ ] **Step 4: Write Run H into the validation report**
 
 Append a **Run H** section to `reports/auction_tournament_validation_2026.md` with: the per-model table (all 8 models × the 5 `METRICS` × {12,16}-team), the ESPN-vs-ours `value_delta` summary, and a note on the observed deep-league (16-team) stud inflation. Frame it as data-gathering — **no winner declared** (the September decision is unchanged).
 
-- [ ] **Step 4: Update TODO + PM, then commit**
+- [ ] **Step 5: Update TODO + PM, then commit**
 
 Mark TODO #49c Slice 2 SHIPPED (bot WTP now ESPN-anchored behind `--bot-prices`, default espn; Run H recorded) and add a PM dated entry. Commit the report + docs (the regenerated `data/vorp_2026/*.parquet` stay untracked per TODO #48).
 
