@@ -16,7 +16,7 @@
 - **`season=2026` must reproduce today's behavior byte-for-byte** (path `data/vorp_2026/…`, config name `..._2026`) — the board depends on it. Frozen-string tests guard this.
 - **2026 is NOT re-ingested** (preserves the Run-A–H baseline `asof=2026-06-19`); it is only *regenerated* from the existing snapshot.
 - Conventions: `Ruleset`/`RosterSlot` as enums; `pd.Int64Dtype` for `espn_auction_dollars`; `mkdir(parents=True, exist_ok=True)`; named-exception catches only (no bare `except`); mypy-strict + ruff clean.
-- Verification (every task): `mypy src tests scripts`, `ruff check src tests scripts`, `ruff format --check src tests scripts`. Commits: prepend the venv scripts dir to PATH (`PATH="$(pwd)/.venv/Scripts:$PATH" git commit …`) to avoid the pre-commit mypy/venv quirk; end messages with the `Co-Authored-By:`/`Claude-Session:` trailers used on this branch.
+- Verification (every task): run the fixers first — `ruff format src tests scripts` then `ruff check --fix src tests scripts` (settle formatting + import order) — then the gates must be clean: `mypy src tests scripts`, `ruff check src tests scripts`, `ruff format --check src tests scripts`. Commits: prepend the venv scripts dir to PATH (`PATH="$(pwd)/.venv/Scripts:$PATH" git commit …`) to avoid the pre-commit mypy/venv quirk; end messages with the `Co-Authored-By:`/`Claude-Session:` trailers used on this branch.
 
 ---
 
@@ -38,7 +38,8 @@ def test_get_preset_season_param_drives_path_and_name() -> None:
     p = get_preset("half", 12, season=2023)
     assert p.table_path == Path("data/vorp_2023/half_12team.parquet")
     assert p.league_config.name == "half_12team_2023"
-    assert get_preset("std", 16, season=2021).table_path == Path("data/vorp_2021/std_16team.parquet")
+    std21 = get_preset("std", 16, season=2021)
+    assert std21.table_path == Path("data/vorp_2021/std_16team.parquet")
 
 
 def test_get_preset_defaults_to_2026_byte_for_byte() -> None:
@@ -157,6 +158,11 @@ def test_main_writes_per_season_tables_and_configs(
         external[c] = pd.to_numeric(external[c], errors="coerce")
     monkeypatch.setattr(gp, "read_latest_partition", lambda *a, **k: external)
     monkeypatch.setattr(presets, "_table_dir", lambda season: tmp_path / f"vorp_{season}")
+    # The 120-player synthetic fixture fills 10/12-team pools but NOT 16-team (FLEX can't fill);
+    # restrict main's grid to half/12-team so it builds a buildable preset — the per-season write
+    # path (dir + .league.json) is what this test verifies, not the full 9-preset grid.
+    monkeypatch.setattr(gp, "SCORING_KEYS", ("half",))
+    monkeypatch.setattr(gp, "TEAM_SIZES", (12,))
 
     rc = gp.main(["--season", "2023", "--data-root", str(tmp_path)])
     assert rc == 0
@@ -268,7 +274,13 @@ from pathlib import Path
 
 import pytest
 
+import generate_preset_vorp_tables
 import refresh_external_seasons as rs  # scripts/ on sys.path via conftest
+
+from projections.ingest.external_projections import ExternalProjectionError
+
+# NOTE: import ExternalProjectionError + generate_preset_vorp_tables DIRECTLY (not via `rs.…`).
+# mypy-strict's no_implicit_reexport flags reaching through `rs` for names it merely imported.
 
 
 def test_loops_each_season_and_isolates_failures(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -277,7 +289,7 @@ def test_loops_each_season_and_isolates_failures(monkeypatch: pytest.MonkeyPatch
 
     def fake_ingest(data_root: Path, *, season: int, asof: object = None) -> None:
         if season == 2022:
-            raise rs.ExternalProjectionError("boom")
+            raise ExternalProjectionError("boom")
         ingested.append(season)
 
     def fake_gen(argv: list[str]) -> int:
@@ -285,7 +297,7 @@ def test_loops_each_season_and_isolates_failures(monkeypatch: pytest.MonkeyPatch
         return 0
 
     monkeypatch.setattr(rs, "refresh_external_projections", fake_ingest)
-    monkeypatch.setattr(rs.generate_preset_vorp_tables, "main", fake_gen)
+    monkeypatch.setattr(generate_preset_vorp_tables, "main", fake_gen)
 
     status = rs.run([2021, 2022, 2023], Path("data"))
 
@@ -313,9 +325,8 @@ For each season: pull the ESPN+Sleeper snapshot, then regenerate that season's p
 baseline snapshot (asof of the published Runs A-H) must be preserved; regenerate 2026 separately
 via `generate_preset_vorp_tables.py --season 2026` (no re-ingest).
 
-Usage:
-    python scripts/refresh_external_seasons.py [--seasons 2021 2022 2023 2024 2025] [--data-root data]
-Run from the repo root (tables write cwd-relative; see the generator's Global Constraints).
+Usage (from the repo root; tables write cwd-relative — see the generator's Global Constraints):
+    python scripts/refresh_external_seasons.py [--seasons 2021..2025] [--data-root data]
 """
 
 from __future__ import annotations
