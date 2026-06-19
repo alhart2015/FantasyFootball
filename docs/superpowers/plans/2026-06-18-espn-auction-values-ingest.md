@@ -86,8 +86,8 @@ def test_parse_espn_auction_values_non_positive_and_missing_become_none():
     }
     df = parse_espn_players(payload, 2026).set_index("espn_id")
     for col in ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std"):
-        assert df.loc["1", col] is None  # <=0 normalized to None
-        assert df.loc["2", col] is None  # missing key -> None, no crash
+        assert pd.isna(df.loc["1", col])  # <=0 normalized to None  (pd.isna: robust to dtype)
+        assert pd.isna(df.loc["2", col])  # missing key -> None, no crash
 ```
 
 - [ ] **Step 2: Run the tests, verify they fail**
@@ -97,17 +97,21 @@ Expected: FAIL with `KeyError: 'espn_auction_value_avg'` (the parser doesn't pro
 
 - [ ] **Step 3: Implement the parser extraction**
 
-In `src/projections/ingest/external_projections.py`, inside `parse_espn_players`, locate the block that builds `ppr_rank` and `espn_adp` (currently around lines 158-164) and the `row` dict that follows. Replace from `ppr_rank = ...` through the `row = {...}` literal with:
+First, add a module-level helper near `round_count` (around line 81) — keep it at module scope, not inside the loop, mirroring `round_count`:
+
+```python
+def _pos_auction(value: float | None) -> float | None:
+    """ESPN encodes 'no auction value' as 0; normalize non-positive to None (same rule as ADP)."""
+    return None if value is None or value <= 0 else float(value)
+```
+
+Then, inside `parse_espn_players`, locate the block that builds `ppr_rank` and `espn_adp` (currently around lines 158-164) and the `row` dict that follows. Replace from `ppr_rank = ...` through the `row = {...}` literal with:
 
 ```python
         draft_ranks = pl.get("draftRanksByRankType") or {}
         ppr_ranks = draft_ranks.get("PPR") or {}
         std_ranks = draft_ranks.get("STANDARD") or {}
         ppr_rank = ppr_ranks.get("rank")
-
-        def _pos_auction(value: float | None) -> float | None:
-            # ESPN encodes "no value" as 0; normalize non-positive to None (same rule as ADP).
-            return None if value is None or value <= 0 else float(value)
 
         # ESPN encodes "undrafted / no draft data" as ADP 0; normalize non-positive to None so the
         # raw table stores honest null (adp is nullable) rather than an in-band sentinel that every
@@ -147,7 +151,7 @@ def test_external_schema_validates_without_auction_columns():
     # A stale-style frame lacking the new columns must still validate (Optional).
     df = pd.DataFrame(
         {
-            "source": pd.array(["sleeper"], dtype="string[pyarrow]"),
+            "source": pd.array(["SLEEPER"], dtype="string[pyarrow]"),  # isin(['ESPN','SLEEPER'])
             "source_player_id": pd.array(["x"], dtype="string[pyarrow]"),
             "gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]"),
             "is_placeholder_gsis": [False],
@@ -169,7 +173,7 @@ def test_external_schema_validates_without_auction_columns():
 def test_external_schema_auction_columns_are_float64():
     df = pd.DataFrame(
         {
-            "source": pd.array(["espn"], dtype="string[pyarrow]"),
+            "source": pd.array(["ESPN"], dtype="string[pyarrow]"),  # isin(['ESPN','SLEEPER'])
             "source_player_id": pd.array(["1"], dtype="string[pyarrow]"),
             "gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]"),
             "is_placeholder_gsis": [False],
@@ -189,6 +193,29 @@ def test_external_schema_auction_columns_are_float64():
     )
     out = ExternalProjectionSchema.validate(df)
     assert str(out["espn_auction_value_avg"].dtype) == "Float64"
+
+
+def test_to_canonical_sleeper_auction_columns_are_float64_na():
+    # _to_canonical null-fills the ESPN-only auction columns for a Sleeper frame; they must land
+    # as Float64/pd.NA (not float64/NaN — the CLAUDE.md dtype-regression trap, spec Testing).
+    from datetime import date
+    from projections.ingest.external_projections import _to_canonical
+    from projections.schemas import STAT_FIELDS, ProjectionSource
+
+    sleeper = pd.DataFrame(
+        {
+            "sleeper_id": ["s1"], "full_name": ["Sleeper Guy"], "position": ["RB"],
+            "sleeper_adp": [12.0], **{f: [100.0] for f in STAT_FIELDS},
+        }
+    )
+    id_map = pd.DataFrame({"gsis_id": ["00-0099999"], "sleeper_id": ["s1"]})
+    out = _to_canonical(
+        sleeper, source=ProjectionSource.SLEEPER, id_col="sleeper_id", adp_col="sleeper_adp",
+        rank_col=None, has_stats=True, season=2026, asof=date(2026, 6, 9), id_map=id_map,
+    )
+    for col in ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std"):
+        assert str(out[col].dtype) == "Float64"
+        assert pd.isna(out[col].iloc[0])
 ```
 
 - [ ] **Step 6: Run the schema tests, verify they fail**
@@ -303,12 +330,36 @@ def test_blend_does_not_crash_when_auction_columns_absent():
     )
     out = build_consensus(external, Ruleset.espn_half()).set_index("gsis_id")
     assert pd.isna(out.loc["00-0033333", "espn_auction_value_avg"])  # seeded to NA
+
+
+def test_blend_keeps_espn_value_when_sleeper_is_identity_row():
+    # The distinguishing test (spec R3): ESPN row is NOT stat-bearing, so the Sleeper row becomes
+    # the identity_row — but ESPN carries the auction value. First-non-null must still surface it;
+    # an identity_row[col] pick would wrongly return the Sleeper row's NA.
+    external = pd.DataFrame([
+        _ext_row("espn", "00-0044444", av_avg=58.0, stats=False),   # ESPN: value, no stat line
+        _ext_row("sleeper", "00-0044444", av_avg=pd.NA, stats=True),  # Sleeper: stat-bearing -> identity
+    ])
+    out = build_consensus(external, Ruleset.espn_half()).set_index("gsis_id")
+    assert out.loc["00-0044444", "espn_auction_value_avg"] == 58.0
+
+
+def test_blend_empty_input_carries_auction_columns():
+    # _empty_output() builds from _OUTPUT_COLUMNS; the new names must be present on the empty path.
+    empty = pd.DataFrame(
+        columns=["source", "source_player_id", "gsis_id", "is_placeholder_gsis", "full_name",
+                 "position", "season", "asof", "adp", "espn_draft_rank",
+                 "espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std", *_STATS]
+    )
+    out = build_consensus(empty, Ruleset.espn_half())
+    for col in ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std"):
+        assert col in out.columns
 ```
 
 - [ ] **Step 2: Run them, verify failure**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_consensus/test_blend.py -k "auction or absent" -q -n0`
-Expected: FAIL — `KeyError: 'espn_auction_value_avg'` on the carry test (the column isn't in `_OUTPUT_COLUMNS`), and the absent test KeyErrors in the loop.
+Run: `.venv/Scripts/python.exe -m pytest tests/test_consensus/test_blend.py -k "auction or absent or identity or empty" -q -n0`
+Expected: FAIL — `KeyError: 'espn_auction_value_avg'` on the carry/identity tests (the column isn't in `_OUTPUT_COLUMNS`), the absent test KeyErrors in the loop, and the empty test fails the `col in out.columns` assertion.
 
 - [ ] **Step 3: Implement the blend carry-through + absence guard**
 
@@ -485,7 +536,7 @@ def test_resolve_all_na_when_columns_absent():
 Run: `.venv/Scripts/python.exe -m pytest tests/test_scripts/test_generate_preset_vorp_tables.py -k resolve -q -n0`
 Expected: FAIL with `ImportError: cannot import name 'resolve_espn_auction_dollars'`.
 
-(Note: `scripts/` is import-discoverable in this repo because the existing test already does `from generate_preset_vorp_tables import ...`; if it does not, add `scripts` to `conftest.py`'s path as the existing script tests do. Verify by checking the import line at the top of the existing test file before writing Step 1.)
+(Note: the top-of-module `from generate_preset_vorp_tables import ...` resolves because `tests/test_scripts/conftest.py` inserts `scripts/` onto `sys.path` at collection time — verified. So the import fails only on the missing symbol, exactly as the expected error states.)
 
 - [ ] **Step 3: Implement the resolver**
 
