@@ -7,8 +7,6 @@ import pandas as pd
 import pytest
 
 from projections.ingest import external_projections as ext
-from projections.ingest.external_projections import parse_espn_players
-from projections.schemas import ExternalProjectionSchema
 
 
 def test_parse_espn_players_extracts_statline_adp_rank() -> None:
@@ -635,7 +633,7 @@ def test_parse_espn_extracts_auction_values() -> None:
     payload = {
         "players": [_espn_player(1, "Crowd Guy", 2, auction_avg=58.67, ppr_av=57, std_av=55)]
     }
-    df = parse_espn_players(payload, 2026)
+    df = ext.parse_espn_players(payload, 2026)
     row = df.iloc[0]
     assert row["espn_auction_value_avg"] == 58.67
     assert row["espn_auction_value_ppr"] == 57
@@ -649,77 +647,60 @@ def test_parse_espn_auction_values_non_positive_and_missing_become_none() -> Non
             _espn_player(2, "No Auction Keys", 2),  # no auction_avg / auctionValue at all
         ]
     }
-    df = parse_espn_players(payload, 2026).set_index("espn_id")
+    df = ext.parse_espn_players(payload, 2026).set_index("espn_id")
     for col in ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std"):
         assert pd.isna(df.loc["1", col])  # <=0 normalized to None  (pd.isna: robust to dtype)
         assert pd.isna(df.loc["2", col])  # missing key -> None, no crash
 
 
+def _external_row(**overrides: Any) -> pd.DataFrame:
+    """One-row ExternalProjectionSchema-shaped frame; overrides add/replace columns."""
+    cols: dict[str, Any] = {
+        "source": pd.array(["ESPN"], dtype="string[pyarrow]"),  # isin(['ESPN','SLEEPER'])
+        "source_player_id": pd.array(["1"], dtype="string[pyarrow]"),
+        "gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]"),
+        "is_placeholder_gsis": [False],
+        "full_name": pd.array(["E"], dtype="string[pyarrow]"),
+        "position": pd.array(["RB"], dtype="string[pyarrow]"),
+        "season": [2026],
+        "asof": pd.array(["2026-06-09"], dtype="string[pyarrow]"),
+        "adp": pd.array([5.0], dtype="Float64"),
+        "espn_draft_rank": pd.array([pd.NA], dtype="Float64"),
+        **{
+            f: pd.array([pd.NA], dtype="Float64")
+            for f in (
+                "passing_yards",
+                "passing_tds",
+                "interceptions",
+                "rushing_yards",
+                "rushing_tds",
+                "receptions",
+                "receiving_yards",
+                "receiving_tds",
+                "fumbles_lost",
+            )
+        },
+    }
+    cols.update(overrides)
+    return pd.DataFrame(cols)
+
+
 def test_external_schema_validates_without_auction_columns() -> None:
     # A stale-style frame lacking the new columns must still validate (Optional).
-    df = pd.DataFrame(
-        {
-            "source": pd.array(["SLEEPER"], dtype="string[pyarrow]"),  # isin(['ESPN','SLEEPER'])
-            "source_player_id": pd.array(["x"], dtype="string[pyarrow]"),
-            "gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]"),
-            "is_placeholder_gsis": [False],
-            "full_name": pd.array(["Old Row"], dtype="string[pyarrow]"),
-            "position": pd.array(["RB"], dtype="string[pyarrow]"),
-            "season": [2026],
-            "asof": pd.array(["2026-06-09"], dtype="string[pyarrow]"),
-            "adp": pd.array([5.0], dtype="Float64"),
-            "espn_draft_rank": pd.array([pd.NA], dtype="Float64"),
-            **{
-                f: pd.array([pd.NA], dtype="Float64")
-                for f in (
-                    "passing_yards",
-                    "passing_tds",
-                    "interceptions",
-                    "rushing_yards",
-                    "rushing_tds",
-                    "receptions",
-                    "receiving_yards",
-                    "receiving_tds",
-                    "fumbles_lost",
-                )
-            },
-        }
-    )
+    from projections.schemas import ExternalProjectionSchema
+
+    df = _external_row(source=pd.array(["SLEEPER"], dtype="string[pyarrow]"))
     out = ExternalProjectionSchema.validate(df)  # must not raise
     assert "espn_auction_value_avg" not in out.columns  # absent -> stays absent, no fabricate
 
 
 def test_external_schema_auction_columns_are_float64() -> None:
-    df = pd.DataFrame(
-        {
-            "source": pd.array(["ESPN"], dtype="string[pyarrow]"),  # isin(['ESPN','SLEEPER'])
-            "source_player_id": pd.array(["1"], dtype="string[pyarrow]"),
-            "gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]"),
-            "is_placeholder_gsis": [False],
-            "full_name": pd.array(["E"], dtype="string[pyarrow]"),
-            "position": pd.array(["RB"], dtype="string[pyarrow]"),
-            "season": [2026],
-            "asof": pd.array(["2026-06-09"], dtype="string[pyarrow]"),
-            "adp": pd.array([5.0], dtype="Float64"),
-            "espn_draft_rank": pd.array([pd.NA], dtype="Float64"),
-            "espn_auction_value_avg": pd.array([58.67], dtype="Float64"),
-            "espn_auction_value_ppr": pd.array([57.0], dtype="Float64"),
-            "espn_auction_value_std": pd.array([55.0], dtype="Float64"),
-            **{
-                f: pd.array([pd.NA], dtype="Float64")
-                for f in (
-                    "passing_yards",
-                    "passing_tds",
-                    "interceptions",
-                    "rushing_yards",
-                    "rushing_tds",
-                    "receptions",
-                    "receiving_yards",
-                    "receiving_tds",
-                    "fumbles_lost",
-                )
-            },
-        }
+    from projections.schemas import ExternalProjectionSchema
+
+    df = _external_row(
+        espn_auction_value_avg=pd.array([58.67], dtype="Float64"),
+        espn_auction_value_ppr=pd.array([57.0], dtype="Float64"),
+        espn_auction_value_std=pd.array([55.0], dtype="Float64"),
     )
     out = ExternalProjectionSchema.validate(df)
     assert str(out["espn_auction_value_avg"].dtype) == "Float64"
