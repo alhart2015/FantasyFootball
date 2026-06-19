@@ -30,6 +30,49 @@ _OUTPUT_COLUMNS: tuple[str, ...] = (
 )
 
 
+def _allocate_surplus(value_signal: pd.Series, config: LeagueConfig) -> pd.Series:
+    """Split the auction surplus across in-pool players in proportion to a non-negative value
+    signal, returning whole-dollar prices that sum to ``config.total_budget``.
+
+    ``value_signal`` is a non-null ``float64`` Series indexed over the in-pool players (one entry
+    per drafted slot). Every entry is floored at ``min_bid``; the surplus
+    ``total_budget - total_pool_size*min_bid`` is distributed proportionally to ``value_signal``
+    (uniformly if it sums to <= 0). The index is preserved; the result is ``Int64``. Shared by
+    ``generate_auction_values`` (VORP signal) and ``espn_anchored_bot_prices`` (ESPN $ signal).
+    """
+    total_budget = config.total_budget
+    reserve = config.total_pool_size * config.min_bid
+    surplus = total_budget - reserve
+
+    signal_sum = float(value_signal.sum())
+    if signal_sum > 0:
+        extra_float = (value_signal / signal_sum) * surplus
+    else:
+        extra_float = pd.Series(surplus / config.total_pool_size, index=value_signal.index)
+
+    dollars_float = config.min_bid + extra_float
+    rounded = dollars_float.round().astype("int64")
+
+    drift = total_budget - int(rounded.sum())
+    if drift != 0:
+        fractional = dollars_float - dollars_float.astype("int64")
+        if drift > 0:
+            order = fractional.sort_values(ascending=False).index
+        else:
+            adjustable_mask = rounded > config.min_bid
+            order = fractional[adjustable_mask].sort_values(ascending=True).index
+            if len(order) < abs(drift):
+                raise ValueError(
+                    f"Cannot close rounding drift of {drift} without violating min_bid "
+                    f"floor of ${config.min_bid}. This usually indicates an extreme "
+                    f"degenerate input (e.g., very small budget per slot)."
+                )
+        step = 1 if drift > 0 else -1
+        for idx in order[: abs(drift)]:
+            rounded.loc[idx] = rounded.loc[idx] + step
+    return rounded.astype(pd.Int64Dtype())
+
+
 def generate_auction_values(
     vorp_table: pd.DataFrame,
     league_config: LeagueConfig,
@@ -50,44 +93,8 @@ def generate_auction_values(
     pool_set = set(pool_ids)
     pool_mask = vorp_table["gsis_id"].isin(pool_set)
 
-    total_budget = league_config.total_budget
-    reserve = league_config.total_pool_size * league_config.min_bid
-    surplus = total_budget - reserve
-
     pool_df = vorp_table.loc[pool_mask].copy()
-    positive_vorp = pool_df["vorp"].clip(lower=0.0)
-    positive_vorp_sum = float(positive_vorp.sum())
-
-    if positive_vorp_sum > 0:
-        extra_float = (positive_vorp / positive_vorp_sum) * surplus
-    else:
-        # Every in-pool player has VORP <= 0 — distribute the surplus uniformly so the
-        # sum invariant still holds and no player exceeds another by accident of rounding.
-        extra_float = pd.Series(surplus / league_config.total_pool_size, index=pool_df.index)
-
-    dollars_float = league_config.min_bid + extra_float
-    rounded = dollars_float.round().astype("int64")
-
-    drift = total_budget - int(rounded.sum())
-    if drift != 0:
-        fractional = dollars_float - dollars_float.astype("int64")
-        if drift > 0:
-            order = fractional.sort_values(ascending=False).index
-        else:
-            # Floor-protection: rows already at min_bid can't absorb -1 without
-            # violating the spec §3 step 4 invariant. Exclude them from candidates.
-            adjustable_mask = rounded > league_config.min_bid
-            order = fractional[adjustable_mask].sort_values(ascending=True).index
-            if len(order) < abs(drift):
-                raise ValueError(
-                    f"Cannot close rounding drift of {drift} without violating min_bid "
-                    f"floor of ${league_config.min_bid}. This usually indicates an extreme "
-                    f"degenerate input (e.g., very small budget per slot)."
-                )
-        step = 1 if drift > 0 else -1
-        for idx in order[: abs(drift)]:
-            rounded.loc[idx] = rounded.loc[idx] + step
-    pool_df["auction_dollars"] = rounded.astype(pd.Int64Dtype())
+    pool_df["auction_dollars"] = _allocate_surplus(pool_df["vorp"].clip(lower=0.0), league_config)
 
     pool_df = pool_df.sort_values(
         by=["auction_dollars", "vorp", "season_mean_fpts", "gsis_id"],
@@ -118,4 +125,40 @@ def generate_auction_values(
     return AuctionValuesSchema.validate(out[list(_OUTPUT_COLUMNS)])
 
 
-__all__ = ["generate_auction_values"]
+def espn_anchored_bot_prices(pool: pd.DataFrame, config: LeagueConfig) -> pd.Series:
+    """Per-player bot reference dollars anchored on real ESPN auction values (TODO #49c Slice 2).
+
+    Returns a ``gsis_id``-indexed ``Int64`` Series over EVERY row of ``pool``: in-pool players get
+    an SOS allocation of the budget over ``espn_auction_dollars`` (NA / absent column -> 0 weight,
+    so unpriced players park at ``min_bid``); out-of-pool players get 0 (bots reading it bid
+    ``min_bid``, as today). Call on the same ``pool`` frame passed to ``generate_auction_values``.
+
+    Raises ``ValueError`` on degenerate drift (propagated from ``_allocate_surplus``); espn-mode
+    callers catch it and fall back to model pricing.
+    """
+    _reject_duplicate_gsis_ids(pool, "pool")
+    pool_set = set(_select_pool(pool, config))
+    pool_mask = pool["gsis_id"].isin(pool_set)
+    pool_df = pool.loc[pool_mask].copy()
+
+    if "espn_auction_dollars" in pool_df.columns:
+        value_signal = (
+            pool_df["espn_auction_dollars"]
+            .astype("Float64")
+            .fillna(0)
+            .clip(lower=0.0)
+            .astype("float64")
+        )
+    else:
+        value_signal = pd.Series(0.0, index=pool_df.index, dtype="float64")
+    in_pool_dollars = _allocate_surplus(value_signal, config)
+
+    out = pd.Series(
+        pd.array([0] * len(pool), dtype=pd.Int64Dtype()),
+        index=pd.Index(pool["gsis_id"], name="gsis_id"),
+    )
+    out.loc[pd.Index(pool_df["gsis_id"])] = in_pool_dollars.to_numpy()
+    return out
+
+
+__all__ = ["espn_anchored_bot_prices", "generate_auction_values"]

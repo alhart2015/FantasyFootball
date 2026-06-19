@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from projections.draft._pool import _select_pool
-from projections.draft.auction import generate_auction_values
+from projections.draft.auction import espn_anchored_bot_prices, generate_auction_values
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import FLEX_ELIGIBLE as _FLEX_ELIGIBLE
 from projections.schemas import (
@@ -428,3 +428,96 @@ def test_reference_prices_duplicate_gsis_id_rejected() -> None:
     )
     with pytest.raises(ValueError, match="duplicate"):
         generate_auction_values(df, cfg, reference_prices=ref)
+
+
+def _hand_pool_with_espn() -> tuple[LeagueConfig, pd.DataFrame]:
+    """4-player pool (2 QB + 2 RB). total_budget = n_teams*budget = 2*100 = 200, min_bid 1 ->
+    surplus 196. Two priced players (espn 60, 36) absorb the surplus; two unpriced (NA) park at
+    min_bid. Drift is 0:
+      value_signal=[60,0,36,0]; sum=96; extra=[60,0,36,0]/96*196=[122.5,0,73.5,0];
+      dollars=round([123.5,1,74.5,1])=[124,1,74,1] (round-half-even); sum=200.
+    """
+    cfg = _make_config(
+        n_teams=2, roster_slots={RosterSlot.QB: 1, RosterSlot.RB: 1, RosterSlot.BENCH: 0}
+    )
+    df = _make_vorp_table(
+        [
+            {"gsis_id": "00-1000001", "position": "QB", "season_mean_fpts": 200.0, "vorp": 50.0},
+            {"gsis_id": "00-1000002", "position": "QB", "season_mean_fpts": 190.0, "vorp": 40.0},
+            {"gsis_id": "00-2000001", "position": "RB", "season_mean_fpts": 180.0, "vorp": 30.0},
+            {"gsis_id": "00-2000002", "position": "RB", "season_mean_fpts": 170.0, "vorp": 20.0},
+        ]
+    )
+    df["espn_auction_dollars"] = pd.array([60, pd.NA, 36, pd.NA], dtype=pd.Int64Dtype())
+    return cfg, df
+
+
+def test_espn_bot_prices_sum_to_total_budget() -> None:
+    cfg, df = _hand_pool_with_espn()
+    out = espn_anchored_bot_prices(df, cfg)
+    assert int(out.sum()) == cfg.total_budget
+
+
+def test_espn_bot_prices_unpriced_park_at_min_bid() -> None:
+    cfg, df = _hand_pool_with_espn()
+    out = espn_anchored_bot_prices(df, cfg)
+    assert out["00-1000002"] == cfg.min_bid
+    assert out["00-2000002"] == cfg.min_bid
+
+
+def test_espn_bot_prices_priced_split_surplus_and_are_monotonic() -> None:
+    cfg, df = _hand_pool_with_espn()
+    out = espn_anchored_bot_prices(df, cfg)
+    assert out["00-1000001"] == 124  # round(min_bid + (60/96)*196)
+    assert out["00-2000001"] == 74  # round(min_bid + (36/96)*196)
+    assert out["00-1000001"] > out["00-2000001"]  # higher ESPN $ -> higher bot $
+
+
+def test_espn_bot_prices_dtype_is_int64() -> None:
+    cfg, df = _hand_pool_with_espn()
+    out = espn_anchored_bot_prices(df, cfg)
+    assert out.dtype == pd.Int64Dtype()
+
+
+def test_espn_bot_prices_out_of_pool_get_zero() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)  # has extra out-of-pool rows per position
+    df["espn_auction_dollars"] = pd.array([10] * len(df), dtype=pd.Int64Dtype())
+    pool_ids = set(_select_pool(df, cfg))
+    out = espn_anchored_bot_prices(df, cfg)
+    out_of_pool = [g for g in df["gsis_id"] if g not in pool_ids]
+    assert all(out[g] == 0 for g in out_of_pool)
+
+
+def test_espn_bot_prices_every_in_pool_at_least_min_bid() -> None:
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    df["espn_auction_dollars"] = pd.array(
+        [50 if i < 5 else pd.NA for i in range(len(df))], dtype=pd.Int64Dtype()
+    )
+    pool_ids = set(_select_pool(df, cfg))
+    out = espn_anchored_bot_prices(df, cfg)
+    assert all(out[g] >= cfg.min_bid for g in pool_ids)
+
+
+def test_espn_bot_prices_absent_column_uniform_fallback() -> None:
+    cfg, df = _hand_pool_with_espn()
+    df = df.drop(columns=["espn_auction_dollars"])
+    out = espn_anchored_bot_prices(df, cfg)
+    # all-zero weight -> uniform split of total_budget (200) over 4 in-pool players:
+    # surplus 196 / 4 = 49 + min_bid 1 = 50 each; drift 0
+    assert int(out.sum()) == cfg.total_budget
+    in_pool = out[out > 0] if (out > 0).any() else out
+    assert sorted(in_pool.tolist()) in ([50, 50, 50, 50], [49, 50, 50, 51])
+
+
+def test_espn_bot_prices_deep_league_inflation() -> None:
+    """One priced player among many unpriced absorbs nearly the whole surplus -> bot $ >> ESPN $."""
+    cfg = _make_config()
+    df = _full_pool_vorp_table(cfg)
+    espn = [pd.NA] * len(df)
+    espn[0] = 5
+    df["espn_auction_dollars"] = pd.array(espn, dtype=pd.Int64Dtype())
+    priced_gsis = df["gsis_id"].iloc[0]
+    out = espn_anchored_bot_prices(df, cfg)
+    assert out[priced_gsis] > 5
