@@ -300,26 +300,28 @@ Per-model metrics (mean [95% CI on exp pts]), sorted by exp pts:
 
 **Multi-year bake-off (#49a) — 2021–2026, the reliability check (2026-06-19, branch `feat/patient-deep-contestant`).** With per-season preset tables now available for every season (branch `feat/multi-year-auction-ingest`, PR #84), the bake-off was run across all six seasons and the per-model metrics averaged — the multi-year mean the single-season Runs A–H couldn't give. Setup: 12-team half-PPR, ESPN-anchored bots, **20 seeds × 300 sims per season**, seat 6, all **9 standing contestants** (incl. the newly-added `patient_deep` = `PatientValueBid(scrub_frac=0)`).
 
+**Methodology correction (mid-investigation):** the first pass priced every ESPN-*unranked* player at a flat `min_bid` for the bots, so the bot field rostered random $1 scrubs (a bot literally started a 3rd-string QB). `espn_anchored_bot_prices` now falls back to `_UNRANKED_MODEL_DISCOUNT` (0.4) × our VORP-based model value for unranked players — cheap but ordered, so bots field real depth. **This changed the rankings materially** (the flat-$1 field was inflating the stud-buying heroes). The table below is the **corrected** run; the buggy first run had `inflation`/`static` at 0.70/0.69 (apparent #2/#3) with a spurious "era-shift," now understood as an artifact.
+
 | model | playoff% (mean) | champ% | sd | per-season playoff `[21 22 23 24 25 26]` |
 |---|---|---|---|---|
-| **patient_deep** | **0.841** | **0.176** | **0.027** | `0.79 0.84 0.87 0.86 0.86 0.84` |
-| inflation | 0.697 | 0.159 | 0.166 | `0.85 0.77 0.90 0.70 0.46 0.49` |
-| static | 0.686 | 0.158 | 0.168 | `0.84 0.78 0.90 0.66 0.46 0.48` |
-| patient (shipped) | 0.651 | 0.093 | 0.059 | `0.54 0.67 0.72 0.64 0.70 0.64` |
-| studsdepth | 0.596 | 0.119 | 0.184 | `0.77 0.71 0.81 0.57 0.41 0.31` |
-| overbid | 0.592 | 0.119 | 0.169 | `0.74 0.68 0.82 0.52 0.42 0.36` |
-| marginal | 0.564 | 0.081 | 0.124 | `0.61 0.62 0.74 0.61 0.41 0.40` |
-| vorpshare | 0.540 | 0.085 | 0.087 | `0.59 0.56 0.60 0.63 0.47 0.38` |
-| anchors | 0.343 | 0.044 | 0.192 | `0.47 0.46 0.63 0.23 0.11 0.15` |
+| **patient_deep** | **0.825** | **0.164** | **0.020** | `0.81 0.81 0.81 0.86 0.85 0.82` |
+| patient (shipped) | 0.577 | 0.071 | 0.090 | `0.44 0.49 0.61 0.57 0.70 0.65` |
+| vorpshare | 0.529 | 0.079 | 0.075 | `0.53 0.48 0.58 0.64 0.55 0.40` |
+| inflation | 0.506 | 0.076 | 0.056 | `0.56 0.50 0.51 0.57 0.50 0.40` |
+| static | 0.497 | 0.073 | 0.054 | `0.54 0.49 0.50 0.56 0.50 0.39` |
+| marginal | 0.488 | 0.049 | 0.078 | `0.46 0.46 0.63 0.54 0.40 0.44` |
+| studsdepth | 0.417 | 0.051 | 0.045 | `0.45 0.44 0.41 0.42 0.46 0.32` |
+| overbid | 0.404 | 0.050 | 0.046 | `0.40 0.42 0.40 0.41 0.47 0.32` |
+| anchors | 0.121 | 0.006 | 0.026 | `0.09 0.12 0.10 0.10 0.14 0.17` |
 
 **Findings (data; the strongest the harness has produced):**
-- **`patient_deep` dominates every axis at once:** highest mean playoff (0.841, **+0.14 over #2**), highest champ rate (0.176), **lowest cross-season variance (sd 0.027 — 6× tighter than inflation/static ~0.17)**, and **#1 in 4 of 6 seasons** (2022/24/25/26), top-3 in all six. It beats the shipped `patient` (`scrub_frac=0.50`) by **+0.19 playoff** — the single-season tuning result generalizes across six seasons and three auction-value regimes.
-- **The high-ceiling strategies are fragile:** `inflation`/`static` post strong means but only because they win the **crowd-only early seasons (2021–2023, 0.85–0.90)**; they collapse to ~0.47 in 2025–2026. This is exactly the year-to-year swing the multi-year average was built to expose — a single 2026 draw would have ranked them very differently.
-- `anchors` is consistently last across all six seasons.
+- **`patient_deep` dominates by a wide, stable margin:** mean playoff **0.825 — +0.25 over #2** (`patient` 0.577), highest champ rate (0.164), **lowest cross-season variance (sd 0.020)**, and **#1 in all six seasons** (range 0.81–0.86). The single-season tuning result generalizes across six seasons and three auction-value regimes, and it *strengthened* once the bot field was made realistic.
+- **The flat-$1 bug was inflating the stud-buyers.** `inflation`/`static` dropped from an apparent 0.70/0.69 to a true ~0.50 once the bots field real depth — buying studs only looks great against a field that punts half its roster to $1. The earlier "era-shift" (inflation/static winning the crowd-only early seasons) was largely the bug, not a real basis effect: corrected, they sit at a flat ~0.50 every year.
+- Shipped `patient` (`scrub_frac=0.50`) is the clear #2 (0.577) — still well behind `patient_deep`. `anchors` is dead last every season.
 
-**Caveats:** the ESPN auction-value *basis varies by season* (pre-2023 crowd-only, 2025 expert-only, 2023/24/26 both), so the era-shift is partly a basis confound, not purely projection differences; 2026 has no schedule yet → empty byes (perturbs its bye/champ cells); 20×300 is modest (directional ranking, not tight CIs). Even with these, the `patient_deep` separation is far outside the noise.
+**Caveats:** the ESPN auction-value *basis varies by season* (pre-2023 crowd-only, 2025 expert-only, 2023/24/26 both); 2026 has no schedule yet → empty byes (perturbs its bye/champ cells); 20×300 is modest (directional ranking, not tight CIs); the unranked-discount (0.4) is itself a tunable knob worth sweeping. Even so, the `patient_deep` separation is far outside the noise.
 
-**Status (data, no default change):** `patient_deep` is now a standing contestant in every bake-off (`_MODELS`). The multi-year evidence makes it the leading **September** candidate — either re-tune the `patient` default to `scrub_frac≈0` or adopt `patient_deep` as the recommended hero. Decision still deferred to September per project policy.
+**Status (data, no default change):** `patient_deep` is now a standing contestant in every bake-off (`_MODELS`), and the corrected ESPN-anchored bot pricing is the new methodology baseline. The multi-year evidence makes `patient_deep` the leading **September** candidate — either re-tune the `patient` default to `scrub_frac≈0` or adopt `patient_deep` as the recommended hero. Decision still deferred to September per project policy.
 
 ## Planned experiments / axes to sweep
 

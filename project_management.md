@@ -4,15 +4,17 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
-## Auction Strategy — Multi-year bake-off + `patient_deep` contestant (#49a) — shipped (2026-06-19, branch `feat/patient-deep-contestant`)
+## Auction Strategy — Multi-year bake-off + `patient_deep` + ESPN-pricing fix (#49a / #49c) — shipped (2026-06-19, branch `feat/patient-deep-contestant`)
 
-**Status:** the multi-year averaging (#49a) is run, and the tuned `patient_deep` (`PatientValueBid(scrub_frac=0)`) is now a **standing 9th contestant** in every bake-off (`_MODELS` in `tournament_cli.py`). Consumes the per-season tables from the data-ingest slice (PR #84).
+**Status:** the multi-year averaging (#49a) is run; the tuned `patient_deep` (`PatientValueBid(scrub_frac=0)`) is now a **standing 9th contestant** (`_MODELS`); and a **bot-pricing methodology fix** (#49c) corrects how ESPN-unranked players are valued. Also added `scripts/inspect_auction_drafts.py` (best/worst-draft roster inspector, `--layout slots`, `--bench` override). Consumes the per-season tables from PR #84.
 
-**Result (data; strongest the harness has produced):** across **6 seasons (2021–2026), 12-team half-PPR, ESPN-anchored bots, 20 seeds × 300 sims, seat 6**, `patient_deep` **dominates every axis at once** — mean playoff **0.841** (next best `inflation` 0.697), champ **0.176**, **lowest cross-season sd 0.027** (6× tighter than `inflation`/`static` ~0.17), **#1 in 4 of 6 seasons** (top-3 in all six). It beats the shipped `patient` (`scrub_frac=0.50`) by **+0.19 playoff** — the single-season tuning finding (Run-H follow-up) generalizes across six seasons and three auction-value regimes. The high-ceiling `inflation`/`static` win only the crowd-only early seasons (2021–2023, 0.85–0.90) and **collapse to ~0.47 in 2025–2026** — exactly the year-to-year swing the multi-year average was built to expose. Full table in `reports/auction_tournament_validation_2026.md` (Multi-year bake-off section).
+**Methodology fix (#49c, the important one):** `espn_anchored_bot_prices` previously gave every ESPN-*unranked* player a flat `min_bid` → bots couldn't distinguish a real backup from a camp body and rostered random $1 scrubs (a bot started a 3rd-string QB; surfaced via the inspector). Now unranked players fall back to `_UNRANKED_MODEL_DISCOUNT` (0.4) × our VORP-based model value — cheap but **ordered**, so bots field real depth. Preserves the hero's edge (the exploited rookies are ESPN-priced-cheap, not unranked). **This changed all ESPN-anchored numbers** — the flat-$1 field had been inflating the stud-buying heroes.
 
-**Caveats:** auction-value basis varies by season (pre-2023 crowd-only, 2025 expert-only); 2026 has no schedule yet (empty byes); 20×300 is directional (ranking, not tight CIs) — but `patient_deep`'s separation is far outside the noise.
+**Result, corrected pricing (data; strongest the harness has produced):** across **6 seasons (2021–2026), 12-team half-PPR, ESPN bots, 20 seeds × 300 sims, seat 6**, `patient_deep` **dominates by a wide, stable margin** — mean playoff **0.825 (+0.25 over #2** `patient` 0.577), champ 0.164, **sd 0.020**, and **#1 in all 6 seasons** (0.81–0.86). The buggy first run had `inflation`/`static` at an apparent 0.70/0.69 (#2/#3) with a spurious "era-shift"; corrected, they sit at a flat ~0.50 (#4/#5) — the era-shift was largely the flat-$1 artifact, and the fix *strengthened* the `patient_deep` conclusion. Full table + correction note in `reports/auction_tournament_validation_2026.md`.
 
-**September decision:** `patient_deep` is now the clear front-runner — either re-tune the `patient` default to `scrub_frac≈0` or adopt `patient_deep` as the recommended hero. Decision still deferred to September per policy. Untested: 16-team auction (12-team is this league's auction size); higher seeds for tight CIs.
+**Caveats:** auction-value basis varies by season (pre-2023 crowd-only, 2025 expert-only); 2026 has no schedule yet (empty byes); 20×300 is directional; the unranked-discount (0.4) is itself a tunable knob worth sweeping.
+
+**September decision:** `patient_deep` is the clear front-runner — adopt it or re-tune `patient` to `scrub_frac≈0`. Deferred to September per policy. Open: sweep the 0.4 unranked-discount; 16-team auction; higher seeds for tight CIs; `patient_deep` underspends badly at low bench counts (idle-budget tuning).
 
 ---
 
