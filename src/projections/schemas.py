@@ -828,6 +828,11 @@ class ExternalProjectionSchema(pa.DataFrameModel):
     asof: Series[str] = pa.Field(str_matches=r"^\d{4}-\d{2}-\d{2}$")
     adp: Series[float] = pa.Field(nullable=True)
     espn_draft_rank: Series[float] = pa.Field(nullable=True)
+    # Optional (not-required): ESPN-only auction values; absent on the Sleeper path and on
+    # partitions written before this column existed. Float64 to avoid the NaN dtype-regression.
+    espn_auction_value_avg: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
+    espn_auction_value_ppr: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
+    espn_auction_value_std: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
     passing_yards: Series[float] = pa.Field(nullable=True)
     passing_tds: Series[float] = pa.Field(nullable=True)
     interceptions: Series[float] = pa.Field(nullable=True)

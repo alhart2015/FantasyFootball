@@ -7,6 +7,8 @@ import pandas as pd
 import pytest
 
 from projections.ingest import external_projections as ext
+from projections.ingest.external_projections import parse_espn_players
+from projections.schemas import ExternalProjectionSchema
 
 
 def test_parse_espn_players_extracts_statline_adp_rank() -> None:
@@ -594,3 +596,164 @@ def test_parse_sleeper_drops_empty_name() -> None:
         }
     ]
     assert ext.parse_sleeper_projections(payload).empty
+
+
+def _espn_player(
+    pid: int,
+    name: str,
+    pos_id: int,
+    *,
+    adp: float = 5.0,
+    auction_avg: float | None = None,
+    ppr_av: float | None = None,
+    std_av: float | None = None,
+) -> dict[str, Any]:
+    """Minimal kona_player_info entry for one player with a projection."""
+    ownership: dict[str, Any] = {"averageDraftPosition": adp}
+    if auction_avg is not None:
+        ownership["auctionValueAverage"] = auction_avg
+    ranks: dict[str, dict[str, Any]] = {"PPR": {"rank": 1}, "STANDARD": {"rank": 1}}
+    if ppr_av is not None:
+        ranks["PPR"]["auctionValue"] = ppr_av
+    if std_av is not None:
+        ranks["STANDARD"]["auctionValue"] = std_av
+    return {
+        "player": {
+            "id": pid,
+            "fullName": name,
+            "defaultPositionId": pos_id,  # 2 == RB
+            "stats": [
+                {"seasonId": 2026, "statSplitTypeId": 0, "statSourceId": 1, "stats": {"24": 1000.0}}
+            ],
+            "ownership": ownership,
+            "draftRanksByRankType": ranks,
+        }
+    }
+
+
+def test_parse_espn_extracts_auction_values() -> None:
+    payload = {
+        "players": [_espn_player(1, "Crowd Guy", 2, auction_avg=58.67, ppr_av=57, std_av=55)]
+    }
+    df = parse_espn_players(payload, 2026)
+    row = df.iloc[0]
+    assert row["espn_auction_value_avg"] == 58.67
+    assert row["espn_auction_value_ppr"] == 57
+    assert row["espn_auction_value_std"] == 55
+
+
+def test_parse_espn_auction_values_non_positive_and_missing_become_none() -> None:
+    payload = {
+        "players": [
+            _espn_player(1, "Zero Crowd", 2, auction_avg=0, ppr_av=0, std_av=0),
+            _espn_player(2, "No Auction Keys", 2),  # no auction_avg / auctionValue at all
+        ]
+    }
+    df = parse_espn_players(payload, 2026).set_index("espn_id")
+    for col in ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std"):
+        assert pd.isna(df.loc["1", col])  # <=0 normalized to None  (pd.isna: robust to dtype)
+        assert pd.isna(df.loc["2", col])  # missing key -> None, no crash
+
+
+def test_external_schema_validates_without_auction_columns() -> None:
+    # A stale-style frame lacking the new columns must still validate (Optional).
+    df = pd.DataFrame(
+        {
+            "source": pd.array(["SLEEPER"], dtype="string[pyarrow]"),  # isin(['ESPN','SLEEPER'])
+            "source_player_id": pd.array(["x"], dtype="string[pyarrow]"),
+            "gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]"),
+            "is_placeholder_gsis": [False],
+            "full_name": pd.array(["Old Row"], dtype="string[pyarrow]"),
+            "position": pd.array(["RB"], dtype="string[pyarrow]"),
+            "season": [2026],
+            "asof": pd.array(["2026-06-09"], dtype="string[pyarrow]"),
+            "adp": pd.array([5.0], dtype="Float64"),
+            "espn_draft_rank": pd.array([pd.NA], dtype="Float64"),
+            **{
+                f: pd.array([pd.NA], dtype="Float64")
+                for f in (
+                    "passing_yards",
+                    "passing_tds",
+                    "interceptions",
+                    "rushing_yards",
+                    "rushing_tds",
+                    "receptions",
+                    "receiving_yards",
+                    "receiving_tds",
+                    "fumbles_lost",
+                )
+            },
+        }
+    )
+    out = ExternalProjectionSchema.validate(df)  # must not raise
+    assert "espn_auction_value_avg" not in out.columns  # absent -> stays absent, no fabricate
+
+
+def test_external_schema_auction_columns_are_float64() -> None:
+    df = pd.DataFrame(
+        {
+            "source": pd.array(["ESPN"], dtype="string[pyarrow]"),  # isin(['ESPN','SLEEPER'])
+            "source_player_id": pd.array(["1"], dtype="string[pyarrow]"),
+            "gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]"),
+            "is_placeholder_gsis": [False],
+            "full_name": pd.array(["E"], dtype="string[pyarrow]"),
+            "position": pd.array(["RB"], dtype="string[pyarrow]"),
+            "season": [2026],
+            "asof": pd.array(["2026-06-09"], dtype="string[pyarrow]"),
+            "adp": pd.array([5.0], dtype="Float64"),
+            "espn_draft_rank": pd.array([pd.NA], dtype="Float64"),
+            "espn_auction_value_avg": pd.array([58.67], dtype="Float64"),
+            "espn_auction_value_ppr": pd.array([57.0], dtype="Float64"),
+            "espn_auction_value_std": pd.array([55.0], dtype="Float64"),
+            **{
+                f: pd.array([pd.NA], dtype="Float64")
+                for f in (
+                    "passing_yards",
+                    "passing_tds",
+                    "interceptions",
+                    "rushing_yards",
+                    "rushing_tds",
+                    "receptions",
+                    "receiving_yards",
+                    "receiving_tds",
+                    "fumbles_lost",
+                )
+            },
+        }
+    )
+    out = ExternalProjectionSchema.validate(df)
+    assert str(out["espn_auction_value_avg"].dtype) == "Float64"
+
+
+def test_to_canonical_sleeper_auction_columns_are_float64_na() -> None:
+    # _to_canonical null-fills the ESPN-only auction columns for a Sleeper frame; they must land
+    # as Float64/pd.NA (not float64/NaN — the CLAUDE.md dtype-regression trap, spec Testing).
+    from datetime import date
+
+    from projections.ingest.external_projections import _to_canonical
+    from projections.schemas import STAT_FIELDS, ProjectionSource
+
+    sleeper = pd.DataFrame(
+        {
+            "sleeper_id": ["s1"],
+            "full_name": ["Sleeper Guy"],
+            "position": ["RB"],
+            "sleeper_adp": [12.0],
+            **{f: [100.0] for f in STAT_FIELDS},
+        }
+    )
+    id_map = pd.DataFrame({"gsis_id": ["00-0099999"], "sleeper_id": ["s1"]})
+    out = _to_canonical(
+        sleeper,
+        source=ProjectionSource.SLEEPER,
+        id_col="sleeper_id",
+        adp_col="sleeper_adp",
+        rank_col=None,
+        has_stats=True,
+        season=2026,
+        asof=date(2026, 6, 9),
+        id_map=id_map,
+    )
+    for col in ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std"):
+        assert str(out[col].dtype) == "Float64"
+        assert pd.isna(out[col].iloc[0])
