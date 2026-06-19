@@ -4,6 +4,18 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction Strategy — ESPN auction-value ingest (Slice 1) — shipped (2026-06-18, branch `feat/espn-auction-values-ingest`)
+
+**Status:** Slice 1 of breaking the auction "shared-value problem" — ingest + plumb real ESPN human auction values to the pool; **no behavior change** (the column lands but no consumer reads it yet). Spec/plan `docs/superpowers/specs|plans/2026-06-18-espn-auction-values-ingest.*`. Built via the full pipeline: brainstorm → spec → **superpowers-spec-review** (new skill; 3 iterations) → plan → **superpowers-plan-review** (new skill; 2 iterations) → subagent-driven execution (4 tasks, each TDD + spec-compliance + code-quality review + per-task fixes) → final whole-branch review.
+
+**The shared-value problem (motivation):** the bot field (`market.py`) centers WTP on the hero's *own* `auction_dollars` ± mean-zero noise, so the hero has zero informational edge and the market leaves no exploitable bargain — the leading suspect for every hero strategy sitting at/below fair share (Runs E–G). Fix: anchor the **bots** on real human-facing ESPN auction values (bots = ESPN, hero = our model), so the hero's edge is the gap between them. **Verified (live API probe):** ESPN's `kona_player_info` (the payload we already fetch) exposes a crowd value (`ownership.auctionValueAverage`, current-season-only) + an expert value (`draftRanksByRankType.{PPR,STANDARD}.auctionValue`, historical); **Sleeper exposes no auction value** — so the anchor is ESPN-only.
+
+**What shipped (Slice 1, ingest + plumb only):** `parse_espn_players` extracts the 3 ESPN fields; carried through `build_consensus` (first-non-null-across-group, absence-guarded) into the consensus snapshot; a `resolve_espn_auction_dollars(consensus, ruleset)` helper (crowd-now / expert-fallback-by-`ruleset.name`, NA-safe `Int64`) lands a single `espn_auction_dollars` column on the preset VORP table via `build_preset_table`. All four new columns are **Optional** (`Series[...] | None`) so stale partitions + the weekly VORP path still validate (preserves no-behavior-change). The existing `generate_auction_values` `reference_prices → reference_dollars` seam is where Slice 2 will feed it.
+
+**Gates:** full suite 1730 passed / 22 skipped / 1 pre-existing failure (`test_backtest_smoke_one_cell`, TODO #40, fails on main too); auction subsystem `tests/test_draft` 461 passed (no regression, R6); mypy clean (332 files); ruff check + format clean. **Deferred to Slice 2 (see TODO #49):** wire the bot WTP to `espn_auction_dollars` (via `reference_prices`), decide how bots handle the large NA fraction (deep/rookie/Sleeper-only players), rescale ESPN $ to the league budget, and run the bake-off. **Prereq:** a fresh `external_projections` re-ingest is required to populate the columns (stale snapshots validate but carry NA; `data/raw/external_projections` may be absent on a given machine).
+
+---
+
 ## Auction Strategy — Budget-urgency factor + StudsAndDepthBid + Run F — shipped (2026-06-18, branch `feat/auction-budget-urgency`, PR #81)
 
 **Status:** Budget-urgency slice shipped. Spec/plan `docs/superpowers/specs|plans/2026-06-18-auction-budget-urgency.*`. Data-gathering — **no bid-model winner declared; decision remains deferred to September 2026.** Built on the unreliable dev box, re-verified + finished on reliable hardware (handoff via `INSTRUCTIONS.md`, removed before the PR).

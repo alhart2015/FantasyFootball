@@ -476,3 +476,106 @@ def test_empty_input_returns_empty_conforming_frame() -> None:
     out = build_consensus(pd.DataFrame(columns=cols), Ruleset())
     assert out.empty
     ConsensusProjectionSchema.validate(out)  # empty frame still conforms
+
+
+_AUCTION_STATS = tuple(STAT_FIELDS)
+
+
+def _ext_row(
+    source: str,
+    gsis_id: str,
+    *,
+    adp: float = 5.0,
+    av_avg: object = pd.NA,
+    stats: bool = True,
+    **extra: object,
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "source": source,
+        "source_player_id": f"{source}-{gsis_id}",
+        "gsis_id": gsis_id,
+        "is_placeholder_gsis": False,
+        "full_name": "Player X",
+        "position": "RB",
+        "season": 2026,
+        "asof": "2026-06-09",
+        "adp": adp,
+        "espn_draft_rank": pd.NA,
+        "espn_auction_value_avg": av_avg,
+        "espn_auction_value_ppr": pd.NA,
+        "espn_auction_value_std": pd.NA,
+    }
+    for s in _AUCTION_STATS:
+        row[s] = 100.0 if stats else pd.NA
+    row.update(extra)
+    return row
+
+
+def test_blend_carries_espn_auction_value_first_non_null() -> None:
+    # ESPN row has the value, Sleeper row does not -> consensus keeps the value.
+    external = pd.DataFrame(
+        [
+            _ext_row("espn", "00-0011111", av_avg=58.67),
+            _ext_row("sleeper", "00-0011111", av_avg=pd.NA, stats=False),
+        ]
+    )
+    out = build_consensus(external, Ruleset.espn_half()).set_index("gsis_id")
+    assert out.loc["00-0011111", "espn_auction_value_avg"] == 58.67
+
+
+def test_blend_sleeper_only_player_has_na_auction() -> None:
+    external = pd.DataFrame([_ext_row("sleeper", "00-0022222", av_avg=pd.NA, stats=False)])
+    out = build_consensus(external, Ruleset.espn_half()).set_index("gsis_id")
+    assert pd.isna(out.loc["00-0022222", "espn_auction_value_avg"])
+
+
+def test_blend_does_not_crash_when_auction_columns_absent() -> None:
+    # A frame lacking the columns entirely (stale snapshot / existing tests) must not KeyError.
+    external = pd.DataFrame([_ext_row("espn", "00-0033333", av_avg=58.0)]).drop(
+        columns=["espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std"]
+    )
+    out = build_consensus(external, Ruleset.espn_half()).set_index("gsis_id")
+    assert pd.isna(out.loc["00-0033333", "espn_auction_value_avg"])  # seeded to NA
+
+
+def test_blend_keeps_espn_value_when_sleeper_is_identity_row() -> None:
+    # The distinguishing test (spec R3): ESPN row is NOT stat-bearing, so the Sleeper row becomes
+    # the identity_row — but ESPN carries the auction value. First-non-null must still surface it;
+    # an identity_row[col] pick would wrongly return the Sleeper row's NA.
+    external = pd.DataFrame(
+        [
+            _ext_row("espn", "00-0044444", av_avg=58.0, stats=False),  # ESPN: value, no stat line
+            _ext_row("sleeper", "00-0044444", av_avg=pd.NA, stats=True),  # Sleeper: stat-bearing
+        ]
+    )
+    out = build_consensus(external, Ruleset.espn_half()).set_index("gsis_id")
+    assert out.loc["00-0044444", "espn_auction_value_avg"] == 58.0
+
+
+def test_blend_empty_input_carries_auction_columns() -> None:
+    # _empty_output() builds from _OUTPUT_COLUMNS; the new names must be present on the empty path.
+    empty = pd.DataFrame(
+        columns=[
+            "source",
+            "source_player_id",
+            "gsis_id",
+            "is_placeholder_gsis",
+            "full_name",
+            "position",
+            "season",
+            "asof",
+            "adp",
+            "espn_draft_rank",
+            "espn_auction_value_avg",
+            "espn_auction_value_ppr",
+            "espn_auction_value_std",
+            *_AUCTION_STATS,
+        ]
+    )
+    out = build_consensus(empty, Ruleset.espn_half())
+    for col in (
+        "espn_auction_value_avg",
+        "espn_auction_value_ppr",
+        "espn_auction_value_std",
+    ):
+        assert col in out.columns

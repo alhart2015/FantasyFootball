@@ -199,6 +199,15 @@ STAT_FIELDS: Final[tuple[str, ...]] = (
     Stat.FUMBLES_LOST.value,
 )
 
+# ESPN-only auction-value columns (crowd average + PPR/STANDARD expert), carried through
+# external_projections -> consensus. Single source of truth, imported by the ingest + blend
+# layers (mirrors STAT_FIELDS).
+ESPN_AUCTION_COLS: Final[tuple[str, ...]] = (
+    "espn_auction_value_avg",
+    "espn_auction_value_ppr",
+    "espn_auction_value_std",
+)
+
 
 class ProjectionSource(StrEnum):
     """External preseason projection sources. Use ProjectionSource.ESPN, never "ESPN"."""
@@ -828,6 +837,11 @@ class ExternalProjectionSchema(pa.DataFrameModel):
     asof: Series[str] = pa.Field(str_matches=r"^\d{4}-\d{2}-\d{2}$")
     adp: Series[float] = pa.Field(nullable=True)
     espn_draft_rank: Series[float] = pa.Field(nullable=True)
+    # Optional (not-required): ESPN-only auction values; absent on the Sleeper path and on
+    # partitions written before this column existed. Float64 to avoid the NaN dtype-regression.
+    espn_auction_value_avg: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
+    espn_auction_value_ppr: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
+    espn_auction_value_std: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
     passing_yards: Series[float] = pa.Field(nullable=True)
     passing_tds: Series[float] = pa.Field(nullable=True)
     interceptions: Series[float] = pa.Field(nullable=True)
@@ -877,6 +891,10 @@ class ConsensusProjectionSchema(pa.DataFrameModel):
     receiving_yards: Series[pd.Float64Dtype] = pa.Field(nullable=True)
     receiving_tds: Series[pd.Float64Dtype] = pa.Field(nullable=True)
     fumbles_lost: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    # Optional (not-required): ESPN-only auction values carried from external_projections.
+    espn_auction_value_avg: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
+    espn_auction_value_ppr: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
+    espn_auction_value_std: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
     is_placeholder_gsis: Series[bool]
     ruleset: Series[str] = pa.Field(isin=_RULESET_NAME_VALUES)
 
@@ -984,6 +1002,10 @@ class VorpTableSchema(pa.DataFrameModel):
     # display name, incl. placeholder-gsis rookies absent from id_map). Weekly-path VORP
     # tables omit it and still validate. Nullable: a player with no consensus name is NA.
     full_name: Series[str] | None = pa.Field(nullable=True)
+    # Optional (not-required): the resolved ESPN human auction value, populated only on the
+    # consensus-fed preset path. Weekly-path VORP tables omit it and still validate. Slice 1
+    # lands it here; Slice 2 feeds it to generate_auction_values as reference_prices.
+    espn_auction_dollars: Series[pd.Int64Dtype] | None = pa.Field(ge=0, nullable=True)
 
     class Config:
         strict = "filter"

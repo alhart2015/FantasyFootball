@@ -31,6 +31,7 @@ from projections.ingest.identity import placeholder_name_key
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import (
     _PYARROW_STR,
+    ESPN_AUCTION_COLS,
     STAT_FIELDS,
     ExternalProjectionSchema,
     Position,
@@ -82,6 +83,11 @@ def round_count(value: float) -> int:
     """Half-up rounding for non-negative projected count stats (Python's round() is banker's).
     Clamps at 0 — count stats (TDs, receptions, INTs, fumbles) are never negative."""
     return max(0, int(value + 0.5))
+
+
+def _pos_auction(value: float | None) -> float | None:
+    """ESPN encodes 'no auction value' as 0; normalize non-positive to None (same rule as ADP)."""
+    return None if value is None or value <= 0 else float(value)
 
 
 def _map_stats(raw: dict[str, float], mapping: dict[str, str]) -> dict[str, float]:
@@ -155,7 +161,11 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
             n_no_projection += 1
             continue
         ownership = pl.get("ownership") or {}
-        ppr_rank = ((pl.get("draftRanksByRankType") or {}).get("PPR") or {}).get("rank")
+        draft_ranks = pl.get("draftRanksByRankType") or {}
+        ppr_ranks = draft_ranks.get("PPR") or {}
+        std_ranks = draft_ranks.get("STANDARD") or {}
+        ppr_rank = ppr_ranks.get("rank")
+
         # ESPN encodes "undrafted / no draft data" as ADP 0; normalize non-positive to None so the
         # raw table stores honest null (adp is nullable) rather than an in-band sentinel that every
         # downstream consumer would have to re-discover.
@@ -168,6 +178,9 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
             "position": position,
             "espn_adp": espn_adp,
             "espn_pos_rank": ppr_rank,
+            "espn_auction_value_avg": _pos_auction(ownership.get("auctionValueAverage")),
+            "espn_auction_value_ppr": _pos_auction(ppr_ranks.get("auctionValue")),
+            "espn_auction_value_std": _pos_auction(std_ranks.get("auctionValue")),
         }
         row.update(_espn_stats_to_statline(proj_stats))
         rows.append(row)
@@ -309,9 +322,13 @@ def _to_canonical(
     )
     for f in STAT_FIELDS:
         out[f] = keyed[f] if has_stats else null_col
+    # ESPN-only: present in the ESPN parsed frame, absent in the Sleeper one (fixed column list).
+    # Guard on presence -> null_col for Sleeper, exactly mirroring espn_draft_rank's null fallback.
+    for col in ESPN_AUCTION_COLS:
+        out[col] = keyed[col] if col in keyed.columns else null_col
     # Uniform nullable-float dtype across all source frames so pd.concat needs no dtype inference
     # over all-NA columns (e.g. Sleeper's espn_draft_rank) — avoids the all-NA-column FutureWarning.
-    for col in ("adp", "espn_draft_rank", *STAT_FIELDS):
+    for col in ("adp", "espn_draft_rank", *ESPN_AUCTION_COLS, *STAT_FIELDS):
         out[col] = out[col].astype("Float64")
     return _finish_canonical(out, season=season, asof=asof)
 
