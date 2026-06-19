@@ -667,3 +667,93 @@ def test_snake_rng_param_does_not_change_flush_rosters() -> None:
         nomination_temp=1.0,
     )
     assert a == b == c
+
+
+def test_all_broke_auction_completes_no_assert() -> None:
+    # With every seat broke and abstaining off-target, the engine must NOT hit `assert bids` — the
+    # nominator backstop (or the broke nominator self-bidding its target) keeps each round
+    # non-empty, and every roster fills.
+    import numpy as np
+
+    from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
+
+    pool, config = _pool_with_adp(), _broke_config()
+    league = simulate_auction(
+        StaticDollarBid(),
+        1,
+        pool,
+        config,
+        baseline_dollars=generate_auction_values(pool, config),
+        price_jitter=0.15,
+        rng=np.random.default_rng(3),
+        nomination_temp=1.0,
+        snake_rng=np.random.default_rng([3, 7]),
+    )
+    assert all(len(r) == config.roster_size for r in league.values())
+
+
+def test_broke_regime_respects_position_caps() -> None:
+    # Behavioral guard: broke bots never roster an off-position scrub — every seat's roster respects
+    # the position-cap maxima (a blind $1-scrub grab would blow a cap or strand a needed slot).
+    from collections import Counter
+
+    import numpy as np
+
+    from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
+    from projections.draft.roster_eligibility import bot_position_bounds
+    from projections.schemas import Position
+
+    pool, config = _pool_with_adp(), _broke_config()
+    state = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        config,
+        baseline_dollars=generate_auction_values(pool, config),
+        price_jitter=0.15,
+        rng=np.random.default_rng(11),
+        nomination_temp=1.0,
+        snake_rng=np.random.default_rng([11, 7]),
+    )
+    _minimums, maximums = bot_position_bounds(config.roster_slots)
+    for roster in state.rosters:
+        counts = Counter(Position(pos) for _g, pos, _pr in roster)
+        for p, c in counts.items():
+            assert c <= maximums[p]
+
+
+def test_snake_regime_changes_outcomes_vs_no_adp() -> None:
+    # The regime must DO something: an all-broke auction with usable ADP must produce a different
+    # outcome than the same all-broke auction with the regime disabled (consensus_adp dropped ->
+    # today's archetype/central behavior). Both are reproducible at a fixed seed.
+    import numpy as np
+
+    from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
+
+    config = _broke_config()
+    adp_pool = _pool_with_adp()
+    no_adp = adp_pool.drop(columns=["consensus_adp"])
+    # my_seat is positional (2nd arg); price_jitter / nomination_temp held common across both runs.
+    with_adp = simulate_auction(
+        StaticDollarBid(),
+        1,
+        adp_pool,
+        config,
+        rng=np.random.default_rng(2),
+        baseline_dollars=generate_auction_values(adp_pool, config),
+        snake_rng=np.random.default_rng([2, 7]),
+        price_jitter=0.15,
+        nomination_temp=1.0,
+    )
+    without = simulate_auction(
+        StaticDollarBid(),
+        1,
+        no_adp,
+        config,
+        rng=np.random.default_rng(2),
+        baseline_dollars=generate_auction_values(no_adp, config),
+        snake_rng=np.random.default_rng([2, 7]),
+        price_jitter=0.15,
+        nomination_temp=1.0,
+    )
+    assert with_adp != without  # the snake regime re-routes who drafts whom

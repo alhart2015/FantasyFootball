@@ -118,8 +118,8 @@ def _simulate_to_state(
     if snake_rng is None:
         snake_rng = rng.spawn(1)[0]  # CRN-safe: spawn advances the seed-sequence, not rng's stream
     adp_ok = adp_usable(pool)
-    # Built here but not yet consumed — Tasks 4/5 read these when bidding the broke/snake regime.
-    snake_boards: dict[int, SnakeBoard] = (  # noqa: F841
+    # Per-bot fixed noisy-ADP boards; broke bots consume these to snipe their snake target (Task 4).
+    snake_boards: dict[int, SnakeBoard] = (
         {s: SnakeBoard(pool, snake_rng) for s in bot_seats} if adp_ok else {}
     )
 
@@ -199,24 +199,57 @@ def _simulate_to_state(
                 )
                 bids[seat] = max(min_bid, min(int(desired), fmax))
             else:
-                desired = seat_arch[seat].max_bid(
-                    SeatView(
-                        open_slots=_open_slots(state, seat, rs),
-                        eligible_positions=elig,
-                        budget=state.budgets[seat],
-                    ),
-                    player,
-                    bd,
-                    config,
-                    rng,
-                    price_jitter=price_jitter,
-                )
-                if desired <= 0:  # abstain -> dropped before the clamp
-                    continue
-                bids[seat] = max(min_bid, min(int(desired), fmax))
+                broke = adp_ok and not forced and fmax == min_bid
+                if broke:
+                    target = snake_boards[seat].best_available(
+                        frozenset(state.drafted), seat_eligible[seat]
+                    )
+                    if target is None or str(nominee_id) != str(target):
+                        continue  # abstain: not this broke bot's snake target
+                    bids[seat] = min(min_bid, fmax)  # snipe at the floor (== min_bid since broke)
+                else:
+                    desired = seat_arch[seat].max_bid(
+                        SeatView(
+                            open_slots=_open_slots(state, seat, rs),
+                            eligible_positions=elig,
+                            budget=state.budgets[seat],
+                        ),
+                        player,
+                        bd,
+                        config,
+                        rng,
+                        price_jitter=price_jitter,
+                    )
+                    if desired <= 0:  # abstain -> dropped before the clamp
+                        continue
+                    bids[seat] = max(min_bid, min(int(desired), fmax))
 
-        assert bids, "resolve_bids requires >=1 bid; forced-pick path guarantees it"
-        winner, price = resolve_bids(bids, min_bid)
+        if not bids:
+            # Nominator takes its nominee at min_bid when nobody bids (only reachable on the
+            # non-forced path once broke bots abstain). Awardee: the nominator if it can roster the
+            # nominee, else the lowest-index open seat that can (room-union guarantees one exists).
+            nominee_pos = pos_by_id[str(nominee_id)]
+            if nominee_pos in seat_eligible.get(state.nominator, frozenset()):
+                winner, price = state.nominator, min_bid
+            else:
+                # lowest-index open seat that can roster the nominee. On the non-forced path the
+                # room-union rule guarantees one exists; assert it rather than silently mis-award to
+                # an ineligible seat (which would violate a position cap).
+                eligible_seat = next(
+                    (
+                        s
+                        for s in range(n)
+                        if _open_slots(state, s, rs) > 0
+                        and nominee_pos in seat_eligible.get(s, frozenset())
+                    ),
+                    None,
+                )
+                assert eligible_seat is not None, (
+                    "non-forced nominee must be rosterable by some open seat (room-union rule)"
+                )
+                winner, price = eligible_seat, min_bid
+        else:
+            winner, price = resolve_bids(bids, min_bid)
         state.budgets[winner] -= price
         state.rosters[winner].append((nominee_id, str(player["position"]), price))
         state.drafted.add(nominee_id)
