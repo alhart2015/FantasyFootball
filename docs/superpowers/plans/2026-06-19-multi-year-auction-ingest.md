@@ -16,7 +16,7 @@
 - **`season=2026` must reproduce today's behavior byte-for-byte** (path `data/vorp_2026/…`, config name `..._2026`) — the board depends on it. Frozen-string tests guard this.
 - **2026 is NOT re-ingested** (preserves the Run-A–H baseline `asof=2026-06-19`); it is only *regenerated* from the existing snapshot.
 - Conventions: `Ruleset`/`RosterSlot` as enums; `pd.Int64Dtype` for `espn_auction_dollars`; `mkdir(parents=True, exist_ok=True)`; named-exception catches only (no bare `except`); mypy-strict + ruff clean.
-- Verification (every task): run the fixers first — `ruff format src tests scripts` then `ruff check --fix src tests scripts` (settle formatting + import order) — then the gates must be clean: `mypy src tests scripts`, `ruff check src tests scripts`, `ruff format --check src tests scripts`. Commits: prepend the venv scripts dir to PATH (`PATH="$(pwd)/.venv/Scripts:$PATH" git commit …`) to avoid the pre-commit mypy/venv quirk; end messages with the `Co-Authored-By:`/`Claude-Session:` trailers used on this branch.
+- Verification (every task): run the fixers first — `ruff format src tests scripts` then `ruff check --fix src tests scripts` (settle formatting + import order) — then the gates must be clean: `mypy src tests`, `ruff check src tests scripts`, `ruff format --check src tests scripts`. Commits: prepend the venv scripts dir to PATH (`PATH="$(pwd)/.venv/Scripts:$PATH" git commit …`) to avoid the pre-commit mypy/venv quirk; end messages with the `Co-Authored-By:`/`Claude-Session:` trailers used on this branch.
 
 ---
 
@@ -100,7 +100,7 @@ Expected: PASS — the 2 new tests AND all existing tests, including `test_get_p
 
 - [ ] **Step 5: Gates + commit**
 
-Run: `mypy src tests scripts && ruff check src tests scripts && ruff format --check src tests scripts`
+Run: `mypy src tests && ruff check src tests scripts && ruff format --check src tests scripts`
 Expected: clean.
 
 ```bash
@@ -241,7 +241,7 @@ Expected: PASS — the 2 new tests AND all existing tests (the existing `build_p
 
 - [ ] **Step 5: Gates + commit**
 
-Run: `mypy src tests scripts && ruff check src tests scripts && ruff format --check src tests scripts`
+Run: `mypy src tests && ruff check src tests scripts && ruff format --check src tests scripts`
 Expected: clean.
 
 ```bash
@@ -385,7 +385,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Gates + commit**
 
-Run: `mypy src tests scripts && ruff check src tests scripts && ruff format --check src tests scripts`
+Run: `mypy src tests && ruff check src tests scripts && ruff format --check src tests scripts`
 Expected: clean.
 
 ```bash
