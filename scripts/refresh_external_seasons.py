@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 
 import generate_preset_vorp_tables  # sibling script (scripts/ on sys.path)
+from pandera.errors import SchemaError
 
 from projections.ingest.external_projections import (
     ExternalProjectionError,
@@ -27,15 +28,18 @@ _DEFAULT_SEASONS: tuple[int, ...] = (2021, 2022, 2023, 2024, 2025)
 
 
 def run(seasons: list[int], data_root: Path) -> dict[int, str]:
-    """Ingest + regenerate per season; isolate per-season failures (one flaky API season must not
-    discard the rest). Returns {season: "ok" | "failed: <reason>"}."""
+    """Ingest + regenerate per season; isolate per-season failures (one bad season — flaky API,
+    missing file, or data that fails validation — must not discard the rest). Returns
+    {season: "ok" | "failed: <reason>"}."""
     status: dict[int, str] = {}
     for year in seasons:
         try:
             refresh_external_projections(data_root, season=year)
             generate_preset_vorp_tables.main(["--season", str(year), "--data-root", str(data_root)])
             status[year] = "ok"
-        except (ExternalProjectionError, OSError) as exc:
+        # ExternalProjectionError: flaky/empty ingest pull; OSError: missing snapshot/file;
+        # SchemaError: a season whose external data fails pandera validation in the generator.
+        except (ExternalProjectionError, OSError, SchemaError) as exc:
             _log.warning("season %s failed: %s", year, exc)
             status[year] = f"failed: {exc}"
     return status

@@ -19,6 +19,7 @@ from projections.consensus.blend import build_consensus
 from projections.draft.assistant.presets import (
     SCORING_KEYS,
     TEAM_SIZES,
+    DraftPreset,
     get_preset,
     materialize_league_config,
 )
@@ -63,12 +64,9 @@ def resolve_espn_auction_dollars(frame: pd.DataFrame, ruleset: Ruleset) -> pd.Se
     return value.round().astype("Int64")
 
 
-def build_preset_table(
-    external: pd.DataFrame, scoring_key: str, n_teams: int, season: int = 2026
-) -> pd.DataFrame:
+def build_preset_table(external: pd.DataFrame, preset: DraftPreset) -> pd.DataFrame:
     """One preset's VORP table: re-score the external snapshot under the preset ruleset,
     compute VORP for the preset size, attach consensus_adp + full_name."""
-    preset = get_preset(scoring_key, n_teams, season=season)
     consensus = ConsensusProjectionSchema.validate(
         build_consensus(external, preset.league_config.ruleset)
     )
@@ -87,7 +85,13 @@ def build_preset_table(
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Generate the 9 preset VORP tables for a season.")
     p.add_argument("--season", type=int, default=2026)
-    p.add_argument("--data-root", type=Path, default=Path("data"))
+    p.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path("data"),
+        help="read-root for the external_projections snapshot; preset tables are written "
+        "cwd-relative to data/vorp_{season}/ (run from the repo root).",
+    )
     args = p.parse_args(argv)
 
     external = ExternalProjectionSchema.validate(
@@ -96,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     for scoring_key in SCORING_KEYS:
         for n_teams in TEAM_SIZES:
             preset = get_preset(scoring_key, n_teams, season=args.season)
-            table = build_preset_table(external, scoring_key, n_teams, season=args.season)
+            table = build_preset_table(external, preset)
             # Write to preset.table_path (cwd-relative data/vorp_{season}/) — where the board and
             # the #49a runner read. --data-root is the external read-root only (Global Constraints).
             preset.table_path.parent.mkdir(parents=True, exist_ok=True)
