@@ -343,22 +343,20 @@ def test_snake_rng_param_does_not_change_flush_rosters() -> None:
     from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
 
     pool, config = _pool_with_adp(), _config()  # flush (budget 100)
-    common = dict(
-        my_seat=1,
-        baseline_dollars=generate_auction_values(pool, config),
-        price_jitter=0.15,
-        nomination_temp=1.0,
-    )
-    a = simulate_auction(StaticDollarBid(), pool, config, rng=np.random.default_rng(0), **common)
+    # NOTE: simulate_auction signature is (strategy, my_seat, pool, config, *, baseline_dollars,
+    # price_jitter, rng, nomination_temp, ...). my_seat is the 2nd POSITIONAL arg.
+    bd = generate_auction_values(pool, config)
+    common = dict(baseline_dollars=bd, price_jitter=0.15, nomination_temp=1.0)
+    a = simulate_auction(StaticDollarBid(), 1, pool, config, rng=np.random.default_rng(0), **common)
     b = simulate_auction(
-        StaticDollarBid(), pool, config, rng=np.random.default_rng(0),
+        StaticDollarBid(), 1, pool, config, rng=np.random.default_rng(0),
         snake_rng=np.random.default_rng([0, 7]), **common,
     )
     no_adp = pool.drop(columns=["consensus_adp"])
     c = simulate_auction(
-        StaticDollarBid(), no_adp, config, rng=np.random.default_rng(0),
-        baseline_dollars=generate_auction_values(no_adp, config),
-        my_seat=1, price_jitter=0.15, nomination_temp=1.0,
+        StaticDollarBid(), 1, no_adp, config, rng=np.random.default_rng(0),
+        baseline_dollars=generate_auction_values(no_adp, config), price_jitter=0.15,
+        nomination_temp=1.0,
     )
     assert a == b == c
 ```
@@ -445,9 +443,9 @@ def test_all_broke_auction_completes_no_assert() -> None:
 
     pool, config = _pool_with_adp(), _broke_config()
     league = simulate_auction(
-        StaticDollarBid(), pool, config, rng=np.random.default_rng(3),
-        my_seat=1, baseline_dollars=generate_auction_values(pool, config),
-        price_jitter=0.15, nomination_temp=1.0, snake_rng=np.random.default_rng([3, 7]),
+        StaticDollarBid(), 1, pool, config, baseline_dollars=generate_auction_values(pool, config),
+        price_jitter=0.15, rng=np.random.default_rng(3), nomination_temp=1.0,
+        snake_rng=np.random.default_rng([3, 7]),
     )
     assert all(len(r) == config.roster_size for r in league.values())
 
@@ -485,14 +483,14 @@ def test_snake_regime_changes_outcomes_vs_no_adp() -> None:
     config = _broke_config()
     adp_pool = _pool_with_adp()
     no_adp = adp_pool.drop(columns=["consensus_adp"])
-    common = dict(my_seat=1, price_jitter=0.15, nomination_temp=1.0)
+    common = dict(price_jitter=0.15, nomination_temp=1.0)  # my_seat is positional (2nd arg)
     with_adp = simulate_auction(
-        StaticDollarBid(), adp_pool, config, rng=np.random.default_rng(2),
+        StaticDollarBid(), 1, adp_pool, config, rng=np.random.default_rng(2),
         baseline_dollars=generate_auction_values(adp_pool, config),
         snake_rng=np.random.default_rng([2, 7]), **common,
     )
     without = simulate_auction(
-        StaticDollarBid(), no_adp, config, rng=np.random.default_rng(2),
+        StaticDollarBid(), 1, no_adp, config, rng=np.random.default_rng(2),
         baseline_dollars=generate_auction_values(no_adp, config),
         snake_rng=np.random.default_rng([2, 7]), **common,
     )
@@ -629,12 +627,12 @@ def test_no_adp_pool_is_byte_identical_regardless_of_snake_rng() -> None:
 
     config = _broke_config()
     no_adp = _pool_with_adp().drop(columns=["consensus_adp"])
-    common = dict(
-        my_seat=1, baseline_dollars=generate_auction_values(no_adp, config),
+    common = dict(  # my_seat is positional (2nd arg)
+        baseline_dollars=generate_auction_values(no_adp, config),
         price_jitter=0.15, nomination_temp=1.0,
     )
-    a = simulate_auction(StaticDollarBid(), no_adp, config, rng=np.random.default_rng(9), **common)
-    b = simulate_auction(StaticDollarBid(), no_adp, config, rng=np.random.default_rng(9),
+    a = simulate_auction(StaticDollarBid(), 1, no_adp, config, rng=np.random.default_rng(9), **common)
+    b = simulate_auction(StaticDollarBid(), 1, no_adp, config, rng=np.random.default_rng(9),
                          snake_rng=np.random.default_rng([9, 7]), **common)
     assert a == b
 ```
