@@ -39,7 +39,7 @@ def bot_max_bid(
         return 0
     if Position(player["position"]) not in seat_view.eligible_positions:
         return 0
-    base = float(baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+    base = float(baseline_dollars.loc[player["gsis_id"], "bot_dollars"])
     wtp = base * (1.0 + rng.normal(0.0, price_jitter))
     return round(max(float(config.min_bid), wtp))
 
@@ -83,8 +83,8 @@ def _value_tier(
     stud_frac: float,
     scrub_frac: float,
 ) -> str:
-    """'stud' | 'mid' | 'scrub' by rank of `value` among in-pool auction_dollars (desc)."""
-    inpool = baseline_dollars.loc[baseline_dollars["in_pool"], "auction_dollars"]
+    """'stud' | 'mid' | 'scrub' by rank of `value` among in-pool bot_dollars (desc)."""
+    inpool = baseline_dollars.loc[baseline_dollars["in_pool"], "bot_dollars"]
     n = len(inpool)
     rank = int((inpool > value).sum())  # 0-based rank, higher value -> lower rank
     if rank < stud_frac * n:
@@ -135,7 +135,7 @@ class PatientValueBot:
         pos = Position(player["position"])
         if seat_view.open_slots <= 0 or pos not in seat_view.eligible_positions:
             return 0
-        value = float(baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        value = float(baseline_dollars.loc[player["gsis_id"], "bot_dollars"])
         tier = _value_tier(value, baseline_dollars, self.stud_frac, self.scrub_frac)
         noise = 1.0 + rng.normal(0.0, price_jitter)
         if tier == "stud":
@@ -165,7 +165,7 @@ class BalancedBot:
         pos = Position(player["position"])
         if seat_view.open_slots <= 0 or pos not in seat_view.eligible_positions:
             return 0
-        value = float(baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        value = float(baseline_dollars.loc[player["gsis_id"], "bot_dollars"])
         wtp = value * (1.0 + rng.normal(0.0, price_jitter))
         cap = self.pace * (seat_view.budget / seat_view.open_slots)
         return round(max(float(config.min_bid), min(wtp, cap)))

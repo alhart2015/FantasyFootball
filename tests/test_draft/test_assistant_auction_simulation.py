@@ -450,6 +450,7 @@ def _realistic_baseline(pool: pd.DataFrame) -> pd.DataFrame:
         {
             "gsis_id": pd.array(gids, dtype=_PYARROW_STR),
             "auction_dollars": dollars,
+            "bot_dollars": dollars,
             "in_pool": [True] * n,
         }
     )
@@ -553,3 +554,65 @@ def test_studs_and_depth_is_deterministic() -> None:
     a = _simulate_to_state(StudsAndDepthBid(), 1, pool, cfg, rng=np.random.default_rng(5), **kw)
     b = _simulate_to_state(StudsAndDepthBid(), 1, pool, cfg, rng=np.random.default_rng(5), **kw)
     assert a.rosters == b.rosters
+
+
+def _flat_bot_dollars(pool: pd.DataFrame, value: int) -> pd.Series:
+    """A bot_dollars Series over every pool gsis_id, all equal -> bots value all players same."""
+    return pd.Series(
+        pd.array([value] * len(pool), dtype=pd.Int64Dtype()),
+        index=pd.Index(pool["gsis_id"], name="gsis_id"),
+    )
+
+
+def test_bot_dollars_none_reproduces_baseline() -> None:
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    a = simulate_auction(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(0),
+    )
+    b = simulate_auction(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(0),
+        bot_dollars=None,
+    )
+    assert a == b  # explicit None is identical to the default
+
+
+def test_bot_dollars_changes_the_bot_market() -> None:
+    # Flat bot_dollars makes bots value every player equally -> a different market than SOS,
+    # so the resulting league differs from the bot_dollars=None (SOS) run at the same seed.
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    sos = simulate_auction(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(0),
+    )
+    flat = simulate_auction(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(0),
+        bot_dollars=_flat_bot_dollars(pool, 20),
+    )
+    assert sos != flat  # bot pricing changed -> different rosters/prices
