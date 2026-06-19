@@ -31,6 +31,7 @@ from projections.ingest.identity import placeholder_name_key
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import (
     _PYARROW_STR,
+    ESPN_AUCTION_COLS,
     STAT_FIELDS,
     ExternalProjectionSchema,
     Position,
@@ -278,7 +279,6 @@ def _attach_gsis_id(df: pd.DataFrame, id_map: pd.DataFrame, *, id_col: str) -> p
 
 
 _CANONICAL_STR_COLS = ("source", "source_player_id", "gsis_id", "full_name", "position", "asof")
-_ESPN_AUCTION_COLS = ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std")
 
 
 def _finish_canonical(df: pd.DataFrame, *, season: int, asof: date) -> pd.DataFrame:
@@ -324,11 +324,11 @@ def _to_canonical(
         out[f] = keyed[f] if has_stats else null_col
     # ESPN-only: present in the ESPN parsed frame, absent in the Sleeper one (fixed column list).
     # Guard on presence -> null_col for Sleeper, exactly mirroring espn_draft_rank's null fallback.
-    for col in _ESPN_AUCTION_COLS:
+    for col in ESPN_AUCTION_COLS:
         out[col] = keyed[col] if col in keyed.columns else null_col
     # Uniform nullable-float dtype across all source frames so pd.concat needs no dtype inference
     # over all-NA columns (e.g. Sleeper's espn_draft_rank) — avoids the all-NA-column FutureWarning.
-    for col in ("adp", "espn_draft_rank", *_ESPN_AUCTION_COLS, *STAT_FIELDS):
+    for col in ("adp", "espn_draft_rank", *ESPN_AUCTION_COLS, *STAT_FIELDS):
         out[col] = out[col].astype("Float64")
     return _finish_canonical(out, season=season, asof=asof)
 

@@ -199,6 +199,15 @@ STAT_FIELDS: Final[tuple[str, ...]] = (
     Stat.FUMBLES_LOST.value,
 )
 
+# ESPN-only auction-value columns (crowd average + PPR/STANDARD expert), carried through
+# external_projections -> consensus. Single source of truth, imported by the ingest + blend
+# layers (mirrors STAT_FIELDS).
+ESPN_AUCTION_COLS: Final[tuple[str, ...]] = (
+    "espn_auction_value_avg",
+    "espn_auction_value_ppr",
+    "espn_auction_value_std",
+)
+
 
 class ProjectionSource(StrEnum):
     """External preseason projection sources. Use ProjectionSource.ESPN, never "ESPN"."""

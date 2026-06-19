@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from projections.schemas import STAT_FIELDS, Ruleset
+from projections.schemas import ESPN_AUCTION_COLS, STAT_FIELDS, Ruleset
 from projections.scoring import expected_points
 
 MIN_STAT_FIELDS = 2  # a source row must have >= this many non-null, non-zero STAT_FIELDS to count
@@ -37,14 +37,10 @@ _OUTPUT_COLUMNS: tuple[str, ...] = (
     "has_points",
     "projected_points_ppr",
     *STAT_FIELDS,
-    "espn_auction_value_avg",
-    "espn_auction_value_ppr",
-    "espn_auction_value_std",
+    *ESPN_AUCTION_COLS,
     "is_placeholder_gsis",
     "ruleset",
 )
-
-_ESPN_AUCTION_COLS = ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std")
 
 
 def _empty_output() -> pd.DataFrame:
@@ -68,7 +64,7 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
 
     # ESPN-only auction columns are Optional; a stale snapshot or an existing caller's frame may
     # omit them. Seed to NA so the per-group reads below never KeyError (R3/R6/R8).
-    for col in _ESPN_AUCTION_COLS:
+    for col in ESPN_AUCTION_COLS:
         if col not in external.columns:
             external[col] = pd.NA
 
@@ -118,7 +114,7 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
             "is_placeholder_gsis": bool(identity_row["is_placeholder_gsis"]),
             "ruleset": ruleset.name,
         }
-        for col in _ESPN_AUCTION_COLS:
+        for col in ESPN_AUCTION_COLS:
             non_null = grp[col].dropna()
             rec[col] = non_null.iloc[0] if not non_null.empty else pd.NA
         for field in STAT_FIELDS:
@@ -137,7 +133,7 @@ def build_consensus(external: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
     df["season"] = df["season"].astype("Int64")
     df["n_adp_sources"] = df["n_adp_sources"].astype("Int64")
     df["consensus_rank"] = df["consensus_rank"].astype("Int64")
-    for col in _ESPN_AUCTION_COLS:
+    for col in ESPN_AUCTION_COLS:
         df[col] = df[col].astype("Float64")
 
     return df[list(_OUTPUT_COLUMNS)]
