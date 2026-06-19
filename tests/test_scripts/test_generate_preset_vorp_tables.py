@@ -93,6 +93,24 @@ def test_preset_table_validates_and_carries_names_and_adp() -> None:
     assert "consensus_adp" in table.columns
 
 
+def test_preset_table_carries_espn_auction_dollars() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(repo_root / "scripts"))
+    from generate_preset_vorp_tables import build_preset_table
+
+    external = _synthetic_external()
+    # One player gets a crowd auction value that rounds cleanly; the rest stay all-NA so we can
+    # assert both the populated and NA cases survive the merge + VorpTableSchema.validate.
+    with_auction = "00-3000000"  # WR Player 0
+    external.loc[external["gsis_id"] == with_auction, "espn_auction_value_avg"] = 58.67
+
+    table = build_preset_table(external, "half", 12).set_index("gsis_id")
+    auction = table["espn_auction_dollars"]
+    assert str(auction.dtype) == "Int64"
+    assert auction.loc[with_auction] == 59  # 58.67 -> crowd average rounded
+    assert pd.isna(auction.loc["00-3000001"])  # WR Player 1 has no ESPN auction value
+
+
 def _frame(**cols: object) -> pd.DataFrame:
     return pd.DataFrame({k: pd.array(v, dtype="Float64") for k, v in cols.items()})
 
