@@ -71,6 +71,20 @@ def _pool(n: int = 40) -> pd.DataFrame:
     )
 
 
+def _pool_with_adp(n: int = 40) -> pd.DataFrame:
+    # _pool() + an ascending, all-positive consensus_adp column so the snake regime activates.
+    pool = _pool(n)
+    pool["consensus_adp"] = pd.array(range(1, n + 1), dtype="Float64")
+    return pool
+
+
+def _broke_config() -> LeagueConfig:
+    # budget == min_bid * roster_size (=1*3=3) => surplus 0 in generate_auction_values (all $1),
+    # AND every seat is broke from pick 1 (feasible_max == min_bid throughout). The whole auction is
+    # then governed by the snake regime — the only way to actually exercise broke behavior.
+    return _config(budget=3)
+
+
 def _baseline(pool: pd.DataFrame, config: LeagueConfig) -> pd.DataFrame:
     return generate_auction_values(pool, config)
 
@@ -616,3 +630,40 @@ def test_bot_dollars_changes_the_bot_market() -> None:
         bot_dollars=_flat_bot_dollars(pool, 20),
     )
     assert sos != flat  # bot pricing changed -> different rosters/prices
+
+
+def test_snake_rng_param_does_not_change_flush_rosters() -> None:
+    # Boards are built (ADP present) but UNUSED in Task 3, and flush bots never enter the snake
+    # path: rosters are identical whether snake_rng is defaulted or given, and whether consensus_adp
+    # is present or dropped.
+    import numpy as np
+
+    from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
+
+    pool, config = _pool_with_adp(), _config()  # flush (budget 100)
+    # NOTE: simulate_auction signature is (strategy, my_seat, pool, config, *, baseline_dollars,
+    # price_jitter, rng, nomination_temp, ...). my_seat is the 2nd POSITIONAL arg.
+    bd = generate_auction_values(pool, config)
+    common = dict(baseline_dollars=bd, price_jitter=0.15, nomination_temp=1.0)
+    a = simulate_auction(StaticDollarBid(), 1, pool, config, rng=np.random.default_rng(0), **common)
+    b = simulate_auction(
+        StaticDollarBid(),
+        1,
+        pool,
+        config,
+        rng=np.random.default_rng(0),
+        snake_rng=np.random.default_rng([0, 7]),
+        **common,
+    )
+    no_adp = pool.drop(columns=["consensus_adp"])
+    c = simulate_auction(
+        StaticDollarBid(),
+        1,
+        no_adp,
+        config,
+        rng=np.random.default_rng(0),
+        baseline_dollars=generate_auction_values(no_adp, config),
+        price_jitter=0.15,
+        nomination_temp=1.0,
+    )
+    assert a == b == c

@@ -22,6 +22,7 @@ from projections.draft.assistant.auction.market import (
     assign_bot_archetypes,
     resolve_bids,
 )
+from projections.draft.assistant.auction.snake_bot import SnakeBoard, adp_usable
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import bot_eligible, bot_position_bounds
 from projections.schemas import Position
@@ -95,6 +96,7 @@ def _simulate_to_state(
     baseline_dollars: pd.DataFrame,
     price_jitter: float,
     rng: np.random.Generator,
+    snake_rng: np.random.Generator | None = None,
     nomination_temp: float = 0.0,
     bot_archetypes: Sequence[BotArchetype] | None = None,
     bot_dollars: pd.Series | None = None,
@@ -112,6 +114,14 @@ def _simulate_to_state(
     else:
         _assigned = assign_bot_archetypes(len(bot_seats), bot_archetypes)
         seat_arch = {s: _assigned[i] for i, s in enumerate(bot_seats)}
+
+    if snake_rng is None:
+        snake_rng = rng.spawn(1)[0]  # CRN-safe: spawn advances the seed-sequence, not rng's stream
+    adp_ok = adp_usable(pool)
+    # Built here but not yet consumed — Tasks 4/5 read these when bidding the broke/snake regime.
+    snake_boards: dict[int, SnakeBoard] = (  # noqa: F841
+        {s: SnakeBoard(pool, snake_rng) for s in bot_seats} if adp_ok else {}
+    )
 
     minimums, maximums = bot_position_bounds(config.roster_slots)
     pos_by_id = {
@@ -224,6 +234,7 @@ def simulate_auction(
     baseline_dollars: pd.DataFrame,
     price_jitter: float,
     rng: np.random.Generator,
+    snake_rng: np.random.Generator | None = None,
     nomination_temp: float = 0.0,
     bot_archetypes: Sequence[BotArchetype] | None = None,
     bot_dollars: pd.Series | None = None,
@@ -237,6 +248,7 @@ def simulate_auction(
         baseline_dollars=baseline_dollars,
         price_jitter=price_jitter,
         rng=rng,
+        snake_rng=snake_rng,
         nomination_temp=nomination_temp,
         bot_archetypes=bot_archetypes,
         bot_dollars=bot_dollars,
