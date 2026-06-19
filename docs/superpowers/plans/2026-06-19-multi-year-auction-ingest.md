@@ -121,7 +121,7 @@ git commit -m "feat(presets): season param on get_preset (default 2026) for per-
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_scripts/test_generate_preset_vorp_tables.py` (it already imports `sys`, `Path`, `pandas as pd`, and `_synthetic_external`):
+Append to `tests/test_scripts/test_generate_preset_vorp_tables.py` (it already imports `sys`, `Path`, `pandas as pd`, and `_synthetic_external`). **First add `import pytest` to the file's top-level imports** (it's not there today, and the gate is mypy-strict so `monkeypatch` must be annotated):
 
 ```python
 def test_build_preset_table_accepts_season_and_still_validates() -> None:
@@ -134,17 +134,27 @@ def test_build_preset_table_accepts_season_and_still_validates() -> None:
     assert "espn_auction_dollars" in table.columns
 
 
-def test_main_writes_per_season_tables_and_configs(tmp_path: Path, monkeypatch) -> None:
+def test_main_writes_per_season_tables_and_configs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
     repo_root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(repo_root / "scripts"))
     import generate_preset_vorp_tables as gp
     from projections.draft.assistant import presets
 
-    # The generator reads the external snapshot via read_latest_partition; feed the synthetic
-    # frame directly (no on-disk partition needed) and redirect the table dir to tmp_path.
+    # The generator reads the external snapshot via read_latest_partition then runs
+    # ExternalProjectionSchema.validate; feed the synthetic frame directly (no on-disk partition)
+    # and redirect the table dir to tmp_path. `_synthetic_external()` builds stat/draft-rank columns
+    # as object dtype with pd.NA — ExternalProjectionSchema declares them float64 and cannot coerce
+    # object+<NA>, so pd.to_numeric(errors="coerce") them to real nullable floats first (.astype
+    # alone still raises on <NA>).
     external = _synthetic_external()
     external["season"] = 2023
     external["asof"] = "2023-01-01"
+    for c in (*STAT_FIELDS, "espn_draft_rank"):
+        external[c] = pd.to_numeric(external[c], errors="coerce")
     monkeypatch.setattr(gp, "read_latest_partition", lambda *a, **k: external)
     monkeypatch.setattr(presets, "_table_dir", lambda season: tmp_path / f"vorp_{season}")
 
@@ -154,15 +164,15 @@ def test_main_writes_per_season_tables_and_configs(tmp_path: Path, monkeypatch) 
     cfg = tmp_path / "vorp_2023" / "half_12team.league.json"
     assert tbl.exists() and cfg.exists()
     assert "espn_auction_dollars" in pd.read_parquet(tbl).columns
-    # config name carries the season
-    import json
-    assert json.loads(cfg.read_text())["name"] == "half_12team_2023"
+    assert json.loads(cfg.read_text())["name"] == "half_12team_2023"  # config carries the season
 ```
+
+(`STAT_FIELDS` is already imported at the top of this test file.)
 
 - [ ] **Step 2: Run; verify they fail**
 
 Run: `pytest tests/test_scripts/test_generate_preset_vorp_tables.py -k "accepts_season or per_season" -v`
-Expected: FAIL — `build_preset_table()` rejects the `season` kwarg (`TypeError`), and `main` writes to `data/vorp_2026/` (or errors) instead of the tmp `vorp_2023/` + emits no `.league.json`.
+Expected: FAIL — `test_build_preset_table_accepts_season_and_still_validates` fails with `TypeError` (`build_preset_table` rejects `season=`); `test_main_writes_per_season_tables_and_configs` fails because the current `main` calls `get_preset(s, n)` (default 2026) and `build_preset_table(external, s, n)` → tables land in `tmp/vorp_2026/` (not the asserted `tmp/vorp_2023/`) and no `.league.json` is written.
 
 - [ ] **Step 3: Thread `season` + write the config in `generate_preset_vorp_tables.py`**
 
@@ -256,19 +266,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import refresh_external_seasons as rs  # scripts/ on sys.path via conftest
 
 
-def test_loops_each_season_and_isolates_failures(monkeypatch) -> None:
+def test_loops_each_season_and_isolates_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     ingested: list[int] = []
     gen_calls: list[list[str]] = []
 
-    def fake_ingest(data_root, *, season, asof=None):
+    def fake_ingest(data_root: Path, *, season: int, asof: object = None) -> None:
         if season == 2022:
             raise rs.ExternalProjectionError("boom")
         ingested.append(season)
 
-    def fake_gen(argv):
+    def fake_gen(argv: list[str]) -> int:
         gen_calls.append(argv)
         return 0
 
