@@ -311,7 +311,7 @@ Add the parameter and build the boards, but **do not consume them yet**. This la
 
 **Interfaces:**
 - Consumes: `SnakeBoard`, `adp_usable` (Task 2).
-- Produces: `simulate_auction(..., snake_rng: np.random.Generator | None = None)` and the same new kw-only param on `_simulate_to_state`. Default derives `snake_rng = rng.spawn(1)[0]` (verified: spawn does not perturb the parent stream). Engine-internal: `_adp_ok: bool` and `snake_boards: dict[int, SnakeBoard]` for bot seats (built only when `_adp_ok`).
+- Produces: `simulate_auction(..., snake_rng: np.random.Generator | None = None)` and the same new kw-only param on `_simulate_to_state`. Default derives `snake_rng = rng.spawn(1)[0]` (verified: spawn does not perturb the parent stream). Engine-internal: `adp_ok: bool` and `snake_boards: dict[int, SnakeBoard]` for bot seats (built only when `adp_ok`).
 
 - [ ] **Step 1: Add two shared fixtures, then write the byte-identity test**
 
