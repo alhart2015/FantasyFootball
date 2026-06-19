@@ -125,6 +125,16 @@ def generate_auction_values(
     return AuctionValuesSchema.validate(out[list(_OUTPUT_COLUMNS)])
 
 
+def has_usable_espn_prices(pool: pd.DataFrame) -> bool:
+    """True if ``pool`` carries an ``espn_auction_dollars`` column with at least one non-null value
+    — the precondition for anchoring bot prices on real ESPN values (else callers fall back to the
+    model). The column is Optional on ``VorpTableSchema`` and absent on the weekly path, so the
+    presence check is required, not just a null check."""
+    return "espn_auction_dollars" in pool.columns and bool(
+        pool["espn_auction_dollars"].notna().any()
+    )
+
+
 def espn_anchored_bot_prices(pool: pd.DataFrame, config: LeagueConfig) -> pd.Series:
     """Per-player bot reference dollars anchored on real ESPN auction values (TODO #49c Slice 2).
 
@@ -153,12 +163,9 @@ def espn_anchored_bot_prices(pool: pd.DataFrame, config: LeagueConfig) -> pd.Ser
         value_signal = pd.Series(0.0, index=pool_df.index, dtype="float64")
     in_pool_dollars = _allocate_surplus(value_signal, config)
 
-    out = pd.Series(
-        pd.array([0] * len(pool), dtype=pd.Int64Dtype()),
-        index=pd.Index(pool["gsis_id"], name="gsis_id"),
-    )
-    out.loc[pd.Index(pool_df["gsis_id"])] = in_pool_dollars.to_numpy()
-    return out
+    in_pool_dollars = in_pool_dollars.set_axis(pd.Index(pool_df["gsis_id"], name="gsis_id"))
+    out = in_pool_dollars.reindex(pd.Index(pool["gsis_id"], name="gsis_id"), fill_value=0)
+    return out.astype(pd.Int64Dtype())
 
 
-__all__ = ["espn_anchored_bot_prices", "generate_auction_values"]
+__all__ = ["espn_anchored_bot_prices", "generate_auction_values", "has_usable_espn_prices"]

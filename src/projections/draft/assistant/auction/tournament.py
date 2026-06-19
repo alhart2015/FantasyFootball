@@ -22,7 +22,11 @@ from projections.draft.assistant.auction.simulation import simulate_auction, val
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.league_projection import project_draft
 from projections.draft.assistant.performance_variance import VarianceParams
-from projections.draft.auction import espn_anchored_bot_prices, generate_auction_values
+from projections.draft.auction import (
+    espn_anchored_bot_prices,
+    generate_auction_values,
+    has_usable_espn_prices,
+)
 from projections.draft.league_config import LeagueConfig
 
 METRICS: tuple[str, ...] = (
@@ -94,10 +98,7 @@ def run_auction_tournament(
         raise ValueError(f"bot_prices must be 'espn' or 'model'; got {bot_prices!r}")
     bot_dollars: pd.Series | None = None
     if bot_prices == "espn":
-        usable = "espn_auction_dollars" in pool.columns and bool(
-            pool["espn_auction_dollars"].notna().any()
-        )
-        if not usable:
+        if not has_usable_espn_prices(pool):
             warnings.warn(
                 "bot_prices='espn' but pool has no usable espn_auction_dollars; "
                 "falling back to model (shared-value) bot pricing.",

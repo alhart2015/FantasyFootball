@@ -40,7 +40,7 @@ from projections.draft.assistant.auction.tournament import (
 from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
-from projections.draft.auction import generate_auction_values
+from projections.draft.auction import generate_auction_values, has_usable_espn_prices
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 
@@ -97,17 +97,13 @@ def format_compare(result: AuctionTournamentResult) -> str:
 def _format_espn_diagnostic(pool: pd.DataFrame, config: LeagueConfig) -> str:
     """Largest our$-vs-ESPN$ gaps (value_delta = our SOS dollars - ESPN dollars). Skipped when
     the pool carries no usable espn_auction_dollars."""
-    usable = "espn_auction_dollars" in pool.columns and bool(
-        pool["espn_auction_dollars"].notna().any()
-    )
-    if not usable:
+    if not has_usable_espn_prices(pool):
         return "ESPN diagnostic: no usable espn_auction_dollars on the pool (skipped)."
     ref = pool.loc[
         pool["espn_auction_dollars"].notna(), ["gsis_id", "espn_auction_dollars"]
     ].rename(columns={"espn_auction_dollars": "reference_dollars"})
     diag = generate_auction_values(pool, config, reference_prices=ref)
-    priced = diag[diag["reference_dollars"].notna()].copy()
-    priced = priced.sort_values("value_delta")
+    priced = diag[diag["reference_dollars"].notna()].sort_values("value_delta")
     lines = ["ESPN vs ours (value_delta = our SOS $ - ESPN $); most negative = ESPN richer:"]
 
     def _fmt(row: pd.Series) -> str:
@@ -117,11 +113,8 @@ def _format_espn_diagnostic(pool: pd.DataFrame, config: LeagueConfig) -> str:
         )
 
     # head(5)+tail(5) overlap when fewer than 10 priced players; show each row once instead.
-    if len(priced) <= 10:
-        rows = (row for _, row in priced.iterrows())
-    else:
-        rows = (row for _, row in pd.concat([priced.head(5), priced.tail(5)]).iterrows())
-    lines.extend(_fmt(row) for row in rows)
+    shown = priced if len(priced) <= 10 else pd.concat([priced.head(5), priced.tail(5)])
+    lines.extend(_fmt(row) for _, row in shown.iterrows())
     return "\n".join(lines)
 
 
