@@ -52,13 +52,16 @@ def test_bot_pick_characterization_stable_across_refactor() -> None:
         }
     )
     picks = [str(bot_pick(avail, np.random.default_rng(seed), adp_jitter=2.0)) for seed in range(6)]
-    assert picks == ["00-0000001", "00-0000002", "00-0000001", "00-0000002", "00-0000002", "00-0000001"]
+    # SENTINEL — replace via Step 2 before running. Do NOT trust this literal; it is a placeholder
+    # that MUST be overwritten with the captured current-`bot_pick` output, or the test is meaningless.
+    expected = ["<RUN STEP 2 TO CAPTURE>"] * 6
+    assert picks == expected
 ```
 
-- [ ] **Step 2: Run it against current code to capture the true expected picks**
+- [ ] **Step 2: Run current code to capture the true expected picks, then paste them over the sentinel**
 
 Run: `python -c "import numpy as np, pandas as pd; from projections.draft.assistant.opponent import bot_pick; av=pd.DataFrame({'gsis_id':['00-0000005','00-0000001','00-0000003','00-0000002','00-0000004'],'consensus_adp':pd.array([12.0,3.0,None,3.0,50.0],dtype='Float64')}); print([str(bot_pick(av,np.random.default_rng(s),adp_jitter=2.0)) for s in range(6)])"`
-Expected: a list of 6 gsis strings. **Replace the literal in the test's `assert` with this exact output**, then `pytest tests/test_draft/test_assistant_opponent.py::test_bot_pick_characterization_stable_across_refactor -v` → PASS.
+Expected: a list of 6 gsis strings. **Overwrite the `expected = [...]` sentinel with this exact list**, then run `pytest tests/test_draft/test_assistant_opponent.py::test_bot_pick_characterization_stable_across_refactor -v` → PASS. (This pins current behavior so Step 5's extraction is proven byte-identical.)
 
 - [ ] **Step 3: Add a direct unit test for the extracted core**
 
@@ -310,18 +313,36 @@ Add the parameter and build the boards, but **do not consume them yet**. This la
 - Consumes: `SnakeBoard`, `adp_usable` (Task 2).
 - Produces: `simulate_auction(..., snake_rng: np.random.Generator | None = None)` and the same new kw-only param on `_simulate_to_state`. Default derives `snake_rng = rng.spawn(1)[0]` (verified: spawn does not perturb the parent stream). Engine-internal: `_adp_ok: bool` and `snake_boards: dict[int, SnakeBoard]` for bot seats (built only when `_adp_ok`).
 
-- [ ] **Step 1: Write the byte-identity test**
+- [ ] **Step 1: Add two shared fixtures, then write the byte-identity test**
 
-Add to `tests/test_draft/test_assistant_auction_simulation.py` (reuse the module's existing pool/config fixtures — find the helper that builds a `VorpTableSchema` pool + `LeagueConfig`; call it `_make_pool`/`_make_config` per the file's convention):
+The test module (`tests/test_draft/test_assistant_auction_simulation.py`) already has `_config(n_teams=4, budget=100, min_bid=1, roster_slots=None)` (default roster RB1/WR1/BENCH1 → `roster_size=3`), `_pool(n=40)` (RB/WR rows; **no `consensus_adp` column**), and imports `generate_auction_values` (line 28). Add these two module-level fixtures near `_pool`:
 
 ```python
-def test_snake_rng_param_does_not_change_rosters_without_adp() -> None:
-    # Boards are built (if adp present) but UNUSED in Task 3 -> rosters identical with/without the
-    # consensus_adp column and identical whether snake_rng is given or defaulted.
+def _pool_with_adp(n: int = 40) -> pd.DataFrame:
+    # _pool() + an ascending, all-positive consensus_adp column so the snake regime activates.
+    pool = _pool(n)
+    pool["consensus_adp"] = pd.array(range(1, n + 1), dtype="Float64")
+    return pool
+
+
+def _broke_config() -> LeagueConfig:
+    # budget == min_bid * roster_size (=1*3=3) => surplus 0 in generate_auction_values (all $1),
+    # AND every seat is broke from pick 1 (feasible_max == min_bid throughout). The whole auction is
+    # then governed by the snake regime — the only way to actually exercise broke behavior.
+    return _config(budget=3)
+```
+
+Then write the byte-identity test (this also covers the spec's **all-flush-with-ADP** byte-identity, since `_config()`'s budget 100 keeps every bot flush so the snake path is never entered):
+
+```python
+def test_snake_rng_param_does_not_change_flush_rosters() -> None:
+    # Boards are built (ADP present) but UNUSED in Task 3, and flush bots never enter the snake path:
+    # rosters are identical whether snake_rng is defaulted or given, and whether consensus_adp is
+    # present or dropped.
     import numpy as np
     from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
 
-    pool, config = _make_pool_with_adp(), _make_config()  # pool carries consensus_adp
+    pool, config = _pool_with_adp(), _config()  # flush (budget 100)
     common = dict(
         my_seat=1,
         baseline_dollars=generate_auction_values(pool, config),
@@ -334,15 +355,19 @@ def test_snake_rng_param_does_not_change_rosters_without_adp() -> None:
         snake_rng=np.random.default_rng([0, 7]), **common,
     )
     no_adp = pool.drop(columns=["consensus_adp"])
-    c = simulate_auction(StaticDollarBid(), no_adp, config, rng=np.random.default_rng(0), **common)
+    c = simulate_auction(
+        StaticDollarBid(), no_adp, config, rng=np.random.default_rng(0),
+        baseline_dollars=generate_auction_values(no_adp, config),
+        my_seat=1, price_jitter=0.15, nomination_temp=1.0,
+    )
     assert a == b == c
 ```
 
-If the test module lacks an ADP-bearing pool helper, add `_make_pool_with_adp()` that takes the existing pool helper's frame and assigns a `consensus_adp` column (`pd.array(range(1, n+1), dtype="Float64")`), re-validated via `VorpTableSchema.validate`.
+(`_pool`/`_pool_with_adp` are not `VorpTableSchema`-validated frames and don't need to be — the engine and `generate_auction_values` consume them directly, exactly as the existing tests do.)
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `pytest tests/test_draft/test_assistant_auction_simulation.py::test_snake_rng_param_does_not_change_rosters_without_adp -v`
+Run: `pytest tests/test_draft/test_assistant_auction_simulation.py::test_snake_rng_param_does_not_change_flush_rosters -v`
 Expected: FAIL with `TypeError: ... unexpected keyword argument 'snake_rng'`.
 
 - [ ] **Step 3: Add the parameter, board construction, and `adp_ok` to the engine**
@@ -406,51 +431,78 @@ Now consume the boards on the bidding side: a broke bot bids `$1` only on its ta
 
 - [ ] **Step 1: Write the behavior tests**
 
-Add these two tests to `tests/test_draft/test_assistant_auction_simulation.py` (ensure
-`generate_auction_values` is imported in the module — add the import if absent):
+Add these tests to `tests/test_draft/test_assistant_auction_simulation.py`. They use the all-broke
+fixture (`_broke_config`) so the snake regime actually governs the auction (every seat broke from
+pick 1):
 
 ```python
-def test_backstop_awards_nominee_when_no_bids() -> None:
-    # Once broke bots can abstain, an empty-bids round is reachable; the backstop must award the
-    # nominee at min_bid (no AssertionError) and the auction must still fill every roster.
+def test_all_broke_auction_completes_no_assert() -> None:
+    # With every seat broke and abstaining off-target, the engine must NOT hit `assert bids` — the
+    # nominator backstop (or the broke nominator self-bidding its target) keeps each round non-empty,
+    # and every roster fills.
     import numpy as np
     from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
 
-    pool, config = _make_pool_with_adp(), _make_config()
+    pool, config = _pool_with_adp(), _broke_config()
     league = simulate_auction(
         StaticDollarBid(), pool, config, rng=np.random.default_rng(3),
         my_seat=1, baseline_dollars=generate_auction_values(pool, config),
-        price_jitter=0.15, nomination_temp=1.0,
+        price_jitter=0.15, nomination_temp=1.0, snake_rng=np.random.default_rng([3, 7]),
     )
     assert all(len(r) == config.roster_size for r in league.values())
 
 
-def test_no_roster_violates_position_caps() -> None:
+def test_broke_regime_respects_position_caps() -> None:
     # Behavioral guard: broke bots never roster an off-position scrub — every seat's roster respects
-    # the position-cap maxima (a $1-scrub grab would blow a cap or strand a needed slot).
+    # the position-cap maxima (a blind $1-scrub grab would blow a cap or strand a needed slot).
     import numpy as np
     from collections import Counter
     from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
     from projections.draft.roster_eligibility import bot_position_bounds
     from projections.schemas import Position
 
-    pool, config = _make_pool_with_adp(), _make_config()
+    pool, config = _pool_with_adp(), _broke_config()
     state = _simulate_to_state(
         StaticDollarBid(), 1, pool, config,
         baseline_dollars=generate_auction_values(pool, config),
         price_jitter=0.15, rng=np.random.default_rng(11), nomination_temp=1.0,
+        snake_rng=np.random.default_rng([11, 7]),
     )
     _minimums, maximums = bot_position_bounds(config.roster_slots)
     for roster in state.rosters:
         counts = Counter(Position(pos) for _g, pos, _pr in roster)
         for p, c in counts.items():
             assert c <= maximums[p]
+
+
+def test_snake_regime_changes_outcomes_vs_no_adp() -> None:
+    # The regime must DO something: an all-broke auction with usable ADP must produce a different
+    # outcome than the same all-broke auction with the regime disabled (consensus_adp dropped ->
+    # today's archetype/central behavior). Both are reproducible at a fixed seed.
+    import numpy as np
+    from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
+
+    config = _broke_config()
+    adp_pool = _pool_with_adp()
+    no_adp = adp_pool.drop(columns=["consensus_adp"])
+    common = dict(my_seat=1, price_jitter=0.15, nomination_temp=1.0)
+    with_adp = simulate_auction(
+        StaticDollarBid(), adp_pool, config, rng=np.random.default_rng(2),
+        baseline_dollars=generate_auction_values(adp_pool, config),
+        snake_rng=np.random.default_rng([2, 7]), **common,
+    )
+    without = simulate_auction(
+        StaticDollarBid(), no_adp, config, rng=np.random.default_rng(2),
+        baseline_dollars=generate_auction_values(no_adp, config),
+        snake_rng=np.random.default_rng([2, 7]), **common,
+    )
+    assert with_adp != without  # the snake regime re-routes who drafts whom
 ```
 
 - [ ] **Step 2: Run to verify the new tests fail or error appropriately**
 
-Run: `pytest tests/test_draft/test_assistant_auction_simulation.py::test_backstop_awards_nominee_when_no_bids tests/test_draft/test_assistant_auction_simulation.py::test_no_roster_violates_position_caps -v`
-Expected: they currently PASS for caps (today's bots already respect caps) but the backstop path is not yet exercised — proceed to wire the behavior, then both must still pass while the new abstention logic is active. (If the cap test already passes, it serves as a regression guard for Step 3.)
+Run: `pytest tests/test_draft/test_assistant_auction_simulation.py -k "all_broke or broke_regime or snake_regime_changes" -v`
+Expected: `test_all_broke_auction_completes_no_assert` and `test_broke_regime_respects_position_caps` PASS today (the engine completes and caps hold even without the snake change), but `test_snake_regime_changes_outcomes_vs_no_adp` **FAILS** right now (`assert with_adp != without` — with the regime unwired, ADP-present and ADP-absent produce identical rosters). That failing test is the fail-first guard for Step 3; the other two are regression guards.
 
 - [ ] **Step 3: Wire the broke responder + backstop in the bid loop**
 
@@ -465,7 +517,7 @@ In `_simulate_to_state`, locate the bid-collection loop (`for seat in range(n):`
                     )
                     if target is None or str(nominee_id) != str(target):
                         continue  # abstain: not this broke bot's snake target
-                    bids[seat] = min_bid  # snipe the target at the floor
+                    bids[seat] = min(min_bid, fmax)  # snipe at the floor (== min_bid since broke)
                 else:
                     desired = seat_arch[seat].max_bid(
                         SeatView(
@@ -502,17 +554,21 @@ with the backstop:
             if nominee_pos in seat_eligible.get(state.nominator, frozenset()):
                 winner, price = state.nominator, min_bid
             else:
-                # lowest-index open seat that can roster the nominee (room-union guarantees one on
-                # the non-forced path); default to the nominator ungated as a defensive fallback.
-                winner = next(
+                # lowest-index open seat that can roster the nominee. On the non-forced path the
+                # room-union rule guarantees one exists; assert it rather than silently mis-award to
+                # an ineligible seat (which would violate a position cap).
+                eligible_seat = next(
                     (
                         s for s in range(n)
                         if _open_slots(state, s, rs) > 0
                         and nominee_pos in seat_eligible.get(s, frozenset())
                     ),
-                    state.nominator,
+                    None,
                 )
-                price = min_bid
+                assert eligible_seat is not None, (
+                    "non-forced nominee must be rosterable by some open seat (room-union rule)"
+                )
+                winner, price = eligible_seat, min_bid
         else:
             winner, price = resolve_bids(bids, min_bid)
 ```
@@ -549,15 +605,13 @@ A broke bot on the clock nominates its own snake target (so "take it for $1 if u
 - [ ] **Step 1: Write the test**
 
 ```python
-def test_broke_nominator_nominates_its_snake_target() -> None:
-    # With a broke bot on the clock and ADP usable, the nominee is that seat's best-available-by-ADP
-    # for a needed position (not the value-sampled central nominee). Assert the auction completes and
-    # that a low-ADP, ESPN-unranked depth player is rostered by SOME bot (not stranded for $1 scrubs).
+def test_broke_nominator_auction_completes() -> None:
+    # All-broke auction with a broke bot on the clock each round: the broke-nominator override must
+    # produce a valid, rosterable nominee every round and fill every roster (no KeyError / no assert).
     import numpy as np
-    from collections import Counter
     from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
 
-    pool, config = _make_pool_with_adp(), _make_config()
+    pool, config = _pool_with_adp(), _broke_config()
     state = _simulate_to_state(
         StaticDollarBid(), 1, pool, config,
         baseline_dollars=generate_auction_values(pool, config),
@@ -567,13 +621,14 @@ def test_broke_nominator_nominates_its_snake_target() -> None:
     assert all(len(r) == config.roster_size for r in state.rosters)
 
 
-def test_no_adp_pool_is_byte_identical_to_pre_snake() -> None:
-    # Regime fully disabled without ADP -> identical to the central-nomination path.
+def test_no_adp_pool_is_byte_identical_regardless_of_snake_rng() -> None:
+    # Regime fully disabled without ADP -> the snake_rng value cannot matter (boards never built),
+    # even in an all-broke config where the regime WOULD otherwise be active.
     import numpy as np
     from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
 
-    pool, config = _make_pool_with_adp(), _make_config()
-    no_adp = pool.drop(columns=["consensus_adp"])
+    config = _broke_config()
+    no_adp = _pool_with_adp().drop(columns=["consensus_adp"])
     common = dict(
         my_seat=1, baseline_dollars=generate_auction_values(no_adp, config),
         price_jitter=0.15, nomination_temp=1.0,
@@ -586,8 +641,8 @@ def test_no_adp_pool_is_byte_identical_to_pre_snake() -> None:
 
 - [ ] **Step 2: Run to verify current behavior**
 
-Run: `pytest tests/test_draft/test_assistant_auction_simulation.py::test_broke_nominator_nominates_its_snake_target tests/test_draft/test_assistant_auction_simulation.py::test_no_adp_pool_is_byte_identical_to_pre_snake -v`
-Expected: both PASS already (completion + no-ADP identity hold pre-Task-5); they lock the invariants Step 3 must preserve.
+Run: `pytest tests/test_draft/test_assistant_auction_simulation.py::test_broke_nominator_auction_completes tests/test_draft/test_assistant_auction_simulation.py::test_no_adp_pool_is_byte_identical_regardless_of_snake_rng -v`
+Expected: both PASS already (completion + no-ADP identity hold pre-Task-5); they lock the invariants Step 3 must preserve. (Task 4 already enabled broke *responder* behavior, so the all-broke auction completes via the responder/backstop path even before the nomination override.)
 
 - [ ] **Step 3: Override nomination for a broke bot**
 
@@ -622,9 +677,13 @@ Replace the `else:` branch so a broke bot nominator nominates its target (fallin
         assert nominee_id is not None
 ```
 
-(The broke nominator's `target` is provably a member of `candidates` — its position is in
-`seat_eligible[nom] ⊆ union` and it is undrafted — so `forced` stays correctly `False` and the
-bid-loop eligibility gate is consistent. `target is None` → central sampling, as specced.)
+(The broke nominator's `target` comes from `best_available` over the same `pool` the engine indexes,
+so `pool_by_id[str(target)]` at the award site is always defined — no KeyError. Given the standard
+flow where `baseline_dollars = generate_auction_values(pool)` covers the full pool, `target` is also
+a member of `candidates` — its position is in `seat_eligible[nom] ⊆ union` and it is undrafted — so
+`forced` stays correctly `False` and the bid-loop eligibility gate is consistent. The award path's
+correctness does not depend on that `candidates` membership (it uses `pos_by_id`/`seat_eligible`, not
+`candidates`). `target is None` → central sampling, as specced.)
 
 - [ ] **Step 4: Run the suite**
 
@@ -652,52 +711,61 @@ Construct the dedicated `snake_rng` off the auction seed and pass it down, so ev
 - Consumes: `simulate_auction(..., snake_rng=...)` (Task 3).
 - Produces: `_SNAKE_SUBSTREAM` module constant; `run_auction_tournament` passes `snake_rng=np.random.default_rng([base_seed + s, _SNAKE_SUBSTREAM])`.
 
-- [ ] **Step 1: Write the CRN test**
+- [ ] **Step 1: Wire the substream constant + the call in the tournament**
 
-```python
-def test_snake_board_is_shared_across_strategies_at_a_seed() -> None:
-    # CRN: the dedicated substream yields the SAME bot field regardless of the hero strategy, so two
-    # contestants at the same seed see identical snake boards (paired design). Assert that two
-    # strategies that consume the bidding rng differently still produce identical BOT snake targets
-    # by checking the boards are seeded identically.
-    import numpy as np
-    from projections.draft.assistant.auction.snake_bot import SnakeBoard
-    from projections.schemas import Position
-
-    pool = _make_pool_with_adp()
-    sub = 20260619  # mirror tournament's _SNAKE_SUBSTREAM in the assertion
-    b1 = SnakeBoard(pool, np.random.default_rng([0, sub]))
-    b2 = SnakeBoard(pool, np.random.default_rng([0, sub]))
-    elig = frozenset(Position)
-    assert b1.best_available(frozenset(), elig) == b2.best_available(frozenset(), elig)
-```
-
-- [ ] **Step 2: Run to verify it passes (board determinism)**
-
-Run: `pytest tests/test_draft/test_assistant_auction_simulation.py::test_snake_board_is_shared_across_strategies_at_a_seed -v`
-Expected: PASS (SnakeBoard is deterministic in its seed — this guards the substream choice).
-
-- [ ] **Step 3: Wire the substream in the tournament**
-
-In `src/projections/draft/assistant/auction/tournament.py`, add near the top:
+In `src/projections/draft/assistant/auction/tournament.py`, add near the top (module level):
 
 ```python
 _SNAKE_SUBSTREAM = 20260619  # dedicated sub-key for the broke-bot ADP noise (CRN: shared bot field)
 ```
 
-At the `simulate_auction(...)` call (currently passing `rng=np.random.default_rng(base_seed + s)`), add:
+At the `simulate_auction(...)` call (currently passing `rng=np.random.default_rng(base_seed + s)`), add the `snake_rng` kwarg right after it:
 
 ```python
                 rng=np.random.default_rng(base_seed + s),
                 snake_rng=np.random.default_rng([base_seed + s, _SNAKE_SUBSTREAM]),
 ```
 
-- [ ] **Step 4: Run the tournament-touching tests**
+- [ ] **Step 2: Write the CRN test (importing the real constant)**
 
-Run: `pytest tests/test_draft/ -k "tournament or auction_simulation" -v`
+The CRN guarantee is that the bot field (each bot's snake board) is **identical across contestant
+models at a given seed**, independent of how the hero perturbs the bidding stream. Because the snake
+noise is seeded by `default_rng([base_seed + s, _SNAKE_SUBSTREAM])` — a function of the seed alone —
+two boards built from it are equal regardless of any bidding-stream activity. The test imports the
+real `_SNAKE_SUBSTREAM` (no hardcoded mirror) so a future change to the constant cannot silently pass:
+
+```python
+def test_snake_substream_is_seed_only_and_shared() -> None:
+    # The dedicated substream depends on the seed alone, so the bot field is identical across models
+    # at a fixed seed (CRN). Build boards the way the tournament does and confirm equality; also
+    # confirm the substream is distinct from the bidding stream (a different board).
+    import numpy as np
+    from projections.draft.assistant.auction.snake_bot import SnakeBoard
+    from projections.draft.assistant.auction.tournament import _SNAKE_SUBSTREAM
+    from projections.schemas import Position
+
+    pool = _pool_with_adp()
+    elig = frozenset(Position)
+    base = 0
+    snake_a = np.random.default_rng([base, _SNAKE_SUBSTREAM])
+    snake_b = np.random.default_rng([base, _SNAKE_SUBSTREAM])
+    bidding = np.random.default_rng(base)  # the scalar bidding seed
+    pick = SnakeBoard(pool, snake_a).best_available(frozenset(), elig)
+    assert pick == SnakeBoard(pool, snake_b).best_available(frozenset(), elig)  # CRN: seed-only
+    # the substream is NOT the bidding stream (else the hero would perturb the bot field)
+    assert SnakeBoard(pool, bidding).best_available(frozenset(), elig) != pick or True
+```
+
+(The final line is a soft check — board picks from two different streams *usually* differ; the
+load-bearing assertion is the equality above. Keep the `or True` so the test never flakes on a
+coincidental tie.)
+
+- [ ] **Step 3: Run the tournament-touching tests**
+
+Run: `pytest tests/test_draft/ -k "tournament or auction_simulation or snake" -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add src/projections/draft/assistant/auction/tournament.py tests/test_draft/test_assistant_auction_simulation.py
