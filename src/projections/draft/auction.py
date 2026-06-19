@@ -31,7 +31,8 @@ _OUTPUT_COLUMNS: tuple[str, ...] = (
 
 # For ESPN-anchored bot pricing: an ESPN-unranked player's bot value falls back to this fraction
 # of our own VORP-based model auction value (instead of a flat min_bid). Keeps the unranked tier
-# cheap but ORDERED, so bots prefer real depth over camp bodies. Tunable; swept toward 0.4-0.5.
+# cheap but ORDERED, so bots prefer real depth over camp bodies. The default for the
+# `espn_anchored_bot_prices(unranked_discount=)` sweep knob (TODO #49c); swept 0.4-0.5.
 _UNRANKED_MODEL_DISCOUNT = 0.4
 
 
@@ -140,37 +141,48 @@ def has_usable_espn_prices(pool: pd.DataFrame) -> bool:
     )
 
 
-def espn_anchored_bot_prices(pool: pd.DataFrame, config: LeagueConfig) -> pd.Series:
+def espn_anchored_bot_prices(
+    pool: pd.DataFrame,
+    config: LeagueConfig,
+    *,
+    model_values: pd.DataFrame | None = None,
+    unranked_discount: float | None = None,
+) -> pd.Series:
     """Per-player bot reference dollars anchored on real ESPN auction values (TODO #49c Slice 2).
 
     Returns a ``gsis_id``-indexed ``Int64`` Series over EVERY row of ``pool``: in-pool players get
     an SOS allocation of the budget over a value signal that is the real ``espn_auction_dollars``
-    where ESPN ranked the player, else ``_UNRANKED_MODEL_DISCOUNT`` x our own VORP-based model value
-    (so unranked players are cheap but ORDERED — bots prefer real depth over camp bodies instead of
+    where ESPN ranked the player, else ``unranked_discount`` x our own VORP-based model value (so
+    unranked players are cheap but ORDERED — bots prefer real depth over camp bodies instead of
     treating every unranked player as an interchangeable ``min_bid``). Out-of-pool players get 0.
     Call on the same ``pool`` frame passed to ``generate_auction_values``.
+
+    ``model_values`` is the ``generate_auction_values`` output reused for the unranked fallback;
+    pass the already-computed baseline to skip a second pass (else it is recomputed). ``unranked
+    _discount`` overrides the ``_UNRANKED_MODEL_DISCOUNT`` default (a sweep knob, TODO #49c).
 
     Raises ``ValueError`` on degenerate drift (propagated from ``_allocate_surplus``); espn-mode
     callers catch it and fall back to model pricing.
     """
     _reject_duplicate_gsis_ids(pool, "pool")
+    discount = _UNRANKED_MODEL_DISCOUNT if unranked_discount is None else unranked_discount
     pool_set = set(_select_pool(pool, config))
     pool_mask = pool["gsis_id"].isin(pool_set)
     pool_df = pool.loc[pool_mask].copy()
 
-    # Our VORP-based model auction value, used as the discounted fallback where ESPN is silent.
-    model_by_id = generate_auction_values(pool, config).set_index("gsis_id")["auction_dollars"]
+    # Our VORP-based model auction value, the discounted fallback where ESPN is silent.
+    if model_values is None:
+        model_values = generate_auction_values(pool, config)
+    model_col = model_values.set_index("gsis_id")["auction_dollars"]
     model = pd.Series(
-        model_by_id.reindex(pool_df["gsis_id"]).to_numpy(dtype="float64"), index=pool_df.index
+        model_col.reindex(pool_df["gsis_id"]).to_numpy(dtype="float64"), index=pool_df.index
     )
     if "espn_auction_dollars" in pool_df.columns:
         espn = pool_df["espn_auction_dollars"].astype("Float64")
-        ranked = (espn.notna() & (espn > 0)).fillna(False).astype(bool)
-        espn_signal = espn.fillna(0).clip(lower=0.0).astype("float64")
     else:
-        ranked = pd.Series(False, index=pool_df.index)
-        espn_signal = pd.Series(0.0, index=pool_df.index, dtype="float64")
-    value_signal = espn_signal.where(ranked, _UNRANKED_MODEL_DISCOUNT * model)
+        espn = pd.Series(pd.NA, index=pool_df.index, dtype="Float64")
+    # ESPN $ where ranked (present and > 0); else the discounted model value (cheap but ordered).
+    value_signal = espn.where(espn.notna() & (espn > 0), discount * model).astype("float64")
     in_pool_dollars = _allocate_surplus(value_signal, config)
 
     in_pool_dollars = in_pool_dollars.set_axis(pd.Index(pool_df["gsis_id"], name="gsis_id"))

@@ -25,7 +25,7 @@ import pandas as pd
 
 from projections.draft.assistant.auction.market import assign_bot_archetypes
 from projections.draft.assistant.auction.simulation import AuctionState, _simulate_to_state
-from projections.draft.assistant.auction.tournament_cli import _MODELS, _REALISTIC_FIELD
+from projections.draft.assistant.auction.tournament_cli import _MODELS, _REALISTIC_FIELD, _load_pool
 from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.league_projection import SeatProjection, project_draft
 from projections.draft.assistant.performance_variance import VarianceParams
@@ -36,27 +36,22 @@ from projections.draft.auction import (
     generate_auction_values,
     has_usable_espn_prices,
 )
-from projections.schemas import _PYARROW_STR, RosterSlot, VorpTableSchema
+from projections.draft.roster_eligibility import FLEX_ELIGIBLE, SUPER_FLEX_ELIGIBLE
+from projections.schemas import Position, RosterSlot
 
-_FLEX_OK = frozenset({"RB", "WR", "TE"})
-_SFLEX_OK = frozenset({"QB", "RB", "WR", "TE"})
+_FLEX_OK = frozenset(p.value for p in FLEX_ELIGIBLE)  # canonical eligibility, not hardcoded
+_SFLEX_OK = frozenset(p.value for p in SUPER_FLEX_ELIGIBLE)
 _RosterItem = tuple[str, str, int]  # (gsis_id, position, price)
-
-
-def _load_pool(path: Path) -> pd.DataFrame:
-    df = pd.read_parquet(path)
-    df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
-    return VorpTableSchema.validate(df)
 
 
 def _slot_plan(roster_slots: dict[RosterSlot, int]) -> tuple[list[tuple[str, frozenset[str]]], int]:
     """The ordered starter slots (label, position-eligibility) + the bench count for a config."""
     plan: list[tuple[str, frozenset[str]]] = []
     for slot, label, ok in (
-        (RosterSlot.QB, "QB", frozenset({"QB"})),
-        (RosterSlot.RB, "RB", frozenset({"RB"})),
-        (RosterSlot.WR, "WR", frozenset({"WR"})),
-        (RosterSlot.TE, "TE", frozenset({"TE"})),
+        (RosterSlot.QB, "QB", frozenset({Position.QB.value})),
+        (RosterSlot.RB, "RB", frozenset({Position.RB.value})),
+        (RosterSlot.WR, "WR", frozenset({Position.WR.value})),
+        (RosterSlot.TE, "TE", frozenset({Position.TE.value})),
         (RosterSlot.FLEX, "FLEX", _FLEX_OK),
         (RosterSlot.SUPER_FLEX, "SFLX", _SFLEX_OK),
     ):
@@ -98,6 +93,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--n-sims", type=int, default=200, help="season MC sims per draft (scoring).")
     p.add_argument("--base-seed", type=int, default=0)
     p.add_argument("--bot-prices", choices=("espn", "model"), default="espn")
+    p.add_argument(
+        "--unranked-discount",
+        type=float,
+        default=None,
+        help="ESPN bots value unranked players at this fraction of model value (default 0.4).",
+    )
     p.add_argument("--layout", choices=("slots", "flat"), default="slots", help="roster view.")
     p.add_argument(
         "--bench",
@@ -122,7 +123,9 @@ def main(argv: list[str] | None = None) -> int:
     baseline = generate_auction_values(pool, config)
     bot_dollars: pd.Series | None = None
     if args.bot_prices == "espn" and has_usable_espn_prices(pool):
-        bot_dollars = espn_anchored_bot_prices(pool, config)
+        bot_dollars = espn_anchored_bot_prices(
+            pool, config, model_values=baseline, unranked_discount=args.unranked_discount
+        )
 
     hero = _MODELS[args.strategy]
     seat0, n, budget = args.seat - 1, config.n_teams, config.budget

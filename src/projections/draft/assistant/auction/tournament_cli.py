@@ -159,6 +159,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default="espn",
         help="Bot pricing anchor: 'espn' (real ESPN auction values) or 'model' (shared SOS).",
     )
+    p.add_argument(
+        "--unranked-discount",
+        type=float,
+        default=None,
+        help="ESPN-anchored bots value unranked players at this fraction of model value "
+        "(default 0.4); sweep knob.",
+    )
     sub = p.add_subparsers(dest="mode", required=True)
     sub.add_parser("compare", help="Race the nine bid models; record per-metric data.")
     return p.parse_args(argv)
@@ -186,6 +193,7 @@ def run(argv: list[str] | None = None) -> int:
         nomination_temp=args.nomination_temp,
         bot_archetypes=_REALISTIC_FIELD,
         bot_prices=bot_prices,
+        unranked_discount=args.unranked_discount,
     )
     print(format_compare(result))
     if bot_prices == "espn":

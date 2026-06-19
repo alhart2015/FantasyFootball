@@ -88,6 +88,7 @@ def run_auction_tournament(
     nomination_temp: float = 0.0,
     bot_archetypes: Sequence[BotArchetype] | None = None,
     bot_prices: Literal["espn", "model"] = "espn",
+    unranked_discount: float | None = None,
 ) -> AuctionTournamentResult:
     if season_base_seed is None:
         season_base_seed = base_seed + 1_000_000
@@ -106,7 +107,9 @@ def run_auction_tournament(
             )
         else:
             try:
-                bot_dollars = espn_anchored_bot_prices(pool, config)
+                bot_dollars = espn_anchored_bot_prices(
+                    pool, config, model_values=baseline_dollars, unranked_discount=unranked_discount
+                )
             except ValueError as exc:
                 warnings.warn(
                     f"espn_anchored_bot_prices failed ({exc}); falling back to model pricing.",
