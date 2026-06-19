@@ -1,7 +1,7 @@
 """CLI engine for the auction bid-model tournament (spec §3.7). Mirrors tournament_cli.py.
 
 `run([...])` loads the VORP pool + LeagueConfig, attaches is_rookie, loads availability +
-variance params (store-backed), then races the eight bid models against a mixed bot field
+variance params (store-backed), then races the nine bid models against a mixed bot field
 with randomized nomination and prints per-metric means + CIs and paired diffs.
 No winner is printed (data-gathering, spec §5.1).
 """
@@ -52,6 +52,10 @@ _MODELS: dict[str, AuctionBidStrategy] = {
     "overbid": OverbidValueBid(),
     "vorpshare": VorpShareBid(),
     "patient": PatientValueBid(),
+    # patient_deep: the scrub_frac=0 tuning — hoard mid-tier breadth (bid real value across the
+    # whole non-stud pool, no $1-dumping the bottom half). The multi-year bake-off found this the
+    # most era-robust hero; included as a standing contestant.
+    "patient_deep": PatientValueBid(scrub_frac=0.0),
     "studsdepth": StudsAndDepthBid(),
 }
 
@@ -156,7 +160,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Bot pricing anchor: 'espn' (real ESPN auction values) or 'model' (shared SOS).",
     )
     sub = p.add_subparsers(dest="mode", required=True)
-    sub.add_parser("compare", help="Race the eight bid models; record per-metric data.")
+    sub.add_parser("compare", help="Race the nine bid models; record per-metric data.")
     return p.parse_args(argv)
 
 

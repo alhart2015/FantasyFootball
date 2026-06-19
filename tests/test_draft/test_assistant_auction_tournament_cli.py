@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from projections.draft.assistant._compare import Interval
-from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
+from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy, PatientValueBid
 from projections.draft.assistant.auction.tournament import AuctionTournamentResult
 from projections.draft.assistant.auction.tournament_cli import (
     _MODELS,
@@ -48,7 +48,7 @@ def _write_config(path: Path) -> None:
     path.write_text(json.dumps(cfg))
 
 
-def test_default_models_are_the_eight_contestants() -> None:
+def test_default_models_are_the_nine_contestants() -> None:
     assert set(_MODELS) == {
         "static",
         "inflation",
@@ -57,8 +57,17 @@ def test_default_models_are_the_eight_contestants() -> None:
         "overbid",
         "vorpshare",
         "patient",
+        "patient_deep",
         "studsdepth",
     }
+
+
+def test_patient_deep_is_the_scrub_frac_zero_tuning() -> None:
+    # patient_deep is PatientValueBid tuned to hoard mid-tier breadth (no $1-dumping the bottom
+    # half); scrub_frac=0 is the whole point of the contestant — pin it against regressions.
+    patient_deep = _MODELS["patient_deep"]
+    assert isinstance(patient_deep, PatientValueBid)
+    assert patient_deep.scrub_frac == 0.0
 
 
 def test_every_default_model_satisfies_the_protocol() -> None:
