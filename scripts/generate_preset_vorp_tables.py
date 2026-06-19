@@ -28,8 +28,6 @@ from projections.schemas import (
 )
 from projections.store import read_latest_partition
 
-_ESPN_AUCTION_COLS = ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std")
-
 
 def resolve_espn_auction_dollars(frame: pd.DataFrame, ruleset: Ruleset) -> pd.Series:
     """Resolve one per-player ESPN auction dollar from the consensus frame: crowd average when

@@ -106,11 +106,27 @@ def test_resolve_prefers_crowd_when_positive() -> None:
     assert str(out.dtype) == "Int64"
 
 
-def test_resolve_falls_back_to_ppr_expert_for_half_when_crowd_zero() -> None:
+def test_resolve_falls_back_to_ppr_expert_for_half_when_crowd_absent() -> None:
     frame = _frame(
         espn_auction_value_avg=[pd.NA], espn_auction_value_ppr=[40.0], espn_auction_value_std=[30.0]
     )
     out = resolve_espn_auction_dollars(frame, Ruleset.espn_half())
+    assert out.iloc[0] == 40
+
+
+def test_resolve_falls_back_to_expert_when_crowd_zero() -> None:
+    frame = _frame(
+        espn_auction_value_avg=[0.0], espn_auction_value_ppr=[40.0], espn_auction_value_std=[30.0]
+    )
+    out = resolve_espn_auction_dollars(frame, Ruleset.espn_half())
+    assert out.iloc[0] == 40  # > 0 guard rejects the 0 sentinel -> PPR expert
+
+
+def test_resolve_uses_ppr_expert_for_ppr() -> None:
+    frame = _frame(
+        espn_auction_value_avg=[pd.NA], espn_auction_value_ppr=[40.0], espn_auction_value_std=[30.0]
+    )
+    out = resolve_espn_auction_dollars(frame, Ruleset.espn_ppr())
     assert out.iloc[0] == 40
 
 
