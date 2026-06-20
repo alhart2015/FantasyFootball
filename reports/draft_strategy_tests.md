@@ -486,6 +486,64 @@ the board uses the same model). Reproduce: `python scripts/_snake_knob_search.py
 
 ---
 
+### Test 15 — Test 11 re-run on availability-correct data (real outcomes, 2021–2025, + `seat_aware`) — **the honest cross-check of the projected goal**
+
+**Why this exists.** Test 14 found the projected-H2H metric favors the season_value family +
+`seat_aware`; the goal was defined on that projected metric, and `seat_aware` meets it. But the
+**real-outcome** hero eval (Test 11) is the honest yardstick — it scores drafted rosters against
+*actual* weekly results, not our own projections. Test 11's inputs (`external_projections` +
+`espn_weekly_projections`) had been deleted, and its draft-basis path (`build_draft_basis`) shared
+the placeholder-gsis bug, so it needed a clean re-run. Both sources were re-pulled for 2021–2025
+(fresh, mostly-real gsis now that the id_map is good — e.g. 2022 external 63 % real) and
+`build_draft_basis` now reconciles placeholder gsis (id_map threaded via `load_inputs`), so the
+rosters join to actuals + injury `p` + byes (verified 2024: pool 627, 2 placeholders, 508 actuals-
+joined, 378 unique `p`, 486 byes). 16-team half-PPR, all 16 seats swept, **n_seeds=8 ×
+strategy_n_sims=40** (lower N than the original Test 11's 25; directional), all 6 baselines +
+`seat_aware`.
+
+**Pooled real-outcome metrics (5-season mean, seat-averaged):**
+
+| strategy | WIN% | CHAMP% | PTS-FOR |
+|----------|------|--------|---------|
+| **now_or_never_floored** | **72.3** | 31.2 | **1274** |
+| season_value_timing | 70.0 | **34.6** | 1244 |
+| seat_aware | 69.9 | 34.2 | 1244 |
+| now_or_never | 69.7 | 26.4 | 1247 |
+| season_value | 69.7 | 27.2 | 1251 |
+| season_value_var | 68.5 | 28.5 | 1242 |
+| raw_vorp | 67.5 | 23.0 | 1228 |
+
+**The headline: the projected metric and real outcomes DIVERGE — and the projected winner is not
+the real-outcome winner.**
+
+- **On real regular-season wins, `now_or_never_floored` is best (72.3 %)** — highest WIN% *and*
+  highest points-for — confirming the original Test 11 finding ("floored most consistent") on fresh,
+  availability-correct data. The projected metric (Test 14) ranked it near the *bottom*; reality puts
+  it on top for win%.
+- **There is a real WIN%/CHAMP% tradeoff.** `season_value_timing` (34.6 %) and `seat_aware`
+  (34.2 %) win the most **championships** (ceiling) while `now_or_never_floored` (31.2 %) banks the
+  most regular-season wins. The sv-family/`seat_aware` build higher-ceiling, lower-floor rosters.
+- **`seat_aware` (the projected-metric goal winner) is mid-pack on real WIN% (69.9 %, 3rd) but
+  top-tier on CHAMP% (34.2 %, 2nd).** So it is a championship-ceiling pick on real outcomes, not a
+  win-maximizer.
+- **Per-season swings are large** (sv-family best in 2021; `now_or_never_floored` best in
+  2023/2024/2025; `now_or_never` best in 2022) — the pooled mean is the signal, not any one year.
+
+**What this means for the goal.** The goal was explicitly scoped to the **projected** H2H metric, and
+`seat_aware` meets it there (Test 14). This cross-check shows that verdict **does not transfer to real
+outcomes**: the projected metric over-credits the season_value family's projected-points optimization
+and under-credits the floor's real-world robustness (the bust/injury hedge the projection can't see).
+**Honest recommendation:** if you optimize for **regular-season wins / making the playoffs**, draft
+**`now_or_never_floored`**; if you optimize for **championship ceiling**, `season_value_timing` or
+`seat_aware`. No single strategy dominates both axes. Caveats: N=8 seeds/season (lower than the
+original Test 11), bots = noisy-ADP human proxy (the whole eval rests on them, TODO #46), ESPN
+weekly projections as the start/sit source. Reproduce: `python scripts/hero_backtest.py run --season
+Y --league-config configs/league_espn_half_16team.json --n-seeds 8 --strategy-n-sims 40 --strategies
+"raw_vorp,now_or_never,now_or_never_floored,season_value,season_value_var,season_value_timing,seat_aware"
+--checkpoint-dir _hero_Y` then `report` (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
+
+---
+
 ## Future tests (backlog)
 
 ### F1 — Head-to-head season simulation (the realistic objective) — ✅ DONE → see **Test 7 (F1)** above. sv wins more games + playoff berths (both scorings); championship a wash (nn ≈ sv).
