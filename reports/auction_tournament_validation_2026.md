@@ -323,6 +323,29 @@ Per-model metrics (mean [95% CI on exp pts]), sorted by exp pts:
 
 **Status (data, no default change):** `patient_deep` is now a standing contestant in every bake-off (`_MODELS`), and the corrected ESPN-anchored bot pricing is the new methodology baseline. The multi-year evidence makes `patient_deep` the leading **September** candidate — either re-tune the `patient` default to `scrub_frac≈0` or adopt `patient_deep` as the recommended hero. Decision still deferred to September per project policy.
 
+**Multi-year bake-off RE-RUN — snake-draft broke bots (the new methodology baseline; 2026-06-19, branch `feat/auction-broke-bot-snake`, PR #86).** The discount-era run above priced ESPN-*unranked* players at `_UNRANKED_MODEL_DISCOUNT` (0.4) × our VORP model for *all* bots. That was a stopgap: it bent flush-bot pricing to patch a **broke-bot behavior** bug (a bot at the `feasible_max == min_bid` floor bid $1 on whatever was nominated — "started a 3rd-string QB"). The shipped fix targets the behavior — an out-of-money bot now drafts like a **snake drafter** (a per-bot fixed noisy-ADP `SnakeBoard`, `adp_jitter=8.0`, drawn once per draft from a dedicated CRN substream: nominate/snipe only its best-available-for-needs target; abstain otherwise; nominator-takes-$1 backstop). Flush bots / hero / flush-hero nomination unchanged. The bake-off was re-run with this field — **identical knobs to the discount-era run above** (12-team half-PPR, ESPN-anchored bots, **20 seeds × 300 sims**, seat 6, all 9 contestants), so the only variable is the broke-bot behavior.
+
+| model | pts | win% | **playoff%** | bye% | champ% | sd(pl) | discount-era pl | Δ | per-season playoff `[21 22 23 24 25 26]` |
+|---|---|---|---|---|---|---|---|---|---|
+| **patient_deep** | 1145 | 0.57 | **0.660** | 0.229 | 0.112 | 0.057 | 0.825 | −0.165 | `0.72 0.68 0.55 0.72 0.67 0.62` |
+| inflation | 1051 | 0.49 | 0.479 | 0.149 | 0.075 | 0.097 | 0.506 | −0.027 | `0.57 0.51 0.42 0.62 0.43 0.33` |
+| vorpshare | 1051 | 0.49 | 0.477 | 0.157 | 0.083 | 0.040 | 0.529 | −0.052 | `0.56 0.46 0.48 0.45 0.47 0.45` |
+| static | 1037 | 0.48 | 0.454 | 0.138 | 0.069 | 0.086 | 0.497 | −0.043 | `0.50 0.48 0.38 0.60 0.43 0.34` |
+| patient (shipped) | 1009 | 0.46 | 0.408 | 0.094 | 0.044 | 0.029 | 0.577 | **−0.169** | `0.39 0.42 0.35 0.42 0.45 0.41` |
+| overbid | 986 | 0.44 | 0.373 | 0.105 | 0.053 | 0.052 | 0.404 | −0.031 | `0.41 0.43 0.36 0.42 0.31 0.30` |
+| studsdepth | 985 | 0.44 | 0.368 | 0.098 | 0.048 | 0.045 | 0.417 | −0.049 | `0.36 0.42 0.36 0.41 0.37 0.28` |
+| marginal | 936 | 0.40 | 0.283 | 0.060 | 0.027 | 0.078 | 0.488 | **−0.205** | `0.32 0.27 0.38 0.36 0.18 0.19` |
+| anchors | 764 | 0.27 | 0.116 | 0.021 | 0.010 | 0.033 | 0.121 | −0.005 | `0.10 0.12 0.06 0.12 0.13 0.16` |
+
+**Findings (data; the snake-draft field is the new baseline):**
+- **`patient_deep` still leads, and still #1 in all six seasons** (range 0.55–0.72), highest champ (0.112). Its margin over #2 **compressed from +0.25 to +0.18** and its level fell 0.825→0.660 — because the snake-draft bots are a **genuinely harder, more realistic field**: a broke bot now hoovers the best-available mid-tier by ADP instead of punting to $1 scrubs, so there is less free depth for any hero to collect. **Every** model's playoff% dropped (mean Δ ≈ −0.08); that uniform decline is the realism lever working, not a regression.
+- **The mid-pack re-ranked.** Shipped `patient` (`scrub_frac=0.50`) **fell from #2 (0.577) to #5 (0.408), Δ −0.169**, and `marginal` cratered (Δ −0.205) — both relied on the scrub-dumping field to leave them cheap depth; against bots that now draft that depth themselves, they lose it. The new #2–#4 (`inflation`/`vorpshare`/`static`, ~0.45–0.48) are tightly packed. `anchors` is dead last every season (unchanged).
+- **The `patient_deep` > `patient` story holds and slightly strengthens.** The paired gap is **+0.252 mean** (per-season `+0.33 +0.26 +0.20 +0.29 +0.22 +0.21`), vs +0.248 in the discount era — breadth-maximizing (`scrub_frac=0`) beats $1-dumping the bottom half *even harder* against a depth-drafting field. `patient_deep`'s cross-season variance rose (sd 0.020→0.057) but it never drops below #1.
+
+**Caveats:** same as the discount-era run (ESPN basis varies by season; 2026 byes empty; 20×300 is directional, not tight CIs) — plus: the snake-draft field changes the auction RNG consumption (abstaining broke bots draw no `price_jitter` noise), so absolute levels are **not** byte-comparable to the discount-era run beyond the within-comparison Δ; the read is the *re-ranking* and the *uniform downward shift*, which are far outside 20×300 noise for the top/bottom. The `adp_jitter=8.0` broke-bot knob (reused from the snake-draft default) is itself unswept.
+
+**Status (data, no default change):** the **snake-draft broke-bot field is the new methodology baseline** (supersedes the 0.4-discount field; the discount is retained only for flush-bot unranked pricing). `patient_deep` remains the leading **September** candidate — its dominance survived the realism upgrade. Decision still deferred to September per project policy.
+
 ## Planned experiments / axes to sweep
 
 - **Bid-model bake-off** (the core): `static` vs `inflation` vs `marginal`, all three metrics, at a fixed
