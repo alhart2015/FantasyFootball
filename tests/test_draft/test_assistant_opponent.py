@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from projections.draft.assistant.opponent import bot_pick
+from projections.draft.assistant.opponent import _best_by_noisy_adp, bot_pick
 from projections.schemas import _PYARROW_STR
 
 
@@ -74,11 +74,6 @@ def test_single_player_available() -> None:
 
 def test_bot_pick_characterization_stable_across_refactor() -> None:
     # Pins bot_pick's exact picks for fixed seeds so the Task 1 extraction is proven byte-identical.
-    import numpy as np
-    import pandas as pd
-
-    from projections.draft.assistant.opponent import bot_pick
-
     avail = pd.DataFrame(
         {
             "gsis_id": ["00-0000005", "00-0000001", "00-0000003", "00-0000002", "00-0000004"],
@@ -98,10 +93,6 @@ def test_bot_pick_characterization_stable_across_refactor() -> None:
 
 
 def test_best_by_noisy_adp_argmin_and_tiebreak() -> None:
-    import numpy as np
-
-    from projections.draft.assistant.opponent import _best_by_noisy_adp
-
     # Canonical gsis_ids (validate_gsis_id requires \d{2}-\d{7}); ascending order is a < b < c.
     a, b, c = "00-0000001", "00-0000002", "00-0000003"
     gsis = np.array([c, a, b], dtype=str)

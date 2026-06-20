@@ -892,5 +892,7 @@ def test_snake_substream_is_seed_only_and_shared() -> None:
     bidding = np.random.default_rng(base)  # the scalar bidding seed
     pick = SnakeBoard(pool, snake_a).best_available(frozenset(), elig)
     assert pick == SnakeBoard(pool, snake_b).best_available(frozenset(), elig)  # CRN: seed-only
-    # the substream is NOT the bidding stream (else the hero would perturb the bot field)
-    assert SnakeBoard(pool, bidding).best_available(frozenset(), elig) != pick or True
+    # The substream is a DIFFERENT stream than the scalar bidding seed (else the hero's bidding RNG
+    # would perturb the bot field). Compare the streams' first draws directly — deterministic, not a
+    # flaky board comparison: the two fixed seeds produce two fixed, distinct values.
+    assert bidding.random() != np.random.default_rng([base, _SNAKE_SUBSTREAM]).random()

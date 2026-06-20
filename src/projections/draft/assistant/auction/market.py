@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -56,6 +56,31 @@ def resolve_bids(bids: dict[int, int], min_bid: int) -> tuple[int, int]:
         return winner_seat, min_bid
     second_max = ordered[1][1]
     return winner_seat, min(winner_max, second_max + min_bid)
+
+
+def resolve_unbid(
+    nominee_pos: Position,
+    nominator: int,
+    open_seats: Sequence[int],
+    seat_eligible: Mapping[int, frozenset[Position]],
+    min_bid: int,
+) -> tuple[int, int]:
+    """Clear a zero-bid nomination — the sibling of `resolve_bids` for the no-bidder case.
+
+    The nominator takes its nominee at `min_bid` if it can roster the position; otherwise the
+    lowest-index open seat that can. On the non-forced path the room-union nomination rule
+    guarantees at least one open seat is eligible for the nominee, so the search never fails
+    (asserted rather than silently mis-awarding to an ineligible seat, which would violate a
+    position cap). `open_seats` must be ascending for the lowest-index tiebreak; every entry (and
+    `nominator`) is a key of `seat_eligible`.
+    """
+    if nominee_pos in seat_eligible[nominator]:
+        return nominator, min_bid
+    winner = next((s for s in open_seats if nominee_pos in seat_eligible[s]), None)
+    assert winner is not None, (
+        "non-forced nominee must be rosterable by some open seat (room-union rule)"
+    )
+    return winner, min_bid
 
 
 # ---------------------------------------------------------------------------

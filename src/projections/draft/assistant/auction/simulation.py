@@ -21,6 +21,7 @@ from projections.draft.assistant.auction.market import (
     SeatView,
     assign_bot_archetypes,
     resolve_bids,
+    resolve_unbid,
 )
 from projections.draft.assistant.auction.snake_bot import SnakeBoard, adp_usable
 from projections.draft.league_config import LeagueConfig
@@ -239,29 +240,12 @@ def _simulate_to_state(
                     bids[seat] = max(min_bid, min(int(desired), fmax))
 
         if not bids:
-            # Nominator takes its nominee at min_bid when nobody bids (only reachable on the
-            # non-forced path once broke bots abstain). Awardee: the nominator if it can roster the
-            # nominee, else the lowest-index open seat that can (room-union guarantees one exists).
-            nominee_pos = pos_by_id[str(nominee_id)]
-            if nominee_pos in seat_eligible.get(state.nominator, frozenset()):
-                winner, price = state.nominator, min_bid
-            else:
-                # lowest-index open seat that can roster the nominee. On the non-forced path the
-                # room-union rule guarantees one exists; assert it rather than silently mis-award to
-                # an ineligible seat (which would violate a position cap).
-                eligible_seat = next(
-                    (
-                        s
-                        for s in range(n)
-                        if _open_slots(state, s, rs) > 0
-                        and nominee_pos in seat_eligible.get(s, frozenset())
-                    ),
-                    None,
-                )
-                assert eligible_seat is not None, (
-                    "non-forced nominee must be rosterable by some open seat (room-union rule)"
-                )
-                winner, price = eligible_seat, min_bid
+            # Nobody bid (reachable on the non-forced path once broke bots abstain): the nominator
+            # takes its nominee at min_bid, else the lowest-index open seat that can roster it.
+            open_seats = [s for s in range(n) if _open_slots(state, s, rs) > 0]
+            winner, price = resolve_unbid(
+                pos_by_id[str(nominee_id)], state.nominator, open_seats, seat_eligible, min_bid
+            )
         else:
             winner, price = resolve_bids(bids, min_bid)
         state.budgets[winner] -= price
