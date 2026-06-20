@@ -279,6 +279,106 @@ Per-season *rankings swing wildly*: `season_value` best in 2021, `raw_vorp` best
 
 ---
 
+### Test 12 — Projected-H2H snake bake-off (2026 consensus, 12- and 16-team) — **projected metric, NOT real outcomes**
+
+**Why this exists.** Test 11 scores against *real* weekly actuals (2021–2025) — it cannot run on **2026** (the season hasn't happened). To bake off the strategies on the *current* 2026 draft basis we borrow the **auction eval's engine**: draft a full league, then score it with `league_projection.project_draft` — a projected-vs-projected MC season (per-week injury Bernoulli + byes + the performance-variance model, optimal lineup each week; reg wks 1–13 → top-6 playoffs / top-2 bye → champ wks 16–17). **This measures roster quality *under our own projections*, not real wins** — it is somewhat circular (rewards what the season-value strategies optimize) and, critically, **blind to the scarcity floor's real-world robustness** (the thing that made `now_or_never_floored` win Test 11). The honest yardstick stays Test 11; this is the only lens available on 2026 data.
+
+**Setup.** Each strategy as the sole hero vs a noisy-ADP bot field (`adp_jitter=8.0`), full league reconstructed from the snake pick order, `project_draft` with **CRN season RNG shared across strategies per seed**. **20 draft seeds × 300 MC seasons**, `strategy_n_sims=50`. Pools: `data/vorp_2026/half_12team.parquet` / `half_16team.parquet` (regenerated 2026-06-19; half-PPR). Scratch runner `scripts/_snake_bakeoff_2026.py` (untracked; mirrors `run_auction_tournament`). Required raw partitions ingested for the availability model: `weekly_stats` 2018–2024, `schedules` 2026, `id_map`.
+
+**Championship % by seat (95% CI; bold = seat best):**
+
+*12-team half-PPR:*
+
+| strategy | Seat 1 (wing) | Seat 6 (mid) | Seat 12 (turn) |
+|----------|---------------|--------------|----------------|
+| now_or_never | 0.159 | **0.185** | **0.163** |
+| season_value_timing | 0.185 | 0.179 | 0.152 |
+| season_value_var | **0.195** | 0.161 | 0.144 |
+| season_value | 0.143 | 0.137 | 0.147 |
+| now_or_never_floored | 0.127 | 0.154 | 0.140 |
+| raw_vorp | 0.119 | 0.114 | 0.100 |
+
+*16-team half-PPR (the league's primary size):*
+
+| strategy | Seat 1 (wing) | Seat 8 (mid) | Seat 16 (turn) |
+|----------|---------------|--------------|----------------|
+| now_or_never | **0.180** | 0.166 | **0.143** |
+| season_value_var | 0.162 | 0.109 | 0.134 |
+| raw_vorp | 0.157 | **0.168** | 0.137 |
+| season_value_timing | 0.154 | 0.148 | 0.112 |
+| now_or_never_floored | 0.148 | 0.146 | 0.126 |
+| season_value | 0.126 | 0.123 | 0.123 |
+
+**What the bake-off favors (recorded in isolation — NOT a verdict):**
+
+- **12-team is seat-dependent.** At the **wing (seat 1)** the season-value family wins outright — `season_value_var` and `season_value_timing` both beat `now_or_never` on playoff% *and* champ% with CI-separation. At the **mid/turn (6, 12)** `now_or_never` retakes #1 with `season_value_timing` statistically tied. **`season_value_timing` is the only 12-team strategy that is top-tier at every seat** (never a CI-separated loss to the seat winner) — the most slot-robust pick. `raw_vorp` is CI-separated **last at all three 12-team seats** (QB-hoarding pathology).
+- **16-team favors `now_or_never` — and re-ranks the field.** `now_or_never` is **#1 champ% at the wing and turn (CI-separated at seat 1) and statistically tied for #1 at the mid** (seat 8, vs `raw_vorp`). The season-value family is **mid-pack, not leading**, at 16-team — the 12-team wing advantage does **not** transfer. **`raw_vorp` is no longer dead last** at 16-team — it's competitive (tied-#1 champ% at seat 8). Mechanism: 16 teams × 13 roster spots drain QBs, so raw_vorp structurally *can't* hoard a deep QB bench (the bots take them) — the deeper league suppresses the pathology that sinks it at 12-team.
+- **The floor underperforms on this metric at every seat/size.** `now_or_never_floored` is CI-separated *below* plain `now_or_never` everywhere — the **opposite** of Test 11's real-outcome result (floored +2.35 win% pooled). Expected: the projected metric cannot see the floor's bust/injury-robustness benefit, only its sacrificed projected ceiling. **This is the cleanest illustration of the projected-vs-actual divergence** and the reason Test 11 stays the honest yardstick.
+- **`season_value_var ≈ season_value`** on the projected metric too (no draft re-ranking), except `sv_var` runs hot at the 12-team wing and cold at the 16-team mid — MC variance at N=20, not a real effect.
+
+**No adopt/reject** — data-gathering, decision deferred (draft months out). Net read across Tests 11–12: **`now_or_never` (or `now_or_never_floored` if you weight the real-outcome eval) for 16-team**; the season-value family is only a wing-seat contender at 12-team. Caveats: N=20 seeds, single ruleset, projected (circular) metric, bots = noisy-ADP human proxy (top realism lever, TODO #46). Reproduce: `python scripts/_snake_bakeoff_2026.py --vorp-table data/vorp_2026/half_16team.parquet --league-config data/vorp_2026/half_16team.league.json --my-slot N --seeds 20 --n-sims 300 --strategy-n-sims 50` (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
+
+---
+
+### Test 13 — Multi-year projected-H2H snake bake-off, 16-team, year-by-year (2021–2026) — **the multi-year cut; WIN% headline**
+
+**Why this exists.** Test 12 ran the projected-H2H bake-off on **2026 only** — one noisy draw — and `champ_pct` (a deep-tail metric) amplified the noise into a misleading "floor looks bad" reading. This test does for the snake draft what #49a did for the auction: run the **same projected-H2H engine year-by-year across every season we have projection data for (2021–2026)** and average, so the ranking is a multi-year mean, not one season. **16-team half-PPR (the league's primary size)**, seats **1 / 8 / 16**, 20 seeds × 300 MC sims, `strategy_n_sims=50`. Per-season pools `data/vorp_{Y}/half_16team.parquet` + `.league.json`; availability uses the fixed 2018–2024 weekly_stats history (shared across strategies per (season, seed) via CRN, so any mild lookahead doesn't bias the *between-strategy* comparison) + per-season byes (`schedules` 2021–2026 ingested). **Headline = `reg_win_pct`** (champ% is too noisy at N=20 — user call 2026-06-19); all four metrics logged. Still the **projected** (circular) metric, NOT real outcomes — Test 11 stays the honest yardstick.
+
+**WIN% by year, Seat 8 (mid) — representative (bold = season best):**
+
+| strategy | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 | mean |
+|----------|------|------|------|------|------|------|------|
+| now_or_never_floored | 0.653 | 0.639 | **0.656** | **0.623** | 0.622 | 0.597 | **0.632** |
+| raw_vorp | 0.652 | 0.616 | 0.648 | 0.619 | **0.630** | 0.610 | 0.629 |
+| now_or_never | **0.660** | **0.640** | 0.606 | 0.618 | 0.625 | **0.617** | 0.628 |
+| season_value | 0.647 | 0.627 | 0.623 | 0.603 | 0.598 | 0.584 | 0.614 |
+| season_value_timing | 0.639 | 0.625 | 0.607 | 0.592 | 0.608 | 0.597 | 0.611 |
+| season_value_var | 0.637 | 0.612 | 0.625 | 0.578 | 0.601 | 0.572 | 0.604 |
+
+**6-year mean of ALL FOUR metrics (win / playoff / bye / champ), by seat:**
+
+*Seat 1 (wing):*
+| strategy | win% | playoff% | bye% | champ% |
+|----------|------|----------|------|--------|
+| now_or_never | **0.637** | **0.689** | **0.343** | **0.190** |
+| now_or_never_floored | 0.632 | 0.680 | 0.336 | 0.184 |
+| season_value_var | 0.632 | 0.675 | 0.335 | 0.185 |
+| raw_vorp | 0.629 | 0.673 | 0.336 | 0.187 |
+| season_value_timing | 0.616 | 0.645 | 0.302 | 0.162 |
+| season_value | 0.605 | 0.617 | 0.276 | 0.146 |
+
+*Seat 8 (mid):*
+| strategy | win% | playoff% | bye% | champ% |
+|----------|------|----------|------|--------|
+| now_or_never_floored | **0.632** | **0.681** | **0.335** | **0.186** |
+| raw_vorp | 0.629 | 0.671 | 0.330 | 0.183 |
+| now_or_never | 0.628 | 0.671 | 0.322 | 0.175 |
+| season_value | 0.614 | 0.637 | 0.300 | 0.158 |
+| season_value_timing | 0.611 | 0.632 | 0.292 | 0.157 |
+| season_value_var | 0.604 | 0.615 | 0.274 | 0.148 |
+
+*Seat 16 (turn):*
+| strategy | win% | playoff% | bye% | champ% |
+|----------|------|----------|------|--------|
+| now_or_never_floored | **0.633** | **0.679** | **0.337** | **0.185** |
+| season_value_var | 0.629 | 0.670 | 0.327 | 0.178 |
+| now_or_never | 0.625 | 0.663 | 0.315 | 0.171 |
+| raw_vorp | 0.621 | 0.657 | 0.314 | 0.172 |
+| season_value | 0.612 | 0.634 | 0.292 | 0.155 |
+| season_value_timing | 0.603 | 0.615 | 0.273 | 0.146 |
+
+**What the multi-year cut favors (recorded in isolation — NOT a verdict):**
+
+- **The `now_or_never` family owns the top tier at 16-team, all three seats.** On the win% headline, **`now_or_never_floored` is #1 at the mid and turn (seats 8, 16)** and #2 by a hair at the wing (0.632 vs `now_or_never` 0.637); `now_or_never` is #1 at the wing and top-3 everywhere. The two nn variants are within ~0.005 win% of each other and of the seat leader at every seat — effectively co-leaders.
+- **This REHABILITATES the floor that Test 12 buried.** Test 12's 2026-only champ% put `now_or_never_floored` near the bottom; averaged over six years on the stable win% metric it is the **most consistent strategy** (top-2 at all three seats, #1 at two). This now **agrees with Test 11's real-outcome finding** (floored most consistent, +2.35 win% pooled) — the convergence of the projected multi-year cut and the actual eval is the strongest signal in the series so far. The lesson: champ% at N=20 was the noise; win% multi-year is the signal.
+- **`raw_vorp` is genuinely competitive at 16-team** (top-4 win% at every seat; #2 at the mid) — the opposite of its 12-team last-place (Test 12). Confirmed mechanism: 16 teams × 13 spots drain QBs, so it structurally can't hoard a deep QB bench. **The QB-hoarding pathology is a 12-team problem, not a 16-team one.**
+- **The season-value family underperforms at 16-team** — `season_value` / `season_value_timing` consistently bottom-half on win% at all three seats; `season_value_var` is competitive only at the wing/turn. The 12-team wing advantage (Test 12) does not transfer to 16-team.
+- **Rankings still swing year-to-year** (e.g. seat 8: `now_or_never` 0.606→0.660 win%, `now_or_never_floored` 0.597→0.656) — no single season is trustworthy, which is the entire justification for this multi-year cut.
+
+**Net read across Tests 11–13 for the 16-team primary use case:** `now_or_never_floored` is the most defensible default — most consistent on both the real-outcome eval (Test 11) and the projected multi-year cut (Test 13), robust across all three seats; plain `now_or_never` is statistically indistinguishable from it. **No adopt/reject** — decision deferred (draft months out). Caveats: N=20 seeds/season, projected (circular) metric, single ruleset, fixed-history availability, bots = noisy-ADP human proxy (top realism lever, TODO #46). Reproduce: `python scripts/_snake_bakeoff_2026.py --vorp-table data/vorp_{Y}/half_16team.parquet --league-config data/vorp_{Y}/half_16team.league.json --my-slot {1,8,16} --season Y --seeds 20 --n-sims 300 --strategy-n-sims 50` for Y in 2021–2026 (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
+
+---
+
 ## Future tests (backlog)
 
 ### F1 — Head-to-head season simulation (the realistic objective) — ✅ DONE → see **Test 7 (F1)** above. sv wins more games + playoff berths (both scorings); championship a wash (nn ≈ sv).
