@@ -281,6 +281,14 @@ Per-season *rankings swing wildly*: `season_value` best in 2021, `raw_vorp` best
 
 ### Test 12 — Projected-H2H snake bake-off (2026 consensus, 12- and 16-team) — **projected metric, NOT real outcomes**
 
+> **⚠️ CORRECTION (2026-06-20, see Test 14).** This test's per-season pools carried 100 %
+> placeholder `99-` gsis_ids, so the projected-H2H metric was **blind to player-specific
+> availability** (injury `p` collapsed to a position-average; byes were empty). The ranking
+> below — nn-family on top, season_value family weak — is therefore an **artifact of the
+> bug**, not a real result. After the gsis-reconciliation fix, the ordering **inverts**: the
+> season_value family is the top tier and the nn-family is the bottom. Read Test 14 for the
+> corrected picture; treat Test 12's strategy conclusions as void.
+
 **Why this exists.** Test 11 scores against *real* weekly actuals (2021–2025) — it cannot run on **2026** (the season hasn't happened). To bake off the strategies on the *current* 2026 draft basis we borrow the **auction eval's engine**: draft a full league, then score it with `league_projection.project_draft` — a projected-vs-projected MC season (per-week injury Bernoulli + byes + the performance-variance model, optimal lineup each week; reg wks 1–13 → top-6 playoffs / top-2 bye → champ wks 16–17). **This measures roster quality *under our own projections*, not real wins** — it is somewhat circular (rewards what the season-value strategies optimize) and, critically, **blind to the scarcity floor's real-world robustness** (the thing that made `now_or_never_floored` win Test 11). The honest yardstick stays Test 11; this is the only lens available on 2026 data.
 
 **Setup.** Each strategy as the sole hero vs a noisy-ADP bot field (`adp_jitter=8.0`), full league reconstructed from the snake pick order, `project_draft` with **CRN season RNG shared across strategies per seed**. **20 draft seeds × 300 MC seasons**, `strategy_n_sims=50`. Pools: `data/vorp_2026/half_12team.parquet` / `half_16team.parquet` (regenerated 2026-06-19; half-PPR). Scratch runner `scripts/_snake_bakeoff_2026.py` (untracked; mirrors `run_auction_tournament`). Required raw partitions ingested for the availability model: `weekly_stats` 2018–2024, `schedules` 2026, `id_map`.
@@ -321,6 +329,15 @@ Per-season *rankings swing wildly*: `season_value` best in 2021, `raw_vorp` best
 ---
 
 ### Test 13 — Multi-year projected-H2H snake bake-off, 16-team, year-by-year (2021–2026) — **the multi-year cut; WIN% headline**
+
+> **⚠️ CORRECTION (2026-06-20, see Test 14).** Same bug as Test 12: the per-season pools
+> carried all-placeholder gsis, so **availability never flowed into the metric** (injury
+> `p` was a position-average; byes empty). The headline here — "`now_or_never_floored`
+> most consistent; season_value family bottom-half; `raw_vorp` competitive" — is an
+> **artifact**. With real availability (Test 14), the season_value family (`season_value_timing`
+> / `season_value_var`) is the **top tier** and the entire nn-family is the **bottom**. The
+> "QB-hoarding is a 12-team pathology" sub-finding still stands (it's a value, not
+> availability, effect), but the strategy ranking is **inverted** — use Test 14.
 
 **Why this exists.** Test 12 ran the projected-H2H bake-off on **2026 only** — one noisy draw — and `champ_pct` (a deep-tail metric) amplified the noise into a misleading "floor looks bad" reading. This test does for the snake draft what #49a did for the auction: run the **same projected-H2H engine year-by-year across every season we have projection data for (2021–2026)** and average, so the ranking is a multi-year mean, not one season. **16-team half-PPR (the league's primary size)**, seats **1 / 8 / 16**, 20 seeds × 300 MC sims, `strategy_n_sims=50`. Per-season pools `data/vorp_{Y}/half_16team.parquet` + `.league.json`; availability uses the fixed 2018–2024 weekly_stats history (shared across strategies per (season, seed) via CRN, so any mild lookahead doesn't bias the *between-strategy* comparison) + per-season byes (`schedules` 2021–2026 ingested). **Headline = `reg_win_pct`** (champ% is too noisy at N=20 — user call 2026-06-19); all four metrics logged. Still the **projected** (circular) metric, NOT real outcomes — Test 11 stays the honest yardstick.
 
@@ -376,6 +393,72 @@ Per-season *rankings swing wildly*: `season_value` best in 2021, `raw_vorp` best
 - **Rankings still swing year-to-year** (e.g. seat 8: `now_or_never` 0.606→0.660 win%, `now_or_never_floored` 0.597→0.656) — no single season is trustworthy, which is the entire justification for this multi-year cut.
 
 **Net read across Tests 11–13 for the 16-team primary use case:** `now_or_never_floored` is the most defensible default — most consistent on both the real-outcome eval (Test 11) and the projected multi-year cut (Test 13), robust across all three seats; plain `now_or_never` is statistically indistinguishable from it. **No adopt/reject** — decision deferred (draft months out). Caveats: N=20 seeds/season, projected (circular) metric, single ruleset, fixed-history availability, bots = noisy-ADP human proxy (top realism lever, TODO #46). Reproduce: `python scripts/_snake_bakeoff_2026.py --vorp-table data/vorp_{Y}/half_16team.parquet --league-config data/vorp_{Y}/half_16team.league.json --my-slot {1,8,16} --season Y --seeds 20 --n-sims 300 --strategy-n-sims 50` for Y in 2021–2026 (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
+
+---
+
+### Test 14 — Projected-H2H bake-off AFTER the gsis-reconciliation fix (16-team, 2021–2026) — **corrects Tests 12/13**
+
+**Why this exists.** A strategy search (goal: beat every baseline in 6-yr-mean win% from
+any seat) surfaced a data-integrity bug: the per-season preset pools carried 100 %
+placeholder `99-` gsis_ids, so they joined to neither `weekly_stats` (injury `p`) nor
+`id_map` (byes). The projected-H2H metric in Tests 12/13 was therefore **blind to
+player-specific availability** — injury `p` collapsed to a position-average (4 distinct
+values instead of ~375; range [0.57,0.62] vs the true [0.40,0.97]) and byes were empty.
+Fixed by `reconcile_pool_gsis` (name+position → real gsis via id_map; spec
+`docs/superpowers/specs/2026-06-20-pool-gsis-reconciliation-design.md`) and the tables
+backfilled in place. This re-runs the multi-year bake-off on the **reconciled** pools.
+
+**Setup.** Same engine/metric as Test 13 (project_draft, reg_win_pct headline), 16-team
+half-PPR, seats 1/8/16, **2021–2026**, 16 seeds × 200 MC sims, `strategy_n_sims=50`,
+reconciled tables. The 7th row is the durability-tilt candidate from the search
+(`now_or_never_floored − μ·(1−p_week)·vorp`, F=60/λ=1/μ=1.0) — included to show where the
+best hand-authored tilt lands.
+
+**6-year mean win% (bold = seat best; all CI halfwidths ≈ ±0.005):**
+
+| strategy | s1 (wing) | s8 (mid) | s16 (turn) | pooled |
+|----------|-----------|----------|------------|--------|
+| season_value_timing | **0.723** | **0.730** | 0.714 | **0.723** |
+| season_value_var | 0.719 | 0.720 | **0.726** | 0.722 |
+| season_value | 0.706 | 0.710 | 0.719 | 0.712 |
+| *durability-tilt (candidate)* | 0.694 | 0.704 | 0.699 | 0.699 |
+| now_or_never_floored | 0.653 | 0.680 | 0.666 | 0.666 |
+| raw_vorp | 0.655 | 0.665 | 0.645 | 0.655 |
+| now_or_never | 0.634 | 0.657 | 0.640 | 0.644 |
+
+**What the fix changes (the correction):**
+
+- **The ranking inverts.** Tests 12/13 reported the **nn-family on top and the
+  season_value family weak**. With real availability, the **season_value family is the top
+  tier** (`season_value_timing` 0.723, `season_value_var` 0.722, `season_value` 0.712) and
+  the **entire nn-family is the bottom** (`now_or_never_floored` 0.666, `raw_vorp` 0.655,
+  `now_or_never` 0.644). Every sv-family vs nn-family gap is CI-separated at every seat.
+- **Why:** the season_value strategies' whole mechanism is a per-player availability
+  Monte-Carlo. With `p` position-constant (the bug), that MC was pointless and they looked
+  weak; with real per-player `p` + byes, it's exactly the right signal and they dominate.
+  The earlier "season_value underperforms at 16-team" was an artifact, not a finding.
+- **No single strategy wins every seat — a per-seat Pareto frontier.**
+  `season_value_timing` is best at the **wing/mid** (s1/s8); `season_value_var` is best at
+  the **turn** (s16, where back-to-back picks make the timing layer add noise rather than
+  signal). They are anti-correlated across seats.
+- **The goal (strictly beat *every* baseline at *every* seat) is not met by any
+  hand-authored candidate.** The search ruled out σ/F/λ knobs (a plateau — can't CI-beat
+  `now_or_never_floored` by tuning itself) and a durability tilt (`−μ(1−p_week)vorp`):
+  validated on the disjoint holdout (2022/24/26, seeds 100–139), the tilt **beats the
+  entire nn-family and raw_vorp at every seat (+0.03…+0.06, CI-separated)** but **loses to
+  the sv-family**; here it lands mid-pack (0.699). A `season_value_var_timing` combination
+  (variance MC + timing, an unwired `risk_aware=True` path) **ties** `season_value_timing`
+  at the wing and **loses at the turn** — it interpolates the frontier rather than beating
+  it. Strictly beating both frontier endpoints needs a genuinely better mechanism;
+  deferred (user decision 2026-06-20: bank the findings, ship the fix).
+
+**Practical recommendation (data-gathering, still no committed default):** for 16-team
+half-PPR, **`season_value_timing`** is the best single strategy (pooled #1; wins wing/mid),
+with **`season_value_var`** strongest at the turn. The nn-family is no longer competitive
+once availability is modeled per-player. Caveats: projected (circular) metric, N=16
+seeds/season, single ruleset, bots = noisy-ADP human proxy (top realism lever, TODO #46),
+and the availability `p`/byes are shared by strategy and judge by construction. Reproduce:
+`python scripts/_snake_knob_search.py validate --config "10.67,60,1,1.0,0" --years 2021,2022,2023,2024,2025,2026 --seats 1,8,16 --seed-lo 0 --seed-hi 16 --n-sims 200` (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`; tables must be reconciled first via `scripts/reconcile_vorp_gsis.py`).
 
 ---
 
