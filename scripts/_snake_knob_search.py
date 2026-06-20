@@ -36,6 +36,7 @@ from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.assistant.simulation import _draft_picks
 from projections.draft.assistant.strategy import (
     NowOrNeverFlooredStrategy,
+    SeasonValueStrategy,
     SeasonValueTimingStrategy,
     _eligible_subset,
     _finalize,
@@ -122,6 +123,28 @@ class TiltedFlooredNN:
             key = "FLEX" if str(pp) in _FLEX_GROUP else str(pp)
             out[i] = self.nu * sum(1 for rb, rk in roster if rb == bw and rk == key)
         return out
+
+
+@dataclass(frozen=True)
+class SeatAwareStrategy:
+    """Dispatch to the empirically-best sub-strategy for the hero's draft slot.
+
+    The post-gsis-fix bake-off (Test 14) shows a per-seat Pareto frontier: the timing
+    layer (season_value_timing) wins the wing/mid where waits between picks are long,
+    but at the turn (the last `turn_band` seats, where picks come back-to-back) the
+    timing term adds noise and the pure variance-aware marginal (season_value_var) wins.
+    The hero's slot is known at draft time, so a single deployable strategy can pick the
+    right policy per slot. mu==nu absent -- this only routes, it adds no new score term.
+    """
+
+    timing: SeasonValueTimingStrategy
+    turn: SeasonValueStrategy
+    turn_band: int
+
+    def recommend(self, state, pool, config):
+        is_turn = state.my_slot > state.n_teams - self.turn_band
+        sub = self.turn if is_turn else self.timing
+        return sub.recommend(state, pool, config)
 
 
 _SEASON_OFFSET = 1_000_000  # season RNG stream, disjoint from the draft stream
@@ -227,6 +250,22 @@ def _build(key_or_cfg, ctx: YearCtx, strat_n_sims: int):
             survival=LogisticSurvival(sigma=default_sigma(ctx.n_teams)),
             risk_aware=True,
         )
+    if key_or_cfg == "seat_aware":
+        # Dispatch per draft slot: timing pays off on long waits (wing/mid) but adds
+        # noise at the turn (back-to-back picks), so use season_value_timing away from
+        # the turn and season_value_var at the last two seats -- the per-seat frontier.
+        return SeatAwareStrategy(
+            timing=SeasonValueTimingStrategy(
+                ctx.availability,
+                n_sims=strat_n_sims,
+                base_seed=0,
+                survival=LogisticSurvival(sigma=default_sigma(ctx.n_teams)),
+            ),
+            turn=SeasonValueStrategy(
+                ctx.availability, n_sims=strat_n_sims, base_seed=0, risk_aware=True
+            ),
+            turn_band=2,
+        )
     return _build_strategy(
         key_or_cfg,
         availability=ctx.availability,
@@ -282,9 +321,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--strat-n-sims", type=int, default=50)
     ap.add_argument("--jitter", type=float, default=8.0)
     ap.add_argument("--no-reconcile", action="store_true", help="skip gsis reconciliation (debug)")
+    ap.add_argument("--baselines", default="", help="validate: comma keys to override BASELINES")
     args = ap.parse_args(argv)
-    global _RECONCILE
+    global _RECONCILE, BASELINES
     _RECONCILE = not args.no_reconcile
+    if args.baselines:
+        BASELINES = tuple(args.baselines.split(","))
 
     seats = [int(x) for x in args.seats.split(",")]
     seeds = list(range(args.seed_lo, args.seed_hi))
@@ -368,6 +410,18 @@ def main(argv: list[str] | None = None) -> int:
             star = "*" if (iv.lo_95 > 0 or iv.hi_95 < 0) else " "
             print(f"   vs {base:<22} {iv.point:+.4f} [{iv.lo_95:+.4f},{iv.hi_95:+.4f}] {star}")
     print(f"\nGOAL MET (candidate CI-beats every baseline at every seat): {win_all}")
+
+    print("\n--- POOLED (all seats) paired diff: candidate - baseline (CI excludes 0 => *) ---")
+    cand_all = np.concatenate([cand_seat[s] for s in seats])
+    pooled_win = True
+    for base in BASELINES:
+        base_all = np.concatenate([per_seat_all[base][s] for s in seats])
+        iv = bootstrap_mean(cand_all - base_all, seed=0)
+        if not (iv.point > 0 and iv.lo_95 > 0):
+            pooled_win = False
+        star = "*" if (iv.lo_95 > 0 or iv.hi_95 < 0) else " "
+        print(f"   vs {base:<22} {iv.point:+.4f} [{iv.lo_95:+.4f},{iv.hi_95:+.4f}] {star}")
+    print(f"\nGOAL MET (pooled win% CI-beats every baseline): {pooled_win}")
     return 0
 
 

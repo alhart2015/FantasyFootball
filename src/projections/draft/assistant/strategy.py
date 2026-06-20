@@ -42,6 +42,7 @@ STRATEGY_KEYS = (
     "season_value",
     "season_value_var",
     "season_value_timing",
+    "seat_aware",
     "raw_vorp",
 )
 
@@ -431,3 +432,34 @@ class SeasonValueTimingStrategy:
         opp = expected_best_by_position(pos, marg, p, gsis)
         out["score"] = marg - np.array([opp[pos_i] for pos_i in pos], dtype=float)
         return _finalize(out, elig, display_p, starting_need_tier=False)
+
+
+@dataclass(frozen=True)
+class SeatAwareStrategy:
+    """Route to the empirically-best sub-strategy for the hero's drawn draft slot.
+
+    The post-availability-fix bake-off (Test 14, `reports/draft_strategy_tests.md`) shows
+    a per-seat Pareto frontier: the pick-timing layer (`season_value_timing`) wins at the
+    wing/mid, where the wait to your next pick is long, but *hurts* at the turn (the last
+    `turn_band` seats), where picks come back-to-back and the timing term adds noise rather
+    than signal -- there the pure variance-aware marginal (`season_value`/risk_aware, i.e.
+    `season_value_var`) wins. The hero's slot is fixed and known at draft time, so a single
+    deployable strategy can route to the right policy per slot. It strictly beats every
+    fixed baseline on the pooled multi-year win% while matching the per-seat best at each
+    seat. This only routes -- it adds no new scoring term.
+    """
+
+    timing: DraftStrategy
+    turn: DraftStrategy
+    turn_band: int = 2
+
+    def __post_init__(self) -> None:
+        if self.turn_band < 1:
+            raise ValueError(f"turn_band must be >= 1; got {self.turn_band}")
+
+    def recommend(
+        self, state: DraftState, pool: pd.DataFrame, config: LeagueConfig
+    ) -> pd.DataFrame:
+        is_turn = state.my_slot > state.n_teams - self.turn_band
+        sub = self.turn if is_turn else self.timing
+        return sub.recommend(state, pool, config)

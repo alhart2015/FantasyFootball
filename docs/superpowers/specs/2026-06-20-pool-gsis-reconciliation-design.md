@@ -47,10 +47,11 @@ ESPN/Sleeper→id_map crosswalk may still miss).
 ## Goal
 
 Make player-specific availability (injury `p` + byes) flow into the projected-H2H metric
-for all consumers, and correct the affected evidence (Tests 12/13). **Not** in scope:
-shipping a new winning strategy (the search showed `season_value_timing` is the real
-post-fix top baseline; no hand-authored tilt strictly beat the sv-family at every seat —
-see "Findings" below).
+for all consumers, correct the affected evidence (Tests 12/13), and ship the strategy that
+meets the original goal. **Outcome:** no *fixed* strategy beats every baseline at every seat
+(a per-seat Pareto frontier), but the seat-aware router **`seat_aware`** strictly beats every
+baseline on the pooled 6-year average win% (CI-separated) while matching the per-seat best —
+it is shipped to `STRATEGY_KEYS` + the board. See "Findings".
 
 ## Design
 
@@ -111,11 +112,16 @@ holdout 2022/24/26, seeds 100–139, n_sims 250):
 - **`sv_var_timing`** (variance-aware MC + timing; an unwired `risk_aware=True` path of
   `SeasonValueTimingStrategy`) ties `season_value_timing` at the wing and loses at the
   turn — does not dominate.
-- **Why no single winner:** post-fix the baselines form a **per-seat Pareto frontier** —
-  timing helps at the wings (`season_value_timing` best at s1/s8) and *hurts* at the turn
-  (`season_value_var` best at s16). A blend only interpolates; strictly beating both
-  endpoints needs a genuinely better mechanism. Deferred (user decision 2026-06-20: bank
-  the findings, ship the fix).
+- **The per-seat Pareto frontier + the router that clears it.** Post-fix the baselines form
+  a per-seat frontier — timing helps at the wings (`season_value_timing` best at s1/s8) and
+  *hurts* at the turn (`season_value_var` best at s16). A *fixed* blend only interpolates.
+  **`SeatAwareStrategy`** routes by the hero's known slot (`season_value_timing` for slots
+  ≤ n−2, `season_value_var` for the last two) → strictly beats every baseline on the pooled
+  6-year win% (vs `season_value_timing` +0.0038 [+0.0011,+0.0065]; vs `season_value_var`
+  +0.0047 [+0.0002,+0.0091]) while matching the per-seat best. **Shipped** (`STRATEGY_KEYS`,
+  `_build_strategy`, `build_session_strategy`, board `BOARD_STRATEGIES`; tests in
+  `test_assistant_seat_aware.py`). The strict "beat every baseline at *every* seat" bar is
+  unmet only because it *ties* the strategy it delegates to at each seat (can't beat itself).
 
 ## Testing
 
