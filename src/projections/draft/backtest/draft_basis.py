@@ -12,6 +12,7 @@ from __future__ import annotations
 import pandas as pd
 
 from projections.consensus.blend import build_consensus
+from projections.draft.assistant.pool_identity import reconcile_pool_gsis
 from projections.draft.consensus_source import consensus_to_season_projections
 from projections.draft.league_config import LeagueConfig
 from projections.draft.vorp import generate_vorp_table
@@ -33,7 +34,12 @@ def sleeper_adp(external: pd.DataFrame) -> pd.Series:
     return sl.groupby("gsis_id")["adp"].mean()
 
 
-def build_draft_basis(external: pd.DataFrame, *, league_config: LeagueConfig) -> pd.DataFrame:
+def build_draft_basis(
+    external: pd.DataFrame,
+    *,
+    league_config: LeagueConfig,
+    id_map: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Build the fixed-VORP draft basis table from one external_projections snapshot.
 
     Scores the blended ESPN+Sleeper stat line under `league_config.ruleset` (half-PPR when
@@ -43,6 +49,10 @@ def build_draft_basis(external: pd.DataFrame, *, league_config: LeagueConfig) ->
     Args:
         external: ExternalProjectionSchema-validated DataFrame (one snapshot: one season/asof).
         league_config: Frozen league configuration; ruleset must match the stat-line source.
+        id_map: when given, reconcile any placeholder (99-) gsis to real ones via name+position
+            (`reconcile_pool_gsis`) so the pool joins to weekly_stats (injury p) and id_map (byes)
+            -- without it the availability model silently degrades. Off by default to keep the
+            function pure of store reads; the backtest input loader passes it.
 
     Returns:
         VorpTableSchema-validated DataFrame extended with `consensus_adp` (Sleeper-only ADP).
@@ -58,6 +68,13 @@ def build_draft_basis(external: pd.DataFrame, *, league_config: LeagueConfig) ->
 
     table = table.merge(adp, on="gsis_id", how="left")
     table["gsis_id"] = table["gsis_id"].astype(_PYARROW_STR)
+    if id_map is not None:
+        # reconcile_pool_gsis keys on full_name; generate_vorp_table omits it, so attach it
+        # from the consensus frame (gsis-keyed) before reconciling.
+        names = consensus[["gsis_id", "full_name"]].drop_duplicates("gsis_id")
+        names["gsis_id"] = names["gsis_id"].astype(_PYARROW_STR)
+        table = table.merge(names, on="gsis_id", how="left")
+        table = reconcile_pool_gsis(table, id_map)
     return VorpTableSchema.validate(table)
 
 

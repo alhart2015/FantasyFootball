@@ -43,7 +43,11 @@ def load_inputs(*, season: int, config: LeagueConfig, data_root: Path) -> Backte
     external = ExternalProjectionSchema.validate(
         read_latest_partition(data_root / "raw", "external_projections", season=season)
     )
-    pool = build_draft_basis(external, league_config=config)
+    # Reconcile placeholder gsis to real ones so the drafted rosters join to weekly_stats
+    # (actuals + injury p) and id_map (byes); without it the hero eval is availability-blind.
+    id_map_path = data_root / "raw" / "id_map.parquet"
+    id_map = pd.read_parquet(id_map_path) if id_map_path.exists() else None
+    pool = build_draft_basis(external, league_config=config, id_map=id_map)
     pool = attach_is_rookie(pool, season=season, data_root=data_root)
 
     proj_df = WeeklyProjectionSchema.validate(

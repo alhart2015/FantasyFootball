@@ -24,7 +24,7 @@ from projections.draft.backtest.league import Calendar, LeagueResult, simulate_l
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import HeroResultSchema
 
-_MC_KEYS = frozenset({"season_value", "season_value_var", "season_value_timing"})
+_MC_KEYS = frozenset({"season_value", "season_value_var", "season_value_timing", "seat_aware"})
 
 
 def simulate_hero_cell(
