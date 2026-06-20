@@ -165,9 +165,11 @@ from projections.schemas import Position
 
 
 def _pool() -> pd.DataFrame:
+    # gsis_ids MUST be canonical (\d{2}-\d{7}) — SnakeBoard.best_available routes through
+    # _best_by_noisy_adp, which calls validate_gsis_id on the winner. Non-canonical ids raise.
     return pd.DataFrame(
         {
-            "gsis_id": ["00-rb1", "00-rb2", "00-wr1", "00-qb1", "00-te1"],
+            "gsis_id": ["00-0000001", "00-0000002", "00-0000003", "00-0000004", "00-0000005"],
             "position": ["RB", "RB", "WR", "QB", "TE"],
             "consensus_adp": pd.array([2.0, 8.0, 1.0, 40.0, 90.0], dtype="Float64"),
         }
@@ -184,20 +186,23 @@ def test_adp_usable() -> None:
 
 def test_best_available_respects_eligibility() -> None:
     board = SnakeBoard(_pool(), np.random.default_rng(0), adp_jitter=0.0)  # no noise -> pure ADP
-    # WR has lowest ADP overall, but if only RB is eligible we get the lowest-ADP RB.
-    assert str(board.best_available(frozenset(), frozenset({Position.RB}))) == "00-rb1"
-    assert str(board.best_available(frozenset(), frozenset({Position.WR}))) == "00-wr1"
+    # WR (00-0000003) has lowest ADP overall, but if only RB is eligible we get the lowest-ADP RB.
+    assert str(board.best_available(frozenset(), frozenset({Position.RB}))) == "00-0000001"
+    assert str(board.best_available(frozenset(), frozenset({Position.WR}))) == "00-0000003"
 
 
 def test_best_available_excludes_drafted() -> None:
     board = SnakeBoard(_pool(), np.random.default_rng(0), adp_jitter=0.0)
-    assert str(board.best_available(frozenset({"00-rb1"}), frozenset({Position.RB}))) == "00-rb2"
+    assert str(board.best_available(frozenset({"00-0000001"}), frozenset({Position.RB}))) == "00-0000002"
 
 
 def test_best_available_none_when_empty() -> None:
     board = SnakeBoard(_pool(), np.random.default_rng(0), adp_jitter=0.0)
     # All RBs drafted, only RB eligible -> nothing left.
-    assert board.best_available(frozenset({"00-rb1", "00-rb2"}), frozenset({Position.RB})) is None
+    assert (
+        board.best_available(frozenset({"00-0000001", "00-0000002"}), frozenset({Position.RB}))
+        is None
+    )
     assert board.best_available(frozenset(), frozenset()) is None
 
 
