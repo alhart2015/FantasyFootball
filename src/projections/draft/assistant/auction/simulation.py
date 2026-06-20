@@ -21,7 +21,9 @@ from projections.draft.assistant.auction.market import (
     SeatView,
     assign_bot_archetypes,
     resolve_bids,
+    resolve_unbid,
 )
+from projections.draft.assistant.auction.snake_bot import SnakeBoard, adp_usable
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import bot_eligible, bot_position_bounds
 from projections.schemas import Position
@@ -95,6 +97,7 @@ def _simulate_to_state(
     baseline_dollars: pd.DataFrame,
     price_jitter: float,
     rng: np.random.Generator,
+    snake_rng: np.random.Generator | None = None,
     nomination_temp: float = 0.0,
     bot_archetypes: Sequence[BotArchetype] | None = None,
     bot_dollars: pd.Series | None = None,
@@ -112,6 +115,14 @@ def _simulate_to_state(
     else:
         _assigned = assign_bot_archetypes(len(bot_seats), bot_archetypes)
         seat_arch = {s: _assigned[i] for i, s in enumerate(bot_seats)}
+
+    if snake_rng is None:
+        snake_rng = rng.spawn(1)[0]  # CRN-safe: spawn advances the seed-sequence, not rng's stream
+    adp_ok = adp_usable(pool)
+    # Per-bot fixed noisy-ADP boards; broke bots consume these to snipe their snake target (Task 4).
+    snake_boards: dict[int, SnakeBoard] = (
+        {s: SnakeBoard(pool, snake_rng) for s in bot_seats} if adp_ok else {}
+    )
 
     minimums, maximums = bot_position_bounds(config.roster_slots)
     pos_by_id = {
@@ -162,6 +173,9 @@ def _simulate_to_state(
             g for g in nominate_order if g not in state.drafted and pos_by_id[str(g)] in union
         ]
         forced = not candidates
+        # state.drafted changes once per pick (after the award); build the frozenset the snake board
+        # needs once here rather than per broke seat.
+        drafted_fs = frozenset(state.drafted)
         if forced:
             nominee_id = next(g for g in nominate_order if g not in state.drafted)
             warnings.warn(
@@ -170,7 +184,18 @@ def _simulate_to_state(
                 stacklevel=2,
             )
         else:
-            nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
+            # `snake_boards` holds only bot seats, and only when adp is usable; this is the
+            # non-forced branch — so `nom in snake_boards and fmax == min_bid` is exactly "nom is a
+            # broke bot." A broke nominator nominates its own snake target; a None target (its
+            # eligible positions are pool-exhausted) or a flush/hero nominator falls back to central
+            # sampling.
+            nom = state.nominator
+            nom_fmax = _feasible_max(state, nom, rs, min_bid)
+            nominee_id = None
+            if nom in snake_boards and nom_fmax == min_bid:
+                nominee_id = snake_boards[nom].best_available(drafted_fs, seat_eligible[nom])
+            if nominee_id is None:
+                nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
         assert nominee_id is not None  # guaranteed: pool is non-empty while any seat has open slots
         player = pool_by_id[str(nominee_id)]
 
@@ -189,24 +214,40 @@ def _simulate_to_state(
                 )
                 bids[seat] = max(min_bid, min(int(desired), fmax))
             else:
-                desired = seat_arch[seat].max_bid(
-                    SeatView(
-                        open_slots=_open_slots(state, seat, rs),
-                        eligible_positions=elig,
-                        budget=state.budgets[seat],
-                    ),
-                    player,
-                    bd,
-                    config,
-                    rng,
-                    price_jitter=price_jitter,
-                )
-                if desired <= 0:  # abstain -> dropped before the clamp
-                    continue
-                bids[seat] = max(min_bid, min(int(desired), fmax))
+                # `seat in snake_boards` == "adp-usable bot seat" (boards exist only for bot seats);
+                # combined with `not forced` and `fmax == min_bid` this is "seat is a broke bot."
+                broke = not forced and seat in snake_boards and fmax == min_bid
+                if broke:
+                    target = snake_boards[seat].best_available(drafted_fs, seat_eligible[seat])
+                    if target is None or str(nominee_id) != str(target):
+                        continue  # abstain: not this broke bot's snake target
+                    bids[seat] = min_bid  # broke ⇒ feasible_max == min_bid
+                else:
+                    desired = seat_arch[seat].max_bid(
+                        SeatView(
+                            open_slots=_open_slots(state, seat, rs),
+                            eligible_positions=elig,
+                            budget=state.budgets[seat],
+                        ),
+                        player,
+                        bd,
+                        config,
+                        rng,
+                        price_jitter=price_jitter,
+                    )
+                    if desired <= 0:  # abstain -> dropped before the clamp
+                        continue
+                    bids[seat] = max(min_bid, min(int(desired), fmax))
 
-        assert bids, "resolve_bids requires >=1 bid; forced-pick path guarantees it"
-        winner, price = resolve_bids(bids, min_bid)
+        if not bids:
+            # Nobody bid (reachable on the non-forced path once broke bots abstain): the nominator
+            # takes its nominee at min_bid, else the lowest-index open seat that can roster it.
+            open_seats = [s for s in range(n) if _open_slots(state, s, rs) > 0]
+            winner, price = resolve_unbid(
+                pos_by_id[str(nominee_id)], state.nominator, open_seats, seat_eligible, min_bid
+            )
+        else:
+            winner, price = resolve_bids(bids, min_bid)
         state.budgets[winner] -= price
         state.rosters[winner].append((nominee_id, str(player["position"]), price))
         state.drafted.add(nominee_id)
@@ -224,6 +265,7 @@ def simulate_auction(
     baseline_dollars: pd.DataFrame,
     price_jitter: float,
     rng: np.random.Generator,
+    snake_rng: np.random.Generator | None = None,
     nomination_temp: float = 0.0,
     bot_archetypes: Sequence[BotArchetype] | None = None,
     bot_dollars: pd.Series | None = None,
@@ -237,6 +279,7 @@ def simulate_auction(
         baseline_dollars=baseline_dollars,
         price_jitter=price_jitter,
         rng=rng,
+        snake_rng=snake_rng,
         nomination_temp=nomination_temp,
         bot_archetypes=bot_archetypes,
         bot_dollars=bot_dollars,

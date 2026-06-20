@@ -29,6 +29,8 @@ from projections.draft.auction import (
 )
 from projections.draft.league_config import LeagueConfig
 
+_SNAKE_SUBSTREAM = 20260619  # dedicated sub-key for the broke-bot ADP noise (CRN: shared bot field)
+
 METRICS: tuple[str, ...] = (
     "mean_points",
     "reg_win_pct",
@@ -130,6 +132,7 @@ def run_auction_tournament(
                 baseline_dollars=baseline_dollars,
                 price_jitter=price_jitter,
                 rng=np.random.default_rng(base_seed + s),
+                snake_rng=np.random.default_rng([base_seed + s, _SNAKE_SUBSTREAM]),
                 nomination_temp=nomination_temp,
                 bot_archetypes=bot_archetypes,
                 bot_dollars=bot_dollars,

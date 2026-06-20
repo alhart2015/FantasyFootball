@@ -13,6 +13,17 @@ import pandas as pd
 from projections.schemas import GsisId, validate_gsis_id
 
 
+def _best_by_noisy_adp(gsis: np.ndarray, noisy_adp: np.ndarray) -> GsisId:
+    """Lowest-noisy-ADP gsis; ties (incl. all-+inf) break on gsis ascending.
+
+    lexsort sorts by the LAST key first -> primary noisy asc, secondary gsis asc. Order-independent
+    given the same (gsis, noisy_adp) pairing. Shared by bot_pick and the auction SnakeBoard so the
+    two pick by identical semantics.
+    """
+    winner = int(np.lexsort((gsis, noisy_adp))[0])
+    return validate_gsis_id(str(gsis[winner]))
+
+
 def bot_pick(available: pd.DataFrame, rng: np.random.Generator, *, adp_jitter: float) -> GsisId:
     """Return the lowest noisy-ADP player among `available`.
 
@@ -28,6 +39,4 @@ def bot_pick(available: pd.DataFrame, rng: np.random.Generator, *, adp_jitter: f
     adp = available["consensus_adp"].to_numpy(dtype=float, na_value=np.inf)
     noisy = adp + rng.normal(0.0, adp_jitter, size=len(available))
     gsis = available["gsis_id"].to_numpy(dtype=str)
-    # lexsort sorts by the LAST key first -> primary noisy asc, secondary gsis asc.
-    winner = int(np.lexsort((gsis, noisy))[0])
-    return validate_gsis_id(str(gsis[winner]))
+    return _best_by_noisy_adp(gsis, noisy)

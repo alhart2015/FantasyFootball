@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from projections.draft.assistant.opponent import bot_pick
+from projections.draft.assistant.opponent import _best_by_noisy_adp, bot_pick
 from projections.schemas import _PYARROW_STR
 
 
@@ -70,3 +70,35 @@ def test_result_independent_of_row_order() -> None:
 def test_single_player_available() -> None:
     avail = _available([("00-0000001", 5.0)])
     assert bot_pick(avail, np.random.default_rng(0), adp_jitter=99.0) == "00-0000001"
+
+
+def test_bot_pick_characterization_stable_across_refactor() -> None:
+    # Pins bot_pick's exact picks for fixed seeds so the Task 1 extraction is proven byte-identical.
+    avail = pd.DataFrame(
+        {
+            "gsis_id": ["00-0000005", "00-0000001", "00-0000003", "00-0000002", "00-0000004"],
+            "consensus_adp": pd.array([12.0, 3.0, None, 3.0, 50.0], dtype="Float64"),
+        }
+    )
+    picks = [str(bot_pick(avail, np.random.default_rng(seed), adp_jitter=2.0)) for seed in range(6)]
+    expected = [
+        "00-0000002",
+        "00-0000001",
+        "00-0000002",
+        "00-0000002",
+        "00-0000001",
+        "00-0000002",
+    ]
+    assert picks == expected
+
+
+def test_best_by_noisy_adp_argmin_and_tiebreak() -> None:
+    # Canonical gsis_ids (validate_gsis_id requires \d{2}-\d{7}); ascending order is a < b < c.
+    a, b, c = "00-0000001", "00-0000002", "00-0000003"
+    gsis = np.array([c, a, b], dtype=str)
+    noisy = np.array([5.0, 5.0, 2.0], dtype=float)
+    assert str(_best_by_noisy_adp(gsis, noisy)) == b  # lowest noisy
+    tie = np.array([2.0, 2.0, 2.0], dtype=float)
+    assert str(_best_by_noisy_adp(gsis, tie)) == a  # gsis-ascending tiebreak
+    inf = np.array([np.inf, 1.0, np.inf], dtype=float)
+    assert str(_best_by_noisy_adp(gsis, inf)) == a  # finite beats inf

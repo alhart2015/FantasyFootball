@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from projections.draft.assistant.auction.market import (
     AggressiveBot,
@@ -10,6 +11,7 @@ from projections.draft.assistant.auction.market import (
     assign_bot_archetypes,
     bot_max_bid,
     resolve_bids,
+    resolve_unbid,
 )
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import Position, RosterSlot, Ruleset
@@ -247,3 +249,28 @@ def test_assign_bot_archetypes_round_robins() -> None:
         "AggressiveBot",
         "PatientValueBot",
     ]
+
+
+def test_resolve_unbid_awards_nominator_when_eligible() -> None:
+    # Nobody bid; the nominator can roster the nominee's position -> nominator takes it at min_bid.
+    seat_eligible = {0: frozenset({Position.RB}), 1: frozenset({Position.RB, Position.WR})}
+    assert resolve_unbid(Position.RB, 1, [0, 1], seat_eligible, 1) == (1, 1)
+
+
+def test_resolve_unbid_falls_to_lowest_index_eligible_seat() -> None:
+    # Nominator (seat 1) cannot roster the WR nominee; the lowest-index open seat that can wins it.
+    seat_eligible = {
+        0: frozenset({Position.RB}),
+        1: frozenset({Position.RB}),
+        2: frozenset({Position.WR}),
+        3: frozenset({Position.WR}),
+    }
+    assert resolve_unbid(Position.WR, 1, [0, 1, 2, 3], seat_eligible, 1) == (2, 1)
+
+
+def test_resolve_unbid_asserts_when_no_seat_eligible() -> None:
+    # The room-union rule guarantees an eligible seat on the non-forced path; a pathological call
+    # where none can roster the nominee asserts rather than silently mis-awarding.
+    seat_eligible = {0: frozenset({Position.RB}), 1: frozenset({Position.RB})}
+    with pytest.raises(AssertionError):
+        resolve_unbid(Position.WR, 1, [0, 1], seat_eligible, 1)
