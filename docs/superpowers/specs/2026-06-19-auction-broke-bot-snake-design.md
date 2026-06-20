@@ -213,7 +213,7 @@ on all open seats being bots.
 (b) into a shared, noise-injected core so the snake board and `bot_pick` cannot drift apart:
 
 ```
-_best_by_noisy_adp(available: pd.DataFrame, noisy_adp: np.ndarray) -> GsisId
+_best_by_noisy_adp(gsis: np.ndarray, noisy_adp: np.ndarray) -> GsisId
 ```
 
 `bot_pick` becomes "draw noise, call the core"; `SnakeBoard` stores its fixed noisy ADP and calls

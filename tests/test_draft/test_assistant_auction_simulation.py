@@ -722,6 +722,112 @@ def test_broke_regime_respects_position_caps() -> None:
             assert c <= maximums[p]
 
 
+def test_broke_regime_drafts_better_adp_depth_than_dollar_grab() -> None:
+    # THE FEATURE'S VALUE (no-scrub property): broke bots draft their best-AVAILABLE-by-ADP player
+    # at a needed position rather than blindly $1-grabbing whatever is nominated. Run the SAME
+    # all-broke seed twice — once with the snake regime ACTIVE (consensus_adp present) and once with
+    # it DISABLED (consensus_adp dropped -> today's archetype $1-grab behavior). Join each bot's won
+    # gsis_ids back to consensus_adp; the snake-regime bots must roster a strictly lower mean ADP
+    # (earlier/better players) than the no-ADP bots. The hero seat (index 0) is excluded — only the
+    # broke BOTS are governed by the snake regime.
+    from collections import Counter
+
+    import numpy as np
+
+    from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
+    from projections.draft.roster_eligibility import bot_position_bounds
+    from projections.schemas import Position
+
+    config = _broke_config()
+    adp_pool = _pool_with_adp()
+    no_adp = adp_pool.drop(columns=["consensus_adp"])
+    adp_by_id = {
+        str(g): float(a)
+        for g, a in zip(adp_pool["gsis_id"], adp_pool["consensus_adp"], strict=True)
+    }
+
+    snake = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        adp_pool,
+        config,
+        baseline_dollars=generate_auction_values(adp_pool, config),
+        price_jitter=0.15,
+        rng=np.random.default_rng(11),
+        nomination_temp=1.0,
+        snake_rng=np.random.default_rng([11, 7]),
+    )
+    grab = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        no_adp,
+        config,
+        baseline_dollars=generate_auction_values(no_adp, config),
+        price_jitter=0.15,
+        rng=np.random.default_rng(11),
+        nomination_temp=1.0,
+        snake_rng=np.random.default_rng([11, 7]),
+    )
+
+    def bot_mean_adp(state: AuctionState) -> float:
+        # bot seats are every seat except the hero (index 0); join won ids back to consensus_adp.
+        adps = [
+            adp_by_id[str(g)]
+            for seat in range(1, config.n_teams)
+            for (g, _p, _pr) in state.rosters[seat]
+        ]
+        return float(np.mean(adps))
+
+    assert bot_mean_adp(snake) < bot_mean_adp(grab)  # snake regime -> earlier/better depth
+
+    # Keep the cheap cap guard too: the better depth never comes at the cost of a blown cap.
+    _minimums, maximums = bot_position_bounds(config.roster_slots)
+    for roster in snake.rosters:
+        counts = Counter(Position(pos) for _g, pos, _pr in roster)
+        for p, c in counts.items():
+            assert c <= maximums[p]
+
+
+def test_backstop_else_branch_awards_to_eligible_non_nominator_seat() -> None:
+    # Reaches the non-forced empty-bids ELSE backstop (simulation.py): a FLUSH nominator nominates a
+    # room-union player it personally CANNOT roster (its own position capped) while every responding
+    # open seat is a broke bot not targeting it -> `bids` is empty -> the player is awarded at
+    # min_bid to the lowest-index open seat that CAN roster it (not the nominator). budget=4 (one $1
+    # above the all-broke floor of 3) is the spec's mixed regime: seats start flush and go broke
+    # after one buy. Found by a bounded seed search (configs x seeds 0..200); this exact
+    # (config, seed) is the pinned hit. The auction must complete cleanly through that branch with
+    # no AssertionError escaping the backstop's `assert eligible_seat is not None`.
+    from collections import Counter
+
+    import numpy as np
+
+    from projections.draft.assistant.auction.bid_strategy import StaticDollarBid
+    from projections.draft.roster_eligibility import bot_position_bounds
+    from projections.schemas import Position
+
+    pool = _pool_with_adp()
+    config = _config(n_teams=4, budget=4)  # mixed regime: surplus $1 over the all-broke floor
+    state = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        config,
+        baseline_dollars=generate_auction_values(pool, config),
+        price_jitter=0.15,
+        rng=np.random.default_rng(25),  # pinned: this seed fires the ELSE backstop once
+        nomination_temp=1.0,
+        snake_rng=np.random.default_rng([25, 7]),
+    )
+    # (a) auction completed: every roster full. (b) no AssertionError escaped (we got here).
+    assert all(len(r) == config.roster_size for r in state.rosters)
+    # (c) no position cap violated by the backstop award.
+    _minimums, maximums = bot_position_bounds(config.roster_slots)
+    for roster in state.rosters:
+        counts = Counter(Position(pos) for _g, pos, _pr in roster)
+        for p, c in counts.items():
+            assert c <= maximums[p]
+
+
 def test_snake_regime_changes_outcomes_vs_no_adp() -> None:
     # The regime must DO something: an all-broke auction with usable ADP must produce a different
     # outcome than the same all-broke auction with the regime disabled (consensus_adp dropped ->
