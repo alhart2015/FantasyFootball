@@ -82,8 +82,10 @@ only on `ingest.identity` + schemas). Unit-tested.
 - **One-time maintenance** (`scripts/reconcile_vorp_gsis.py`, scratch/ops) — reconcile
   the existing `data/vorp_{2021..2026}/*.parquet` **in place** (the only way to fix them
   without the deleted external snapshots). Idempotent.
-- **`build_draft_basis`** (hero-harness path) — reconcile the pool it builds, so the
-  real-outcome hero eval (Test 11) is also availability-correct.
+- **`build_draft_basis`** (hero-harness path) — **deferred to a follow-up.** Its table
+  lacks a `full_name` column (the reconcile key), so it needs extra plumbing, and no
+  consumer is re-running the heavy 5-season Test 11 here. Tracked as a TODO; the same
+  silent-degradation guard should be added when Test 11 is next run.
 
 ### 3. Correct the evidence
 
