@@ -14,6 +14,12 @@ Two modes:
 
 Metric: project_draft reg_win_pct (projected-vs-projected H2H), CRN season RNG
 shared across configs per (year, seed). Repeatable by seed.
+
+Search-trail note: the `TiltedFlooredNN` tilts (durability `mu`, bye `nu`) both fell out
+as DEAD levers (the projection already prices durability; bye collisions are too rare to
+matter) and the `sigma/F/lambda` knobs are a plateau. The shipped winner is the routing-only
+`SeatAwareStrategy` (`build_seat_aware`, in src) -- `TiltedFlooredNN` and its tilt plumbing are
+retained here only as the recorded negative result.
 """
 
 from __future__ import annotations
@@ -36,11 +42,11 @@ from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.assistant.simulation import _draft_picks
 from projections.draft.assistant.strategy import (
     NowOrNeverFlooredStrategy,
-    SeasonValueStrategy,
     SeasonValueTimingStrategy,
     _eligible_subset,
     _finalize,
     _raw_vorp_result,
+    build_seat_aware,
 )
 from projections.draft.assistant.survival import (
     LogisticSurvival,
@@ -123,28 +129,6 @@ class TiltedFlooredNN:
             key = "FLEX" if str(pp) in _FLEX_GROUP else str(pp)
             out[i] = self.nu * sum(1 for rb, rk in roster if rb == bw and rk == key)
         return out
-
-
-@dataclass(frozen=True)
-class SeatAwareStrategy:
-    """Dispatch to the empirically-best sub-strategy for the hero's draft slot.
-
-    The post-gsis-fix bake-off (Test 14) shows a per-seat Pareto frontier: the timing
-    layer (season_value_timing) wins the wing/mid where waits between picks are long,
-    but at the turn (the last `turn_band` seats, where picks come back-to-back) the
-    timing term adds noise and the pure variance-aware marginal (season_value_var) wins.
-    The hero's slot is known at draft time, so a single deployable strategy can pick the
-    right policy per slot. mu==nu absent -- this only routes, it adds no new score term.
-    """
-
-    timing: SeasonValueTimingStrategy
-    turn: SeasonValueStrategy
-    turn_band: int
-
-    def recommend(self, state, pool, config):
-        is_turn = state.my_slot > state.n_teams - self.turn_band
-        sub = self.turn if is_turn else self.timing
-        return sub.recommend(state, pool, config)
 
 
 _SEASON_OFFSET = 1_000_000  # season RNG stream, disjoint from the draft stream
@@ -251,20 +235,13 @@ def _build(key_or_cfg, ctx: YearCtx, strat_n_sims: int):
             risk_aware=True,
         )
     if key_or_cfg == "seat_aware":
-        # Dispatch per draft slot: timing pays off on long waits (wing/mid) but adds
-        # noise at the turn (back-to-back picks), so use season_value_timing away from
-        # the turn and season_value_var at the last two seats -- the per-seat frontier.
-        return SeatAwareStrategy(
-            timing=SeasonValueTimingStrategy(
-                ctx.availability,
-                n_sims=strat_n_sims,
-                base_seed=0,
-                survival=LogisticSurvival(sigma=default_sigma(ctx.n_teams)),
-            ),
-            turn=SeasonValueStrategy(
-                ctx.availability, n_sims=strat_n_sims, base_seed=0, risk_aware=True
-            ),
-            turn_band=2,
+        # Per-slot router (the shipped winner): season_value_timing off the turn,
+        # season_value_var at the last two seats -- the per-seat Pareto frontier (Test 14).
+        return build_seat_aware(
+            ctx.availability,
+            n_sims=strat_n_sims,
+            base_seed=0,
+            survival=LogisticSurvival(sigma=default_sigma(ctx.n_teams)),
         )
     return _build_strategy(
         key_or_cfg,

@@ -21,7 +21,7 @@ from projections.draft.assistant.strategy import (
     RawVorpStrategy,
     SeasonValueStrategy,
     SeasonValueTimingStrategy,
-    SeatAwareStrategy,
+    build_seat_aware,
 )
 from projections.draft.assistant.strategy import (
     STRATEGY_KEYS as STRATEGY_KEYS,
@@ -88,16 +88,11 @@ def _build_strategy(
             survival=LogisticSurvival(sigma=default_sigma(n_teams)),
         )
     if key == "seat_aware":
-        return SeatAwareStrategy(
-            timing=SeasonValueTimingStrategy(
-                availability,
-                n_sims=strategy_n_sims,
-                base_seed=base_seed,
-                survival=LogisticSurvival(sigma=default_sigma(n_teams)),
-            ),
-            turn=SeasonValueStrategy(
-                availability, n_sims=strategy_n_sims, base_seed=base_seed, risk_aware=True
-            ),
+        return build_seat_aware(
+            availability,
+            n_sims=strategy_n_sims,
+            base_seed=base_seed,
+            survival=LogisticSurvival(sigma=default_sigma(n_teams)),
         )
     raise ValueError(f"unknown strategy key {key!r}")
 

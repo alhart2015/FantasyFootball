@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from projections.draft.assistant._compare import bootstrap_mean
 from projections.draft.backtest.hero_harness import consolidate_cells, load_hero_cells
 
 _STRATS = (
@@ -27,11 +28,10 @@ _STRATS = (
 )
 
 
-def _ci(paired: np.ndarray, *, b: int = 10000, seed: int = 0) -> tuple[float, float, float]:
-    rng = np.random.default_rng(seed)
-    n = len(paired)
-    means = paired[rng.integers(0, n, size=(b, n))].mean(axis=1)
-    return float(paired.mean()), float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
+def _ci(paired: np.ndarray) -> tuple[float, float, float]:
+    """Point + 95% CI of the (paired) mean via the shared percentile bootstrap."""
+    iv = bootstrap_mean(paired, seed=0)
+    return iv.point, iv.lo_95, iv.hi_95
 
 
 def main(argv: list[str] | None = None) -> int:

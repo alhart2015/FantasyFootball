@@ -26,8 +26,12 @@ _PLACEHOLDER_PREFIX = "99-"
 _REAL_PREFIX = "00-"
 
 
-def _real_gsis_by_key(id_map: pd.DataFrame) -> dict[str, str]:
-    """name+position key -> real gsis, dropping keys that map to >1 distinct gsis."""
+def real_gsis_by_key(id_map: pd.DataFrame) -> dict[str, str]:
+    """name+position key -> real gsis, dropping keys that map to >1 distinct gsis.
+
+    Exposed so a caller reconciling many pools against one id_map can build this once and
+    pass it as ``reconcile_pool_gsis(..., key_map=...)`` rather than rebuilding it per pool.
+    """
     by_key: dict[str, set[str]] = {}
     real = id_map[id_map["gsis_id"].astype(str).str.startswith(_REAL_PREFIX)]
     for name, pos, gid in zip(
@@ -39,7 +43,12 @@ def _real_gsis_by_key(id_map: pd.DataFrame) -> dict[str, str]:
     return {k: next(iter(v)) for k, v in by_key.items() if len(v) == 1}
 
 
-def reconcile_pool_gsis(pool: pd.DataFrame, id_map: pd.DataFrame) -> pd.DataFrame:
+def reconcile_pool_gsis(
+    pool: pd.DataFrame,
+    id_map: pd.DataFrame,
+    *,
+    key_map: dict[str, str] | None = None,
+) -> pd.DataFrame:
     """Return ``pool`` with placeholder gsis_ids relabeled to real ones where possible.
 
     A placeholder row is relabeled only when its (full_name, position) key maps to a
@@ -48,33 +57,30 @@ def reconcile_pool_gsis(pool: pd.DataFrame, id_map: pd.DataFrame) -> pd.DataFram
     indexes the pool by gsis). Rows already carrying a real gsis, or with no/ambiguous/
     colliding match, pass through unchanged. ``pool`` is not mutated.
 
+    ``key_map`` is an optional prebuilt ``real_gsis_by_key(id_map)``; pass it when reconciling
+    many pools against the same id_map to skip the per-call rebuild (``id_map`` is then unused).
     Requires ``pool`` to carry ``gsis_id``, ``full_name`` and ``position`` columns.
     """
     if "full_name" not in pool.columns:
         raise ValueError("reconcile_pool_gsis requires a full_name column on the pool")
-    uniq = _real_gsis_by_key(id_map)
+    uniq = real_gsis_by_key(id_map) if key_map is None else key_map
 
     out = pool.copy()
     ids = out["gsis_id"].astype(str).tolist()
     names = out["full_name"].tolist()
     positions = out["position"].astype(str).tolist()
 
-    # `seen` tracks every gsis already committed to the output so a reconciled id can
-    # never collide with a real id the pool already had, nor with an earlier reconcile.
+    # `seen` = every gsis already committed to the output, so a reconciled id never collides
+    # with a real id the pool already had nor with an earlier reconcile. Placeholders are never
+    # reconcile targets (uniq's values are all real), so they need not be tracked.
     seen: set[str] = {g for g in ids if not g.startswith(_PLACEHOLDER_PREFIX)}
     for i, gid in enumerate(ids):
-        if not gid.startswith(_PLACEHOLDER_PREFIX):
+        if not gid.startswith(_PLACEHOLDER_PREFIX) or pd.isna(names[i]):
             continue
-        name = names[i]
-        if pd.isna(name):
-            seen.add(gid)
-            continue
-        real = uniq.get(placeholder_name_key(str(name), positions[i]))
+        real = uniq.get(placeholder_name_key(str(names[i]), positions[i]))
         if real is not None and real not in seen:
             ids[i] = real
             seen.add(real)
-        else:
-            seen.add(gid)
 
     out["gsis_id"] = pd.array(ids, dtype=_PYARROW_STR)
     return out

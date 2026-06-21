@@ -46,6 +46,14 @@ STRATEGY_KEYS = (
     "raw_vorp",
 )
 
+# Keys whose construction needs an availability load (the Monte-Carlo strategies). Single
+# source of truth for the CLI/board gate (`live.MC_STRATEGIES`) and the hero harness
+# (`hero_harness._MC_KEYS`) so a new MC strategy can't be added to one gate but not the other
+# -- which would silently skip the availability load and re-arm the availability-blind bug.
+MC_STRATEGY_KEYS = frozenset(
+    {"season_value", "season_value_var", "season_value_timing", "seat_aware"}
+)
+
 # PROVISIONAL defaults for the now_or_never_floored knobs — a mid-grid starting point,
 # replaced by the A/B winner (spec 2026-06-16 §8). Imported by build_session_strategy,
 # the harness registry, and both CLIs so there is ONE literal to update.
@@ -463,3 +471,27 @@ class SeatAwareStrategy:
         is_turn = state.my_slot > state.n_teams - self.turn_band
         sub = self.turn if is_turn else self.timing
         return sub.recommend(state, pool, config)
+
+
+def build_seat_aware(
+    availability: PlayerAvailability,
+    *,
+    n_sims: int,
+    base_seed: int,
+    survival: SurvivalModel,
+    turn_band: int = 2,
+) -> SeatAwareStrategy:
+    """Construct the seat-aware router: `season_value_timing` off the turn, `season_value_var`
+    (`SeasonValueStrategy(risk_aware=True)`) at it.
+
+    The single source of the routing recipe (which two sub-strategies, and their MC config), so
+    the live board and the backtest builders don't each duplicate the composition. Callers pass
+    the survival model for the timing leg and the shared MC config.
+    """
+    return SeatAwareStrategy(
+        timing=SeasonValueTimingStrategy(
+            availability, n_sims=n_sims, base_seed=base_seed, survival=survival
+        ),
+        turn=SeasonValueStrategy(availability, n_sims=n_sims, base_seed=base_seed, risk_aware=True),
+        turn_band=turn_band,
+    )

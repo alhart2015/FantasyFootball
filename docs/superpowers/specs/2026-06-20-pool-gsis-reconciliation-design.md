@@ -83,10 +83,14 @@ only on `ingest.identity` + schemas). Unit-tested.
 - **One-time maintenance** (`scripts/reconcile_vorp_gsis.py`, scratch/ops) — reconcile
   the existing `data/vorp_{2021..2026}/*.parquet` **in place** (the only way to fix them
   without the deleted external snapshots). Idempotent.
-- **`build_draft_basis`** (hero-harness path) — **deferred to a follow-up.** Its table
-  lacks a `full_name` column (the reconcile key), so it needs extra plumbing, and no
-  consumer is re-running the heavy 5-season Test 11 here. Tracked as a TODO; the same
-  silent-degradation guard should be added when Test 11 is next run.
+- **`build_draft_basis`** (hero-harness path) — **wired** (Test 15 re-ran Test 11 on it).
+  Its VORP table lacks `full_name` (the reconcile key), so the function attaches it from the
+  consensus frame, then reconciles when `load_inputs` passes an `id_map`; `load_inputs` warns
+  loudly if `id_map.parquet` is missing (no silent availability-blind degradation).
+- **Not reconciled (acknowledged):** `consensus/refresh.py` writes the *processed* consensus
+  partition directly, but the spec's measurement shows that layer already carries real gsis for
+  most players (1741/3042 for 2026), so it is a lower-risk source and is intentionally left to
+  the source-side ingest fix (Out of scope) rather than the consumer-side guard.
 
 ### 3. Correct the evidence
 
