@@ -43,7 +43,7 @@ from projections.schemas import GsisId, Position, RosterSlot, validate_gsis_id
 
 # MC strategies that require an availability load. Aliases the single source of truth in
 # strategy.py (shared with hero_harness._MC_KEYS) so the gate can't drift across modules;
-# re-exported here under the name build_session_strategy/the CLI/the board already import.
+# kept under the `MC_STRATEGIES` name that build_session_strategy, the CLI, and the board import.
 MC_STRATEGIES: frozenset[str] = MC_STRATEGY_KEYS
 
 # Strategy names the board's dropdown offers (season_value_var is in STRATEGY_KEYS
