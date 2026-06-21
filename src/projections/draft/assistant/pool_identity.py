@@ -22,7 +22,9 @@ import pandas as pd
 from projections.ingest.identity import placeholder_name_key
 from projections.schemas import _PYARROW_STR
 
-_PLACEHOLDER_PREFIX = "99-"
+# Public: the deterministic placeholder-gsis prefix nflverse/ingest assign to players not
+# yet in id_map. Callers that count/filter placeholders import this rather than re-typing "99-".
+PLACEHOLDER_GSIS_PREFIX = "99-"
 _REAL_PREFIX = "00-"
 
 
@@ -73,9 +75,9 @@ def reconcile_pool_gsis(
     # `seen` = every gsis already committed to the output, so a reconciled id never collides
     # with a real id the pool already had nor with an earlier reconcile. Placeholders are never
     # reconcile targets (uniq's values are all real), so they need not be tracked.
-    seen: set[str] = {g for g in ids if not g.startswith(_PLACEHOLDER_PREFIX)}
+    seen: set[str] = {g for g in ids if not g.startswith(PLACEHOLDER_GSIS_PREFIX)}
     for i, gid in enumerate(ids):
-        if not gid.startswith(_PLACEHOLDER_PREFIX) or pd.isna(names[i]):
+        if not gid.startswith(PLACEHOLDER_GSIS_PREFIX) or pd.isna(names[i]):
             continue
         real = uniq.get(placeholder_name_key(str(names[i]), positions[i]))
         if real is not None and real not in seen:

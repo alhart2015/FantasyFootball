@@ -17,7 +17,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from projections.draft.assistant.pool_identity import real_gsis_by_key, reconcile_pool_gsis
+from projections.draft.assistant.pool_identity import (
+    PLACEHOLDER_GSIS_PREFIX,
+    real_gsis_by_key,
+    reconcile_pool_gsis,
+)
 from projections.schemas import VorpTableSchema
 
 _DEFAULT_SEASONS = (2021, 2022, 2023, 2024, 2025, 2026)
@@ -39,11 +43,11 @@ def main(argv: list[str] | None = None) -> int:
             continue
         for table_path in sorted(season_dir.glob("*.parquet")):
             pool = pd.read_parquet(table_path)
-            before = int(pool["gsis_id"].astype(str).str.startswith("99-").sum())
+            before = int(pool["gsis_id"].astype(str).str.startswith(PLACEHOLDER_GSIS_PREFIX).sum())
             # Re-validate after the gsis relabel before overwriting the table in place, so a bad
             # reconcile can't silently persist a duplicate/malformed canonical join key.
             fixed = VorpTableSchema.validate(reconcile_pool_gsis(pool, id_map, key_map=key_map))
-            after = int(fixed["gsis_id"].astype(str).str.startswith("99-").sum())
+            after = int(fixed["gsis_id"].astype(str).str.startswith(PLACEHOLDER_GSIS_PREFIX).sum())
             fixed.to_parquet(table_path, index=False)
             total += 1
             print(f"  {table_path.name} ({season}): placeholders {before} -> {after}")
