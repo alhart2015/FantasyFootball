@@ -6,6 +6,7 @@ inputs, so the loading lives here once rather than being duplicated per script.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,7 +44,19 @@ def load_inputs(*, season: int, config: LeagueConfig, data_root: Path) -> Backte
     external = ExternalProjectionSchema.validate(
         read_latest_partition(data_root / "raw", "external_projections", season=season)
     )
-    pool = build_draft_basis(external, league_config=config)
+    # Reconcile placeholder gsis to real ones so the drafted rosters join to weekly_stats
+    # (actuals + injury p) and id_map (byes); without it the hero eval is availability-blind.
+    id_map_path = data_root / "raw" / "id_map.parquet"
+    if not id_map_path.exists():
+        # Warn loudly rather than silently produce an availability-blind pool -- the exact
+        # silent-degradation mode the gsis-reconciliation fix exists to prevent.
+        warnings.warn(
+            f"id_map.parquet not found at {id_map_path}; the draft pool will NOT be "
+            "gsis-reconciled and availability (injury p + byes) will be position-default only.",
+            stacklevel=2,
+        )
+    id_map = pd.read_parquet(id_map_path) if id_map_path.exists() else None
+    pool = build_draft_basis(external, league_config=config, id_map=id_map)
     pool = attach_is_rookie(pool, season=season, data_root=data_root)
 
     proj_df = WeeklyProjectionSchema.validate(

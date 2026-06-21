@@ -15,7 +15,11 @@ from pathlib import Path
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
-from projections.draft.assistant.strategy import _DEFAULT_FLOOR, _DEFAULT_FLOOR_WEIGHT
+from projections.draft.assistant.strategy import (
+    _DEFAULT_FLOOR,
+    _DEFAULT_FLOOR_WEIGHT,
+    MC_STRATEGY_KEYS,
+)
 from projections.draft.assistant.tournament import Interval, _bootstrap_mean
 from projections.draft.backtest.checkpoint import dump_results, load_results
 from projections.draft.backtest.draft_field import hero_seat_layout
@@ -24,7 +28,7 @@ from projections.draft.backtest.league import Calendar, LeagueResult, simulate_l
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import HeroResultSchema
 
-_MC_KEYS = frozenset({"season_value", "season_value_var", "season_value_timing"})
+_MC_KEYS = MC_STRATEGY_KEYS  # single source in strategy.py; shared with live.MC_STRATEGIES
 
 
 def simulate_hero_cell(

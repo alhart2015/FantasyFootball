@@ -16,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 from projections.consensus.blend import build_consensus
+from projections.draft.assistant.pool_identity import real_gsis_by_key, reconcile_pool_gsis
 from projections.draft.assistant.presets import (
     SCORING_KEYS,
     TEAM_SIZES,
@@ -97,10 +98,19 @@ def main(argv: list[str] | None = None) -> int:
     external = ExternalProjectionSchema.validate(
         read_latest_partition(args.data_root / "raw", "external_projections", season=args.season)
     )
+    # Reconcile placeholder gsis to real ones so the written tables join to weekly_stats
+    # (injury p) and id_map (byes); without this the availability model degrades silently.
+    id_map = pd.read_parquet(args.data_root / "raw" / "id_map.parquet")
+    key_map = real_gsis_by_key(id_map)  # build once; reused across all 9 presets
     for scoring_key in SCORING_KEYS:
         for n_teams in TEAM_SIZES:
             preset = get_preset(scoring_key, n_teams, season=args.season)
-            table = build_preset_table(external, preset)
+            # Re-validate after reconcile: it rewrites the canonical gsis_id (the unique=True
+            # join key), so the persisted frame must pass the schema again, not just the
+            # pre-reconcile build_preset_table validate.
+            table = VorpTableSchema.validate(
+                reconcile_pool_gsis(build_preset_table(external, preset), id_map, key_map=key_map)
+            )
             # Write to preset.table_path (cwd-relative data/vorp_{season}/) — where the board and
             # the #49a runner read. --data-root is the external read-root only (Global Constraints).
             preset.table_path.parent.mkdir(parents=True, exist_ok=True)

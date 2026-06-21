@@ -27,32 +27,36 @@ from projections.draft.assistant.state import DraftState, build_draft_state
 from projections.draft.assistant.strategy import (
     _DEFAULT_FLOOR,
     _DEFAULT_FLOOR_WEIGHT,
+    MC_STRATEGY_KEYS,
     DraftStrategy,
     NowOrNeverFlooredStrategy,
     NowOrNeverStrategy,
     RawVorpStrategy,
     SeasonValueStrategy,
     SeasonValueTimingStrategy,
+    build_seat_aware,
 )
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import allocate_roster_slots
 from projections.schemas import GsisId, Position, RosterSlot, validate_gsis_id
 
-# MC strategies that require an availability load (the single source of truth, shared by
-# build_session_strategy, the CLI, LiveDraftSession.load, and the board).
-MC_STRATEGIES: frozenset[str] = frozenset(
-    {"season_value", "season_value_var", "season_value_timing"}
-)
+# MC strategies that require an availability load. Aliases the single source of truth in
+# strategy.py (shared with hero_harness._MC_KEYS) so the gate can't drift across modules;
+# kept under the `MC_STRATEGIES` name that build_session_strategy, the CLI, and the board import.
+MC_STRATEGIES: frozenset[str] = MC_STRATEGY_KEYS
 
 # Strategy names the board's dropdown offers (season_value_var is in STRATEGY_KEYS
 # but excluded — its A/B showed no draft benefit; see the spec §2 / memory).
+# seat_aware routes to season_value_timing (wing/mid) or season_value_var (turn) by the
+# hero's slot — the post-availability-fix per-seat frontier winner (Test 14).
 BOARD_STRATEGIES: tuple[str, ...] = (
     "now_or_never",
     "now_or_never_floored",
     "raw_vorp",
     "season_value",
     "season_value_timing",
+    "seat_aware",
 )
 
 
@@ -93,6 +97,13 @@ def build_session_strategy(
                 availability, n_sims=n_sims, base_seed=base_seed, risk_aware=True
             )
         spread = default_sigma(league.n_teams) if sigma is None else sigma
+        if name == "seat_aware":
+            return build_seat_aware(
+                availability,
+                n_sims=n_sims,
+                base_seed=base_seed,
+                survival=LogisticSurvival(sigma=spread),
+            )
         return SeasonValueTimingStrategy(
             availability,
             n_sims=n_sims,
