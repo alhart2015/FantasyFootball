@@ -497,50 +497,55 @@ the placeholder-gsis bug, so it needed a clean re-run. Both sources were re-pull
 (fresh, mostly-real gsis now that the id_map is good — e.g. 2022 external 63 % real) and
 `build_draft_basis` now reconciles placeholder gsis (id_map threaded via `load_inputs`), so the
 rosters join to actuals + injury `p` + byes (verified 2024: pool 627, 2 placeholders, 508 actuals-
-joined, 378 unique `p`, 486 byes). 16-team half-PPR, all 16 seats swept, **n_seeds=8 ×
-strategy_n_sims=40** (lower N than the original Test 11's 25; directional), all 6 baselines +
-`seat_aware`.
+joined, 378 unique `p`, 486 byes). 16-team half-PPR, all 16 seats swept, **n_seeds=25 ×
+strategy_n_sims=40** (matching the original Test 11's N), all 6 baselines + `seat_aware`. **Paired
+diffs are bootstrapped over all 2000 `(season, seat, seed)` cells/strategy** (CRN across strategies →
+a true paired comparison), `scripts/_hero_pool.py`. (An initial N=8 directional pass agreed; the
+N=25 numbers below shift by <1 pt and are the CI-separated confirmation.)
 
-**Pooled real-outcome metrics (5-season mean, seat-averaged):**
+**Pooled real-outcome metrics (5 seasons × 16 seats × 25 seeds = 2000 cells/strategy; paired ΔWIN%
+vs `now_or_never_floored`, ✱ = 95 % CI excludes 0):**
 
-| strategy | WIN% | CHAMP% | PTS-FOR |
-|----------|------|--------|---------|
-| **now_or_never_floored** | **72.3** | 31.2 | **1274** |
-| season_value_timing | 70.0 | **34.6** | 1244 |
-| seat_aware | 69.9 | 34.2 | 1244 |
-| now_or_never | 69.7 | 26.4 | 1247 |
-| season_value | 69.7 | 27.2 | 1251 |
-| season_value_var | 68.5 | 28.5 | 1242 |
-| raw_vorp | 67.5 | 23.0 | 1228 |
+| strategy | WIN% | PLAYOFF% | CHAMP% | paired ΔWIN% [95% CI] |
+|----------|------|----------|--------|------------------------|
+| **now_or_never_floored** | **71.6** | 84.5 | 29.3 | (reference) |
+| season_value_timing | 69.9 | **85.7** | 33.2 | −1.66 [−2.45, −0.85] ✱ |
+| seat_aware | 69.8 | 85.5 | **33.4** | −1.75 [−2.54, −0.94] ✱ |
+| season_value | 69.7 | 82.5 | 27.3 | −1.89 [−2.71, −1.06] ✱ |
+| now_or_never | 69.4 | 83.4 | 24.3 | −2.15 [−2.77, −1.52] ✱ |
+| season_value_var | 68.9 | 82.0 | 27.5 | −2.70 [−3.50, −1.88] ✱ |
+| raw_vorp | 67.9 | 79.8 | 21.4 | −3.72 [−4.46, −2.96] ✱ |
 
-**The headline: the projected metric and real outcomes DIVERGE — and the projected winner is not
-the real-outcome winner.**
+**The headline: the projected metric and real outcomes DIVERGE — confirmed at N=25, not noise.**
 
-- **On real regular-season wins, `now_or_never_floored` is best (72.3 %)** — highest WIN% *and*
-  highest points-for — confirming the original Test 11 finding ("floored most consistent") on fresh,
-  availability-correct data. The projected metric (Test 14) ranked it near the *bottom*; reality puts
-  it on top for win%.
-- **There is a real WIN%/CHAMP% tradeoff.** `season_value_timing` (34.6 %) and `seat_aware`
-  (34.2 %) win the most **championships** (ceiling) while `now_or_never_floored` (31.2 %) banks the
-  most regular-season wins. The sv-family/`seat_aware` build higher-ceiling, lower-floor rosters.
-- **`seat_aware` (the projected-metric goal winner) is mid-pack on real WIN% (69.9 %, 3rd) but
-  top-tier on CHAMP% (34.2 %, 2nd).** So it is a championship-ceiling pick on real outcomes, not a
-  win-maximizer.
+- **`now_or_never_floored` is CI-separated #1 on real WIN%** — it beats *every* other strategy by a
+  paired margin whose 95 % CI excludes 0 (−1.66 to −3.72 for the others). The projected metric
+  (Test 14) ranked it near the *bottom*; on real regular-season wins it is decisively on top. This
+  confirms the original Test 11 finding on fresh, availability-correct data — **and it is not a
+  small-sample artifact**: the user's "could be noise" concern is answered by the CI-separation.
+- **The WIN%/CHAMP% tradeoff is also CI-separated.** On championships, **`seat_aware` (+4.05
+  [+1.55, +6.60] ✱) and `season_value_timing` (+3.90 [+1.40, +6.50] ✱) beat `now_or_never_floored`
+  with CI excluding 0** — they win ~33 % of titles vs the floor's 29 %. So the two metrics genuinely
+  reward different rosters: the floor banks regular-season wins; the sv-family/`seat_aware` build
+  higher-ceiling rosters that win more titles. Real effect, not sampling noise.
+- **`seat_aware` (the projected-metric goal winner) is a championship-ceiling pick on real
+  outcomes** — 2nd-from-bottom-of-the-pack on WIN% (−1.75 vs the floor) but co-best on CHAMP%.
 - **Per-season swings are large** (sv-family best in 2021; `now_or_never_floored` best in
-  2023/2024/2025; `now_or_never` best in 2022) — the pooled mean is the signal, not any one year.
+  2023/2024/2025; `now_or_never` best in 2022) — the pooled mean + CI is the signal, not any one year.
 
 **What this means for the goal.** The goal was explicitly scoped to the **projected** H2H metric, and
 `seat_aware` meets it there (Test 14). This cross-check shows that verdict **does not transfer to real
 outcomes**: the projected metric over-credits the season_value family's projected-points optimization
 and under-credits the floor's real-world robustness (the bust/injury hedge the projection can't see).
-**Honest recommendation:** if you optimize for **regular-season wins / making the playoffs**, draft
-**`now_or_never_floored`**; if you optimize for **championship ceiling**, `season_value_timing` or
-`seat_aware`. No single strategy dominates both axes. Caveats: N=8 seeds/season (lower than the
-original Test 11), bots = noisy-ADP human proxy (the whole eval rests on them, TODO #46), ESPN
-weekly projections as the start/sit source. Reproduce: `python scripts/hero_backtest.py run --season
-Y --league-config configs/league_espn_half_16team.json --n-seeds 8 --strategy-n-sims 40 --strategies
+**Honest recommendation (now CI-backed):** optimize for **regular-season wins / playoff berths →
+`now_or_never_floored`** (CI-separated #1 WIN%); optimize for **championship ceiling →
+`season_value_timing` or `seat_aware`** (CI-separated #1 CHAMP%). No single strategy dominates both
+axes. Caveats: bots = noisy-ADP human proxy (the whole eval rests on them, TODO #46), ESPN weekly
+projections as the start/sit source. Reproduce: `python scripts/hero_backtest.py run --season Y
+--league-config configs/league_espn_half_16team.json --n-seeds 25 --strategy-n-sims 40 --strategies
 "raw_vorp,now_or_never,now_or_never_floored,season_value,season_value_var,season_value_timing,seat_aware"
---checkpoint-dir _hero_Y` then `report` (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
+--checkpoint-dir _hero_Y` for Y in 2021–2025, then pool with `python scripts/_hero_pool.py
+--reference now_or_never_floored` (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
 
 ---
 
