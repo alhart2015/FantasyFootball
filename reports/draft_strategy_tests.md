@@ -549,6 +549,28 @@ projections as the start/sit source. Reproduce: `python scripts/hero_backtest.py
 
 ---
 
+### Test 16 — QB≤2 cap on the season_value family (causal test vs an observational confound) — **SHIPPED `season_value_qb_cap`**
+
+**Why.** The Test-15 roster dumps showed `season_value_timing` champions sometimes rostering **3 QBs** in a 1-QB league — a likely-wasted pick. An observational cut looked like it *endorsed* 3 QBs: svt teams with nQB=3 won **57 %** of titles vs 30.7 % for nQB=2. But `nQB` is **endogenous** — svt only drafts a 3rd QB when its timing MC ranks a QB over the best available skill player (elite QB fell, thin skill pool), so "3-QB" tags *favorable* drafts, not a causal benefit (a 3rd QB almost never starts in a 1-QB league). The only way to settle it is the intervention: cap QB at 2 and re-run.
+
+**Setup.** New `PositionCapStrategy` decorator (drops a position from the inner recommendation once the roster hits the cap; spec TODO #F7). Built QB≤2 variants of `season_value`, `season_value_var`, `season_value_timing`; ran the real-outcome hero eval (5 seasons × 16 seats × 25 seeds, `strategy_n_sims=40`) in fresh checkpoints and **paired** each capped cell against its uncapped counterpart in `_hero_{season}` (same seed → same league seed → identical bots+schedule = CRN). Tool: `scripts/_hero_cap_compare.py`.
+
+**Result (paired, capped − uncapped; ✱ = 95 % CI excludes 0):**
+
+| base strategy | ΔWIN% | ΔPLAYOFF% | ΔCHAMP% |
+|---|---|---|---|
+| **season_value_timing** | +0.19 [−0.01,+0.41] | **+0.55 [+0.10,+1.00] ✱** | **+1.15 [+0.15,+2.00] ✱** |
+| season_value | +0.13 [+0.03,+0.24] ✱ | +0.35 ✱ | −0.15 [−0.45,+0.15] |
+| season_value_var | +0.00 (cap never binds) | +0.00 | +0.00 |
+
+- **Capping `season_value_timing` at QB≤2 is a clean win** — champ% **+1.15** and playoff% **+0.55** (CI-separated), win% neutral-to-positive, **no downside**. The user's 2-QB intuition is causally correct.
+- **The observational data was a confound, now refuted.** Forcing QB≤2 (a skill player instead of the rarely-starting 3rd QB, in the *same* drafts) *improves* titles — the opposite of the nQB=3→57 % correlation, which was draft-situation selection.
+- **The 3rd-QB tendency is the timing layer's, not season_value's.** `season_value_var` (marginal MC, no timing) **never hits a 3rd QB** (cap is a no-op). Only the opportunity-cost/timing term over-reaches for scarce 1-starter QB — the same pathology `now_or_never_floored`'s value-floor addresses softly; the cap is the hard fix.
+
+**Shipped:** `season_value_qb_cap` = `season_value_timing` + hard QB≤2 (via `build_season_value_qb_cap`), added to `STRATEGY_KEYS` / `MC_STRATEGY_KEYS` / the board. Now the clearest champ%-leader (≈34.4 % vs nn 29.3 %); nn still leads win% (the win%/champ% trade persists, sharpened). Caveat: 1 ruleset, noisy-ADP bots (TODO #46). The original experiment capped all three bases via a throwaway `<base>_qbcap2` key; on promotion that was replaced by the single explicit `season_value_qb_cap` key (the only base with a CI-separated gain). The `_hero_cap_{season}` checkpoints + `scripts/_hero_cap_compare.py` retain the paired three-base comparison above.
+
+---
+
 ## Future tests (backlog)
 
 ### F1 — Head-to-head season simulation (the realistic objective) — ✅ DONE → see **Test 7 (F1)** above. sv wins more games + playoff berths (both scorings); championship a wash (nn ≈ sv).

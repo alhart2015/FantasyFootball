@@ -21,6 +21,7 @@ from projections.draft.assistant.strategy import (
     RawVorpStrategy,
     SeasonValueStrategy,
     SeasonValueTimingStrategy,
+    build_season_value_qb_cap,
     build_seat_aware,
 )
 from projections.draft.assistant.strategy import (
@@ -89,6 +90,13 @@ def _build_strategy(
         )
     if key == "seat_aware":
         return build_seat_aware(
+            availability,
+            n_sims=strategy_n_sims,
+            base_seed=base_seed,
+            survival=LogisticSurvival(sigma=default_sigma(n_teams)),
+        )
+    if key == "season_value_qb_cap":
+        return build_season_value_qb_cap(
             availability,
             n_sims=strategy_n_sims,
             base_seed=base_seed,

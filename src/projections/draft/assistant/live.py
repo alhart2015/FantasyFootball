@@ -34,6 +34,7 @@ from projections.draft.assistant.strategy import (
     RawVorpStrategy,
     SeasonValueStrategy,
     SeasonValueTimingStrategy,
+    build_season_value_qb_cap,
     build_seat_aware,
 )
 from projections.draft.assistant.survival import LogisticSurvival, default_sigma
@@ -56,6 +57,7 @@ BOARD_STRATEGIES: tuple[str, ...] = (
     "raw_vorp",
     "season_value",
     "season_value_timing",
+    "season_value_qb_cap",
     "seat_aware",
 )
 
@@ -97,6 +99,13 @@ def build_session_strategy(
                 availability, n_sims=n_sims, base_seed=base_seed, risk_aware=True
             )
         spread = default_sigma(league.n_teams) if sigma is None else sigma
+        if name == "season_value_qb_cap":
+            return build_season_value_qb_cap(
+                availability,
+                n_sims=n_sims,
+                base_seed=base_seed,
+                survival=LogisticSurvival(sigma=spread),
+            )
         if name == "seat_aware":
             return build_seat_aware(
                 availability,
