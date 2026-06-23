@@ -23,6 +23,21 @@ Running project management list. Add items as they come up; remove or check off 
 3. **Re-run Tests 14 (projected) + 15/16/18 (real-outcome) on it**; re-derive the Test-17 depth-slot optimal counts; **re-validate or re-tune** the shipped strategies' caps to the real roster.
 4. Until then, treat `season_value_qb_cap` / `*_targeted` and all win%/champ% numbers as **provisional** (right method, possibly-wrong roster).
 
+### 53. Mid-season Manager — feature backlog (user, 2026-06-22)
+
+User-requested feature set for the in-season tool (sub-project #3, "Mid-season Manager" in `CLAUDE.md`). Three features below (53a–53c). **These are requirements, not yet specs** — each needs its own brainstorm → spec → plan → execute pass on a feature branch.
+
+**Shared prerequisites (build once, all three depend on them):**
+- **Real league config (#52 BLOCKER).** Same gate as the draft work — roster slots, scoring, team count, playoff format must be canonical before any of these produce trustworthy numbers. The MC standings (53b) and matchup odds (53c) are *directly* a function of starters/bench/playoff format.
+- **Live league-state ingest — NEW, does not exist yet.** The draft path ingests *projections* (ESPN/Sleeper consensus) but nothing pulls **current league state**: my roster + every opponent's roster, the free-agent pool (rostered − available), standings/records to date, completed-week actuals, and the remaining schedule. Needs an ESPN/Sleeper **league** API ingest (likely auth'd, unlike the public projection pull). This is the long pole for all three.
+- **Reusable machinery (do NOT rebuild):** `draft/assistant/league_projection.py` (`gauntlet_schedule` / `team_weekly_points` / `project_draft`) is the gauntlet Monte Carlo — 53b/53c are this engine run over *real current rosters + remaining schedule + actuals-to-date* instead of a simulated draft. `availability.py` (injury/bye Bernoulli), `performance_variance.py` (the fitted weekly variance model → the confidence bounds 53a wants), and `season_value.py` (season-points MC) are all in place.
+
+**53a. Roster audit / free-agent swap recommender.** Sweep the entire available free-agent pool against my current roster and recommend any swap (drop X, add Y) that improves the team. For each recommended swap report: **expected value-add in (i) season points, (ii) wins**, and **(iii) P(positive move)** — the probability the swap actually helps, derived from the projection confidence bounds (the `performance_variance` distribution, not a point estimate). This is the "waiver-wire valuator / trade analyzer" from the sub-project description. **Connects to:** TODO #44 (draft-time undrafted-pool-by-position analysis is the precursor; same "who's on the wire" question) and #45 (the variance model that supplies the confidence bounds). Open design Qs: swaps evaluated marginally (one at a time) vs jointly; whether "wins" add-value reuses the gauntlet MC (53b) per candidate (expensive) or a cheaper proxy.
+
+**53b. Projected standings / playoff odds.** Monte Carlo over the remaining schedule from current rosters + records-to-date: **expected wins for the full season, actual-vs-expected (am I over/under-performing my talent), and the trend through the year** (re-run each week, plot the trajectory). Plus **P(make playoffs), P(earn a first-round bye), P(win the championship)**. This is the gauntlet MC (`league_projection.py`) re-pointed at real league state. Open design Qs: how to seed already-played weeks (lock actuals, only sim remaining) and where to persist the weekly snapshots for the trend line.
+
+**53c. Matchup analysis.** For each remaining matchup on my schedule, the **probability I win that individual matchup** — my team's weekly-points distribution vs the opponent's, from the same weekly MC that drives 53b (53c is the per-week win-prob read-out; 53b aggregates the same sims to season standings). Effectively one simulation engine, two reports.
+
 ### 51. Follow-ups from the gsis-reconciliation fix (2026-06-20, branch `feat/snake-strategy-search`)
 
 The placeholder-gsis bug (per-season preset pools carried 100 % `99-` ids → projected-H2H metric was availability-blind → Tests 12/13 conclusions inverted; corrected in Test 14) was fixed via `reconcile_pool_gsis` + an in-place backfill of `data/vorp_{2021..2026}` + a generator hook. Open follow-ups:

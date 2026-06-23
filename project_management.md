@@ -4,6 +4,16 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Mid-season Manager — feature backlog captured (user, 2026-06-22)
+
+**Status:** requirements only — logged as **TODO #53** (53a–53c), no spec/plan/code yet. User listed the in-season tool's wanted features (sub-project #3 in `CLAUDE.md`). Each gets its own brainstorm → spec → plan → execute pass when picked up.
+
+**The three features:** (53a) **roster audit / free-agent swap recommender** — sweep all free agents vs my roster, recommend beneficial swaps, each with expected value-add in season points + wins + **P(positive move)** from the projection confidence bounds; (53b) **projected standings / playoff odds** — MC expected wins, actual-vs-expected, weekly trend, and P(playoffs)/P(bye)/P(championship); (53c) **matchup analysis** — per-remaining-matchup win probability.
+
+**Two shared prerequisites gate all three:** (1) the **real league config** (#52 BLOCKER — standings/odds are a direct function of roster + playoff format); (2) a **NEW live league-state ingest** that does not exist yet — current rosters (mine + opponents), the free-agent pool, standings/actuals-to-date, and the remaining schedule, via an ESPN/Sleeper *league* API (distinct from the public projection pull the draft path uses). **Reuse, don't rebuild:** `draft/assistant/league_projection.py` (gauntlet MC) drives 53b/53c (same engine, re-pointed at real state + actuals); `availability.py`, `performance_variance.py` (the confidence bounds for 53a), and `season_value.py` are all in place. 53b and 53c are one simulation, two read-outs. See TODO #53 for the per-feature detail and open design questions.
+
+---
+
 ## Auction Strategy — Multi-year bake-off + `patient_deep` + ESPN-pricing fix (#49a / #49c) — shipped (2026-06-19, branch `feat/patient-deep-contestant`)
 
 **Status:** the multi-year averaging (#49a) is run; the tuned `patient_deep` (`PatientValueBid(scrub_frac=0)`) is now a **standing 9th contestant** (`_MODELS`); and a **bot-pricing methodology fix** (#49c) corrects how ESPN-unranked players are valued. Also added `scripts/inspect_auction_drafts.py` (best/worst-draft roster inspector, `--layout slots`, `--bench` override). Consumes the per-season tables from PR #84.
