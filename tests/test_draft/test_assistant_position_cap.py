@@ -6,14 +6,18 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.state import DraftState
 from projections.draft.assistant.strategy import (
     MC_STRATEGY_KEYS,
     STRATEGY_KEYS,
     PositionCapStrategy,
     RawVorpStrategy,
+    SeasonValueTimingStrategy,
     build_position_targeted,
+    build_season_value_qb_cap,
 )
+from projections.draft.assistant.survival import LogisticSurvival
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, Position, RecommendationSchema
 
@@ -92,3 +96,21 @@ def test_targeted_keys_registered_and_mc_gating() -> None:
     assert "season_value_targeted" in STRATEGY_KEYS
     assert "season_value_targeted" in MC_STRATEGY_KEYS
     assert "now_or_never_targeted" not in MC_STRATEGY_KEYS  # wraps the analytic nn_floored
+
+
+def test_season_value_qb_cap_registered() -> None:
+    # The shipped QB-only cap key is registered + MC-gated (it wraps the MC timing base).
+    assert "season_value_qb_cap" in STRATEGY_KEYS
+    assert "season_value_qb_cap" in MC_STRATEGY_KEYS
+
+
+def test_build_season_value_qb_cap_wiring() -> None:
+    # The builder caps QB at 2 over a season_value_timing inner (the wiring the key relies on).
+    capped = build_season_value_qb_cap(
+        PlayerAvailability(p={}, bye={}),
+        n_sims=1,
+        base_seed=0,
+        survival=LogisticSurvival(sigma=1.0),
+    )
+    assert capped.caps == {Position.QB: 2}
+    assert isinstance(capped.inner, SeasonValueTimingStrategy)

@@ -122,7 +122,12 @@ def build_session_strategy(
             base_seed=base_seed,
             survival=LogisticSurvival(sigma=spread),
         )
-        return build_position_targeted(timing) if name == "season_value_targeted" else timing
+        if name == "season_value_targeted":
+            return build_position_targeted(timing)
+        if name == "season_value_timing":
+            return timing
+        # An MC key with no branch above falls through to the terminal raise rather than
+        # silently degrading to bare `timing` (parity with harness._build_strategy).
     raise ValueError(f"unknown strategy {name!r}")
 
 
