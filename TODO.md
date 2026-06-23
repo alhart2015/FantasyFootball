@@ -32,6 +32,7 @@ First DFS Engine slice: a retrospective kill-test — does our home-grown weekly
 **Validated live (2026-06-23):** Sleeper weekly ingest works end-to-end on real 2023 data (303 rows, **placeholder-gsis frac 0.00** — every id resolved). **Verdict DEFERRED:** `emit_weekly_projections` reads stored feature partitions that are **stale** (missing `preseason_implied_team_total` etc. — **TODO #40**), and the raw inputs to rebuild them (`pbp`/`ngs`/`snap_counts`/`depth_charts`) are absent from `data/raw/`. **To get the verdict:** resolve TODO #40 (refresh features), then `python scripts/dfs_edge_study.py {ingest-sleeper,calibrate,study} --data-root C:/Users/alden/FantasyFootball/data ...` (see `reports/dfs_projection_edge_2026-06-23.md` for the exact commands + limitations). Pre-registered constants in `dfs/config.py` are placeholders pending the calibrate step.
 
 **Follow-ups (open):** sharper market proxy than Sleeper-alone (Layer 2); the deferred verdict run; on ADOPT → Layer 2 (salary-cap ILP optimizer + contest/ROI backtest); correlation/ownership for GPP (TODO #1).
+- deferred-verdict hardening: (a) full drop-reason coverage accounting (placeholder/cold-start/usage-floor counts) in `run_study`; (b) the top-N-at-position weekly hit-rate diagnostic (spec §7.2.2, reported not gate-bearing); (c) the real end-to-end run is the only integration test — `test_run_smoke` is skipped in CI.
 
 ### 51. Follow-ups from the gsis-reconciliation fix (2026-06-20, branch `feat/snake-strategy-search`)
 

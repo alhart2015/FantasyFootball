@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from projections.schemas import _PYARROW_STR, Ruleset
+from projections.schemas import _PYARROW_STR, Position, Ruleset
 from projections.scoring import dk_actuals_bonus
 from projections.scoring.score import StatLine, score
 from projections.season_calendar import last_regular_week
 
-_SKILL = {"QB", "RB", "WR", "TE"}
+_SKILL = {p.value for p in (Position.QB, Position.RB, Position.WR, Position.TE)}
 
 
 def dk_weekly_actuals(weekly_stats: pd.DataFrame, *, ruleset: Ruleset) -> pd.DataFrame:

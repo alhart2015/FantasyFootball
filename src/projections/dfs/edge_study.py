@@ -87,6 +87,30 @@ def ranking_skill_diff(df: pd.DataFrame) -> float:
     )
 
 
+def ranking_skill_diff_ci(df: pd.DataFrame, *, seed: int) -> Interval:
+    """Percentile bootstrap of `ranking_skill_diff`, resampling whole
+    player-season clusters with replacement (same structure as
+    `clustered_bootstrap_fraction`). The pooled Spearman difference is recomputed
+    on each resample. Pre-registered (spec §7.2.2/§7.3): the ranking-skill edge is
+    gated on this CI's low side, not on the point estimate. Degenerate resamples
+    (Spearman undefined → NaN) are dropped; if none survive, returns
+    `Interval(point, NaN, NaN)`, which conservatively fails the gate."""
+    groups = [g for _, g in df.groupby("player_season")]
+    rng = np.random.default_rng(seed)
+    n = len(groups)
+    boot = np.empty(config.N_BOOTSTRAP, dtype=np.float64)
+    for b in range(config.N_BOOTSTRAP):
+        pick = rng.integers(0, n, size=n)
+        resampled = pd.concat([groups[i] for i in pick], ignore_index=True)
+        boot[b] = ranking_skill_diff(resampled)
+    boot = boot[~np.isnan(boot)]
+    point = ranking_skill_diff(df)
+    if boot.size == 0:
+        return Interval(point=float(point), lo_95=float("nan"), hi_95=float("nan"))
+    lo, hi = np.percentile(boot, (2.5, 97.5))
+    return Interval(point=float(point), lo_95=float(lo), hi_95=float(hi))
+
+
 def inclusion_disagreement(
     ours: pd.DataFrame, sleeper_pts: pd.DataFrame, *, usage: pd.DataFrame
 ) -> dict[str, int]:
@@ -101,9 +125,7 @@ def inclusion_disagreement(
 
 
 def coverage_report(universe: pd.DataFrame) -> dict[str, int]:
-    """Per-week-bucket cell counts of the final universe (spec §7.1/§5.3). The
-    CLI augments this with drop-reason counts (placeholder-gsis, cold-start,
-    usage floor) it computes from the raw frames."""
+    """Per-week-bucket cell counts of the final universe (spec §7.1/§5.3)."""
 
     def bucket(w: int) -> str:
         return "wk1_3" if w <= 3 else ("wk4_13" if w <= 13 else "wk14_18")
@@ -122,6 +144,7 @@ class EdgeStudyResult:
     byweek: Interval  # robustness (block-by-week) bootstrap
     sensitivity: Interval  # primary metric vs bonus-inclusive actuals
     ranking_diff: float
+    ranking_diff_ci: Interval  # clustered-bootstrap CI of the ranking-skill diff
     n_clusters: int
     per_position_fraction: dict[str, float]
     equal_weight_fraction: float
@@ -138,6 +161,7 @@ def run_edge_study_from_universe(universe: pd.DataFrame) -> EdgeStudyResult:
         universe, seed=config.BOOTSTRAP_SEED, target_col="actual_points_with_bonus"
     )
     ranking_diff = ranking_skill_diff(universe)
+    ranking_diff_ci = ranking_skill_diff_ci(universe, seed=config.BOOTSTRAP_SEED)
 
     per_pos = {pos: head_to_head_fraction(g) for pos, g in universe.groupby("position")}
     finite = [v for v in per_pos.values() if not np.isnan(v)]
@@ -150,7 +174,7 @@ def run_edge_study_from_universe(universe: pd.DataFrame) -> EdgeStudyResult:
 
     edge_primary = (
         primary.lo_95 > 0.50
-        and not (np.isnan(ranking_diff) or ranking_diff < 0)
+        and ranking_diff_ci.lo_95 >= 0  # NaN -> False (conservative; spec §7.2.2/§7.3)
         and all((np.isnan(v) or v >= 0.50 - config.MARGIN_M) for v in per_pos.values())
     )
     robust = byweek.lo_95 > 0.50  # by-week agrees on the edge
@@ -171,6 +195,7 @@ def run_edge_study_from_universe(universe: pd.DataFrame) -> EdgeStudyResult:
         byweek=byweek,
         sensitivity=sensitivity,
         ranking_diff=ranking_diff,
+        ranking_diff_ci=ranking_diff_ci,
         n_clusters=n_clusters,
         per_position_fraction=per_pos,
         equal_weight_fraction=equal_weight,

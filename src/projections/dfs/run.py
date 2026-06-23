@@ -18,7 +18,7 @@ from projections.dfs.edge_study import (
 )
 from projections.dfs.projections import emit_weekly_projections
 from projections.dfs.usage import build_usage
-from projections.schemas import Position, Ruleset
+from projections.schemas import Position, Ruleset, WeeklyStatsSchema
 from projections.season_calendar import last_regular_week
 from projections.store import read_partition
 
@@ -69,9 +69,11 @@ def run_study(
     sleeper_raw = _load_sleeper(data_root, seasons)
     sleeper_pts = sleeper_weekly_points(sleeper_raw, ruleset=ruleset)
 
-    raw_actuals = pd.concat(
-        [read_partition(data_root / "raw", "weekly_stats", season=s) for s in seasons],
-        ignore_index=True,
+    raw_actuals = WeeklyStatsSchema.validate(
+        pd.concat(
+            [read_partition(data_root / "raw", "weekly_stats", season=s) for s in seasons],
+            ignore_index=True,
+        )
     )
     actuals = dk_weekly_actuals(raw_actuals, ruleset=ruleset)
     usage = build_usage(raw_actuals)
@@ -107,7 +109,9 @@ def write_report(path: Path, out: StudyOutput, *, seasons: list[int]) -> None:
         f"- by-week robustness CI: {p.byweek.lo_95:.3f} to {p.byweek.hi_95:.3f}",
         f"- bonus-sensitivity CI (actuals+bonus): "
         f"{p.sensitivity.lo_95:.3f} to {p.sensitivity.hi_95:.3f}",
-        f"- ranking-skill diff (Spearman, ours-Sleeper): {p.ranking_diff:.3f}",
+        f"- ranking-skill diff (Spearman, ours-Sleeper): {p.ranking_diff:.3f} "
+        f"(95% CI {p.ranking_diff_ci.lo_95:.3f} to {p.ranking_diff_ci.hi_95:.3f}), "
+        f"clustered by player-season",
         f"- disagreement clusters (player-seasons): {p.n_clusters}",
         f"- pooled (count-weighted) {p.primary.point:.3f} vs equal-weight "
         f"{p.equal_weight_fraction:.3f}",
