@@ -32,8 +32,13 @@ def blend_statlines(
     ours: pd.DataFrame, sleeper: pd.DataFrame, *, weight_ours: float, ruleset: Ruleset
 ) -> pd.DataFrame:
     """Weighted stat-line blend -> one `blended_pts` per (gsis_id, season, week)."""
-    o = ours[_KEY + [c for c in _BLEND_FIELDS if c in ours.columns]]
-    s = sleeper[_KEY + [c for c in _BLEND_FIELDS if c in sleeper.columns]]
+    # Reindex both sides to the full field set (absent fields -> NaN) so every
+    # blend field is present in BOTH frames and therefore gets a _ours/_slp
+    # suffix on merge. Without this, a field present in only one source stays
+    # unsuffixed and `row.get(f"{field}_slp")` silently reads None -> that
+    # source's contribution for the stat is dropped.
+    o = ours.reindex(columns=_KEY + _BLEND_FIELDS)
+    s = sleeper.reindex(columns=_KEY + _BLEND_FIELDS)
     merged = o.merge(s, on=_KEY, how="inner", suffixes=("_ours", "_slp"))
 
     pts: list[float] = []

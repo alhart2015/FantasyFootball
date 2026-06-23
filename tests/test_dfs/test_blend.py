@@ -48,3 +48,25 @@ def test_sleeper_weekly_points_scores_statline() -> None:
     out = sleeper_weekly_points(_sleeper(), ruleset=Ruleset.draftkings())
     # sleeper: rec=6, rec_yd=80 -> 6 + 8 = 14.0
     assert round(float(out.set_index(_KEY).loc[("g1", 2023, 5), "sleeper_pts"]), 2) == 14.0
+
+
+def test_one_sided_field_is_not_silently_dropped() -> None:
+    # `ours` lacks rushing_yards; `sleeper` has it. The merge must still carry
+    # sleeper's rushing_yards (reindex makes the field present on both sides), so
+    # it contributes via weight-renormalization rather than being dropped.
+    ours = pd.DataFrame(
+        {"gsis_id": ["g1"], "season": [2023], "week": [5], Stat.RECEPTIONS.value: [4.0]}
+    )
+    sleeper = pd.DataFrame(
+        {
+            "gsis_id": ["g1"],
+            "season": [2023],
+            "week": [5],
+            "receptions": [4.0],
+            "rushing_yards": [50.0],
+        }
+    )
+    out = blend_statlines(ours, sleeper, weight_ours=0.5, ruleset=Ruleset.draftkings())
+    # rec=4 (both agree); rushing_yards=50 (sleeper-only, renormalized) -> 4*1 + 50/10 = 9.0
+    # (the pre-fix bug dropped rushing_yards and gave 4.0)
+    assert round(float(out.set_index(_KEY).loc[("g1", 2023, 5), "blended_pts"]), 2) == 9.0
