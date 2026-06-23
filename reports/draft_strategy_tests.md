@@ -571,6 +571,34 @@ projections as the start/sit source. Reproduce: `python scripts/hero_backtest.py
 
 ---
 
+### Test 17 — Per-position depth-slot scoring breakdown (where the cap rationale + depth value live)
+
+**What.** For `now_or_never_floored`, `season_value_timing`, `season_value_qb_cap`: replay every cell's deterministic draft, label each player by **draft order within position** (RB1 = first RB drafted), and attribute season points to each depth slot counting only the weeks that player was **in the starting lineup** (lineup set by weekly projection; a benched/bye/injured player credits 0 and whoever starts gets the week). Two engines: **realized** (actual points, all 5 seasons × 16 × 25) and the **season-value availability MC** (sampled, seed subset). Tool: `scripts/_starter_breakdown.py`.
+
+**Expected starting-lineup pts per slot (realized):**
+
+| slot | nn_floored | sv_timing | slot | nn_floored | sv_timing |
+|------|-----------|-----------|------|-----------|-----------|
+| QB1 | 304.8 | 281.8 | RB1 | 202.3 | 214.8 |
+| QB2 | 37.1 | 57.4 | RB2 | 156.7 | 163.7 |
+| **QB3** | **2.9** | **3.3** | RB3 | 100.6 | 114.7 |
+| TE1 | 164.0 | 135.7 | RB4 | 54.8 | 29.6 |
+| TE2 | 42.1 | 48.8 | RB5 | 32.6 | 3.1 |
+| **TE3** | **3.2** | **5.9** | RB6 | 7.9 | 0.2 |
+| WR1 | 181.8 | 183.3 | WR3 | 64.9 | 100.7 |
+| WR2 | 140.9 | 137.4 | WR4 | 27.1 | 32.4 |
+| | | | WR5 | 8.0 | 2.6 |
+
+**Findings.**
+- **QB3 and TE3 are ≈ 0** (3–6 pts/season) in both strategies — the wasted picks the QB cap (and a TE cap) remove. QB2/TE2 are real (37–58 / 42–49 = the weeks the starter was out).
+- **Capping QB redirects ~5 starting pts/season** into RB3–4 + WR3–4 (svt_cap total ≈1521.8 vs svt 1516.5) — live depth that covers single-elim playoff weeks → the +1.15 champ%.
+- **Optimal counts (marginal value → ~0):** QB 2, TE 2, RB ~5 (nn earns 5–6, svt ~4), WR ~4 (WR5 marginal, WR6 dead). Constrained to the 13-man roster (QB2+TE2 = 4 → RB+WR = 9): **nn leans RB-heavy** (RB4=55, RB5=33 ≫ WR4=27), **svt leans WR** (WR3=101 ≫ its RB4=30).
+- **The MC over-credits depth/backups** (QB2 MC 73–117 vs realized 37–57; TE2 MC 67 vs 42–49) and under-credits the top stud (QB1 MC 254 vs realized 305). The season_value strategies optimize that MC → they over-value a backup QB/TE → over-draft them. **This is the root cause of the 3rd-QB pathology** the cap fixes.
+
+Feeds Test 18 (positional-target strategies): cap the dead tails (QB≤2, TE≤2, RB≤6, WR≤5) on nn + sv and A/B.
+
+---
+
 ## Future tests (backlog)
 
 ### F1 — Head-to-head season simulation (the realistic objective) — ✅ DONE → see **Test 7 (F1)** above. sv wins more games + playoff berths (both scorings); championship a wash (nn ≈ sv).
