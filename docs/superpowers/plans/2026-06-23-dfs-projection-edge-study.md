@@ -90,7 +90,7 @@ def last_regular_week(season: int) -> int:
 
 - [ ] **Step 4: Refactor `availability.py` to reuse it**
 
-In `src/projections/draft/assistant/availability.py`, delete the private `_sched_games` (lines ~19-21) and `_last_regular_week` (lines ~24-30), add `from projections.season_calendar import last_regular_week`, and replace every internal `_last_regular_week(` call with `last_regular_week(`. Grep first: `rg "_last_regular_week|_sched_games" src tests` and update every reference (there may be tests referencing the private name — point them at the new public function).
+In `src/projections/draft/assistant/availability.py`, delete the private `_sched_games` (lines ~19-21) and `_last_regular_week` (lines ~24-30), add `from projections.season_calendar import last_regular_week, regular_season_games` (import **both** — `_sched_games` is called directly at `availability.py:107`, so its replacement `regular_season_games` must be imported too), and replace every internal `_last_regular_week(` call with `last_regular_week(` and every `_sched_games(` call with `regular_season_games(`. Verify with `rg "_last_regular_week|_sched_games" src tests`: there are **no test references** and only a stale *comment* mention in `draft/assistant/season_value.py:~29` (no code change needed there). Expect the grep to come back clean (only the comment) after the edit.
 
 - [ ] **Step 5: Run tests + gates**
 
@@ -713,12 +713,13 @@ Produce realized weekly DK-base points per `(gsis_id, season, week, position)`, 
 
 **Files:**
 - Create: `src/projections/dfs/__init__.py` (empty package marker)
+- Create: `tests/test_dfs/__init__.py` (empty — package marker so the new test dir matches repo convention, e.g. `tests/test_scripts/__init__.py`)
 - Create: `src/projections/dfs/actuals.py`
 - Test: `tests/test_dfs/test_actuals.py`
 
 **Interfaces:**
-- Consumes: `StatLine`, `score` (`scoring.score`), `last_regular_week` (Task 1), `_PYARROW_STR`.
-- Produces: `dk_weekly_actuals(weekly_stats: pd.DataFrame, *, ruleset: Ruleset) -> pd.DataFrame` → columns `["gsis_id","season","week","position","actual_points"]`, regular-season weeks only (per-row `week <= last_regular_week(season)`), skill positions only. (Distinct from `draft/backtest/weekly_actuals.build_weekly_actuals`, which caps at week 17 and drops `position`.)
+- Consumes: `StatLine`, `score` (`scoring.score`), `dk_actuals_bonus` (Task 4), `last_regular_week` (Task 1), `_PYARROW_STR`.
+- Produces: `dk_weekly_actuals(weekly_stats: pd.DataFrame, *, ruleset: Ruleset) -> pd.DataFrame` → columns `["gsis_id","season","week","position","actual_points","actual_points_with_bonus"]`, regular-season weeks only (per-row `week <= last_regular_week(season)`), skill positions only. `actual_points` is DK **base** (no bonus); `actual_points_with_bonus = actual_points + dk_actuals_bonus(yards)` — the target for the §6.2 sensitivity check. (Distinct from `draft/backtest/weekly_actuals.build_weekly_actuals`, which caps at week 17, is bonus-free, and drops `position`.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -764,6 +765,14 @@ def test_drops_playoff_weeks_era_aware():
 def test_drops_non_skill_positions():
     ws = _ws([["00-0000002", 2023, 5, "K", 0, 0, 0, 0, 0, 0, 0, 0, 0]])
     assert dk_weekly_actuals(ws, ruleset=Ruleset.draftkings()).empty
+
+
+def test_bonus_column_adds_three_at_100_rec_yards():
+    ws = _ws([["00-0000003", 2023, 5, "WR", 0, 0, 0, 0, 0, 8, 110, 0, 0]])
+    out = dk_weekly_actuals(ws, ruleset=Ruleset.draftkings()).iloc[0]
+    # base: 8*1 + 110/10 = 19.0 ; +3 bonus -> 22.0
+    assert round(float(out["actual_points"]), 2) == 19.0
+    assert round(float(out["actual_points_with_bonus"]), 2) == 22.0
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -788,15 +797,18 @@ from __future__ import annotations
 import pandas as pd
 
 from projections.scoring.score import StatLine, score
+from projections.scoring import dk_actuals_bonus
 from projections.schemas import Ruleset, _PYARROW_STR
 from projections.season_calendar import last_regular_week
 
 _SKILL = {"QB", "RB", "WR", "TE"}
+_EMPTY_COLS = ["gsis_id", "season", "week", "position", "actual_points", "actual_points_with_bonus"]
 
 
 def dk_weekly_actuals(weekly_stats: pd.DataFrame, *, ruleset: Ruleset) -> pd.DataFrame:
-    """One row per (gsis_id, season, week, position) of realized DK-base points,
-    regular-season weeks only, skill positions only."""
+    """One row per (gsis_id, season, week, position) of realized DK-base points
+    (+ a bonus-inclusive column for the sensitivity check), regular-season weeks
+    only, skill positions only."""
     ws = weekly_stats[weekly_stats["position"].isin(_SKILL)].copy()
     if not ws.empty:
         cutoff = ws["season"].map(last_regular_week)
@@ -810,10 +822,12 @@ def dk_weekly_actuals(weekly_stats: pd.DataFrame, *, ruleset: Ruleset) -> pd.Dat
                 "week": pd.array([], dtype="Int64"),
                 "position": pd.array([], dtype=_PYARROW_STR),
                 "actual_points": pd.array([], dtype="Float64"),
+                "actual_points_with_bonus": pd.array([], dtype="Float64"),
             }
         )
 
     points: list[float] = []
+    with_bonus: list[float] = []
     for _, row in ws.iterrows():
         line = StatLine(
             passing_yards=float(row["passing_yards"]),
@@ -826,7 +840,14 @@ def dk_weekly_actuals(weekly_stats: pd.DataFrame, *, ruleset: Ruleset) -> pd.Dat
             receiving_tds=int(row["receiving_tds"]),
             fumbles_lost=int(row["fumbles_lost"]),
         )
-        points.append(score(line, ruleset))
+        base = score(line, ruleset)
+        bonus = dk_actuals_bonus(
+            passing_yards=float(row["passing_yards"]),
+            rushing_yards=float(row["rushing_yards"]),
+            receiving_yards=float(row["receiving_yards"]),
+        )
+        points.append(base)
+        with_bonus.append(base + bonus)
 
     return pd.DataFrame(
         {
@@ -835,6 +856,7 @@ def dk_weekly_actuals(weekly_stats: pd.DataFrame, *, ruleset: Ruleset) -> pd.Dat
             "week": ws["week"].astype("Int64").to_numpy(),
             "position": ws["position"].astype(_PYARROW_STR).to_numpy(),
             "actual_points": pd.array(points, dtype="Float64"),
+            "actual_points_with_bonus": pd.array(with_bonus, dtype="Float64"),
         }
     )
 ```
@@ -863,9 +885,9 @@ Emit our model's per-stat means (and DK-base points) for the eval cells, walk-fo
 
 **Interfaces:**
 - Consumes: `POSITION_DISPATCH`, `read_features`, `read_partition`, `_per_stat_means_from_predictions` (from `projections.backtest.harness`), `Ruleset.draftkings()`, `expected_points`, `Stat`, `Position`.
-- Produces: `emit_weekly_projections(*, seasons, positions, train_start=2018, model_classes=("baseline",), features_root, raw_root, ruleset) -> pd.DataFrame` → columns `["gsis_id","season","week","position", <stat.value per emitted stat>, "our_pts"]` where `our_pts = expected_points(stat_means, ruleset)`.
+- Produces: `emit_weekly_projections(*, seasons, positions, train_start=2018, model_class=None, features_root, raw_root, ruleset) -> pd.DataFrame` → columns `["gsis_id","season","week","position", <stat.value per emitted stat>, "our_pts"]` where `our_pts = expected_points(stat_means, ruleset)`. `model_class=None` resolves **per position** to the production model (`dispatch.default_model_class`: WR `ensemble-decomposed`, QB `lightgbm-nb`, RB/TE `baseline`) — the edge study must give our model its real (production) form, not a weakened baseline (spec §5.3 "our home-grown weekly model").
 
-**Note on reuse vs. leakage:** the loop mirrors `harness.run_backtest` (`harness.py:239-272`) but collects per-stat means instead of metrics. `predict_distribution(features, ruleset=DK)` already returns DK-scored `mean`, but because DK base scoring is *linear* in stats, `expected_points(per_stat_means, DK)` equals it exactly and is what the blend (Task 9) also consumes — so we score from the decoded means for consistency. Import `_per_stat_means_from_predictions` from the harness (it is module-level; if review prefers, promote it to `backtest/__init__` — note in the commit).
+**Note on reuse vs. leakage:** the loop mirrors `harness.run_backtest` (`harness.py:239-272`) but collects per-stat means instead of metrics. `predict_distribution(features, ruleset=DK)` already returns DK-scored `mean`, but because DK base scoring is *linear* in stats, `expected_points(per_stat_means, DK)` equals it exactly and is what the blend (Task 9) also consumes — so we score from the decoded means for consistency. `read_features` lives in `projections.features.cache` (NOT `projections.features` — that exports only the `build_*_features`); `_per_stat_means_from_predictions` is module-level in `projections.backtest.harness`. `.target_stats` is not on the `Model` protocol, so read it via a local structural `Protocol` cast (avoids importing/maintaining the concrete 4-class union the harness casts to).
 
 - [ ] **Step 1: Write the failing test (small, real model on synthetic features is heavy — test the assembly with a stubbed harness path)**
 
@@ -926,14 +948,13 @@ blend in dfs.blend consumes the same per-stat means).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import pandas as pd
 
 from projections.backtest.harness import _per_stat_means_from_predictions
-from projections.features import read_features
+from projections.features.cache import read_features
 from projections.models import POSITION_DISPATCH
-from projections.models.baseline import BaselineModel  # for the cast union
 from projections.schemas import Position, Ruleset, Stat
 from projections.scoring import expected_points
 from projections.store import read_partition
@@ -941,17 +962,29 @@ from projections.store import read_partition
 _STAT_COLS = [s.value for s in Stat]
 
 
+class _HasTargetStats(Protocol):
+    """Structural view of the per-position production models, which all expose
+    `target_stats` (not on the base `Model` protocol). Casting to this avoids
+    importing/maintaining the concrete 4-class union the harness uses."""
+
+    target_stats: tuple[Stat, ...]
+
+
 def _emit_one_cell(
     position: Position,
     year: int,
     *,
     train_start: int,
-    model_class: str,
+    model_class: str | None,
     features_root: Path,
     raw_root: Path,
     ruleset: Ruleset,
 ) -> pd.DataFrame:
-    """Fit on seasons < year, predict all weeks of `year`, return per-stat means."""
+    """Fit on seasons < year, predict all weeks of `year`, return per-stat means.
+    `model_class=None` -> the position's production model (`default_model_class`)."""
+    dispatch = POSITION_DISPATCH[position]
+    resolved_class = model_class or dispatch.default_model_class
+
     train_seasons = list(range(train_start, year))
     train_features = pd.concat(
         [read_features(position, s, features_root=features_root) for s in train_seasons],
@@ -963,11 +996,10 @@ def _emit_one_cell(
     )
     predict_features = read_features(position, year, features_root=features_root)
 
-    dispatch = POSITION_DISPATCH[position]
-    model = dispatch.factories[model_class]()
+    model = dispatch.factories[resolved_class]()
     model.fit(train_features, train_actuals)
     predictions = model.predict_distribution(predict_features, ruleset=ruleset)
-    target_stats = tuple(cast(BaselineModel, model).target_stats)
+    target_stats = tuple(cast(_HasTargetStats, model).target_stats)
     means = _per_stat_means_from_predictions(predictions, target_stats=target_stats)
     means["position"] = position.value
     return means
@@ -978,27 +1010,27 @@ def emit_weekly_projections(
     seasons: list[int],
     positions: list[Position],
     train_start: int = 2018,
-    model_classes: tuple[str, ...] = ("baseline",),
+    model_class: str | None = None,
     features_root: Path | str,
     raw_root: Path | str,
     ruleset: Ruleset,
 ) -> pd.DataFrame:
-    """Per-(gsis_id, season, week, position) per-stat means + DK-base `our_pts`."""
+    """Per-(gsis_id, season, week, position) per-stat means + DK-base `our_pts`.
+    `model_class=None` uses each position's production model."""
     frames: list[pd.DataFrame] = []
     for position in positions:
         for year in seasons:
-            for model_class in model_classes:
-                frames.append(
-                    _emit_one_cell(
-                        position,
-                        year,
-                        train_start=train_start,
-                        model_class=model_class,
-                        features_root=Path(features_root),
-                        raw_root=Path(raw_root),
-                        ruleset=ruleset,
-                    )
+            frames.append(
+                _emit_one_cell(
+                    position,
+                    year,
+                    train_start=train_start,
+                    model_class=model_class,
+                    features_root=Path(features_root),
+                    raw_root=Path(raw_root),
+                    ruleset=ruleset,
                 )
+            )
     out = pd.concat(frames, ignore_index=True)
     stat_cols = [c for c in out.columns if c in _STAT_COLS]
     out["our_pts"] = out[stat_cols].apply(
@@ -1085,8 +1117,10 @@ git commit -m "feat(dfs): walk-forward weekly projection emitter + trajectory/ve
 - Test: `tests/test_dfs/test_blend.py`
 
 **Interfaces:**
-- Consumes: `expected_points`, the emitter output (per-stat means; Task 8), the Sleeper weekly stat line (Task 6), `Stat`.
-- Produces: `blend_statlines(ours: pd.DataFrame, sleeper: pd.DataFrame, *, weight_ours: float, ruleset: Ruleset) -> pd.DataFrame` → per `(gsis_id, season, week)`: a `blended_pts` column = `expected_points(weighted-mean stat line, ruleset)`. Blend is in **stat-line space** (matches `consensus.blend`). Variants the harness will request: `weight_ours ∈ {1.0 (home-grown-only), 0.0 (Sleeper-only), 0.5}`.
+- Consumes: `expected_points`, the emitter output (per-stat means; Task 8), the Sleeper weekly stat-line frame (`ExternalProjectionWeeklySchema`; Task 6), `Stat`.
+- Produces:
+  - `sleeper_weekly_points(sleeper: pd.DataFrame, *, ruleset: Ruleset) -> pd.DataFrame` → per `(gsis_id, season, week)` a `sleeper_pts` column = `expected_points(stat line, ruleset)`. **This is the frame `build_universe` (Task 10) consumes as `sleeper_pts`** — it is the source of the Sleeper-only baseline column the headline metric needs.
+  - `blend_statlines(ours: pd.DataFrame, sleeper: pd.DataFrame, *, weight_ours: float, ruleset: Ruleset) -> pd.DataFrame` → per `(gsis_id, season, week)` a `blended_pts` column = `expected_points(weighted-mean stat line, ruleset)`. Blend is in **stat-line space** (matches `consensus.blend`). **Role:** the blend at `weight_ours=0.5` is an **exploratory** candidate — Task 11 renames its `blended_pts → our_pts` and runs it through the *same* `build_universe`/metrics as a non-confirmatory variant (per spec §7.3). `weight_ours=1.0` reproduces the emitter's home-grown-only line (a cross-check); `0.0` reproduces `sleeper_weekly_points`. So `blended_pts` is **not** dead — it is the exploratory-variant input.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1123,6 +1157,13 @@ def test_weight_one_is_home_grown_only():
     out = blend_statlines(_ours(), _sleeper(), weight_ours=1.0, ruleset=Ruleset.draftkings())
     # ours: rec=4, rec_yd=40 -> 4 + 4 = 8.0
     assert round(float(out.set_index(_KEY).loc[("g1", 2023, 5), "blended_pts"]), 2) == 8.0
+
+
+def test_sleeper_weekly_points_scores_statline():
+    from projections.dfs.blend import sleeper_weekly_points
+    out = sleeper_weekly_points(_sleeper(), ruleset=Ruleset.draftkings())
+    # sleeper: rec=6, rec_yd=80 -> 6 + 8 = 14.0
+    assert round(float(out.set_index(_KEY).loc[("g1", 2023, 5), "sleeper_pts"]), 2) == 14.0
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -1180,6 +1221,19 @@ def blend_statlines(
     out = merged[_KEY].copy()
     out["blended_pts"] = pts
     return out
+
+
+def sleeper_weekly_points(sleeper: pd.DataFrame, *, ruleset: Ruleset) -> pd.DataFrame:
+    """Score the Sleeper weekly stat-line frame to DK-base points per cell.
+    This is the `sleeper_pts` frame Task 10's build_universe consumes."""
+    present = [c for c in _BLEND_FIELDS if c in sleeper.columns]
+    pts = [
+        expected_points({c: float(row[c]) for c in present if pd.notna(row[c])}, ruleset)
+        for _, row in sleeper.iterrows()
+    ]
+    out = sleeper[_KEY].copy()
+    out["sleeper_pts"] = pts
+    return out
 ```
 
 > Note: `how="inner"` enforces the "both sources project" paired universe (Task 10 handles inclusion-disagreement separately). When one side is missing a field but not the row, the weighted mean renormalizes over present sources — acceptable for v1; document in the report.
@@ -1206,11 +1260,14 @@ The core. Pre-registered constants, the comparable universe (actuals-conditioned
 **Interfaces:**
 - Produces (config): `DELTA: float`, `USAGE_FLOOR_SNAPS: float` (or touches+targets count), `MARGIN_M: float`, `N_MIN_CLUSTERS: int`, `TARGET_CI_HALFWIDTH: float`, `N_BOOTSTRAP: int`, `BOOTSTRAP_SEED: int`.
 - Produces (edge_study):
-  - `build_universe(ours, sleeper_pts, actuals, *, usage) -> pd.DataFrame` — inner-join on `(gsis_id, season, week)`, position from actuals, filtered by the actual-usage floor; columns include `our_pts`, `sleeper_pts`, `actual_points`, `position`, `player_season` (= `gsis_id+"-"+season`).
-  - `head_to_head_fraction(df) -> float` — on the `|our_pts - sleeper_pts| > DELTA` subset, share where `|our_pts-actual| < |sleeper_pts-actual|` (ties dropped).
-  - `clustered_bootstrap_fraction(df, *, seed) -> Interval` — resample distinct `player_season` clusters; **re-derive the disagreement subset inside each resample**; return the §3 `Interval`.
+  - `build_universe(ours, sleeper_pts, actuals, *, usage) -> pd.DataFrame` — inner-join on `(gsis_id, season, week)`, position + `actual_points` + `actual_points_with_bonus` from actuals, filtered by the actual-usage floor; columns include `our_pts`, `sleeper_pts`, `actual_points`, `actual_points_with_bonus`, `position`, `player_season` (= `gsis_id+"-"+season`).
+  - `head_to_head_fraction(df, *, target_col="actual_points") -> float` — on the `|our_pts - sleeper_pts| > DELTA` subset, share where `|our_pts-target| < |sleeper_pts-target|` (ties dropped). `target_col="actual_points_with_bonus"` drives the §6.2 sensitivity.
+  - `clustered_bootstrap_fraction(df, *, seed, target_col="actual_points") -> Interval` — resample distinct `player_season` clusters; **re-derive the disagreement subset inside each resample**; return the `Interval`.
+  - `block_bootstrap_by_week(df, *, seed, target_col="actual_points") -> Interval` — resample `(season, week)` blocks (robustness, §7.2.3).
   - `ranking_skill_diff(df) -> float` — pooled Spearman(our,actual) − Spearman(sleeper,actual).
-  - `run_edge_study(ours, sleeper_pts, actuals, *, usage) -> EdgeStudyResult` — assembles the universe, computes the primary gate (home-grown-only pooled), per-position exploratory fractions, the anti-masking check, and the verdict tier.
+  - `inclusion_disagreement(ours, sleeper_pts, *, usage) -> dict[str,int]` — above-floor one-source-only cell counts (§6.5/§7.1).
+  - `coverage_report(universe) -> dict[str,int]` — per-week-bucket cell counts (CLI augments with drop-reason counts).
+  - `run_edge_study_from_universe(universe) -> EdgeStudyResult` — primary gate (home-grown-only pooled) + anti-masking + by-week robustness + bonus sensitivity → verdict tier. `EdgeStudyResult` fields: `verdict, primary, byweek, sensitivity, ranking_diff, n_clusters, per_position_fraction, equal_weight_fraction`.
 
 - [ ] **Step 1: Write `config.py`** (committed *before* the verdict; values are placeholders to be finalized from a prior-year distribution in Task 11's calibration step, but fixed in code here)
 
@@ -1236,7 +1293,7 @@ BOOTSTRAP_SEED: int = 20260623
 # tests/test_dfs/test_edge_study.py
 import numpy as np
 import pandas as pd
-from projections.dfs import edge_study as es
+from projections.dfs import config, edge_study as es
 
 
 def _frame(our, slp, actual, player_seasons=None, positions=None):
@@ -1247,7 +1304,8 @@ def _frame(our, slp, actual, player_seasons=None, positions=None):
         "week": list(range(1, n + 1)),
         "player_season": player_seasons or [f"g{i}-2023" for i in range(n)],
         "position": positions or ["WR"] * n,
-        "our_pts": our, "sleeper_pts": slp, "actual_points": actual,
+        "our_pts": our, "sleeper_pts": slp,
+        "actual_points": actual, "actual_points_with_bonus": actual,
     })
 
 
@@ -1264,26 +1322,50 @@ def test_head_to_head_identical_sources_drops_all_ties():
 
 
 def test_clustered_bootstrap_wider_than_iid_on_correlated_data():
-    rng = np.random.default_rng(0)
-    # 10 player-seasons x 10 weeks, ours closer with strong within-cluster corr
+    # 10 player-seasons x 10 weeks. WITHIN a cluster the same source is closer
+    # every week (perfect within-cluster correlation); ACROSS clusters it is 50/50.
+    # The i.i.d. cell bootstrap sees ~100 "independent" cells (narrow CI); the
+    # clustered bootstrap sees only 10 effective units (wide CI). Pins spec §7.2.3.
     rows = []
     for p in range(10):
-        bias = rng.normal(0, 5)
+        favor_ours = p % 2 == 0
+        our, slp = (51.0, 58.0) if favor_ours else (58.0, 51.0)  # |err|=1 vs 8; disagreement=7>delta
         for w in range(10):
-            actual = 50 + rng.normal(0, 1)
-            rows.append(dict(player_season=f"p{p}", our_pts=actual + 1 + bias,
-                             sleeper_pts=actual + 8 + bias, actual_points=actual,
-                             gsis_id=f"p{p}", season=2023, week=w + 1, position="WR"))
+            rows.append(dict(player_season=f"p{p}", gsis_id=f"p{p}", season=2023,
+                             week=w + 1, position="WR",
+                             our_pts=our, sleeper_pts=slp, actual_points=50.0))
     df = pd.DataFrame(rows)
+
     clustered = es.clustered_bootstrap_fraction(df, seed=1)
-    # sanity: returns an Interval with point in [0,1] and lo<=point<=hi
     assert 0.0 <= clustered.lo_95 <= clustered.point <= clustered.hi_95 <= 1.0
+
+    # i.i.d. cell bootstrap of the same head-to-head statistic, for comparison.
+    closer = ((df["our_pts"] - df["actual_points"]).abs()
+              < (df["sleeper_pts"] - df["actual_points"]).abs()).astype(float).to_numpy()
+    rngb = np.random.default_rng(1)
+    boot = np.array([closer[rngb.integers(0, len(closer), len(closer))].mean()
+                     for _ in range(config.N_BOOTSTRAP)])
+    iid_halfwidth = float(np.percentile(boot, 97.5) - np.percentile(boot, 2.5)) / 2
+    clustered_halfwidth = (clustered.hi_95 - clustered.lo_95) / 2
+    assert clustered_halfwidth > iid_halfwidth
 
 
 def test_verdict_inconclusive_when_too_few_clusters():
     df = _frame(our=[11], slp=[0], actual=[10])  # 1 cluster << N_MIN
     res = es.run_edge_study_from_universe(df)
     assert res.verdict == "INCONCLUSIVE"
+
+
+def test_inclusion_disagreement_counts_one_source_cells():
+    key = ["gsis_id", "season", "week"]
+    usage = pd.DataFrame({
+        "gsis_id": ["a", "b", "c"], "season": [2023] * 3, "week": [1, 1, 1],
+        "touches_targets": [10, 10, 10],  # all above floor
+    })
+    ours = pd.DataFrame({"gsis_id": ["a", "b"], "season": [2023, 2023], "week": [1, 1]})
+    sleeper = pd.DataFrame({"gsis_id": ["b", "c"], "season": [2023, 2023], "week": [1, 1]})
+    out = es.inclusion_disagreement(ours[key], sleeper[key], usage=usage)
+    assert out == {"ours_only": 1, "sleeper_only": 1, "both": 1}  # a-only, c-only, b-both
 ```
 
 - [ ] **Step 3: Run to verify failure**
@@ -1317,12 +1399,14 @@ def _disagreement(df: pd.DataFrame) -> pd.DataFrame:
     return df[(df["our_pts"] - df["sleeper_pts"]).abs() > config.DELTA]
 
 
-def head_to_head_fraction(df: pd.DataFrame) -> float:
-    """Share of disagreement cells where ours is strictly closer to actual.
-    Ties (equidistant) dropped from numerator and denominator."""
+def head_to_head_fraction(df: pd.DataFrame, *, target_col: str = "actual_points") -> float:
+    """Share of disagreement cells where ours is strictly closer to `target_col`.
+    Ties (equidistant) dropped from numerator and denominator. `target_col` is
+    `actual_points` (base) for the primary metric, `actual_points_with_bonus`
+    for the §6.2 sensitivity check."""
     sub = _disagreement(df)
-    our_err = (sub["our_pts"] - sub["actual_points"]).abs()
-    slp_err = (sub["sleeper_pts"] - sub["actual_points"]).abs()
+    our_err = (sub["our_pts"] - sub[target_col]).abs()
+    slp_err = (sub["sleeper_pts"] - sub[target_col]).abs()
     decisive = our_err != slp_err
     n = int(decisive.sum())
     if n == 0:
@@ -1330,24 +1414,41 @@ def head_to_head_fraction(df: pd.DataFrame) -> float:
     return float((our_err[decisive] < slp_err[decisive]).sum()) / n
 
 
-def clustered_bootstrap_fraction(df: pd.DataFrame, *, seed: int) -> Interval:
-    """Percentile bootstrap of head_to_head_fraction, resampling player-season
-    clusters (subset re-derived inside each resample)."""
-    clusters = {ps: g for ps, g in df.groupby("player_season")}
-    keys = list(clusters)
+def _bootstrap_over(
+    df: pd.DataFrame, group_cols: list[str], *, seed: int, target_col: str
+) -> Interval:
+    """Percentile bootstrap of head_to_head_fraction, resampling whole groups
+    (clusters) with replacement; the disagreement subset is re-derived inside
+    each resample so threshold-boundary uncertainty propagates."""
+    groups = [g for _, g in df.groupby(group_cols)]
     rng = np.random.default_rng(seed)
-    n = len(keys)
+    n = len(groups)
     boot = np.empty(config.N_BOOTSTRAP, dtype=np.float64)
     for b in range(config.N_BOOTSTRAP):
         pick = rng.integers(0, n, size=n)
-        resampled = pd.concat([clusters[keys[i]] for i in pick], ignore_index=True)
-        boot[b] = head_to_head_fraction(resampled)
+        resampled = pd.concat([groups[i] for i in pick], ignore_index=True)
+        boot[b] = head_to_head_fraction(resampled, target_col=target_col)
     boot = boot[~np.isnan(boot)]
-    point = head_to_head_fraction(df)
+    point = head_to_head_fraction(df, target_col=target_col)
     if boot.size == 0:
         return Interval(point=point, lo_95=float("nan"), hi_95=float("nan"))
     lo, hi = np.percentile(boot, (2.5, 97.5))
     return Interval(point=float(point), lo_95=float(lo), hi_95=float(hi))
+
+
+def clustered_bootstrap_fraction(
+    df: pd.DataFrame, *, seed: int, target_col: str = "actual_points"
+) -> Interval:
+    """Primary CI: resample player-season clusters (same-player serial corr)."""
+    return _bootstrap_over(df, ["player_season"], seed=seed, target_col=target_col)
+
+
+def block_bootstrap_by_week(
+    df: pd.DataFrame, *, seed: int, target_col: str = "actual_points"
+) -> Interval:
+    """Robustness CI: resample (season, week) blocks (cross-player same-game
+    corr — an orthogonal source to player-season clustering, spec §7.2.3)."""
+    return _bootstrap_over(df, ["season", "week"], seed=seed, target_col=target_col)
 
 
 def _spearman(a: pd.Series, b: pd.Series) -> float:
@@ -1364,10 +1465,39 @@ def ranking_skill_diff(df: pd.DataFrame) -> float:
     )
 
 
+def inclusion_disagreement(
+    ours: pd.DataFrame, sleeper_pts: pd.DataFrame, *, usage: pd.DataFrame
+) -> dict[str, int]:
+    """Above the actual-usage floor, count cells only ONE source projects
+    (the inclusion-disagreement diagnostic, spec §6.5/§7.1 — reported, not in
+    the paired test)."""
+    floor = usage[usage["touches_targets"].fillna(0) >= config.USAGE_FLOOR_TOUCHES_TARGETS]
+    floor = floor[_KEY].drop_duplicates()
+    o = set(map(tuple, floor.merge(ours[_KEY].drop_duplicates(), on=_KEY).to_numpy()))
+    s = set(map(tuple, floor.merge(sleeper_pts[_KEY].drop_duplicates(), on=_KEY).to_numpy()))
+    return {"ours_only": len(o - s), "sleeper_only": len(s - o), "both": len(o & s)}
+
+
+def coverage_report(universe: pd.DataFrame) -> dict[str, int]:
+    """Per-week-bucket cell counts of the final universe (spec §7.1/§5.3). The
+    CLI augments this with drop-reason counts (placeholder-gsis, cold-start,
+    usage floor) it computes from the raw frames."""
+    def bucket(w: int) -> str:
+        return "wk1_3" if w <= 3 else ("wk4_13" if w <= 13 else "wk14_18")
+
+    counts = {"universe_cells": int(len(universe))}
+    tagged = universe.assign(_b=universe["week"].map(bucket))
+    for b, g in tagged.groupby("_b"):
+        counts[f"universe_{b}"] = int(len(g))
+    return counts
+
+
 @dataclass(frozen=True)
 class EdgeStudyResult:
     verdict: str  # "ADOPT" | "STOP" | "INCONCLUSIVE"
     primary: Interval
+    byweek: Interval        # robustness (block-by-week) bootstrap
+    sensitivity: Interval   # primary metric vs bonus-inclusive actuals
     ranking_diff: float
     n_clusters: int
     per_position_fraction: dict[str, float]
@@ -1375,33 +1505,45 @@ class EdgeStudyResult:
 
 
 def run_edge_study_from_universe(universe: pd.DataFrame) -> EdgeStudyResult:
-    """Compute the primary gate + verdict on an already-built universe
+    """Compute the pre-registered primary gate + robustness/sensitivity + verdict
     (home-grown-only vs Sleeper, pooled)."""
     sub = _disagreement(universe)
-    n_clusters = sub["player_season"].nunique()
+    n_clusters = int(sub["player_season"].nunique())
     primary = clustered_bootstrap_fraction(universe, seed=config.BOOTSTRAP_SEED)
+    byweek = block_bootstrap_by_week(universe, seed=config.BOOTSTRAP_SEED)
+    sensitivity = clustered_bootstrap_fraction(
+        universe, seed=config.BOOTSTRAP_SEED, target_col="actual_points_with_bonus"
+    )
     ranking_diff = ranking_skill_diff(universe)
 
-    per_pos = {
-        pos: head_to_head_fraction(g) for pos, g in universe.groupby("position")
-    }
+    per_pos = {pos: head_to_head_fraction(g) for pos, g in universe.groupby("position")}
     finite = [v for v in per_pos.values() if not np.isnan(v)]
     equal_weight = float(np.mean(finite)) if finite else float("nan")
 
     half_width = (primary.hi_95 - primary.lo_95) / 2 if not np.isnan(primary.lo_95) else float("inf")
-    if n_clusters < config.N_MIN_CLUSTERS or half_width > config.TARGET_CI_HALFWIDTH:
+    underpowered = n_clusters < config.N_MIN_CLUSTERS or half_width > config.TARGET_CI_HALFWIDTH
+
+    edge_primary = (
+        primary.lo_95 > 0.50
+        and not (np.isnan(ranking_diff) or ranking_diff < 0)
+        and all((np.isnan(v) or v >= 0.50 - config.MARGIN_M) for v in per_pos.values())
+    )
+    robust = byweek.lo_95 > 0.50          # by-week agrees on the edge
+    sens_holds = sensitivity.lo_95 > 0.50  # bonus sensitivity does not flip
+
+    if underpowered:
         verdict = "INCONCLUSIVE"
+    elif edge_primary and robust and sens_holds:
+        verdict = "ADOPT"
+    elif edge_primary:
+        verdict = "INCONCLUSIVE"  # primary edge but robustness/sensitivity disagree
     else:
-        edge = primary.lo_95 > 0.50 and not (np.isnan(ranking_diff) or ranking_diff < 0)
-        no_masking = all(
-            (np.isnan(v) or v >= 0.50 - config.MARGIN_M) for v in per_pos.values()
-        )
-        verdict = "ADOPT" if (edge and no_masking) else "STOP"
+        verdict = "STOP"
 
     return EdgeStudyResult(
-        verdict=verdict, primary=primary, ranking_diff=ranking_diff,
-        n_clusters=int(n_clusters), per_position_fraction=per_pos,
-        equal_weight_fraction=equal_weight,
+        verdict=verdict, primary=primary, byweek=byweek, sensitivity=sensitivity,
+        ranking_diff=ranking_diff, n_clusters=n_clusters,
+        per_position_fraction=per_pos, equal_weight_fraction=equal_weight,
     )
 
 
@@ -1409,12 +1551,16 @@ def build_universe(
     ours: pd.DataFrame, sleeper_pts: pd.DataFrame, actuals: pd.DataFrame, *, usage: pd.DataFrame
 ) -> pd.DataFrame:
     """Inner-join ours+sleeper+actuals on (gsis_id, season, week); position +
-    actual_points from `actuals`; filter by the actual-usage floor in `usage`
-    (columns gsis_id, season, week, touches_targets)."""
+    actual_points (+ bonus-inclusive) from `actuals`; filter by the actual-usage
+    floor in `usage` (columns gsis_id, season, week, touches_targets)."""
     df = (
         ours[_KEY + ["our_pts"]]
         .merge(sleeper_pts[_KEY + ["sleeper_pts"]], on=_KEY, how="inner")
-        .merge(actuals[_KEY + ["position", "actual_points"]], on=_KEY, how="inner")
+        .merge(
+            actuals[_KEY + ["position", "actual_points", "actual_points_with_bonus"]],
+            on=_KEY,
+            how="inner",
+        )
         .merge(usage[_KEY + ["touches_targets"]], on=_KEY, how="left")
     )
     df = df[df["touches_targets"].fillna(0) >= config.USAGE_FLOOR_TOUCHES_TARGETS].copy()
@@ -1435,46 +1581,293 @@ git commit -m "feat(dfs): edge-study metrics, clustered bootstrap, pre-registere
 
 ---
 
-### Task 11: End-to-end CLI + calibration + one-season smoke
+### Task 11: Usage frame, `run_study` orchestrator, CLI, smoke
 
-Wire ingest → projections → actuals → universe → verdict behind a script, calibrate the pre-registered constants from a prior year, and smoke-test one season.
+Wire ingest → projections → actuals → universe → verdict into a tested orchestrator + thin CLI.
 
 **Files:**
-- Create: `scripts/dfs_edge_study.py`
-- Create: `src/projections/dfs/usage.py` (build the actual-usage frame from `weekly_stats`)
+- Create: `src/projections/dfs/usage.py`
+- Create: `src/projections/dfs/run.py` (the orchestrator + report writer — keeps the script thin)
+- Create: `scripts/dfs_edge_study.py` (argparse only)
 - Test: `tests/test_dfs/test_usage.py`
+- Test: `tests/test_dfs/test_run_smoke.py`
 
 **Interfaces:**
-- Produces: `build_usage(weekly_stats) -> pd.DataFrame` → `(gsis_id, season, week, touches_targets)` where `touches_targets = carries + targets` (read the `weekly_stats` columns; if `carries`/`targets` absent, fall back to `rushing_attempts`/`receptions` — confirm column names by reading one partition).
-- Produces (script): `run(...)` subcommand: `ingest-sleeper --season --weeks`, `calibrate --prior-season 2020` (prints the empirical δ / usage-floor / N distribution so the committed `config.py` values are justified — does NOT auto-write them), `study --seasons 2021-2024 --out reports/...`.
+- Produces: `build_usage(weekly_stats) -> pd.DataFrame` → `(gsis_id, season, week, touches_targets)`, `touches_targets = carries + targets` (both columns exist in `weekly_stats` — verified).
+- Produces: `run_study(*, seasons, positions, data_root, features_root, ruleset) -> StudyOutput` (dataclass: `primary: EdgeStudyResult`, `exploratory_blend: EdgeStudyResult`, `inclusion: dict`, `coverage: dict`). Wires every Task 6–10 function.
+- Produces: `write_report(path, out: StudyOutput, *, seasons) -> None`.
+- Produces (CLI): subcommands `ingest-sleeper --seasons 2021-2024`, `calibrate --prior-season 2020` (prints the empirical δ / usage-floor / cluster-count distributions — does NOT auto-write `config.py`), `study --seasons 2021-2024 --out reports/...`.
 
-- [ ] **Step 1: Write the usage test + implement** (TDD as in prior tasks: failing test asserting `touches_targets = carries + targets`, then implement `build_usage`).
-
-- [ ] **Step 2: Implement `scripts/dfs_edge_study.py`** with `argparse` subcommands. `study` loads stored Sleeper weekly partitions (`read_partition(... "sleeper_weekly_projections", season=, week=)` looped over weeks), scores them under `Ruleset.draftkings()` via `expected_points` per row → `sleeper_pts`; calls `emit_weekly_projections` (Task 8); `dk_weekly_actuals` (Task 7); `build_usage` + `build_universe` + `run_edge_study_from_universe`; writes the report (Task 12). Keep the script thin — all logic in `dfs/`.
-
-- [ ] **Step 3: One-season smoke** (guard with `@pytest.mark.skipif` if the real feature/raw partitions are absent, so CI without data still passes):
+- [ ] **Step 1: `build_usage` — failing test**
 
 ```python
-# tests/test_dfs/test_smoke.py  (sketch)
-import pytest
-from pathlib import Path
+# tests/test_dfs/test_usage.py
+import pandas as pd
+from projections.dfs.usage import build_usage
 
-pytestmark = pytest.mark.skipif(
-    not Path("data/features/wr/season=2023").exists(),
-    reason="requires built feature/raw partitions",
-)
 
-def test_one_season_end_to_end(tmp_path):
-    # ingest a couple weeks (network) or use a saved fixture partition, then
-    # run the study for 2023 WR only and assert a verdict in the allowed set.
-    ...
+def test_touches_targets_is_carries_plus_targets():
+    ws = pd.DataFrame({
+        "gsis_id": ["a", "b"], "season": [2023, 2023], "week": [1, 1],
+        "carries": [10, 0], "targets": [2, 7],
+    })
+    out = build_usage(ws).set_index("gsis_id")
+    assert float(out.loc["a", "touches_targets"]) == 12.0
+    assert float(out.loc["b", "touches_targets"]) == 7.0
 ```
 
-- [ ] **Step 4: Run available tests + gates; commit**
+- [ ] **Step 2: Run to verify it fails, then implement `usage.py`**
 
+```python
+# src/projections/dfs/usage.py
+"""Actual-usage frame for the edge-study universe floor (spec §6.5)."""
+
+from __future__ import annotations
+
+import pandas as pd
+
+
+def build_usage(weekly_stats: pd.DataFrame) -> pd.DataFrame:
+    """(gsis_id, season, week, touches_targets) where touches_targets = carries
+    + targets (actual usage — never a projection, to avoid endogenous selection)."""
+    out = weekly_stats[["gsis_id", "season", "week"]].copy()
+    out["touches_targets"] = (
+        weekly_stats["carries"].fillna(0) + weekly_stats["targets"].fillna(0)
+    ).astype("Float64")
+    return out
+```
+
+Run: `./.venv/Scripts/python -m pytest tests/test_dfs/test_usage.py -v` → PASS.
+
+- [ ] **Step 3: Implement `run.py`** (the orchestrator + report writer)
+
+```python
+# src/projections/dfs/run.py
+"""Edge-study orchestrator + report writer. The CLI is a thin wrapper over this."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import pandas as pd
+
+from projections.dfs.actuals import dk_weekly_actuals
+from projections.dfs.blend import blend_statlines, sleeper_weekly_points
+from projections.dfs.edge_study import (
+    EdgeStudyResult,
+    build_universe,
+    coverage_report,
+    inclusion_disagreement,
+    run_edge_study_from_universe,
+)
+from projections.dfs.projections import emit_weekly_projections
+from projections.dfs.usage import build_usage
+from projections.schemas import Position, Ruleset
+from projections.season_calendar import last_regular_week
+from projections.store import read_partition
+
+
+@dataclass(frozen=True)
+class StudyOutput:
+    primary: EdgeStudyResult
+    exploratory_blend: EdgeStudyResult
+    inclusion: dict[str, int]
+    coverage: dict[str, int]
+
+
+def _load_sleeper(data_root: Path, seasons: list[int]) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for season in seasons:
+        for week in range(1, last_regular_week(season) + 1):
+            try:
+                frames.append(
+                    read_partition(
+                        data_root / "raw", "sleeper_weekly_projections",
+                        season=season, week=week,
+                    )
+                )
+            except FileNotFoundError:
+                continue
+    if not frames:
+        raise FileNotFoundError("no Sleeper weekly partitions found; run ingest-sleeper first")
+    return pd.concat(frames, ignore_index=True)
+
+
+def run_study(
+    *, seasons: list[int], positions: list[Position], data_root: Path,
+    features_root: Path, ruleset: Ruleset,
+) -> StudyOutput:
+    ours = emit_weekly_projections(
+        seasons=seasons, positions=positions,
+        features_root=features_root, raw_root=data_root / "raw", ruleset=ruleset,
+    )
+    sleeper_raw = _load_sleeper(data_root, seasons)
+    sleeper_pts = sleeper_weekly_points(sleeper_raw, ruleset=ruleset)
+
+    raw_actuals = pd.concat(
+        [read_partition(data_root / "raw", "weekly_stats", season=s) for s in seasons],
+        ignore_index=True,
+    )
+    actuals = dk_weekly_actuals(raw_actuals, ruleset=ruleset)
+    usage = build_usage(raw_actuals)
+
+    universe = build_universe(ours, sleeper_pts, actuals, usage=usage)
+    primary = run_edge_study_from_universe(universe)
+
+    blend = blend_statlines(ours, sleeper_raw, weight_ours=0.5, ruleset=ruleset)
+    blend_universe = build_universe(
+        blend.rename(columns={"blended_pts": "our_pts"}), sleeper_pts, actuals, usage=usage
+    )
+    exploratory = run_edge_study_from_universe(blend_universe)
+
+    return StudyOutput(
+        primary=primary, exploratory_blend=exploratory,
+        inclusion=inclusion_disagreement(ours, sleeper_pts, usage=usage),
+        coverage=coverage_report(universe),
+    )
+
+
+def write_report(path: Path, out: StudyOutput, *, seasons: list[int]) -> None:
+    p = out.primary
+    lines = [
+        f"# DFS Projection Edge Study — verdict ({'-'.join(map(str, (min(seasons), max(seasons))))})",
+        "",
+        f"**VERDICT: {p.verdict}**",
+        "",
+        "## Primary test (home-grown-only vs Sleeper, pooled, DK base)",
+        f"- head-to-head fraction: {p.primary.point:.3f} "
+        f"(95% CI {p.primary.lo_95:.3f}–{p.primary.hi_95:.3f}), clustered by player-season",
+        f"- by-week robustness CI: {p.byweek.lo_95:.3f}–{p.byweek.hi_95:.3f}",
+        f"- bonus-sensitivity CI (actuals+bonus): {p.sensitivity.lo_95:.3f}–{p.sensitivity.hi_95:.3f}",
+        f"- ranking-skill diff (Spearman, ours−Sleeper): {p.ranking_diff:.3f}",
+        f"- disagreement clusters (player-seasons): {p.n_clusters}",
+        f"- pooled (count-weighted) {p.primary.point:.3f} vs equal-weight {p.equal_weight_fraction:.3f}",
+        "",
+        "## Per-position (EXPLORATORY — non-confirmatory)",
+        *[f"- {pos}: {frac:.3f}" for pos, frac in sorted(p.per_position_fraction.items())],
+        "",
+        "## Exploratory 50/50 blend (non-confirmatory)",
+        f"- verdict {out.exploratory_blend.verdict}; "
+        f"fraction {out.exploratory_blend.primary.point:.3f} "
+        f"({out.exploratory_blend.primary.lo_95:.3f}–{out.exploratory_blend.primary.hi_95:.3f})",
+        "",
+        "## Coverage & inclusion disagreement",
+        f"- inclusion: {out.inclusion}",
+        f"- coverage: {out.coverage}",
+        "",
+        "## Limitations",
+        "- Sleeper-alone is a softer proxy than the true DFS field (necessary, not "
+        "sufficient — spec §4.3/§6.1). Bonuses excluded from the projection comparison "
+        "(conservative; spec §6.2).",
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+```
+
+- [ ] **Step 4: Implement `scripts/dfs_edge_study.py`** (argparse only — three subcommands delegating to `dfs/`)
+
+```python
+# scripts/dfs_edge_study.py
+"""CLI for the DFS projection edge study. All logic lives in projections.dfs."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from projections.dfs.run import run_study, write_report
+from projections.ingest.sleeper_weekly_projections import refresh_sleeper_weekly
+from projections.schemas import Position, Ruleset
+from projections.season_calendar import last_regular_week
+
+
+def _seasons(arg: str) -> list[int]:
+    lo, hi = (int(x) for x in arg.split("-")) if "-" in arg else (int(arg), int(arg))
+    return list(range(lo, hi + 1))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="DFS projection edge study")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    ing = sub.add_parser("ingest-sleeper")
+    ing.add_argument("--seasons", type=_seasons, required=True)
+    ing.add_argument("--data-root", type=Path, default=Path("data"))
+
+    cal = sub.add_parser("calibrate")
+    cal.add_argument("--prior-season", type=int, default=2020)
+    cal.add_argument("--data-root", type=Path, default=Path("data"))
+
+    stu = sub.add_parser("study")
+    stu.add_argument("--seasons", type=_seasons, required=True)
+    stu.add_argument("--out", type=Path, required=True)
+    stu.add_argument("--data-root", type=Path, default=Path("data"))
+    stu.add_argument("--features-root", type=Path, default=Path("data/features"))
+
+    args = parser.parse_args()
+    positions = [Position.QB, Position.RB, Position.WR, Position.TE]
+
+    if args.cmd == "ingest-sleeper":
+        for season in args.seasons:
+            for week in range(1, last_regular_week(season) + 1):
+                refresh_sleeper_weekly(args.data_root / "raw", season=season, week=week)
+    elif args.cmd == "calibrate":
+        # Print empirical |our-sleeper| / usage / cluster-count distributions so the
+        # committed config.py constants are justified; do NOT auto-write them.
+        from projections.dfs.run import run_study  # local import to keep startup light
+        out = run_study(
+            seasons=[args.prior_season], positions=positions,
+            data_root=args.data_root, features_root=args.features_root,
+            ruleset=Ruleset.draftkings(),
+        )
+        print("prior-season diagnostics:", out.coverage, out.inclusion,
+              "n_clusters=", out.primary.n_clusters)
+    elif args.cmd == "study":
+        out = run_study(
+            seasons=args.seasons, positions=positions,
+            data_root=args.data_root, features_root=args.features_root,
+            ruleset=Ruleset.draftkings(),
+        )
+        write_report(args.out, out, seasons=args.seasons)
+        print(f"verdict: {out.primary.verdict} -> {args.out}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+- [ ] **Step 5: Smoke test** (skips cleanly when real partitions are absent, so data-less CI passes)
+
+```python
+# tests/test_dfs/test_run_smoke.py
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    not Path("data/features/wr/season=2023").exists()
+    or not Path("data/raw/sleeper_weekly_projections/season=2023").exists(),
+    reason="requires built feature/raw + ingested Sleeper partitions",
+)
+
+
+def test_one_season_end_to_end():
+    from projections.dfs.run import run_study
+    from projections.schemas import Position, Ruleset
+
+    out = run_study(
+        seasons=[2023], positions=[Position.WR], data_root=Path("data"),
+        features_root=Path("data/features"), ruleset=Ruleset.draftkings(),
+    )
+    assert out.primary.verdict in {"ADOPT", "STOP", "INCONCLUSIVE"}
+```
+
+- [ ] **Step 6: Run available tests + gates; commit**
+
+Run: `./.venv/Scripts/python -m pytest tests/test_dfs -v` (smoke skips without data); mypy/ruff clean.
 ```bash
-git add scripts/dfs_edge_study.py src/projections/dfs/usage.py tests/test_dfs/test_usage.py tests/test_dfs/test_smoke.py
-git commit -m "feat(dfs): edge-study CLI, usage frame, calibration + one-season smoke"
+git add src/projections/dfs/usage.py src/projections/dfs/run.py scripts/dfs_edge_study.py tests/test_dfs/test_usage.py tests/test_dfs/test_run_smoke.py
+git commit -m "feat(dfs): run_study orchestrator + edge-study CLI + usage frame + smoke"
 ```
 
 ---
@@ -1487,7 +1880,7 @@ git commit -m "feat(dfs): edge-study CLI, usage frame, calibration + one-season 
 
 - [ ] **Step 1: Calibrate** — run `python scripts/dfs_edge_study.py calibrate --prior-season 2020`, record the empirical δ / usage-floor / cluster-count, and confirm (or adjust, with justification) the `config.py` constants. Commit any change to `config.py` as a `chore(dfs): pre-register study constants` commit *before* running the study.
 
-- [ ] **Step 2: Ingest** — `python scripts/dfs_edge_study.py ingest-sleeper --season 2021 --weeks 1-18` (repeat 2022/2023/2024). (Requires network; ~9k rows/week.)
+- [ ] **Step 2: Ingest** — `python scripts/dfs_edge_study.py ingest-sleeper --seasons 2021-2024` (loops every regular-season week per season internally; requires network, ~9k rows/week).
 
 - [ ] **Step 3: Run** — `python scripts/dfs_edge_study.py study --seasons 2021-2024 --out reports/dfs_projection_edge_2026-06-23.md`. The report must include: the primary verdict (ADOPT/STOP/INCONCLUSIVE) with the CI; the per-position exploratory table (labeled non-confirmatory); the equal-weight vs count-weighted pooled fractions; the §6.2 actuals-with-bonus sensitivity result; the coverage accounting (placeholder-gsis drops, rookie/cold-start drops, usage-floor drops, per-week-bucket counts); and the §4.3/§6.1 limitations (Sleeper-as-soft-proxy).
 
@@ -1506,6 +1899,6 @@ git commit -m "report(dfs): Layer 1 projection edge study verdict + close TODO #
 
 **Spec coverage:** §5.1 ingest → T5/T6; §5.2 DK ruleset + allowlist + bonus helper → T3/T4; §5.3 projection emitter + two-surface leakage → T8; §5.4 era-aware actuals → T1/T7; §5.5 blend → T9; §5.6 metric harness → T10; §6.2 sensitivity → T4+T12; §7.1 universe/coverage → T10/T11; §7.2 metrics → T10; §7.2.3 clustered bootstrap → T10; §7.3 pre-registered gate + anti-masking → T10; §7.4 verdict tiers → T10; §8 schema/allowlist/week-bound → T3/T5/T7; §9 tests → every task; §10 deliverables → T6–T12; H-2 id-join lift → T2. No spec section is unmapped.
 
-**Placeholder scan:** Task 11/12 steps 1-3 describe operational runs (calibrate/ingest/study) rather than code — these are inherently runtime actions, not code placeholders; the *code* they invoke (`build_usage`, the CLI, the report writer) is specified. The `test_smoke.py` and Task 11 CLI are sketched rather than fully coded because they are thin orchestration over fully-specified functions; the implementer wires documented signatures. Flagged here honestly for the plan-review.
+**Placeholder scan:** Task 11 is now fully coded (`build_usage`, `run_study`, `write_report`, the argparse CLI, the smoke test all have complete bodies). Task 12 steps 1-3 are operational *runs* (calibrate/ingest/study) — inherently runtime actions invoking the specified CLI, not code placeholders. The §7 diagnostics the spec requires (inclusion-disagreement, coverage, by-week robustness bootstrap, §6.2 bonus sensitivity) are tested functions in `edge_study.py` and wired through `run_study`/`write_report`. No "TODO/similar-to/add-error-handling" placeholders remain.
 
 **Type consistency:** stat columns use `Stat.value` strings consistently across emitter (T8), blend (T9), and universe (T10); `Interval` reused from `_compare.py`; `our_pts`/`sleeper_pts`/`blended_pts`/`actual_points`/`player_season` names consistent across T8–T10.
