@@ -4,6 +4,20 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## DFS Engine — Layer 1 projection edge study — harness shipped, verdict deferred (2026-06-23, branch `feat/dfs-projection-edge-study`)
+
+**Status:** the DFS Engine sub-project's first slice — a retrospective kill-test gating the whole engine: does our home-grown weekly model (alone or blended with Sleeper) beat Sleeper's own weekly projections under DraftKings base scoring? Built end-to-end via the `superpowers-go` pipeline (brainstorm → spec → **superpowers-spec-review** 4 iters to convergence → writing-plans → **superpowers-plan-review** 2 iters → **subagent-driven-development** 12 tasks, each TDD + spec/quality review). Spec/plan `docs/superpowers/specs|plans/2026-06-23-dfs-projection-edge-study.*`; status report `reports/dfs_projection_edge_2026-06-23.md`. TODO #54.
+
+**Method (the headline design calls):** measure edge **only where we disagree with the market** (a disagreement head-to-head fraction, the only place edge can live in a negative-sum market), under DK **base** scoring (bonuses excluded as conservative; a deterministic actuals-bonus sensitivity check tests whether the verdict flips), via a **single pre-registered primary test** (home-grown-only vs Sleeper, pooled) with a **player-season clustered bootstrap** (the spec-review killed an i.i.d. cell bootstrap that would have over-declared significance), an anti-masking per-position guardrail, a by-week robustness check, and an **INCONCLUSIVE** tier so thin data can't masquerade as STOP. Sleeper (not ESPN) is the proxy because only Sleeper's weekly endpoint is historically retrievable (verified live; ESPN deletes history + auth-gates it).
+
+**What's validated vs deferred:** the Sleeper weekly ingest is validated end-to-end on real 2023 data (303 rows, placeholder-gsis frac 0.00 — the float-stringified `id_map.sleeper_id` join holds, TODO #38). The **verdict is DEFERRED**: `emit_weekly_projections` reads stored feature partitions that are **stale** (missing the PR #51 Vegas team-context columns — **TODO #40**), and the raw inputs to rebuild them (`pbp`/`ngs`/`snap_counts`/`depth_charts`) are absent from `data/raw/`. Resolving TODO #40 (refresh features) unblocks the verdict run.
+
+**Notable review saves:** plan-review caught a wrong `read_features` import + a sketched-too-thin orchestration task; the implementation review caught a **vacuous leakage test** (all asserted columns were NaN; the fix subagent reworked it into a genuine guard, negative-check-verified). The clustered-bootstrap statistical guard was confirmed non-vacuous by an independent reviewer.
+
+**Decision gate:** ADOPT (edge real) → Layer 2 (DK/FD ruleset hardening, salary-cap ILP optimizer, contest/ROI backtest, sharper proxy); STOP → DFS not worth building; INCONCLUSIVE → collect more data. No decision until the deferred verdict runs.
+
+---
+
 ## Auction Strategy — Multi-year bake-off + `patient_deep` + ESPN-pricing fix (#49a / #49c) — shipped (2026-06-19, branch `feat/patient-deep-contestant`)
 
 **Status:** the multi-year averaging (#49a) is run; the tuned `patient_deep` (`PatientValueBid(scrub_frac=0)`) is now a **standing 9th contestant** (`_MODELS`); and a **bot-pricing methodology fix** (#49c) corrects how ESPN-unranked players are valued. Also added `scripts/inspect_auction_drafts.py` (best/worst-draft roster inspector, `--layout slots`, `--bench` override). Consumes the per-season tables from PR #84.
