@@ -4,6 +4,25 @@ Running project management list. Add items as they come up; remove or check off 
 
 ## Open
 
+### 🚨🚨 52. BLOCKER BEFORE THE REAL DRAFT — RE-VALIDATE EVERYTHING ON OUR EXACT LEAGUE CONFIG 🚨🚨
+
+> **⚠️ NOTHING in the snake-draft strategy work is trustworthy for our actual league until this is done. ⚠️**
+
+**The problem.** The entire snake-draft investigation (Tests 11–18) and the shipped strategies ran on the WRONG roster shape — and the two config families even disagree with each other:
+
+| used by | config | roster | starters |
+|---|---|---|---|
+| **real-outcome evals (Tests 11/15/16/18)** that validated `season_value_qb_cap`, `now_or_never_targeted`, `season_value_targeted` + the QB2/TE2/RB6/WR5 caps | `configs/league_espn_half_16team.json` | **11-man** | QB1 / **RB2 / WR2** / TE1 / FLEX1 / BENCH4 |
+| projected bake-offs (Tests 12/13/14) | `data/vorp_2026/half_16team.league.json` | **13-man** | QB1 / **RB2 / WR3** / TE1 / FLEX1 / BENCH5 |
+
+**Neither is confirmed to match our actual league.** They differ on starting WR (2 vs 3), bench depth (4 vs 5), and roster size (11 vs 13) — and the cap tuning + the win%/champ% findings are **sensitive to all three**. The depth-slot "optimal counts" (RB≤6/WR≤5, the RB-heavy-vs-WR lean) depend directly on the starting-WR count and bench size. **QB≤2 / TE≤2 very likely hold; the RB/WR ranges will shift.**
+
+**Action (solidify before drafting on this):**
+1. Get the **actual league rules**: exact roster slots (starting QB/RB/WR/TE/FLEX/SUPERFLEX, bench, K/DST?), scoring (half-PPR confirmed; TE-premium? bonuses?), team count (16 confirmed?), playoff format (size/byes/weeks).
+2. Reconcile the **11-man vs 13-man** discrepancy and build ONE canonical league config.
+3. **Re-run Tests 14 (projected) + 15/16/18 (real-outcome) on it**; re-derive the Test-17 depth-slot optimal counts; **re-validate or re-tune** the shipped strategies' caps to the real roster.
+4. Until then, treat `season_value_qb_cap` / `*_targeted` and all win%/champ% numbers as **provisional** (right method, possibly-wrong roster).
+
 ### 51. Follow-ups from the gsis-reconciliation fix (2026-06-20, branch `feat/snake-strategy-search`)
 
 The placeholder-gsis bug (per-season preset pools carried 100 % `99-` ids → projected-H2H metric was availability-blind → Tests 12/13 conclusions inverted; corrected in Test 14) was fixed via `reconcile_pool_gsis` + an in-place backfill of `data/vorp_{2021..2026}` + a generator hook. Open follow-ups:
