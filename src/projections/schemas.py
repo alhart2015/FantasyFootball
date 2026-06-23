@@ -865,6 +865,36 @@ class ExternalProjectionSchema(pa.DataFrameModel):
         coerce = True
 
 
+class ExternalProjectionWeeklySchema(pa.DataFrameModel):
+    """Per-(source, player, season, week) external weekly projection stat line.
+
+    Weekly sibling of ExternalProjectionSchema. Sleeper's weekly endpoint
+    carries a real stat line (unlike its season endpoint). Skill positions only.
+    """
+
+    source: Series[str] = pa.Field(isin=_SOURCE_VALUES)
+    source_player_id: Series[str]
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    is_placeholder_gsis: Series[bool]
+    full_name: Series[str]
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[pd.Int64Dtype] = pa.Field(ge=1, le=22)
+    passing_yards: Series[float] = pa.Field(nullable=True)
+    passing_tds: Series[float] = pa.Field(nullable=True)
+    interceptions: Series[float] = pa.Field(nullable=True)
+    rushing_yards: Series[float] = pa.Field(nullable=True)
+    rushing_tds: Series[float] = pa.Field(nullable=True)
+    receptions: Series[float] = pa.Field(nullable=True)
+    receiving_yards: Series[float] = pa.Field(nullable=True)
+    receiving_tds: Series[float] = pa.Field(nullable=True)
+    fumbles_lost: Series[float] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
 class ConsensusProjectionSchema(pa.DataFrameModel):
     """Published preseason consensus projection: one row per (gsis_id, season, asof).
 
