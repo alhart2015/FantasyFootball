@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Protocol, runtime_checkable
@@ -39,9 +41,12 @@ from projections.schemas import _PYARROW_STR, Position, RecommendationSchema
 STRATEGY_KEYS = (
     "now_or_never",
     "now_or_never_floored",
+    "now_or_never_targeted",
     "season_value",
     "season_value_var",
     "season_value_timing",
+    "season_value_qb_cap",
+    "season_value_targeted",
     "seat_aware",
     "raw_vorp",
 )
@@ -51,8 +56,17 @@ STRATEGY_KEYS = (
 # (`hero_harness._MC_KEYS`) so a new MC strategy can't be added to one gate but not the other
 # -- which would silently skip the availability load and re-arm the availability-blind bug.
 MC_STRATEGY_KEYS = frozenset(
-    {"season_value", "season_value_var", "season_value_timing", "seat_aware"}
+    {
+        "season_value",
+        "season_value_var",
+        "season_value_timing",
+        "season_value_qb_cap",
+        "season_value_targeted",
+        "seat_aware",
+    }
 )
+# `now_or_never_targeted` is intentionally NOT here: it wraps the analytic now_or_never_floored,
+# so (like its base) it needs no availability load.
 
 # PROVISIONAL defaults for the now_or_never_floored knobs — a mid-grid starting point,
 # replaced by the A/B winner (spec 2026-06-16 §8). Imported by build_session_strategy,
@@ -495,3 +509,78 @@ def build_seat_aware(
         turn=SeasonValueStrategy(availability, n_sims=n_sims, base_seed=base_seed, risk_aware=True),
         turn_band=turn_band,
     )
+
+
+@dataclass(frozen=True)
+class PositionCapStrategy:
+    """Wrap a strategy with hard per-position roster caps (spec TODO #F7).
+
+    Once the hero already rosters ``caps[pos]`` players at a position, that position is
+    dropped from the inner strategy's recommendation, so the next pick goes elsewhere. A
+    thin decorator: it does not change the inner ranking, only filters the capped positions
+    out of the result. Below the cap (or for uncapped positions) it is a pure pass-through.
+    Used to test e.g. "season_value but never a 3rd QB" against the uncapped baseline.
+    """
+
+    inner: DraftStrategy
+    caps: Mapping[Position, int]
+
+    def recommend(
+        self, state: DraftState, pool: pd.DataFrame, config: LeagueConfig
+    ) -> pd.DataFrame:
+        rec = self.inner.recommend(state, pool, config)
+        counts = Counter(state.my_roster)
+        capped = {pos.value for pos, cap in self.caps.items() if counts.get(pos, 0) >= cap}
+        if not capped:
+            return rec
+        out = rec[~rec["position"].isin(capped)].reset_index(drop=True)
+        if out.empty:  # never strand the draft: if the cap would leave nothing, don't apply it
+            return rec
+        out["rank"] = pd.array(range(1, len(out) + 1), dtype=pd.Int64Dtype())
+        return RecommendationSchema.validate(out)
+
+
+def build_season_value_qb_cap(
+    availability: PlayerAvailability,
+    *,
+    n_sims: int,
+    base_seed: int,
+    survival: SurvivalModel,
+) -> PositionCapStrategy:
+    """`season_value_timing` with a hard QB<=2 cap — the shipped `season_value_qb_cap`.
+
+    The timing layer over-reaches for a 3rd QB (its opportunity-cost term inflates the urgency
+    of scarce 1-starter positions), and a 3rd QB almost never starts in a 1-QB league, so the
+    pick is wasted. Capping QB at 2 redirects it to a skill player. Validated on the real-outcome
+    hero eval (Test 16): +1.15 champ% / +0.55 playoff% vs uncapped season_value_timing,
+    CI-separated; win% neutral-to-positive. Single construction source, shared by the backtest
+    builder and the live board.
+    """
+    return PositionCapStrategy(
+        inner=SeasonValueTimingStrategy(
+            availability, n_sims=n_sims, base_seed=base_seed, survival=survival
+        ),
+        caps={Position.QB: 2},
+    )
+
+
+# Data-derived per-position roster caps from the depth-slot breakdown (Test 17): the
+# 1-starter tails QB3/TE3 contribute ~0, and RB/WR caps trim the rare deep-bench waste, so
+# every capped pick is redirected to productive depth. The `_targeted` strategies apply these.
+_TARGETED_CAPS: Mapping[Position, int] = {
+    Position.QB: 2,
+    Position.TE: 2,
+    Position.RB: 6,
+    Position.WR: 5,
+}
+
+
+def build_position_targeted(inner: DraftStrategy) -> PositionCapStrategy:
+    """Wrap any strategy with the data-derived per-position caps (QB<=2, TE<=2, RB<=6, WR<=5).
+
+    Validated on the real-outcome hero eval (Test 18), paired vs uncapped, all CI-separated
+    except the noted one: now_or_never_floored +1.0 win% / +2.1 playoff% / +2.0 champ%;
+    season_value_timing +0.61 win% / +1.15 playoff% / +1.15 champ% (champ CI brackets 0). nn
+    benefits most -- it over-drafts TE; capping the 1-starter tails frees those picks for depth.
+    """
+    return PositionCapStrategy(inner=inner, caps=_TARGETED_CAPS)

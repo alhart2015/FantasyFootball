@@ -21,6 +21,8 @@ from projections.draft.assistant.strategy import (
     RawVorpStrategy,
     SeasonValueStrategy,
     SeasonValueTimingStrategy,
+    build_position_targeted,
+    build_season_value_qb_cap,
     build_seat_aware,
 )
 from projections.draft.assistant.strategy import (
@@ -94,6 +96,28 @@ def _build_strategy(
             base_seed=base_seed,
             survival=LogisticSurvival(sigma=default_sigma(n_teams)),
         )
+    if key == "season_value_qb_cap":
+        return build_season_value_qb_cap(
+            availability,
+            n_sims=strategy_n_sims,
+            base_seed=base_seed,
+            survival=LogisticSurvival(sigma=default_sigma(n_teams)),
+        )
+    if key in ("now_or_never_targeted", "season_value_targeted"):
+        inner_key = (
+            "now_or_never_floored" if key == "now_or_never_targeted" else "season_value_timing"
+        )
+        base = _build_strategy(
+            inner_key,
+            availability=availability,
+            n_teams=n_teams,
+            strategy_n_sims=strategy_n_sims,
+            base_seed=base_seed,
+            floor=floor,
+            floor_weight=floor_weight,
+        )
+        assert base is not None
+        return build_position_targeted(base)
     raise ValueError(f"unknown strategy key {key!r}")
 
 

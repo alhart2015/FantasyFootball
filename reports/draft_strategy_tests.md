@@ -549,6 +549,77 @@ projections as the start/sit source. Reproduce: `python scripts/hero_backtest.py
 
 ---
 
+### Test 16 — QB≤2 cap on the season_value family (causal test vs an observational confound) — **SHIPPED `season_value_qb_cap`**
+
+**Why.** The Test-15 roster dumps showed `season_value_timing` champions sometimes rostering **3 QBs** in a 1-QB league — a likely-wasted pick. An observational cut looked like it *endorsed* 3 QBs: svt teams with nQB=3 won **57 %** of titles vs 30.7 % for nQB=2. But `nQB` is **endogenous** — svt only drafts a 3rd QB when its timing MC ranks a QB over the best available skill player (elite QB fell, thin skill pool), so "3-QB" tags *favorable* drafts, not a causal benefit (a 3rd QB almost never starts in a 1-QB league). The only way to settle it is the intervention: cap QB at 2 and re-run.
+
+**Setup.** New `PositionCapStrategy` decorator (drops a position from the inner recommendation once the roster hits the cap; spec TODO #F7). Built QB≤2 variants of `season_value`, `season_value_var`, `season_value_timing`; ran the real-outcome hero eval (5 seasons × 16 seats × 25 seeds, `strategy_n_sims=40`) in fresh checkpoints and **paired** each capped cell against its uncapped counterpart in `_hero_{season}` (same seed → same league seed → identical bots+schedule = CRN). Tool: `scripts/_hero_cap_compare.py`.
+
+**Result (paired, capped − uncapped; ✱ = 95 % CI excludes 0):**
+
+| base strategy | ΔWIN% | ΔPLAYOFF% | ΔCHAMP% |
+|---|---|---|---|
+| **season_value_timing** | +0.19 [−0.01,+0.41] | **+0.55 [+0.10,+1.00] ✱** | **+1.15 [+0.15,+2.00] ✱** |
+| season_value | +0.13 [+0.03,+0.24] ✱ | +0.35 ✱ | −0.15 [−0.45,+0.15] |
+| season_value_var | +0.00 (cap never binds) | +0.00 | +0.00 |
+
+- **Capping `season_value_timing` at QB≤2 is a clean win** — champ% **+1.15** and playoff% **+0.55** (CI-separated), win% neutral-to-positive, **no downside**. The user's 2-QB intuition is causally correct.
+- **The observational data was a confound, now refuted.** Forcing QB≤2 (a skill player instead of the rarely-starting 3rd QB, in the *same* drafts) *improves* titles — the opposite of the nQB=3→57 % correlation, which was draft-situation selection.
+- **The 3rd-QB tendency is the timing layer's, not season_value's.** `season_value_var` (marginal MC, no timing) **never hits a 3rd QB** (cap is a no-op). Only the opportunity-cost/timing term over-reaches for scarce 1-starter QB — the same pathology `now_or_never_floored`'s value-floor addresses softly; the cap is the hard fix.
+
+**Shipped:** `season_value_qb_cap` = `season_value_timing` + hard QB≤2 (via `build_season_value_qb_cap`), added to `STRATEGY_KEYS` / `MC_STRATEGY_KEYS` / the board. Now the clearest champ%-leader (≈34.4 % vs nn 29.3 %); nn still leads win% (the win%/champ% trade persists, sharpened). Caveat: 1 ruleset, noisy-ADP bots (TODO #46). The original experiment capped all three bases via a throwaway `<base>_qbcap2` key; on promotion that was replaced by the single explicit `season_value_qb_cap` key (the only base with a CI-separated gain). The `_hero_cap_{season}` checkpoints + `scripts/_hero_cap_compare.py` retain the paired three-base comparison above.
+
+---
+
+### Test 17 — Per-position depth-slot scoring breakdown (where the cap rationale + depth value live)
+
+**What.** For `now_or_never_floored`, `season_value_timing`, `season_value_qb_cap`: replay every cell's deterministic draft, label each player by **draft order within position** (RB1 = first RB drafted), and attribute season points to each depth slot counting only the weeks that player was **in the starting lineup** (lineup set by weekly projection; a benched/bye/injured player credits 0 and whoever starts gets the week). Two engines: **realized** (actual points, all 5 seasons × 16 × 25) and the **season-value availability MC** (sampled, seed subset). Tool: `scripts/_starter_breakdown.py`.
+
+**Expected starting-lineup pts per slot (realized):**
+
+| slot | nn_floored | sv_timing | slot | nn_floored | sv_timing |
+|------|-----------|-----------|------|-----------|-----------|
+| QB1 | 304.8 | 281.8 | RB1 | 202.3 | 214.8 |
+| QB2 | 37.1 | 57.4 | RB2 | 156.7 | 163.7 |
+| **QB3** | **2.9** | **3.3** | RB3 | 100.6 | 114.7 |
+| TE1 | 164.0 | 135.7 | RB4 | 54.8 | 29.6 |
+| TE2 | 42.1 | 48.8 | RB5 | 32.6 | 3.1 |
+| **TE3** | **3.2** | **5.9** | RB6 | 7.9 | 0.2 |
+| WR1 | 181.8 | 183.3 | WR3 | 64.9 | 100.7 |
+| WR2 | 140.9 | 137.4 | WR4 | 27.1 | 32.4 |
+| | | | WR5 | 8.0 | 2.6 |
+
+**Findings.**
+- **QB3 and TE3 are ≈ 0** (3–6 pts/season) in both strategies — the wasted picks the QB cap (and a TE cap) remove. QB2/TE2 are real (37–58 / 42–49 = the weeks the starter was out).
+- **Capping QB redirects ~5 starting pts/season** into RB3–4 + WR3–4 (svt_cap total ≈1521.8 vs svt 1516.5) — live depth that covers single-elim playoff weeks → the +1.15 champ%.
+- **Optimal counts (marginal value → ~0):** QB 2, TE 2, RB ~5 (nn earns 5–6, svt ~4), WR ~4 (WR5 marginal, WR6 dead). Constrained to the 13-man roster (QB2+TE2 = 4 → RB+WR = 9): **nn leans RB-heavy** (RB4=55, RB5=33 ≫ WR4=27), **svt leans WR** (WR3=101 ≫ its RB4=30).
+- **The MC over-credits depth/backups** (QB2 MC 73–117 vs realized 37–57; TE2 MC 67 vs 42–49) and under-credits the top stud (QB1 MC 254 vs realized 305). The season_value strategies optimize that MC → they over-value a backup QB/TE → over-draft them. **This is the root cause of the 3rd-QB pathology** the cap fixes.
+
+Feeds Test 18 (positional-target strategies): cap the dead tails (QB≤2, TE≤2, RB≤6, WR≤5) on nn + sv and A/B.
+
+---
+
+### Test 18 — Positional target-cap strategies (QB≤2, TE≤2, RB≤6, WR≤5) — **SHIPPED `now_or_never_targeted` + `season_value_targeted`**
+
+**Why.** Test 17's depth breakdown gave data-derived optimal counts: the 1-starter tails (QB3, TE3) contribute ~0, RB pays through ~5, WR through ~4. Cap the dead tails on both family leaders and A/B — does targeting the counts help?
+
+**Setup.** `build_position_targeted` wraps any strategy with `{QB:2, TE:2, RB:6, WR:5}` (the RB/WR caps rarely bind; QB/TE are the live ones). Hero eval 5 seasons × 16 × 25, paired (CRN) vs uncapped `now_or_never_floored` / `season_value_timing`. Tools: `scripts/_hero_tc_compare.py`.
+
+**Result (paired, capped − uncapped; ✱ = 95 % CI excludes 0):**
+
+| base | ΔWIN% | ΔPLAYOFF% | ΔCHAMP% |
+|---|---|---|---|
+| **now_or_never_floored** | **+1.00 [+0.68,+1.29] ✱** | **+2.10 [+1.40,+2.85] ✱** | **+2.00 [+0.75,+3.20] ✱** |
+| **season_value_timing** | **+0.61 [+0.26,+0.91] ✱** | **+1.15 [+0.35,+2.05] ✱** | +1.15 [−0.25,+2.45] |
+
+- **nn benefits the most — across all three metrics, CI-separated.** Surprising (I expected nn ≈ neutral). The cause: nn **over-drafts TE** (it'll take a 3rd TE; TE3 ≈ 0); capping the 1-starter tails redirects those picks to RB/WR depth. `now_or_never_targeted`: win% 72.6 / playoff% 86.6 / champ% 31.4 — extends nn's win% lead *and* lifts its champ%.
+- **For sv, the target-cap dominates the QB-only `season_value_qb_cap`** (Test 16): win% +0.61 / playoff% +1.15 (both CI-separated) vs qb_cap's +0.19 / +0.55, at the same champ% gain (+1.15, CI brackets 0 here). The added TE/RB/WR caps supply the win%/playoff% lift the QB cap alone didn't.
+- The win%/champ% trade still holds (`now_or_never_targeted` leads win% 72.6, `season_value_targeted` leads champ% 34.4) — both strategies just moved up.
+
+**Shipped:** `now_or_never_targeted` (analytic; not in `MC_STRATEGY_KEYS`) and `season_value_targeted` (MC), via `build_position_targeted`, added to `STRATEGY_KEYS` + the board. `season_value_qb_cap` retained alongside (user call). Caveat: 1 ruleset, noisy-ADP bots (TODO #46), and the caps are tuned to this 11-man roster shape (`configs/league_espn_half_16team.json`). Reproduce: `scripts/hero_backtest.py` for `<base>_targeted` then `scripts/_hero_tc_compare.py`.
+
+---
+
 ## Future tests (backlog)
 
 ### F1 — Head-to-head season simulation (the realistic objective) — ✅ DONE → see **Test 7 (F1)** above. sv wins more games + playoff berths (both scorings); championship a wash (nn ≈ sv).
