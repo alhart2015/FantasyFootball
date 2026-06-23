@@ -5,6 +5,7 @@ ADOPT/STOP/INCONCLUSIVE verdict. See the design spec §6-§7.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -36,12 +37,19 @@ def head_to_head_fraction(df: pd.DataFrame, *, target_col: str = "actual_points"
     return float((our_err[decisive] < slp_err[decisive]).sum()) / n
 
 
-def _bootstrap_over(
-    df: pd.DataFrame, group_cols: list[str], *, seed: int, target_col: str
+def _cluster_bootstrap(
+    df: pd.DataFrame,
+    group_cols: list[str],
+    statistic: Callable[[pd.DataFrame], float],
+    *,
+    seed: int,
 ) -> Interval:
-    """Percentile bootstrap of head_to_head_fraction, resampling whole groups
-    (clusters) with replacement; the disagreement subset is re-derived inside
-    each resample so threshold-boundary uncertainty propagates."""
+    """Percentile bootstrap of `statistic`, resampling whole groups (clusters)
+    with replacement. A statistic that re-derives its own subset (e.g. the
+    disagreement head-to-head) propagates threshold-boundary uncertainty inside
+    each resample. Degenerate resamples (`statistic` → NaN) are dropped; if none
+    survive, returns `Interval(point, NaN, NaN)`, which conservatively fails the
+    gate."""
     groups = [g for _, g in df.groupby(group_cols)]
     rng = np.random.default_rng(seed)
     n = len(groups)
@@ -49,11 +57,11 @@ def _bootstrap_over(
     for b in range(config.N_BOOTSTRAP):
         pick = rng.integers(0, n, size=n)
         resampled = pd.concat([groups[i] for i in pick], ignore_index=True)
-        boot[b] = head_to_head_fraction(resampled, target_col=target_col)
+        boot[b] = statistic(resampled)
     boot = boot[~np.isnan(boot)]
-    point = head_to_head_fraction(df, target_col=target_col)
+    point = statistic(df)
     if boot.size == 0:
-        return Interval(point=point, lo_95=float("nan"), hi_95=float("nan"))
+        return Interval(point=float(point), lo_95=float("nan"), hi_95=float("nan"))
     lo, hi = np.percentile(boot, (2.5, 97.5))
     return Interval(point=float(point), lo_95=float(lo), hi_95=float(hi))
 
@@ -62,7 +70,9 @@ def clustered_bootstrap_fraction(
     df: pd.DataFrame, *, seed: int, target_col: str = "actual_points"
 ) -> Interval:
     """Primary CI: resample player-season clusters (same-player serial corr)."""
-    return _bootstrap_over(df, ["player_season"], seed=seed, target_col=target_col)
+    return _cluster_bootstrap(
+        df, ["player_season"], lambda d: head_to_head_fraction(d, target_col=target_col), seed=seed
+    )
 
 
 def block_bootstrap_by_week(
@@ -70,7 +80,9 @@ def block_bootstrap_by_week(
 ) -> Interval:
     """Robustness CI: resample (season, week) blocks (cross-player same-game
     corr — an orthogonal source to player-season clustering, spec §7.2.3)."""
-    return _bootstrap_over(df, ["season", "week"], seed=seed, target_col=target_col)
+    return _cluster_bootstrap(
+        df, ["season", "week"], lambda d: head_to_head_fraction(d, target_col=target_col), seed=seed
+    )
 
 
 def _spearman(a: pd.Series, b: pd.Series) -> float:
@@ -88,27 +100,10 @@ def ranking_skill_diff(df: pd.DataFrame) -> float:
 
 
 def ranking_skill_diff_ci(df: pd.DataFrame, *, seed: int) -> Interval:
-    """Percentile bootstrap of `ranking_skill_diff`, resampling whole
-    player-season clusters with replacement (same structure as
-    `clustered_bootstrap_fraction`). The pooled Spearman difference is recomputed
-    on each resample. Pre-registered (spec §7.2.2/§7.3): the ranking-skill edge is
-    gated on this CI's low side, not on the point estimate. Degenerate resamples
-    (Spearman undefined → NaN) are dropped; if none survive, returns
-    `Interval(point, NaN, NaN)`, which conservatively fails the gate."""
-    groups = [g for _, g in df.groupby("player_season")]
-    rng = np.random.default_rng(seed)
-    n = len(groups)
-    boot = np.empty(config.N_BOOTSTRAP, dtype=np.float64)
-    for b in range(config.N_BOOTSTRAP):
-        pick = rng.integers(0, n, size=n)
-        resampled = pd.concat([groups[i] for i in pick], ignore_index=True)
-        boot[b] = ranking_skill_diff(resampled)
-    boot = boot[~np.isnan(boot)]
-    point = ranking_skill_diff(df)
-    if boot.size == 0:
-        return Interval(point=float(point), lo_95=float("nan"), hi_95=float("nan"))
-    lo, hi = np.percentile(boot, (2.5, 97.5))
-    return Interval(point=float(point), lo_95=float(lo), hi_95=float(hi))
+    """Pre-registered ranking-skill CI (spec §7.2.2/§7.3): resample player-season
+    clusters and recompute the pooled Spearman difference per resample. The
+    ranking-skill edge is gated on this CI's low side, not the point estimate."""
+    return _cluster_bootstrap(df, ["player_season"], ranking_skill_diff, seed=seed)
 
 
 def inclusion_disagreement(

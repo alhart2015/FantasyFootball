@@ -19,7 +19,6 @@ from projections.dfs.edge_study import (
 from projections.dfs.projections import emit_weekly_projections
 from projections.dfs.usage import build_usage
 from projections.schemas import Position, Ruleset, WeeklyStatsSchema
-from projections.season_calendar import last_regular_week
 from projections.store import read_partition
 
 
@@ -32,20 +31,17 @@ class StudyOutput:
 
 
 def _load_sleeper(data_root: Path, seasons: list[int]) -> pd.DataFrame:
+    """Concatenate the stored Sleeper weekly partitions across seasons. A
+    season-only `read_partition` recurses into that season's `week=` partitions,
+    so we don't enumerate weeks by hand; a fully-missing season is skipped."""
     frames: list[pd.DataFrame] = []
     for season in seasons:
-        for week in range(1, last_regular_week(season) + 1):
-            try:
-                frames.append(
-                    read_partition(
-                        data_root / "raw",
-                        "sleeper_weekly_projections",
-                        season=season,
-                        week=week,
-                    )
-                )
-            except FileNotFoundError:
-                continue
+        try:
+            frames.append(
+                read_partition(data_root / "raw", "sleeper_weekly_projections", season=season)
+            )
+        except FileNotFoundError:
+            continue
     if not frames:
         raise FileNotFoundError("no Sleeper weekly partitions found; run ingest-sleeper first")
     return pd.concat(frames, ignore_index=True)
