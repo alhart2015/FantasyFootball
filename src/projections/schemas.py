@@ -285,6 +285,14 @@ class Ruleset(BaseModel):
     def standard(cls) -> Ruleset:
         return cls(name="STANDARD", reception_pts=0.0)
 
+    @classmethod
+    def draftkings(cls) -> Ruleset:
+        """DraftKings NFL Classic *base* scoring (skill positions, no yardage
+        bonuses — those are a separate deterministic helper, see
+        scoring.draftkings_bonus). Differs from ESPN PPR only in turnovers:
+        INT and fumble lost are -1 (ESPN: -2)."""
+        return cls(name="DRAFTKINGS", interception_pts=-1.0, fumble_lost_pts=-1.0)
+
 
 # ---------------------------------------------------------------------------
 # Pandera DataFrame schemas
@@ -299,7 +307,7 @@ _SKILL_POSITION_VALUES = [
 ]
 _TEAM_VALUES = [t.value for t in Team]
 _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
-_RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD"]
+_RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD", "DRAFTKINGS"]
 _BACKTEST_VERDICT_VALUES = ["ADOPT", "NULL", "DO_NOT_ADOPT"]
 _SOURCE_VALUES = [s.value for s in ProjectionSource]
 
