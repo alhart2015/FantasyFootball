@@ -7,7 +7,13 @@ from dataclasses import dataclass
 import pandas as pd
 
 from projections.draft.assistant.state import DraftState
-from projections.draft.assistant.strategy import PositionCapStrategy
+from projections.draft.assistant.strategy import (
+    MC_STRATEGY_KEYS,
+    STRATEGY_KEYS,
+    PositionCapStrategy,
+    RawVorpStrategy,
+    build_position_targeted,
+)
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, Position, RecommendationSchema
 
@@ -73,3 +79,16 @@ def test_uncapped_position_unaffected() -> None:
     # 5 RBs rostered, no RB cap set -> nothing dropped.
     out = strat.recommend(_state((Position.RB,) * 5), pool=None, config=None)  # type: ignore[arg-type]
     assert out.equals(_REC)
+
+
+def test_build_position_targeted_caps() -> None:
+    capped = build_position_targeted(RawVorpStrategy())
+    assert capped.caps == {Position.QB: 2, Position.TE: 2, Position.RB: 6, Position.WR: 5}
+
+
+def test_targeted_keys_registered_and_mc_gating() -> None:
+    # Both targeted strategies are public keys; only the season_value one needs availability.
+    assert "now_or_never_targeted" in STRATEGY_KEYS
+    assert "season_value_targeted" in STRATEGY_KEYS
+    assert "season_value_targeted" in MC_STRATEGY_KEYS
+    assert "now_or_never_targeted" not in MC_STRATEGY_KEYS  # wraps the analytic nn_floored

@@ -34,6 +34,7 @@ from projections.draft.assistant.strategy import (
     RawVorpStrategy,
     SeasonValueStrategy,
     SeasonValueTimingStrategy,
+    build_position_targeted,
     build_season_value_qb_cap,
     build_seat_aware,
 )
@@ -54,10 +55,12 @@ MC_STRATEGIES: frozenset[str] = MC_STRATEGY_KEYS
 BOARD_STRATEGIES: tuple[str, ...] = (
     "now_or_never",
     "now_or_never_floored",
+    "now_or_never_targeted",
     "raw_vorp",
     "season_value",
     "season_value_timing",
     "season_value_qb_cap",
+    "season_value_targeted",
     "seat_aware",
 )
 
@@ -89,6 +92,14 @@ def build_session_strategy(
         return NowOrNeverFlooredStrategy(
             LogisticSurvival(sigma=spread), floor=floor, floor_weight=floor_weight
         )
+    if name == "now_or_never_targeted":
+        # Analytic like its base (wraps now_or_never_floored) -> no availability needed.
+        spread = default_sigma(league.n_teams) if sigma is None else sigma
+        return build_position_targeted(
+            NowOrNeverFlooredStrategy(
+                LogisticSurvival(sigma=spread), floor=floor, floor_weight=floor_weight
+            )
+        )
     if name in MC_STRATEGIES:
         if availability is None:
             raise ValueError(f"strategy {name!r} requires availability data (None given)")
@@ -105,6 +116,15 @@ def build_session_strategy(
                 n_sims=n_sims,
                 base_seed=base_seed,
                 survival=LogisticSurvival(sigma=spread),
+            )
+        if name == "season_value_targeted":
+            return build_position_targeted(
+                SeasonValueTimingStrategy(
+                    availability,
+                    n_sims=n_sims,
+                    base_seed=base_seed,
+                    survival=LogisticSurvival(sigma=spread),
+                )
             )
         if name == "seat_aware":
             return build_seat_aware(

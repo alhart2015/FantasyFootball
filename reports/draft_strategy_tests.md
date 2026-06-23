@@ -599,6 +599,27 @@ Feeds Test 18 (positional-target strategies): cap the dead tails (QB≤2, TE≤2
 
 ---
 
+### Test 18 — Positional target-cap strategies (QB≤2, TE≤2, RB≤6, WR≤5) — **SHIPPED `now_or_never_targeted` + `season_value_targeted`**
+
+**Why.** Test 17's depth breakdown gave data-derived optimal counts: the 1-starter tails (QB3, TE3) contribute ~0, RB pays through ~5, WR through ~4. Cap the dead tails on both family leaders and A/B — does targeting the counts help?
+
+**Setup.** `build_position_targeted` wraps any strategy with `{QB:2, TE:2, RB:6, WR:5}` (the RB/WR caps rarely bind; QB/TE are the live ones). Hero eval 5 seasons × 16 × 25, paired (CRN) vs uncapped `now_or_never_floored` / `season_value_timing`. Tools: `scripts/_hero_tc_compare.py`.
+
+**Result (paired, capped − uncapped; ✱ = 95 % CI excludes 0):**
+
+| base | ΔWIN% | ΔPLAYOFF% | ΔCHAMP% |
+|---|---|---|---|
+| **now_or_never_floored** | **+1.00 [+0.68,+1.29] ✱** | **+2.10 [+1.40,+2.85] ✱** | **+2.00 [+0.75,+3.20] ✱** |
+| **season_value_timing** | **+0.61 [+0.26,+0.91] ✱** | **+1.15 [+0.35,+2.05] ✱** | +1.15 [−0.25,+2.45] |
+
+- **nn benefits the most — across all three metrics, CI-separated.** Surprising (I expected nn ≈ neutral). The cause: nn **over-drafts TE** (it'll take a 3rd TE; TE3 ≈ 0); capping the 1-starter tails redirects those picks to RB/WR depth. `now_or_never_targeted`: win% 72.6 / playoff% 86.6 / champ% 31.4 — extends nn's win% lead *and* lifts its champ%.
+- **For sv, the target-cap dominates the QB-only `season_value_qb_cap`** (Test 16): win% +0.61 / playoff% +1.15 (both CI-separated) vs qb_cap's +0.19 / +0.55, at the same champ% gain (+1.15, CI brackets 0 here). The added TE/RB/WR caps supply the win%/playoff% lift the QB cap alone didn't.
+- The win%/champ% trade still holds (`now_or_never_targeted` leads win% 72.6, `season_value_targeted` leads champ% 34.4) — both strategies just moved up.
+
+**Shipped:** `now_or_never_targeted` (analytic; not in `MC_STRATEGY_KEYS`) and `season_value_targeted` (MC), via `build_position_targeted`, added to `STRATEGY_KEYS` + the board. `season_value_qb_cap` retained alongside (user call). Caveat: 1 ruleset, noisy-ADP bots (TODO #46), and the caps are tuned to this 11-man roster shape (`configs/league_espn_half_16team.json`). Reproduce: `scripts/hero_backtest.py` for `<base>_targeted` then `scripts/_hero_tc_compare.py`.
+
+---
+
 ## Future tests (backlog)
 
 ### F1 — Head-to-head season simulation (the realistic objective) — ✅ DONE → see **Test 7 (F1)** above. sv wins more games + playoff berths (both scorings); championship a wash (nn ≈ sv).

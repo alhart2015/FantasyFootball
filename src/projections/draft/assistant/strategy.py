@@ -41,10 +41,12 @@ from projections.schemas import _PYARROW_STR, Position, RecommendationSchema
 STRATEGY_KEYS = (
     "now_or_never",
     "now_or_never_floored",
+    "now_or_never_targeted",
     "season_value",
     "season_value_var",
     "season_value_timing",
     "season_value_qb_cap",
+    "season_value_targeted",
     "seat_aware",
     "raw_vorp",
 )
@@ -59,9 +61,12 @@ MC_STRATEGY_KEYS = frozenset(
         "season_value_var",
         "season_value_timing",
         "season_value_qb_cap",
+        "season_value_targeted",
         "seat_aware",
     }
 )
+# `now_or_never_targeted` is intentionally NOT here: it wraps the analytic now_or_never_floored,
+# so (like its base) it needs no availability load.
 
 # PROVISIONAL defaults for the now_or_never_floored knobs — a mid-grid starting point,
 # replaced by the A/B winner (spec 2026-06-16 §8). Imported by build_session_strategy,
@@ -557,3 +562,25 @@ def build_season_value_qb_cap(
         ),
         caps={Position.QB: 2},
     )
+
+
+# Data-derived per-position roster caps from the depth-slot breakdown (Test 17): the
+# 1-starter tails QB3/TE3 contribute ~0, and RB/WR caps trim the rare deep-bench waste, so
+# every capped pick is redirected to productive depth. The `_targeted` strategies apply these.
+_TARGETED_CAPS: Mapping[Position, int] = {
+    Position.QB: 2,
+    Position.TE: 2,
+    Position.RB: 6,
+    Position.WR: 5,
+}
+
+
+def build_position_targeted(inner: DraftStrategy) -> PositionCapStrategy:
+    """Wrap any strategy with the data-derived per-position caps (QB<=2, TE<=2, RB<=6, WR<=5).
+
+    Validated on the real-outcome hero eval (Test 18), paired vs uncapped, all CI-separated
+    except the noted one: now_or_never_floored +1.0 win% / +2.1 playoff% / +2.0 champ%;
+    season_value_timing +0.61 win% / +1.15 playoff% / +1.15 champ% (champ CI brackets 0). nn
+    benefits most -- it over-drafts TE; capping the 1-starter tails frees those picks for depth.
+    """
+    return PositionCapStrategy(inner=inner, caps=_TARGETED_CAPS)
