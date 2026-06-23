@@ -84,22 +84,15 @@ def build_session_strategy(
     """
     if name == "raw_vorp":
         return RawVorpStrategy()
+    spread = default_sigma(league.n_teams) if sigma is None else sigma
     if name == "now_or_never":
-        spread = default_sigma(league.n_teams) if sigma is None else sigma
         return NowOrNeverStrategy(LogisticSurvival(sigma=spread))
-    if name == "now_or_never_floored":
-        spread = default_sigma(league.n_teams) if sigma is None else sigma
-        return NowOrNeverFlooredStrategy(
+    if name in ("now_or_never_floored", "now_or_never_targeted"):
+        # now_or_never_targeted wraps the analytic floored base -> no availability needed.
+        floored = NowOrNeverFlooredStrategy(
             LogisticSurvival(sigma=spread), floor=floor, floor_weight=floor_weight
         )
-    if name == "now_or_never_targeted":
-        # Analytic like its base (wraps now_or_never_floored) -> no availability needed.
-        spread = default_sigma(league.n_teams) if sigma is None else sigma
-        return build_position_targeted(
-            NowOrNeverFlooredStrategy(
-                LogisticSurvival(sigma=spread), floor=floor, floor_weight=floor_weight
-            )
-        )
+        return floored if name == "now_or_never_floored" else build_position_targeted(floored)
     if name in MC_STRATEGIES:
         if availability is None:
             raise ValueError(f"strategy {name!r} requires availability data (None given)")
@@ -109,22 +102,12 @@ def build_session_strategy(
             return SeasonValueStrategy(
                 availability, n_sims=n_sims, base_seed=base_seed, risk_aware=True
             )
-        spread = default_sigma(league.n_teams) if sigma is None else sigma
         if name == "season_value_qb_cap":
             return build_season_value_qb_cap(
                 availability,
                 n_sims=n_sims,
                 base_seed=base_seed,
                 survival=LogisticSurvival(sigma=spread),
-            )
-        if name == "season_value_targeted":
-            return build_position_targeted(
-                SeasonValueTimingStrategy(
-                    availability,
-                    n_sims=n_sims,
-                    base_seed=base_seed,
-                    survival=LogisticSurvival(sigma=spread),
-                )
             )
         if name == "seat_aware":
             return build_seat_aware(
@@ -133,12 +116,13 @@ def build_session_strategy(
                 base_seed=base_seed,
                 survival=LogisticSurvival(sigma=spread),
             )
-        return SeasonValueTimingStrategy(
+        timing = SeasonValueTimingStrategy(
             availability,
             n_sims=n_sims,
             base_seed=base_seed,
             survival=LogisticSurvival(sigma=spread),
         )
+        return build_position_targeted(timing) if name == "season_value_targeted" else timing
     raise ValueError(f"unknown strategy {name!r}")
 
 
