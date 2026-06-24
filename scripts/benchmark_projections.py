@@ -43,6 +43,7 @@ from pathlib import Path
 import pandas as pd
 from pull_external_projections import COUNT_FIELDS, STAT_FIELDS, round_count
 
+from projections.ingest.identity import normalize_join_id
 from projections.schemas import Ruleset
 from projections.scoring.score import StatLine, score
 from projections.store import read_partition
@@ -90,22 +91,6 @@ def espn_season_points(espn: pd.DataFrame, ruleset: Ruleset) -> pd.DataFrame:
     ]
 
 
-def _normalize_join_id(s: pd.Series) -> pd.Series:
-    """id_map stores espn_id/sleeper_id as float-stringified values ('4374302.0')
-    with a string dtype; external pulls write clean int-strings ('4374302') as
-    object dtype. Canonicalize both sides to a plain string with surrounding
-    whitespace and any trailing '.0' (or '.00', etc.) stripped so the merge actually
-    matches and the dtypes line up. Without this, the join silently produces ZERO
-    matches.
-
-    NOTE: this is a consumer-side patch for an upstream defect — id_map's ingest
-    (src/projections/ingest/id_map.py) stringifies float64 ids, yielding the '.0'
-    suffix. The deeper fix is to cast those id columns to nullable Int64 (or plain
-    string) before persisting id_map; that belongs in sub-project #2 (TODO #38) when
-    this graduates from the spike."""
-    return s.astype("string").str.strip().str.replace(r"\.0+$", "", regex=True)
-
-
 def _attach_gsis_id(
     external: pd.DataFrame, id_map: pd.DataFrame, platform_id_col: str
 ) -> pd.DataFrame:
@@ -113,9 +98,9 @@ def _attach_gsis_id(
     Normalizes both sides (id_map stores float-stringified ids) and dedupes the id_map
     crosswalk on the platform id so a duplicate mapping cannot multiply rows. Returns
     `external` (platform id normalized) with `gsis_id` attached, NaN where unmatched."""
-    ext = external.assign(**{platform_id_col: _normalize_join_id(external[platform_id_col])})
+    ext = external.assign(**{platform_id_col: normalize_join_id(external[platform_id_col])})
     crosswalk = id_map[["gsis_id", platform_id_col]].dropna(subset=[platform_id_col]).copy()
-    crosswalk[platform_id_col] = _normalize_join_id(crosswalk[platform_id_col])
+    crosswalk[platform_id_col] = normalize_join_id(crosswalk[platform_id_col])
     crosswalk = crosswalk.drop_duplicates(subset=[platform_id_col])
     return ext.merge(crosswalk, on=platform_id_col, how="left")
 

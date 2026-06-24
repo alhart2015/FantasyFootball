@@ -285,6 +285,14 @@ class Ruleset(BaseModel):
     def standard(cls) -> Ruleset:
         return cls(name="STANDARD", reception_pts=0.0)
 
+    @classmethod
+    def draftkings(cls) -> Ruleset:
+        """DraftKings NFL Classic *base* scoring (skill positions, no yardage
+        bonuses — those are a separate deterministic helper, see
+        scoring.draftkings_bonus). Differs from ESPN PPR only in turnovers:
+        INT and fumble lost are -1 (ESPN: -2)."""
+        return cls(name="DRAFTKINGS", interception_pts=-1.0, fumble_lost_pts=-1.0)
+
 
 # ---------------------------------------------------------------------------
 # Pandera DataFrame schemas
@@ -299,7 +307,7 @@ _SKILL_POSITION_VALUES = [
 ]
 _TEAM_VALUES = [t.value for t in Team]
 _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
-_RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD"]
+_RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD", "DRAFTKINGS"]
 _BACKTEST_VERDICT_VALUES = ["ADOPT", "NULL", "DO_NOT_ADOPT"]
 _SOURCE_VALUES = [s.value for s in ProjectionSource]
 
@@ -842,6 +850,36 @@ class ExternalProjectionSchema(pa.DataFrameModel):
     espn_auction_value_avg: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
     espn_auction_value_ppr: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
     espn_auction_value_std: Series[pd.Float64Dtype] | None = pa.Field(nullable=True)
+    passing_yards: Series[float] = pa.Field(nullable=True)
+    passing_tds: Series[float] = pa.Field(nullable=True)
+    interceptions: Series[float] = pa.Field(nullable=True)
+    rushing_yards: Series[float] = pa.Field(nullable=True)
+    rushing_tds: Series[float] = pa.Field(nullable=True)
+    receptions: Series[float] = pa.Field(nullable=True)
+    receiving_yards: Series[float] = pa.Field(nullable=True)
+    receiving_tds: Series[float] = pa.Field(nullable=True)
+    fumbles_lost: Series[float] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
+class ExternalProjectionWeeklySchema(pa.DataFrameModel):
+    """Per-(source, player, season, week) external weekly projection stat line.
+
+    Weekly sibling of ExternalProjectionSchema. Sleeper's weekly endpoint
+    carries a real stat line (unlike its season endpoint). Skill positions only.
+    """
+
+    source: Series[str] = pa.Field(isin=_SOURCE_VALUES)
+    source_player_id: Series[str]
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    is_placeholder_gsis: Series[bool]
+    full_name: Series[str]
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[pd.Int64Dtype] = pa.Field(ge=1, le=22)
     passing_yards: Series[float] = pa.Field(nullable=True)
     passing_tds: Series[float] = pa.Field(nullable=True)
     interceptions: Series[float] = pa.Field(nullable=True)

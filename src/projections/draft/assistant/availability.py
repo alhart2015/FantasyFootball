@@ -15,19 +15,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-
-def _sched_games(season: int) -> int:
-    """Regular-season games a team plays that season (excludes the bye)."""
-    return 16 if season <= 2020 else 17
-
-
-def _last_regular_week(season: int) -> int:
-    """Last regular-season calendar week = games + the one bye (17 pre-2021, 18 after).
-
-    Ingested `weekly_stats` and `schedules` partitions both number playoff weeks
-    above this (up to 22), so it is the cutoff for "regular season only" on either.
-    """
-    return _sched_games(season) + 1
+from projections.season_calendar import last_regular_week, regular_season_games
 
 
 def _team_byes(schedules: pd.DataFrame, season: int) -> dict[str, int]:
@@ -44,7 +32,7 @@ def _team_byes(schedules: pd.DataFrame, season: int) -> dict[str, int]:
     # carry playoff weeks (19-22); without this filter a team that missed the playoffs
     # "misses" every playoff week too, so the single-gap rule below never fires and no
     # bye is ever detected.
-    sch = sch[sch["week"] <= _last_regular_week(season)]
+    sch = sch[sch["week"] <= last_regular_week(season)]
     weeks = sorted(int(w) for w in sch["week"].unique())
     teams = pd.unique(pd.concat([sch["home_team"], sch["away_team"]], ignore_index=True))
     byes: dict[str, int] = {}
@@ -90,7 +78,7 @@ def build_availability(
     ws["gsis_id"] = ws["gsis_id"].astype(str)
     # Drop playoff weeks (same cutoff as the bye filter) so they don't inflate
     # games played or set first_week from a playoff-only season.
-    ws = ws[ws["week"] <= ws["season"].map(_last_regular_week)]
+    ws = ws[ws["week"] <= ws["season"].map(last_regular_week)]
 
     games = (
         ws.groupby(["gsis_id", "season"])
@@ -104,7 +92,7 @@ def build_availability(
     # Denominator = scheduled games from the first week through season end
     # (sched - first_week + 1); clip keeps frac in (0, 1] (the span ignores a
     # possible pre-debut bye, which can over-trim).
-    sched = games["season"].map(_sched_games)
+    sched = games["season"].map(regular_season_games)
     active = (sched - games["first_week"] + 1).clip(lower=1)
     games["frac"] = (games["games"] / active).clip(upper=1.0)
     p_raw = games.groupby("gsis_id")["frac"].mean()
