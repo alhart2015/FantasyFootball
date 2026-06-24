@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from projections.scoring.actuals import actual_season_total
+from projections.scoring.draftkings_bonus import dk_actuals_bonus
 from projections.scoring.score import StatLine, expected_points, score
 from projections.scoring.score_distribution import (
     INTEGER_STATS,
@@ -20,6 +21,7 @@ __all__ = [
     "StatLine",
     "actual_season_total",
     "derive_row_seed",
+    "dk_actuals_bonus",
     "expected_points",
     "score",
     "score_distribution",

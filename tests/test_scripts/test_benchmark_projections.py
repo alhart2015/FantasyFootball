@@ -3,6 +3,7 @@ import benchmark_projections as bench
 import numpy as np
 import pandas as pd
 
+from projections.ingest.identity import normalize_join_id
 from projections.schemas import Ruleset
 
 
@@ -177,7 +178,7 @@ def test_build_benchmark_frame_matches_float_stringified_idmap_ids() -> None:
 
 def test_normalize_join_id_strips_float_artifacts_and_whitespace() -> None:
     s = pd.Series(["4374302.0", " 4374302 ", "4374302.00", "4374302", pd.NA], dtype="string")
-    out = bench._normalize_join_id(s)
+    out = normalize_join_id(s)
     assert list(out[:4]) == ["4374302", "4374302", "4374302", "4374302"]
     assert pd.isna(out.iloc[4])  # NA preserved, not turned into a string
 

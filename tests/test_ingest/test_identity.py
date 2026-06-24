@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from projections.ingest.identity import placeholder_name_key
+import pandas as pd
+
+from projections.ingest.identity import normalize_join_id, placeholder_name_key
 
 
 def test_folds_accents_and_lowercases() -> None:
@@ -25,3 +27,10 @@ def test_position_is_part_of_key() -> None:
 def test_degenerate_name_falls_back_to_raw_lower() -> None:
     # all-suffix/punctuation name keys on the raw name, not the empty '|pos'
     assert placeholder_name_key("Jr.", "WR") == "jr.|wr"
+
+
+def test_normalize_join_id_strips_float_suffix_and_whitespace() -> None:
+    s = pd.Series(["4374302.0", " 4374302 ", "4374302.00", "00-0036900"])
+    out = normalize_join_id(s)
+    assert out.tolist() == ["4374302", "4374302", "4374302", "00-0036900"]
+    assert out.dtype == "string"
