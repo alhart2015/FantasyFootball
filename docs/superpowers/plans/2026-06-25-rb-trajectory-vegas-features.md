@@ -120,7 +120,7 @@ Expected: both files written; no error. (Both builders emit all four fantasy pos
 ```bash
 .venv/Scripts/python.exe - <<'PY'
 import pandas as pd
-from projections.backtest.cache import read_features
+from projections.features.cache import read_features  # NB: features.cache, not backtest.cache
 from projections.schemas import Position
 # Baseline RB rows the probe will evaluate against (2021-2024, all weeks).
 base = pd.concat([read_features(Position.RB, y) for y in (2021, 2022, 2023, 2024)], ignore_index=True)
@@ -271,11 +271,14 @@ parser.add_argument(
     help="restrict the backtest to a single position (default: all four).",
 )
 ```
-Then, where `positions` is computed, honor `--position` (it currently only special-cases decomposed variants):
+Then, where `positions` is computed, honor `--position` — but do **not** override the existing decomposed/ensemble-decomposed WR-only guard (those models are WR-only; `--position RB` with them would KeyError in dispatch). Reject the incompatible combo:
 ```python
 if args.position is not None:
+    if args.model in ("decomposed-baseline", "ensemble-decomposed") and args.position != "WR":
+        parser.error(f"--model {args.model} is WR-only; --position {args.position} is incompatible")
     positions = (Position[args.position],)
 ```
+(`Position` is already imported at `backtest.py:19`.)
 And pass `features_root` into both `run_backtest(...)` call sites:
 ```python
 run = (
@@ -355,37 +358,16 @@ PATH=".venv/Scripts:$PATH" git add scripts/refresh_features.py tests/backtest/te
 PATH=".venv/Scripts:$PATH" git commit -m "feat(refresh): --features-root output override (#55)"
 ```
 
-### Task 7: Add the signaling family's columns to `RbFeaturesSchema` (TDD)
+### Task 7: Add the signaling family's columns to `RbFeaturesSchema` AND `_RB_FEATURE_COLUMNS` together (TDD)
 
 **Files:**
 - Modify: `src/projections/schemas.py` (`RbFeaturesSchema`, ~line 687-751)
-- Test: `tests/test_draft/test_backtest/test_schemas.py` (extend) — mirror the WR trajectory/Vegas schema tests already there.
+- Modify: `src/projections/models/baseline.py` (`_RB_FEATURE_COLUMNS`, line 386)
+- Test (already exists — the guard): `tests/test_models/test_baseline_feature_columns_match_schema.py`
 
-**Interfaces:**
-- Produces: `RbFeaturesSchema` accepting the new columns; consumed by `build_rb_features` (Task 8) and the lightgbm dynamic feature-list derivation.
+**Why both files in one task/commit:** `tests/test_models/test_baseline_feature_columns_match_schema.py:44` asserts `set(_RB_FEATURE_COLUMNS) == set(RbFeaturesSchema columns) − identity`. Editing the schema *without* the baseline list (or vice-versa) leaves that regression test RED. So they must change together. This existing test **is** our fail-first guard — no new schema-test helper is needed (the earlier idea of a hand-authored `_minimal_rb_features_row` is dropped; `RbFeaturesSchema` is non-nullable on `is_home`/`roof_dome`/`passing_down_back`, so a minimal stub would be brittle and redundant with this guard + Task 8's build-and-validate).
 
-- [ ] **Step 1: Write the failing test** (trajectory shown; for Vegas use the four `*_implied_team_total`/`*_spread`/`season_avg_*` columns)
-
-```python
-def test_rb_schema_accepts_trajectory_columns():
-    import pandas as pd
-    from projections.schemas import RbFeaturesSchema
-    # minimal valid RB feature row + the new nullable float columns
-    df = _minimal_rb_features_row()  # existing helper / fixture in this test module
-    df["age"] = pd.Series([25.0], dtype="float64")
-    df["is_rookie"] = pd.Series([0.0], dtype="float64")
-    df["volume_trend_l4_minus_prior_l4"] = pd.Series([1.5], dtype="float64")
-    df["snap_pct_change_l4_vs_prior_l4"] = pd.Series([0.1], dtype="float64")
-    validated = RbFeaturesSchema.validate(df)  # must not raise
-    assert "age" in validated.columns
-```
-
-- [ ] **Step 2: Run, verify fail**
-
-Run: `.venv/Scripts/python.exe -m pytest tests/test_draft/test_backtest/test_schemas.py -k rb_schema_accepts -v`
-Expected: FAIL (schema rejects the unexpected columns under `strict`).
-
-- [ ] **Step 3: Add the columns to `RbFeaturesSchema`** (copy the WR declarations verbatim, `schemas.py:604-607`)
+- [ ] **Step 1: Add the new columns to `RbFeaturesSchema` only** (copy the WR declarations verbatim, `schemas.py:604-607`; Vegas mirrors QB `schemas.py:674-677` including the `ge=0, le=60` bounds on the `*_implied_team_total` pair)
 
 ```python
     # Trajectory features (mirrors WrFeaturesSchema:604-607). float nullable.
@@ -396,116 +378,176 @@ Expected: FAIL (schema rejects the unexpected columns under `strict`).
 ```
 For the Vegas family (mirror QB `schemas.py:674-677`):
 ```python
-    preseason_implied_team_total: Series[float] = pa.Field(nullable=True)
+    preseason_implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
     preseason_spread: Series[float] = pa.Field(nullable=True)
-    season_avg_implied_team_total: Series[float] = pa.Field(nullable=True)
+    season_avg_implied_team_total: Series[float] = pa.Field(ge=0, le=60, nullable=True)
     season_avg_spread: Series[float] = pa.Field(nullable=True)
 ```
 
-- [ ] **Step 4: Run, verify pass**
+- [ ] **Step 2: Run the coupling guard — verify it FAILS first**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_draft/test_backtest/test_schemas.py -k rb_schema -v`
-Expected: PASS.
+Run: `.venv/Scripts/python.exe -m pytest tests/test_models/test_baseline_feature_columns_match_schema.py -k RB -v`
+Expected: FAIL — `_RB_FEATURE_COLUMNS` is now missing the columns the schema declares (the set-equality assertion at `:44` breaks). This is the fail-first signal that the two lists are coupled. (Mechanism note: `RbFeaturesSchema.Config.strict = "filter"` at `schemas.py:750` *filters* unknown columns; it does not raise — so the coupling test, not a `pytest.raises`, is the correct guard here.)
+
+- [ ] **Step 3: Add the same columns to `_RB_FEATURE_COLUMNS`** (`baseline.py:386`), with a comment citing this plan, mirroring the existing weather/PBP additions:
+
+```python
+    # Trajectory features (#55 RB feature lift). lightgbm derives its list from
+    # RbFeaturesSchema dynamically; this hardcoded baseline list is updated explicitly.
+    "age",
+    "is_rookie",
+    "volume_trend_l4_minus_prior_l4",
+    "snap_pct_change_l4_vs_prior_l4",
+    # Vegas preseason context (#55). Same explicit-update reason.
+    "preseason_implied_team_total",
+    "preseason_spread",
+    "season_avg_implied_team_total",
+    "season_avg_spread",
+```
+(Add only the signaling family's columns.)
+
+- [ ] **Step 4: Run the guard + lightgbm-column test — verify PASS**
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_models/test_baseline_feature_columns_match_schema.py tests/test_models/test_lightgbm_nb.py -k "RB or rb" -v`
+Expected: PASS (schema and baseline list now agree; lightgbm derives the columns from the schema).
 
 - [ ] **Step 5: Checklist + commit**
 
 ```bash
-.venv/Scripts/python.exe -m pytest -v -k "schemas"
+.venv/Scripts/python.exe -m pytest -v -k "schemas or match_schema or lightgbm"
 .venv/Scripts/python.exe -m mypy src tests && .venv/Scripts/python.exe -m ruff check src tests && .venv/Scripts/python.exe -m ruff format --check src tests
-PATH=".venv/Scripts:$PATH" git add src/projections/schemas.py tests/test_draft/test_backtest/test_schemas.py
-PATH=".venv/Scripts:$PATH" git commit -m "feat(schemas): RB trajectory/vegas feature columns (#55)"
+PATH=".venv/Scripts:$PATH" git add src/projections/schemas.py src/projections/models/baseline.py
+PATH=".venv/Scripts:$PATH" git commit -m "feat(schemas): RB trajectory/vegas columns in schema + baseline list (#55)"
 ```
 
 ### Task 8: Wire the family into `build_rb_features` (TDD)
 
 **Files:**
 - Modify: `src/projections/features/rb.py` (`build_rb_features`)
-- Test: `tests/test_features/test_rb.py` (extend) — mirror `tests/test_features/test_wr_trajectory_vegas_leakage.py` for the leakage assertion.
+- Modify: `tests/test_features/conftest.py` (add an `rb_draft_picks` fixture, mirroring `wr_draft_picks` at `conftest.py:965` and `te_draft_picks` at `:1025`)
+- Modify: `tests/test_features/test_rb.py` (add the trajectory attach test, mirroring the WR analog `test_wr.py:580-607` which passes `draft_picks=wr_draft_picks` and asserts a known veteran's `is_rookie == 0`)
+- Modify: `tests/test_features/test_rb_leakage.py` (**extend** — the file already exists with a `_baseline(...)` harness at `:14`; append a trajectory/Vegas leakage assertion mirroring `test_wr_trajectory_vegas_leakage.py`)
 
 **Interfaces:**
-- Consumes: `attach_trajectory_features(index, weekly_stats, snap_counts, build_draft_lookup(draft_picks), Position.RB)` and/or `attach_vegas_team_context_features(index, schedules)` (`features/trajectory_features.py:273`, `features/vegas_team_context_features.py:129`); `build_wr_features` (`features/wr.py:257-269`) is the working template.
+- Consumes: `attach_trajectory_features(index, weekly_stats, snap_counts, draft_lookup, Position.RB)` + `build_draft_lookup(draft_picks)` from `projections.features.trajectory_features` (`:273`, `:327`); `attach_vegas_team_context_features(out, schedules)` from `projections.features.vegas_team_context_features` (`:129`). `build_wr_features` (`features/wr.py:263-284`) is the verbatim working template.
+- `build_draft_lookup` needs `draft_picks` with `gsis_id`, `draft_year`, `draft_age` (matches `DraftPicksSchema`).
 - Produces: RB feature frame carrying the new columns, validated by `RbFeaturesSchema`.
 
-- [ ] **Step 1: Write the failing test** (columns populated, not all-NaN, coverage ≥ recorded floor)
+- [ ] **Step 1: Add the `rb_draft_picks` fixture to `tests/test_features/conftest.py`** (mirror `wr_draft_picks`)
 
 ```python
-def test_build_rb_features_attaches_trajectory(rb_feature_inputs):
-    # rb_feature_inputs: existing fixture giving real-shaped raw frames incl. draft_picks
-    feats = build_rb_features(**rb_feature_inputs)  # now passing draft_picks
-    for col in ("age", "is_rookie", "volume_trend_l4_minus_prior_l4", "snap_pct_change_l4_vs_prior_l4"):
-        assert col in feats.columns
-    # age/is_rookie are well-covered; not all-NaN
-    assert feats["age"].notna().mean() > 0.5
-    assert feats["is_rookie"].notna().mean() > 0.5
+@pytest.fixture
+def rb_draft_picks() -> pd.DataFrame:
+    """Synthetic draft_picks for the RBs in the RB fixture set: one rookie
+    (draft_year == the fixture's current season → is_rookie=1) + veterans.
+    Columns gsis_id/draft_year/draft_age match DraftPicksSchema (see wr_draft_picks)."""
+    # Copy wr_draft_picks' construction (conftest.py:965-1023), substituting the
+    # gsis_ids used by the RB fixtures (rb_weekly_stats etc.). Keep one rookie.
+    ...
 ```
+(Read `conftest.py:965-1023` and replicate its exact shape with the RB fixtures' gsis_ids.)
 
-- [ ] **Step 2: Run, verify fail**
+- [ ] **Step 2: Write the failing test** (columns present + a known veteran resolves `is_rookie == 0`, mirroring `test_wr.py:580-607`)
+
+```python
+def test_build_rb_features_attaches_trajectory(
+    rb_weekly_stats, rb_snap_counts, rb_depth_charts, rb_ngs_rushing,
+    rb_schedules, rb_draft_picks,
+):
+    out = build_rb_features(
+        weekly_stats=rb_weekly_stats, snap_counts=rb_snap_counts,
+        depth_charts=rb_depth_charts, ngs_rushing=rb_ngs_rushing,
+        schedules=rb_schedules, season=<fixture_season>, as_of_week=<fixture_week>,
+        draft_picks=rb_draft_picks,
+    )
+    for col in ("age", "is_rookie", "volume_trend_l4_minus_prior_l4",
+                "snap_pct_change_l4_vs_prior_l4"):
+        assert col in out.columns
+    # the veteran RB in the fixture (in rb_draft_picks) resolves a real age + is_rookie==0
+    vet = out[out["gsis_id"] == <known_vet_gsis_id>]
+    assert vet["age"].notna().all()
+    assert (vet["is_rookie"] == 0).all()
+```
+(Use the actual fixture parameter names from `test_rb.py:12-29` and the season/week the existing RB tests use; `<known_vet_gsis_id>` is one you put in `rb_draft_picks` as a veteran.)
+
+- [ ] **Step 3: Run, verify fail**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_features/test_rb.py -k trajectory -v`
-Expected: FAIL (columns absent).
+Expected: FAIL (columns absent — `KeyError`/assertion).
 
-- [ ] **Step 3: Wire the helper** (mirror WR: pass the **full** un-`prior_mask` `weekly_stats`/`snap_counts`)
+- [ ] **Step 4: Wire the helper into `build_rb_features` — mirror WR `wr.py:263-284` EXACTLY** (rename `opponent`→`opp` for the helper index; merge back on the **3 keys only**, after selecting just the 4 feature columns):
 
-In `build_rb_features`, after the existing feature assembly and before the final `RbFeaturesSchema.validate`, build the player-team-week index and attach:
 ```python
-from projections.features.trajectory_features import attach_trajectory_features, build_draft_lookup
-# ... (Vegas: attach_vegas_team_context_features)
+from projections.features.trajectory_features import (
+    attach_trajectory_features, build_draft_lookup,
+)
+# 'out' is the assembled RB feature frame (it carries 'opponent', not 'opp');
+# weekly_stats/snap_counts are the FULL un-prior_mask params (see wr.py:256-262 —
+# the .shift(1) trend/age helpers need full history or every value resolves NaN).
 draft_lookup = build_draft_lookup(draft_picks)
-traj_idx = df[["gsis_id", "season", "week", "team", "opp"]].copy()  # match the index cols build_wr_features uses
+traj_idx = out[["gsis_id", "season", "week", "team", "opponent"]].rename(
+    columns={"opponent": "opp"}
+)
 traj = attach_trajectory_features(traj_idx, weekly_stats, snap_counts, draft_lookup, Position.RB)
-df = df.merge(traj, on=["gsis_id", "season", "week", "team", "opp"], how="left")
+out = out.merge(
+    traj[[
+        "gsis_id", "season", "week",
+        "age", "is_rookie",
+        "volume_trend_l4_minus_prior_l4", "snap_pct_change_l4_vs_prior_l4",
+    ]],
+    on=["gsis_id", "season", "week"],
+    how="left",
+)
 ```
-Use `weekly_stats`/`snap_counts` (the full params), **not** the internally `prior_mask`-sliced `ws`/`sc` — the helper's trailing-window/age computation needs full history (see the WR comment at `features/wr.py:256-262`). Then `df = RbFeaturesSchema.validate(df)`.
+Key corrections vs a naive merge: the RB frame column is **`opponent`** (no `opp`); merge on **`["gsis_id","season","week"]`** only (not 5 keys); and slice `traj` to the **4 feature columns** so `attach_trajectory_features`'s extra `draft_year_inferred`/`team`/`opp` columns don't collide. (For the Vegas family: `out = attach_vegas_team_context_features(out, schedules)` over the FULL `schedules`, per `wr.py` Vegas block.) Then `out = RbFeaturesSchema.validate(out)` at the boundary.
 
-- [ ] **Step 4: Run, verify pass; add the leakage test**
+- [ ] **Step 5: Run, verify pass; then extend the leakage test**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_features/test_rb.py -k trajectory -v`
-Expected: PASS. Then mirror `test_wr_trajectory_vegas_leakage.py` to assert no current-week leakage for RB and run it.
+Expected: PASS. Then append to `tests/test_features/test_rb_leakage.py` a trajectory/Vegas no-current-week-leakage assertion mirroring `test_wr_trajectory_vegas_leakage.py`, and run it.
 
-- [ ] **Step 5: Checklist + commit**
+- [ ] **Step 6: Checklist + commit**
 
 ```bash
 .venv/Scripts/python.exe -m pytest -v -k "rb or store or schemas"
 .venv/Scripts/python.exe -m mypy src tests && .venv/Scripts/python.exe -m ruff check src tests && .venv/Scripts/python.exe -m ruff format --check src tests
-PATH=".venv/Scripts:$PATH" git add src/projections/features/rb.py tests/test_features/test_rb.py tests/test_features/test_rb_leakage.py
+PATH=".venv/Scripts:$PATH" git add src/projections/features/rb.py tests/test_features/conftest.py tests/test_features/test_rb.py tests/test_features/test_rb_leakage.py
 PATH=".venv/Scripts:$PATH" git commit -m "feat(features): attach trajectory/vegas to build_rb_features (#55)"
 ```
 
-### Task 9: Add columns to `_RB_FEATURE_COLUMNS`, build augmented cache, run dual-run gate + bake-off (GATE G2)
+### Task 9: Build augmented cache, run dual-run adoption gate + model-class bake-off (GATE G2)
+
+> The `_RB_FEATURE_COLUMNS` edit is **already done in Task 7** (it's coupled to the schema by the regression test). This task is evaluation only — its sole code change is the `_rb_model_bakeoff.py` `--features-root` arg (Step 5).
 
 **Files:**
-- Modify: `src/projections/models/baseline.py` (`_RB_FEATURE_COLUMNS`, line 386)
+- Modify: `scripts/_rb_model_bakeoff.py` (add a `--features-root` arg — see Step 5)
 - Create (gitignored): `data/features_rb_aug/rb/*`, `data/backtest/run_*/`
-- Update: `reports/feature_probe_rb_summary.md` (append the gate + bake-off result)
+- Update: `reports/feature_probe_rb_summary.md` (append the gate + bake-off result); create `reports/adoption_gate_rb_<family>_baseline.csv`, `reports/rb_model_bakeoff_augmented.md`
 
 **Interfaces:**
 - Consumes: the augmented schema/builder (Tasks 7–8), the CLI passthroughs (Tasks 5–6), `adoption_gate.py` dual-run mode.
 - Produces: **G2 verdict** (dual-run ADOPT? + which class wins the bake-off) that branches the plan.
 
-- [ ] **Step 1: Add the signaling family's columns to `_RB_FEATURE_COLUMNS`**
-
-Append the same column names added in Task 7 to the `_RB_FEATURE_COLUMNS` tuple (`baseline.py:386`), with a comment citing this plan. (lightgbm derives its list from the schema automatically; only the hardcoded baseline list needs the edit.)
-
-- [ ] **Step 2: Run the model-backtest snapshot check to confirm baseline still trains** (sanity)
+- [ ] **Step 1: Produce the OLD-features baseline leg** (runs against the unchanged `data/features`)
 
 Run: `.venv/Scripts/python.exe scripts/backtest.py --report --model baseline --position RB`
-Expected: completes, writes `data/backtest/run_<ts>/results.parquet`. **Record this run dir as the OLD-features baseline leg** (it ran against `data/features`).
+Expected: completes, writes `data/backtest/run_<ts>/results.parquet`. **Record this run dir as the OLD leg.**
 
-- [ ] **Step 3: Build the augmented RB cache into a separate root**
+- [ ] **Step 2: Build the augmented RB cache into a separate root**
 
 ```bash
 .venv/Scripts/python.exe scripts/refresh_features.py rb --features-root data/features_rb_aug
 ```
 Expected: `data/features_rb_aug/rb/season=YYYY/...` written for all cached seasons.
 
-- [ ] **Step 4: Run the augmented baseline leg**
+- [ ] **Step 3: Produce the AUGMENTED baseline leg**
 
 ```bash
 .venv/Scripts/python.exe scripts/backtest.py --report --model baseline --position RB --features-root data/features_rb_aug
 ```
-Expected: writes a new `data/backtest/run_<ts>/results.parquet` (augmented leg).
+Expected: writes a new `data/backtest/run_<ts>/results.parquet` (the AUG leg).
 
-- [ ] **Step 5: Dual-run adoption gate (old vs augmented)**
+- [ ] **Step 4: Dual-run adoption gate (old vs augmented)**
 
 ```bash
 .venv/Scripts/python.exe scripts/adoption_gate.py \
@@ -513,26 +555,27 @@ Expected: writes a new `data/backtest/run_<ts>/results.parquet` (augmented leg).
     --candidate-run data/backtest/run_<AUG_ts> \
     --csv-out reports/adoption_gate_rb_<family>_baseline.csv
 ```
-(Do **not** pass `--candidate` — dual-run uses synthesized labels. Both legs are single-class/single-position so the one-to-one pairing holds; the two legs share identical row coverage since only feature *values* changed.) ADOPT ⇔ composite ΔRMSE `hi_95 < 0` AND spearman `lo_95 > -0.02`.
+(Do **not** pass `--candidate` — dual-run uses synthesized labels. Both legs are single-class/single-position so the one-to-one pairing holds; the two legs share identical row coverage since only feature *values* changed, not rows — `load_dual_run_paired` raises if coverage differs, so a raise here means the augmented build dropped rows and must be fixed.) ADOPT ⇔ composite ΔRMSE `hi_95 < 0` AND spearman `lo_95 > -0.02`.
 
-- [ ] **Step 6: Re-run the model-class bake-off on the augmented cache (class selection)**
+- [ ] **Step 5: Add `--features-root` to `_rb_model_bakeoff.py`, then run the bake-off on the augmented cache**
 
+The driver currently has no argparse (bare `main()`, `_rb_model_bakeoff.py:18`). Add ~5 lines: `import argparse`, a parser with `--features-root` (`type=Path`, default `Path("data/features")`), `parse_args()`, and pass `features_root=args.features_root` into the `run_backtest(...)` call (`:22-25`). Then:
 ```bash
 .venv/Scripts/python.exe scripts/_rb_model_bakeoff.py --features-root data/features_rb_aug \
     > reports/rb_model_bakeoff_augmented.md
 ```
-(Give `_rb_model_bakeoff.py` the same `--features-root` arg — a one-line `argparse` + pass to `run_backtest(..., features_root=...)`; it currently hardcodes the default. If preferred, run the three classes via the extended `backtest.py` instead.) Compare absolute composite_rmse/mae/spearman vs the Phase 0 table.
+Compare absolute composite_rmse/mae/spearman vs the Phase 0 table. (Alternatively run the three classes via the extended `backtest.py --features-root ... --position RB`.)
 
-- [ ] **Step 7: Record the G2 verdict + commit reports/code**
+- [ ] **Step 6: Record the G2 verdict + commit**
 
 Append to `reports/feature_probe_rb_summary.md`: the dual-run gate verdict and the augmented bake-off table; state which model class has the lowest composite_rmse (and that it does not regress spearman vs augmented baseline).
 ```bash
 .venv/Scripts/python.exe -m mypy src tests && .venv/Scripts/python.exe -m ruff check src tests scripts && .venv/Scripts/python.exe -m ruff format --check src tests scripts
-PATH=".venv/Scripts:$PATH" git add src/projections/models/baseline.py reports/feature_probe_rb_summary.md reports/rb_model_bakeoff_augmented.md scripts/_rb_model_bakeoff.py
-PATH=".venv/Scripts:$PATH" git commit -m "feat(models): RB augmented feature columns + G2 gate/bakeoff (#55)"
+PATH=".venv/Scripts:$PATH" git add scripts/_rb_model_bakeoff.py reports/feature_probe_rb_summary.md reports/rb_model_bakeoff_augmented.md reports/adoption_gate_rb_*.csv
+PATH=".venv/Scripts:$PATH" git commit -m "feat(dfs): RB augmented dual-run gate + bake-off — G2 verdict (#55)"
 ```
 
-- [ ] **Step 8: GATE G2 — branch**
+- [ ] **Step 7: GATE G2 — branch**
 
 - **Dual-run gate does NOT ADOPT → Task 10a (revert + STOP write-up), END.**
 - **Gate ADOPTs → Task 10b onward** (Phase 3). Note which class wins the bake-off (baseline vs a non-baseline class) — it decides whether the default flips.
@@ -540,15 +583,15 @@ PATH=".venv/Scripts:$PATH" git commit -m "feat(models): RB augmented feature col
 ### Task 10a: Revert + STOP write-up (ONLY if G2 not ADOPT)
 
 **Files:**
-- Revert: the Task 7/8/9 source edits (schema cols, builder wiring, `_RB_FEATURE_COLUMNS`) — do not ship inert feature columns. Keep the CLI passthroughs (Tasks 5–6) — they are independently useful, non-RB-specific infra.
+- Revert: the **integration** commits — Task 8 (builder wiring + fixtures) and Task 7 (schema cols + `_RB_FEATURE_COLUMNS`, which now live in one commit). Do not ship inert feature columns. **Keep:** the CLI passthroughs (Tasks 5–6) and Task 9's `_rb_model_bakeoff.py --features-root` arg + reports — all independently useful, non-RB-specific infra/artifacts.
 - Modify: `TODO.md`, `project_management.md`
 
-- [ ] **Step 1: Revert the integration commits** (keep Tasks 5–6)
+- [ ] **Step 1: Revert the two integration commits** (newest first; keep Tasks 5–6 and Task 9 infra)
 
 ```bash
-git revert --no-edit <Task9_commit> <Task8_commit> <Task7_commit>
+git revert --no-edit <Task8_commit> <Task7_commit>
 ```
-(Resolve any conflict by ensuring `RbFeaturesSchema`, `build_rb_features`, `_RB_FEATURE_COLUMNS` match `main`; rerun `pytest -k "rb or schemas or store"` to confirm green.)
+Revert Task 8 before Task 7 (Task 8 depends on Task 7's schema). The two sequential revert commits leave the final tree matching `main` for `RbFeaturesSchema`/`build_rb_features`/`_RB_FEATURE_COLUMNS`. (Note: do NOT revert Task 9's commit — it carries only the harmless `--features-root` arg + report artifacts, not RB integration.) Rerun `.venv/Scripts/python.exe -m pytest -k "rb or schemas or store or match_schema"` to confirm green.
 
 - [ ] **Step 2: Document the result + commit**
 
@@ -655,8 +698,9 @@ PATH=".venv/Scripts:$PATH" git commit -m "docs(dfs): RB feature lift verdict (#5
 
 ## Self-review notes
 
-- **Spec coverage:** Phase 0 (§4 Phase 0) → Task 1; Phase 1 probe + G1 (§4 Phase 1, §6 G1) → Tasks 2–4; CLI prerequisite (§4 Phase 2 "CLI prerequisite") → Tasks 5–6; schema/builder/model-cols (§4 Phase 2 steps 1–3) → Tasks 7–9 step 1; dual-run gate + bake-off + G2 (§4 Phase 2 steps 4–5, §6 G2) → Task 9; revert-on-fail (§6 G2 third branch, §8) → Task 10a; default flip + prod rebuild + snapshot + edge study + docs (§4 Phase 3) → Tasks 10b–13.
-- **Gates honored:** G1 (Task 3 step 5), G2 (Task 9 step 8) branch to STOP write-ups; the both-NULL early exit (the spec's likely outcome) costs only Tasks 1–4.
+- **Spec coverage:** Phase 0 (§4 Phase 0) → Task 1; Phase 1 probe + G1 (§4 Phase 1, §6 G1) → Tasks 2–4; CLI prerequisite (§4 Phase 2 "CLI prerequisite") → Tasks 5–6; schema + model-cols (§4 Phase 2 steps 1,3) → Task 7 (one commit, kept in sync by the existing `test_baseline_feature_columns_match_schema` guard); builder wiring (§4 Phase 2 step 2) → Task 8; dual-run gate + bake-off + G2 (§4 Phase 2 steps 4–5, §6 G2) → Task 9; revert-on-fail (§6 G2 third branch, §8) → Task 10a; default flip + prod rebuild + snapshot + edge study + docs (§4 Phase 3) → Tasks 10b–13.
+- **Gates honored:** G1 (Task 3 step 5), G2 (Task 9 step 7) branch to STOP write-ups; the both-NULL early exit (the spec's likely outcome) costs only Tasks 1–4.
 - **Coverage discipline:** thresholds are measured (Task 2), not guessed; the imputation-sensitive trend-col split is handled (Task 2 step 3 / Task 3 step 2).
-- **No dead columns:** Task 10a reverts the integration if the gate fails.
-- **Type consistency:** the four trajectory + four Vegas column names are identical across Tasks 7, 8, 9 and match the WR/QB schema precedents.
+- **No dead columns:** Task 10a reverts the integration (Tasks 7–8) if the gate fails; the Task 9 infra (bake-off `--features-root` arg) is kept.
+- **Type consistency:** the four trajectory + four Vegas column names are identical across Task 7 (schema + `_RB_FEATURE_COLUMNS`) and Task 8 (builder merge-slice) and match the WR/QB schema precedents.
+- **No invented fixtures:** Task 8 adds a real `rb_draft_picks` conftest fixture (mirroring `wr_draft_picks`); the schema coupling is checked by the pre-existing regression test, not a hand-authored minimal-row helper.
