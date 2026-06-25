@@ -189,7 +189,10 @@ precedent that admits them. **Important:** relaxing the threshold to admit a
 So decide per column: `age`/`is_rookie` are well-covered (~88–97%) and probe
 cleanly; if the trend columns are too sparse to admit without heavy imputation,
 **probe them as a separate candidate** (or drop them from the trajectory family
-for RB) rather than blindly lowering the floor. Record the chosen threshold(s)
+for RB) rather than blindly lowering the floor. (The builder always emits all
+five trajectory columns, so "separate candidate" means a one-line column-select
+on the override parquet — `df[["gsis_id","season","week","age","is_rookie"]]` —
+not a builder flag.) Record the chosen threshold(s)
 and the measured per-column coverage in the probe report.
 
 **Gate G1** (see §6). Both NULL → STOP. Any SIGNAL → Phase 2 for the
@@ -231,8 +234,11 @@ For each family that SIGNALed in Phase 1:
    `data/features` (old RB cache) untouched so the dual-run gate in step 5 has a
    clean old-vs-augmented pair with no fragile in-place overwrite/restore. (The
    production rebuild of `data/features/rb` happens only in Phase 3, after the
-   gate passes. If `refresh_features.py` has no root override, add a minimal
-   `--features-root` passthrough — `run_backtest`/builders already accept it.)
+   gate passes. NB: `refresh_features.py` today exposes only `--data-root` and
+   derives `features_root = data_root/"features"`; reusing `--data-root` would
+   wrongly relocate `raw/` too, so add a minimal **`--features-root`** passthrough
+   — `_refresh_one` already accepts `features_root`, only the CLI parser needs the
+   flag. The example command above assumes that one-line addition.)
 5. **Re-evaluate on the augmented features.** Two distinct questions, two
    distinct instruments. **CLI prerequisite:** `scripts/backtest.py` currently
    does **not** expose `features_root` or `positions` (it calls `run_backtest`
