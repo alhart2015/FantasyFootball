@@ -418,6 +418,9 @@ _RB_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "is_high_wind",
     "temperature_f",
     "is_grass_surface",
+    # Trajectory trend (#55 RB feature lift; signal probe SIGNAL on rushing_yards).
+    "volume_trend_l4_minus_prior_l4",
+    "snap_pct_change_l4_vs_prior_l4",
 )
 
 

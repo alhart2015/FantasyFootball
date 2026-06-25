@@ -609,6 +609,10 @@ def test_rb_features_schema_accepts_valid_row() -> None:
             "is_high_wind": [0.0],
             "temperature_f": [65.0],
             "is_grass_surface": [1.0],
+            # Trajectory-trend cols (#55 RB feature lift). nullable=True;
+            # happy-path test covers the populated case.
+            "volume_trend_l4_minus_prior_l4": [1.5],
+            "snap_pct_change_l4_vs_prior_l4": [0.05],
         }
     )
     RbFeaturesSchema.validate(df)
@@ -646,12 +650,14 @@ def test_rb_features_schema_rejects_rush_share_over_one() -> None:
             "proe_l4": [2.5],
             "team_ayps_l4": [7.8],
             "team_def_epa_resid_l4": [-0.05],
-            # Weather cols — provided so the failure is on rush_share_l4, not
-            # on a missing weather column.
+            # Weather + trajectory-trend cols — provided so the failure is on
+            # rush_share_l4, not on a missing required column.
             "wind_speed_mph": [8.0],
             "is_high_wind": [0.0],
             "temperature_f": [65.0],
             "is_grass_surface": [1.0],
+            "volume_trend_l4_minus_prior_l4": [1.5],
+            "snap_pct_change_l4_vs_prior_l4": [0.05],
         }
     )
     with pytest.raises(SchemaError):

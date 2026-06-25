@@ -746,6 +746,13 @@ class RbFeaturesSchema(pa.DataFrameModel):
     temperature_f: Series[float] = pa.Field(nullable=True)
     is_grass_surface: Series[float] = pa.Field(ge=0, le=1, nullable=True)
 
+    # Trajectory trend (#55 RB feature lift; signal probe SIGNAL on
+    # rushing_yards). Needs 8 prior active games, so NaN for early-season /
+    # low-history player-weeks; BaselineModel imputes mean, lightgbm consumes
+    # NaN natively. Mirrors the WrFeaturesSchema declarations.
+    volume_trend_l4_minus_prior_l4: Series[float] = pa.Field(nullable=True)
+    snap_pct_change_l4_vs_prior_l4: Series[float] = pa.Field(ge=-1, le=1, nullable=True)
+
     class Config:
         strict = "filter"
         coerce = True  # see WrFeaturesSchema.Config for rationale
