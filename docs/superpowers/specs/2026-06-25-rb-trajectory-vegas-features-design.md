@@ -103,12 +103,17 @@ position). Phases with hard decision gates between them.
 
 ### Phase 0 — Persist the baseline-to-beat (no source changes)
 
-Run `scripts/_rb_model_bakeoff.py` (already authored this session) and write its
-output to `reports/rb_model_bakeoff_2026-06-25.md`, so the §1 "baseline beats
-lightgbm-nb and ensemble" claim rests on a committed artifact, not an inline
-citation. This is the *old-feature-set* baseline the Phase 2 re-bake-off is
-compared against. Trivial; do it first so the rest of the work has a fixed
-reference point.
+`scripts/_rb_model_bakeoff.py` (already authored this session) **prints** the
+RB-only `{baseline, lightgbm-nb, ensemble}` walk-forward table to stdout — it
+does not write a file. Capture that stdout into
+`reports/rb_model_bakeoff_2026-06-25.md` (wrap the print output in a short
+markdown header) so the §1 "baseline beats lightgbm-nb and ensemble" claim rests
+on a committed artifact, not an inline citation. This persists the **table**
+(the old-feature-set reference the Phase 2(b) re-bake-off compares against); it
+is *not* the dual-run gate's baseline leg — that leg is a separate
+`results.parquet` run produced in Phase 2 step 5 (the bake-off driver computes
+metrics, not the per-row `results.parquet` the gate consumes). Trivial; do it
+first so the rest of the work has a fixed reference point.
 
 ### Phase 1 — Signal probe (cheap, no source changes)
 
@@ -132,22 +137,37 @@ Use the existing pre-spec screening tool `scripts/probe_feature_signal.py`
   `attach_vegas_team_context_features` over raw `schedules` (position-agnostic;
   merged on `(season, week, team)`).
 
-Confirm each script's output covers RB rows; if a script needs an RB-inclusive
-invocation flag, add it minimally rather than forking the builder. The override
-parquets land in `data/features_probe/` (gitignored convention; regenerable).
-No source module (`RbFeaturesSchema`, `build_rb_features`, any model) is touched
-in this phase.
+Both builders emit all four fantasy positions unconditionally (no position
+filter); the probe loads only the RB cache and left-joins the override on
+`(gsis_id, season, week)`, so the extra QB/WR/TE override rows are harmless
+non-matches — **no RB-inclusive flag is needed**. Both builders default
+`--output` to their own filename (`data/features_probe/trajectory.parquet` /
+`vegas_team_context.parquet`), so **pass `--output` explicitly** to land the
+files the probe then consumes:
+
+```
+python -m scripts.build_trajectory_override \
+    --output data/features_probe/rb_trajectory.parquet
+python -m scripts.build_vegas_team_context_override \
+    --output data/features_probe/rb_vegas_preseason.parquet
+```
+
+(The trajectory builder also emits a `draft_year_inferred` column beyond the four
+named ones; it is not in the RB baseline cache, so it rides along as an extra
+candidate column — account for it when reading the per-column coverage, don't be
+surprised by a fifth column.) The override parquets land in
+`data/features_probe/` (gitignored convention; regenerable). No source module
+(`RbFeaturesSchema`, `build_rb_features`, any model) is touched in this phase.
 
 **Run the probe** for each family — **explicitly `--position RB`** (the probe
 defaults to all four positions and would crash on QB/WR where these columns
-already exist in the cache), with the **coverage threshold relaxed** to match
-the structural sparsity of each family (the default is 0.95 and both families
-fall below it):
+already exist in the cache), with the **coverage threshold relaxed** because the
+default 0.95 is above both families' structural coverage:
 
 ```
 python -m scripts.probe_feature_signal --candidate-name augment_rb_trajectory \
     --position RB --override data/features_probe/rb_trajectory.parquet \
-    --coverage-threshold 0.35 \
+    --coverage-threshold <measured> \
     --csv-out reports/feature_probe_rb_trajectory.csv
 python -m scripts.probe_feature_signal --candidate-name augment_rb_vegas \
     --position RB --override data/features_probe/rb_vegas_preseason.parquet \
@@ -155,15 +175,22 @@ python -m scripts.probe_feature_signal --candidate-name augment_rb_vegas \
     --csv-out reports/feature_probe_rb_vegas.csv
 ```
 
-Coverage thresholds follow the established precedents: Vegas `season_avg_*` is
-NaN at week 1 by construction → `0.90` (per the WR+QB Vegas probe spec,
-`2026-05-17-vegas-team-context-probe-design.md`); trajectory's trend columns need
-~8 prior active games and cover only ~45–71% of player-weeks → a relaxed floor
-(~`0.35`, matching the PR #25 WR trajectory probe). **Confirm the exact RB
-non-null fractions from the override and set the threshold just below the
-binding column** rather than hardcoding these figures blindly; the harness
-reports per-column coverage and aborts with `OverrideCoverageError` if a column
-falls under the threshold.
+**Set the threshold from measured RB coverage, not a guessed constant** (this is
+the first Phase-1 task): the harness checks **each candidate column
+independently** and aborts with `OverrideCoverageError` if any falls below the
+threshold, so the binding column is the sparsest. For Vegas, `season_avg_*` is
+NaN at week 1 by construction → `0.90` is the documented precedent (WR+QB Vegas
+probe spec `2026-05-17-vegas-team-context-probe-design.md`). For trajectory, the
+trend columns cover only ~50% of player-weeks (WR schema comment, `schemas.py`),
+so the binding column needs a threshold below ~0.50 — there is **no** 0.90/0.95
+precedent that admits them. **Important:** relaxing the threshold to admit a
+~50%-NaN column means the probe mean-imputes that NaN mass, which can bias the
+ΔRMSE (the exact failure `validate_override_coverage`'s docstring warns about).
+So decide per column: `age`/`is_rookie` are well-covered (~88–97%) and probe
+cleanly; if the trend columns are too sparse to admit without heavy imputation,
+**probe them as a separate candidate** (or drop them from the trajectory family
+for RB) rather than blindly lowering the floor. Record the chosen threshold(s)
+and the measured per-column coverage in the probe report.
 
 **Gate G1** (see §6). Both NULL → STOP. Any SIGNAL → Phase 2 for the
 signaling family (or families).
@@ -198,27 +225,44 @@ For each family that SIGNALed in Phase 1:
    from `RbFeaturesSchema` dynamically and picks them up automatically; the
    hardcoded baseline list must be updated explicitly (the documented
    pattern in the WR/QB column lists).
-4. **Rebuild the RB feature cache** — `python scripts/refresh_features.py rb`
-   for all cached seasons. (Keep the *pre-feature* RB cache/run from Phase 0 so
-   the dual-run gate in step 5 has a clean before/after pair.)
+4. **Build the augmented RB cache into a *separate* feature root** (non-destructive)
+   — e.g. `python scripts/refresh_features.py rb --features-root
+   data/features_rb_aug` (or the script's equivalent root arg). Keep the existing
+   `data/features` (old RB cache) untouched so the dual-run gate in step 5 has a
+   clean old-vs-augmented pair with no fragile in-place overwrite/restore. (The
+   production rebuild of `data/features/rb` happens only in Phase 3, after the
+   gate passes. If `refresh_features.py` has no root override, add a minimal
+   `--features-root` passthrough — `run_backtest`/builders already accept it.)
 5. **Re-evaluate on the augmented features.** Two distinct questions, two
-   distinct instruments:
+   distinct instruments. **CLI prerequisite:** `scripts/backtest.py` currently
+   does **not** expose `features_root` or `positions` (it calls `run_backtest`
+   with neither, `backtest.py:170`), so add a minimal **`--features-root` and
+   `--position` passthrough** to it (both already parameters of `run_backtest`,
+   `harness.py:209,212`) — this is what makes the two legs reproducible
+   non-destructively, and is the only source change step 5 needs.
    - **(a) Do the features help? — the ship gate.** `scripts/adoption_gate.py`
      is a *paired* gate over two backtest **run directories** (each a
-     `results.parquet`), **not** a snapshot comparison. So: produce two RB
-     `baseline` backtest runs via `scripts/backtest.py --report` (which writes
-     `data/backtest/run_<ts>/results.parquet`) — one on the **old** features
-     (Phase 0 / pre-rebuild cache), one on the **augmented** features — then run
-     the **dual-run** gate (`--baseline-run <old> --candidate-run <new>
-     --candidate baseline`). ADOPT here = the feature family helps the baseline
-     model (criteria in §6 G2).
+     `results.parquet`), **not** a snapshot comparison. Produce two RB-only
+     `baseline` backtest runs via `scripts/backtest.py --report --model baseline
+     --position RB` (writes `data/backtest/run_<ts>/results.parquet`): leg ONE
+     with `--features-root data/features` (old), leg TWO with `--features-root
+     data/features_rb_aug` (augmented). Then run the **dual-run** gate:
+     `--baseline-run <old_run> --candidate-run <aug_run>` (in dual-run mode the
+     gate uses synthesized `_baseline_run`/`_candidate_run` labels — **do not**
+     pass `--candidate`, which only applies to single-run mode and is ignored
+     here). ADOPT = the feature family helps the baseline model (criteria §6 G2).
+     `--model baseline` keeps each run single-class so the dual-run pairing is
+     one-to-one (a multi-class run dir would break the `one_to_one` merge).
    - **(b) Which model class is best on the augmented features? — selection.**
      Re-run the RB-only walk-forward **bake-off** {`baseline`, `lightgbm-nb`,
-     `ensemble`} on the augmented cache (the §1 / Phase 0 driver) and compare
-     **absolute** `composite_rmse`/`composite_mae`/`spearman_topN`. New signal is
-     precisely what could let lightgbm/ensemble finally beat ridge; the §1
-     verdict was on the old feature set and does not bind. (The adoption gate
-     emits a *paired delta*, not an absolute per-class ranking — that is why
+     `ensemble`} on the **augmented** cache (the Phase 0 driver, pointed at
+     `data/features_rb_aug` — give `_rb_model_bakeoff.py` the same
+     `--features-root` passthrough, or run the three classes via the extended
+     `backtest.py`) and compare **absolute**
+     `composite_rmse`/`composite_mae`/`spearman_topN` against the Phase 0 table.
+     New signal is precisely what could let lightgbm/ensemble finally beat ridge;
+     the §1 verdict was on the old feature set and does not bind. (The adoption
+     gate emits a *paired delta*, not an absolute per-class ranking — that is why
      class selection uses the bake-off's absolute table, while the ship decision
      uses the gate.)
 
@@ -250,10 +294,10 @@ If a model class wins G2:
 
 | Phase | Files | Nature |
 |---|---|---|
-| 0 | `reports/rb_model_bakeoff_2026-06-25.md` (new); driver `scripts/_rb_model_bakeoff.py` (already authored) | No source changes |
-| 1 | **reuse** `scripts/build_trajectory_override.py` + `scripts/build_vegas_team_context_override.py` (minimal RB-inclusive tweak only if needed), `data/features_probe/rb_*.parquet` (new, gitignored), `reports/feature_probe_rb_*.csv` (new) | No source changes |
-| 2 | `src/projections/schemas.py`, `src/projections/features/rb.py`, `src/projections/models/baseline.py`; `data/features/rb/*` cache rebuilt; `data/backtest/run_*/` (old + augmented) | Schema + builder + model column list |
-| 3 | `src/projections/models/__init__.py` (dispatch default), `tests/backtest/model_metrics.json` (snapshot); TODO/PM | Default flip + snapshot + docs |
+| 0 | `reports/rb_model_bakeoff_2026-06-25.md` (new, captured from the driver's stdout); driver `scripts/_rb_model_bakeoff.py` (already authored, prints only) | No source changes |
+| 1 | **reuse** `scripts/build_trajectory_override.py` + `scripts/build_vegas_team_context_override.py` (pass `--output`; no fork needed), `data/features_probe/rb_*.parquet` (new, gitignored), `reports/feature_probe_rb_*.csv` (new) | No source changes |
+| 2 | `src/projections/schemas.py`, `src/projections/features/rb.py`, `src/projections/models/baseline.py`; **`scripts/backtest.py`** (+`--features-root`/`--position` passthrough) and possibly `scripts/refresh_features.py`/`_rb_model_bakeoff.py` (same passthrough); augmented cache built to a **separate** root `data/features_rb_aug/rb/*`; `data/backtest/run_*/` (old + augmented legs) | Schema + builder + model column list + small CLI passthroughs |
+| 3 | `src/projections/models/__init__.py` (dispatch default), `data/features/rb/*` (production rebuild), `tests/backtest/model_metrics.json` (snapshot); TODO/PM | Default flip + prod cache rebuild + snapshot + docs |
 
 Mirrors WR trajectory (PR #25), WR+QB Vegas (PR #51), RB weather (PR #28).
 
