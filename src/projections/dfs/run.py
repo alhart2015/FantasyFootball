@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,20 +42,42 @@ def _load_sleeper(data_root: Path, seasons: list[int]) -> pd.DataFrame:
                 read_partition(data_root / "raw", "sleeper_weekly_projections", season=season)
             )
         except FileNotFoundError:
+            warnings.warn(
+                f"no Sleeper weekly partition for season {season}; excluding it — "
+                "the resulting universe/verdict will be partial.",
+                stacklevel=2,
+            )
             continue
     if not frames:
         raise FileNotFoundError("no Sleeper weekly partitions found; run ingest-sleeper first")
     return pd.concat(frames, ignore_index=True)
 
 
-def run_study(
+@dataclass(frozen=True)
+class StudyInputs:
+    """The comparable universe plus the intermediate frames the study reuses for
+    the blend and inclusion diagnostics. Bundled so `run_study` and per-position
+    analysis tooling share one construction path instead of reimplementing it."""
+
+    ours: pd.DataFrame
+    sleeper_raw: pd.DataFrame
+    sleeper_pts: pd.DataFrame
+    actuals: pd.DataFrame
+    usage: pd.DataFrame
+    universe: pd.DataFrame
+
+
+def build_study_inputs(
     *,
     seasons: list[int],
     positions: list[Position],
     data_root: Path,
     features_root: Path,
     ruleset: Ruleset,
-) -> StudyOutput:
+) -> StudyInputs:
+    """Build the comparable universe (+ reused intermediates) from stored
+    partitions. The single source of truth for how the study universe is
+    assembled; `run_study` and analysis scripts both call this."""
     ours = emit_weekly_projections(
         seasons=seasons,
         positions=positions,
@@ -73,21 +96,57 @@ def run_study(
     )
     actuals = dk_weekly_actuals(raw_actuals, ruleset=ruleset)
     usage = build_usage(raw_actuals)
-
     universe = build_universe(ours, sleeper_pts, actuals, usage=usage)
-    primary = run_edge_study_from_universe(universe)
+    # Postcondition: refuse to return a universe that silently dropped a requested
+    # season (a missing Sleeper partition is skipped with only a warning by
+    # `_load_sleeper`, and missing feature/weekly data inner-joins away) — otherwise
+    # `run_study` would emit an authoritative ADOPT/STOP verdict on partial data.
+    covered = {int(s) for s in universe["season"].unique()}
+    dropped = sorted(set(seasons) - covered)
+    if dropped:
+        raise ValueError(
+            f"comparable universe is missing requested season(s) {dropped} — a Sleeper, "
+            "feature, or weekly partition is absent, so a verdict would be computed on "
+            "partial data. Ingest the missing partitions and retry."
+        )
+    return StudyInputs(
+        ours=ours,
+        sleeper_raw=sleeper_raw,
+        sleeper_pts=sleeper_pts,
+        actuals=actuals,
+        usage=usage,
+        universe=universe,
+    )
 
-    blend = blend_statlines(ours, sleeper_raw, weight_ours=0.5, ruleset=ruleset)
+
+def run_study(
+    *,
+    seasons: list[int],
+    positions: list[Position],
+    data_root: Path,
+    features_root: Path,
+    ruleset: Ruleset,
+) -> StudyOutput:
+    si = build_study_inputs(
+        seasons=seasons,
+        positions=positions,
+        data_root=data_root,
+        features_root=features_root,
+        ruleset=ruleset,
+    )
+    primary = run_edge_study_from_universe(si.universe)
+
+    blend = blend_statlines(si.ours, si.sleeper_raw, weight_ours=0.5, ruleset=ruleset)
     blend_universe = build_universe(
-        blend.rename(columns={"blended_pts": "our_pts"}), sleeper_pts, actuals, usage=usage
+        blend.rename(columns={"blended_pts": "our_pts"}), si.sleeper_pts, si.actuals, usage=si.usage
     )
     exploratory = run_edge_study_from_universe(blend_universe)
 
     return StudyOutput(
         primary=primary,
         exploratory_blend=exploratory,
-        inclusion=inclusion_disagreement(ours, sleeper_pts, usage=usage),
-        coverage=coverage_report(universe),
+        inclusion=inclusion_disagreement(si.ours, si.sleeper_pts, usage=si.usage),
+        coverage=coverage_report(si.universe),
     )
 
 
