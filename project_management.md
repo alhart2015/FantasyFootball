@@ -4,6 +4,20 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## DFS Engine — Layer 1 edge-study VERDICT: **STOP** (2026-06-24, branch `feat/dfs-projection-edge-study-verdict`)
+
+**Status:** the deferred verdict is in. Resolved the TODO #40 blocker (re-ingested raw `pbp`/`ngs`/`snap_counts`/`depth_charts`/`schedules`/`draft_picks` from nflreadpy and rebuilt the full 2018–2024 feature cache — 604 partitions, current schema, Vegas team-context columns genuinely populated), ingested Sleeper weekly projections 2020–2024, and ran the pre-registered study on 2021–2024. Machine report `reports/dfs_projection_edge_2026-06-24.md`. TODO #54/#39/#40.
+
+**The verdict — STOP (well-powered, not INCONCLUSIVE).** On the disagreement head-to-head (cells where we differ from Sleeper by ≥ DELTA=3.0 DK-base pts), our home-grown weekly model is closer to actual only **0.476 of the time (95% CI 0.456–0.495, clustered by player-season)** — i.e. Sleeper wins ~52%, CI entirely below 0.50. Robust: by-week CI 0.456–0.496, bonus-sensitivity CI (actuals+bonus) 0.451–0.489 (verdict does not flip with bonuses), and our ranking skill is also worse (Spearman diff −0.031, CI −0.038…−0.023). Power: **1006 disagreement clusters** (≥ N_MIN=100) and CI half-width ≈0.02 (< 0.05 target) — so the realized study satisfies exactly the minimums the `calibrate` step exists to pre-check; the STOP is well-powered, not a thin-data artifact.
+
+**Nuance (exploratory, non-confirmatory):** the loss is concentrated in QB (0.431) and RB (0.430); TE is ~even (0.498) and **WR is a bright spot where we beat Sleeper (0.535)**. The 50/50 ours+Sleeper blend lifts the pooled fraction to 0.543 but is **INCONCLUSIVE** (CI 0.485–0.600 straddles 0.50) — blending pulls us to ~even, not a significant edge. Coverage: 13,398 both-projected cells, 898 ours-only, 556 Sleeper-only.
+
+**Decision-gate implication:** per the pre-registered gate, **do NOT build DFS Engine Layer 2** (DK/FD ruleset hardening, salary-cap ILP optimizer, contest/ROI backtest) on this projection edge — the model can't beat even Sleeper-alone (a *softer* proxy than the sharp DFS field; failing here is a strong negative signal). The WR-only edge + the near-even blend are the only threads worth a future look if DFS is ever revisited (e.g. a WR-specialist or a sharper market proxy than Sleeper); not actioned now.
+
+**Code/process notes:** fixed a shipped CLI bug — `calibrate` was missing `--features-root` (the deferred calibrate path had never run end-to-end). The formal `calibrate --prior-season 2020` diagnostic is still **blocked**: it needs ≥3 training seasons before 2020 (EnsembleModel minimum), i.e. features back to 2017, but rebuilding 2017 features trips a latent **schema-too-strict bug** — `opp_allowed_qb_fppg_l4` (and the analogous rb/wr/te opp-allowed L4 features) carry a `ge=0` check, yet an early-season trailing-4 average is legitimately negative (a QB can post net-negative fantasy points). 2018–2024 never hit it; 2017 does. Logged as a TODO follow-up; **non-gating** because the verdict's power is already confirmed by the realized study. Decision needed before relaxing the schema invariant (per CLAUDE.md schema-change discipline).
+
+---
+
 ## DFS Engine — Layer 1 projection edge study — harness shipped, verdict deferred (2026-06-23, branch `feat/dfs-projection-edge-study`)
 
 **Status:** the DFS Engine sub-project's first slice — a retrospective kill-test gating the whole engine: does our home-grown weekly model (alone or blended with Sleeper) beat Sleeper's own weekly projections under DraftKings base scoring? Built end-to-end via the `superpowers-go` pipeline (brainstorm → spec → **superpowers-spec-review** 4 iters to convergence → writing-plans → **superpowers-plan-review** 2 iters → **subagent-driven-development** 12 tasks, each TDD + spec/quality review). Spec/plan `docs/superpowers/specs|plans/2026-06-23-dfs-projection-edge-study.*`; status report `reports/dfs_projection_edge_2026-06-23.md`. TODO #54.

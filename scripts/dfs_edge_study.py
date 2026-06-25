@@ -27,6 +27,7 @@ def main() -> None:
     cal = sub.add_parser("calibrate")
     cal.add_argument("--prior-season", type=int, default=2020)
     cal.add_argument("--data-root", type=Path, default=Path("data"))
+    cal.add_argument("--features-root", type=Path, default=Path("data/features"))
 
     stu = sub.add_parser("study")
     stu.add_argument("--seasons", type=_seasons, required=True)
