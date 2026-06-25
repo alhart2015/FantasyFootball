@@ -271,7 +271,7 @@ parser.add_argument(
     help="restrict the backtest to a single position (default: all four).",
 )
 ```
-Then, where `positions` is computed, honor `--position` — but do **not** override the existing decomposed/ensemble-decomposed WR-only guard (those models are WR-only; `--position RB` with them would KeyError in dispatch). Reject the incompatible combo:
+Then, **after** the existing decomposed/ensemble-decomposed `positions = (Position.WR,)` assignment (`backtest.py:162-166`) so this block sees and overrides it, honor `--position` — but do **not** silently override the WR-only guard (those models are WR-only; `--position RB` with them would KeyError in dispatch). Reject the incompatible combo first, then set positions:
 ```python
 if args.position is not None:
     if args.model in ("decomposed-baseline", "ensemble-decomposed") and args.position != "WR":
@@ -426,7 +426,7 @@ PATH=".venv/Scripts:$PATH" git commit -m "feat(schemas): RB trajectory/vegas col
 - Modify: `src/projections/features/rb.py` (`build_rb_features`)
 - Modify: `tests/test_features/conftest.py` (add an `rb_draft_picks` fixture, mirroring `wr_draft_picks` at `conftest.py:965` and `te_draft_picks` at `:1025`)
 - Modify: `tests/test_features/test_rb.py` (add the trajectory attach test, mirroring the WR analog `test_wr.py:580-607` which passes `draft_picks=wr_draft_picks` and asserts a known veteran's `is_rookie == 0`)
-- Modify: `tests/test_features/test_rb_leakage.py` (**extend** — the file already exists with a `_baseline(...)` harness at `:14`; append a trajectory/Vegas leakage assertion mirroring `test_wr_trajectory_vegas_leakage.py`)
+- Create: `tests/test_features/test_rb_trajectory_vegas_leakage.py` (a **new** file mirroring `tests/test_features/test_wr_trajectory_vegas_leakage.py` — see Step 5 for why it must NOT be appended to the existing `test_rb_leakage.py` `_baseline` harness)
 
 **Interfaces:**
 - Consumes: `attach_trajectory_features(index, weekly_stats, snap_counts, draft_lookup, Position.RB)` + `build_draft_lookup(draft_picks)` from `projections.features.trajectory_features` (`:273`, `:327`); `attach_vegas_team_context_features(out, schedules)` from `projections.features.vegas_team_context_features` (`:129`). `build_wr_features` (`features/wr.py:263-284`) is the verbatim working template.
@@ -447,7 +447,7 @@ def rb_draft_picks() -> pd.DataFrame:
 ```
 (Read `conftest.py:965-1023` and replicate its exact shape with the RB fixtures' gsis_ids.)
 
-- [ ] **Step 2: Write the failing test** (columns present + a known veteran resolves `is_rookie == 0`, mirroring `test_wr.py:580-607`)
+- [ ] **Step 2: Write the failing test** (columns present + a known veteran resolves `is_rookie == 0`, mirroring `test_wr.py:595-609`)
 
 ```python
 def test_build_rb_features_attaches_trajectory(
@@ -463,12 +463,14 @@ def test_build_rb_features_attaches_trajectory(
     for col in ("age", "is_rookie", "volume_trend_l4_minus_prior_l4",
                 "snap_pct_change_l4_vs_prior_l4"):
         assert col in out.columns
-    # the veteran RB in the fixture (in rb_draft_picks) resolves a real age + is_rookie==0
-    vet = out[out["gsis_id"] == <known_vet_gsis_id>]
+    # age/is_rookie need NO prior-week history, so they populate at the fixture's
+    # as_of_week regardless: a veteran in rb_draft_picks resolves a real age + is_rookie==0.
+    # (Saquon Barkley 00-0034796 / CMC 00-0036650 are the RB-fixture gsis_ids — use one.)
+    vet = out[out["gsis_id"] == "00-0034796"]
     assert vet["age"].notna().all()
     assert (vet["is_rookie"] == 0).all()
 ```
-(Use the actual fixture parameter names from `test_rb.py:12-29` and the season/week the existing RB tests use; `<known_vet_gsis_id>` is one you put in `rb_draft_picks` as a veteran.)
+(Use the actual fixture parameter names from `test_rb.py:12-29` and the season/week the existing RB tests use. Assert only on `age`/`is_rookie` here — the **trend** columns need ≥8 prior active games and will be NaN at the small-fixture `as_of_week`, so they are exercised in the dedicated Step 5 leakage test with a 9-week fixture, not here.)
 
 - [ ] **Step 3: Run, verify fail**
 
@@ -501,17 +503,19 @@ out = out.merge(
 ```
 Key corrections vs a naive merge: the RB frame column is **`opponent`** (no `opp`); merge on **`["gsis_id","season","week"]`** only (not 5 keys); and slice `traj` to the **4 feature columns** so `attach_trajectory_features`'s extra `draft_year_inferred`/`team`/`opp` columns don't collide. (For the Vegas family: `out = attach_vegas_team_context_features(out, schedules)` over the FULL `schedules`, per `wr.py` Vegas block.) Then `out = RbFeaturesSchema.validate(out)` at the boundary.
 
-- [ ] **Step 5: Run, verify pass; then extend the leakage test**
+- [ ] **Step 5: Run the attach test, then write the leakage test as a NEW 9-week file**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_features/test_rb.py -k trajectory -v`
-Expected: PASS. Then append to `tests/test_features/test_rb_leakage.py` a trajectory/Vegas no-current-week-leakage assertion mirroring `test_wr_trajectory_vegas_leakage.py`, and run it.
+Expected: PASS.
+
+Then create `tests/test_features/test_rb_trajectory_vegas_leakage.py` mirroring `test_wr_trajectory_vegas_leakage.py` **including its fixture strategy** — do **NOT** append to the existing `test_rb_leakage.py` `_baseline` harness, which runs at `as_of_week=5`. The trend columns (`volume_trend_l4_minus_prior_l4`, `snap_pct_change_l4_vs_prior_l4`) use `rolling(4).shift(5)` and need ≥8 prior active games; `season_avg_*` needs ≥2 prior schedule weeks. At `as_of_week=5` those columns are structurally all-NaN, so a leakage assert there compares NaN-vs-NaN and **passes vacuously** — the exact failure the WR analog's docstring (`test_wr_trajectory_vegas_leakage.py:13-26`) documents. So mirror WR exactly: build **9 weeks** of `weekly_stats`/`snap_counts` + 9 schedule weeks locally, set `as_of_week=9`, inject implausible current/prior-week values into the full frames, and assert byte-equality of the four trajectory + the Vegas columns vs the un-poisoned build. Run it and confirm it actually exercises non-NaN values (the columns are populated at `as_of_week=9`).
 
 - [ ] **Step 6: Checklist + commit**
 
 ```bash
 .venv/Scripts/python.exe -m pytest -v -k "rb or store or schemas"
 .venv/Scripts/python.exe -m mypy src tests && .venv/Scripts/python.exe -m ruff check src tests && .venv/Scripts/python.exe -m ruff format --check src tests
-PATH=".venv/Scripts:$PATH" git add src/projections/features/rb.py tests/test_features/conftest.py tests/test_features/test_rb.py tests/test_features/test_rb_leakage.py
+PATH=".venv/Scripts:$PATH" git add src/projections/features/rb.py tests/test_features/conftest.py tests/test_features/test_rb.py tests/test_features/test_rb_trajectory_vegas_leakage.py
 PATH=".venv/Scripts:$PATH" git commit -m "feat(features): attach trajectory/vegas to build_rb_features (#55)"
 ```
 
