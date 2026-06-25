@@ -97,6 +97,18 @@ def build_study_inputs(
     actuals = dk_weekly_actuals(raw_actuals, ruleset=ruleset)
     usage = build_usage(raw_actuals)
     universe = build_universe(ours, sleeper_pts, actuals, usage=usage)
+    # Postcondition: refuse to return a universe that silently dropped a requested
+    # season (a missing Sleeper partition is skipped with only a warning by
+    # `_load_sleeper`, and missing feature/weekly data inner-joins away) — otherwise
+    # `run_study` would emit an authoritative ADOPT/STOP verdict on partial data.
+    covered = {int(s) for s in universe["season"].unique()}
+    dropped = sorted(set(seasons) - covered)
+    if dropped:
+        raise ValueError(
+            f"comparable universe is missing requested season(s) {dropped} — a Sleeper, "
+            "feature, or weekly partition is absent, so a verdict would be computed on "
+            "partial data. Ingest the missing partitions and retry."
+        )
     return StudyInputs(
         ours=ours,
         sleeper_raw=sleeper_raw,

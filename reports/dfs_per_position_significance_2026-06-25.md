@@ -1,6 +1,6 @@
 # DFS Edge Study — per-position significance (2021-2024)
 
-Companion to the pooled verdict in `dfs_projection_edge_2026-06-24.md` (**STOP**). Per-position head-to-head fractions with player-season **clustered-bootstrap 95% CIs** (N_BOOTSTRAP=2000, seed=20260623, DELTA=3.0 DK-base pts) — the per-position breakdown the verdict report omitted. Universe persisted to `data/dfs_universe_2021-2024.parquet` (gitignored) so re-cuts don't rebuild the 16 model cells.
+Companion to the pooled verdict in `dfs_projection_edge_2026-06-24.md` (**STOP**). Per-position head-to-head fractions with player-season **clustered-bootstrap 95% CIs** (N_BOOTSTRAP=2000, seed=20260623, DELTA=3.0 DK-base pts) — the per-position breakdown the verdict report omitted. Universe persisted to a gitignored parquet cache (keyed on usage floor + model routing) so re-cuts don't rebuild the 16 model cells.
 
 **Pooled:** 0.476 (95% CI 0.456-0.495); comparable cells 13398, disagreement cells 2521, disagreement clusters 1006.
 

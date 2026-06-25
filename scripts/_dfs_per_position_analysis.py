@@ -7,9 +7,11 @@ disagreement head-to-head fraction with a player-season clustered-bootstrap 95%
 CI + cell/cluster counts.
 
 Reuses the shipped harness (same DELTA, same clustered bootstrap) so the numbers
-are methodologically identical to the verdict. The universe cache is keyed only
-by filename: delete `data/dfs_universe_2021-2024.parquet` to rebuild after any
-config (DELTA / usage floor) or upstream data change. Throwaway — delete after use.
+are methodologically identical to the verdict. The universe cache filename is
+keyed on the config baked into the universe at build time (usage floor + per-
+position model routing), so changing either auto-invalidates the cache; DELTA is
+applied live at analysis time (not baked) and so is deliberately excluded.
+Throwaway — delete after use.
 """
 
 from __future__ import annotations
@@ -30,12 +32,18 @@ DATA_ROOT = Path("data")
 FEATURES_ROOT = DATA_ROOT / "features"
 SEASONS = [2021, 2022, 2023, 2024]
 POSITIONS = [Position.QB, Position.RB, Position.WR, Position.TE]
-UNIVERSE_CACHE = DATA_ROOT / "dfs_universe_2021-2024.parquet"
 
 # Production model class per position (for the report's "Model" column), read from
 # the single source of truth so the label can't drift when a position's model is
 # swapped (e.g. RB graduating off `baseline` — TODO #55).
 MODEL_CLASS = {pos: POSITION_DISPATCH[pos].default_model_class for pos in POSITIONS}
+# Cache filename signature: the config baked into the universe at build time. A
+# usage-floor or model-routing change yields a different filename → automatic
+# rebuild, so a stale cache can't be reused as if fresh.
+_CACHE_SIG = "floor{}_{}".format(
+    config.USAGE_FLOOR_TOUCHES_TARGETS, "-".join(MODEL_CLASS[pos] for pos in POSITIONS)
+)
+UNIVERSE_CACHE = DATA_ROOT / f"dfs_universe_2021-2024_{_CACHE_SIG}.parquet"
 # Maps the significance tag to its report-table label; reused (asterisks stripped)
 # for the console legend so the classification lives in exactly one place.
 SIG_LABEL = {
@@ -58,38 +66,37 @@ class PositionRow(NamedTuple):
     sig: str
 
 
-def _require_complete_universe(universe: pd.DataFrame) -> None:
-    """Refuse to report off a stale or quietly-partial cached universe. Checks the
-    expected columns are present (a schema-drifted cache otherwise dies with an
-    opaque KeyError mid-run) and that every (position, season) cell exists — a
-    missing Sleeper/feature season inner-joins away silently, and `_load_sleeper`
-    skips missing seasons, so a partial universe could be reported as the full
-    2021-2024 result."""
+def _require_loadable_universe(universe: pd.DataFrame) -> None:
+    """Refuse to report off a stale/malformed cached universe. Checks the expected
+    columns are present (a schema-drifted cache otherwise dies with an opaque
+    KeyError mid-run) and that every requested season is present (a fully missing
+    season inner-joins away; `build_study_inputs` guards this on a fresh build, but
+    a cache loaded from disk is unvalidated). Week-level completeness within a
+    season is NOT verified."""
     missing_cols = sorted(_REQUIRED_COLS - set(universe.columns))
     if missing_cols:
         raise SystemExit(
             f"cached universe is missing columns {missing_cols} — it predates a schema "
             f"change. Delete {UNIVERSE_CACHE} and re-run to rebuild."
         )
-    present = {
-        (str(p), int(s))
-        for p, s in universe[["position", "season"]].drop_duplicates().itertuples(index=False)
-    }
-    missing = sorted({(pos.value, season) for pos in POSITIONS for season in SEASONS} - present)
+    covered = {int(s) for s in universe["season"].unique()}
+    missing = sorted(set(SEASONS) - covered)
     if missing:
         raise SystemExit(
-            f"universe is missing (position, season) cells {missing} (expected every "
-            f"{[p.value for p in POSITIONS]} x {SEASONS}); refusing to report a partial "
-            f"result. Delete {UNIVERSE_CACHE} and re-run after ingesting all partitions."
+            f"cached universe is missing season(s) {missing} (expected {SEASONS}); refusing "
+            f"to report a partial result. Delete {UNIVERSE_CACHE} and re-run after ingesting "
+            "all partitions."
         )
 
 
 def build_or_load_universe() -> pd.DataFrame:
     if UNIVERSE_CACHE.exists():
-        print(f"[load] cached universe {UNIVERSE_CACHE} (delete to rebuild)", flush=True)
+        print(f"[load] cached universe {UNIVERSE_CACHE}", flush=True)
         universe = pd.read_parquet(UNIVERSE_CACHE)
     else:
         print("[build] build_study_inputs (this is the slow step)...", flush=True)
+        # build_study_inputs raises on a season that silently dropped, so a partial
+        # universe is never persisted to poison later runs.
         universe = build_study_inputs(
             seasons=SEASONS,
             positions=POSITIONS,
@@ -99,7 +106,7 @@ def build_or_load_universe() -> pd.DataFrame:
         ).universe
         universe.to_parquet(UNIVERSE_CACHE, index=False)
         print(f"[save] universe -> {UNIVERSE_CACHE} ({len(universe)} cells)", flush=True)
-    _require_complete_universe(universe)
+    _require_loadable_universe(universe)
     return universe
 
 
@@ -166,8 +173,8 @@ def _write_report(
         "Per-position head-to-head fractions with player-season **clustered-bootstrap 95% CIs** "
         f"(N_BOOTSTRAP={config.N_BOOTSTRAP}, seed={config.BOOTSTRAP_SEED}, DELTA={config.DELTA} "
         "DK-base pts) — the per-position breakdown the verdict report omitted. Universe persisted "
-        f"to `data/dfs_universe_2021-2024.parquet` (gitignored) so re-cuts don't rebuild the "
-        "16 model cells.",
+        "to a gitignored parquet cache (keyed on usage floor + model routing) so re-cuts don't "
+        "rebuild the 16 model cells.",
         "",
         f"**Pooled:** {pooled.point:.3f} (95% CI {pooled.lo_95:.3f}-{pooled.hi_95:.3f}); "
         f"comparable cells {n_comparable}, disagreement cells {len(pooled_dis)}, "
