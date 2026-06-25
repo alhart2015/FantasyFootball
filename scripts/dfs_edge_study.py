@@ -20,20 +20,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="DFS projection edge study")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    ing = sub.add_parser("ingest-sleeper")
+    # Shared args via parent parsers so a subcommand can't silently omit one its
+    # handler reads — the class of bug where `calibrate` read args.features_root
+    # without declaring it (the original defect on main). `--data-root` is common
+    # to all three; `--features-root` to the two that run the study.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--data-root", type=Path, default=Path("data"))
+    feat = argparse.ArgumentParser(add_help=False)
+    feat.add_argument("--features-root", type=Path, default=Path("data/features"))
+
+    ing = sub.add_parser("ingest-sleeper", parents=[common])
     ing.add_argument("--seasons", type=_seasons, required=True)
-    ing.add_argument("--data-root", type=Path, default=Path("data"))
 
-    cal = sub.add_parser("calibrate")
+    cal = sub.add_parser("calibrate", parents=[common, feat])
     cal.add_argument("--prior-season", type=int, default=2020)
-    cal.add_argument("--data-root", type=Path, default=Path("data"))
-    cal.add_argument("--features-root", type=Path, default=Path("data/features"))
 
-    stu = sub.add_parser("study")
+    stu = sub.add_parser("study", parents=[common, feat])
     stu.add_argument("--seasons", type=_seasons, required=True)
     stu.add_argument("--out", type=Path, required=True)
-    stu.add_argument("--data-root", type=Path, default=Path("data"))
-    stu.add_argument("--features-root", type=Path, default=Path("data/features"))
 
     args = parser.parse_args()
     positions = [Position.QB, Position.RB, Position.WR, Position.TE]
