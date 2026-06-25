@@ -139,6 +139,18 @@ def main() -> None:
             "depends on the WR-only decomposed-baseline factory as child A)."
         ),
     )
+    parser.add_argument(
+        "--features-root",
+        type=Path,
+        default=Path("data/features"),
+        help="Feature-cache root passed through to run_backtest. Default data/features.",
+    )
+    parser.add_argument(
+        "--position",
+        choices=["QB", "RB", "WR", "TE"],
+        default=None,
+        help="Restrict the backtest to a single position. Default: all positions.",
+    )
     args = parser.parse_args()
 
     if args.model == "both":
@@ -165,11 +177,20 @@ def main() -> None:
     else:
         positions = None
 
+    if args.position is not None:
+        if args.model in ("decomposed-baseline", "ensemble-decomposed") and args.position != "WR":
+            parser.error(
+                f"--model {args.model} is WR-only; --position {args.position} is incompatible"
+            )
+        positions = (Position[args.position],)
+
     tolerances = json.loads(_TOLERANCES_PATH.read_text(encoding="utf-8"))
     run = (
-        run_backtest(model_classes=model_classes, positions=positions)
+        run_backtest(
+            model_classes=model_classes, positions=positions, features_root=args.features_root
+        )
         if positions is not None
-        else run_backtest(model_classes=model_classes)
+        else run_backtest(model_classes=model_classes, features_root=args.features_root)
     )
 
     if args.update_snapshot:

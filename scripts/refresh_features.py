@@ -130,11 +130,22 @@ def main() -> None:
         help="Inclusive season range, e.g. '2018-2024' or '2024'. Default 2018-2024.",
     )
     parser.add_argument("--data-root", type=Path, default=Path("data"))
+    parser.add_argument(
+        "--features-root",
+        type=Path,
+        default=None,
+        help=(
+            "Feature-cache root to write to. Default: <data-root>/features. "
+            "Set this to A/B a feature-cache version without relocating raw/."
+        ),
+    )
     args = parser.parse_args()
 
     seasons = _parse_season_range(args.seasons)
     raw_root = args.data_root / "raw"
-    features_root = args.data_root / "features"
+    features_root = (
+        args.features_root if args.features_root is not None else args.data_root / "features"
+    )
 
     # 2026-05-03 WR trajectory: load draft_picks once across the full
     # nfl_data_py-supported range (1980+) so the WR trajectory features see
