@@ -14,10 +14,6 @@ from projections.features._rolling import (
 )
 from projections.features._shared import build_game_environment, exact_week_mask, prior_mask
 from projections.features.pbp_team_features import attach_pbp_family_features
-from projections.features.trajectory_features import (
-    attach_trajectory_features,
-    build_draft_lookup,
-)
 from projections.features.weather_features import attach_weather_features
 from projections.schemas import (
     _PYARROW_STR,
@@ -66,9 +62,9 @@ def build_rb_features(
     # team_ayps_l4, team_def_epa_resid_l4). Empty frame yields NaN for those
     # 4 columns via attach_pbp_family_features's empty-pbp short-circuit.
     pbp: pd.DataFrame = _EMPTY_PBP,
-    # draft_picks: consumed by the trajectory feature family (#55 RB feature
-    # lift). build_draft_lookup tolerates an empty frame (age/is_rookie fall
-    # back to the inferred path); only the trend columns are kept for RB.
+    # draft_picks: reserved plumbing for the trajectory feature family
+    # (PR #25); accept-and-ignore until the RB-specific integration plan
+    # fires. Mirror the `pbp` precedent.
     draft_picks: pd.DataFrame = _EMPTY_DRAFT_PICKS,
 ) -> pd.DataFrame:
     """Build the RB feature DataFrame for week `as_of_week` of `season`."""
@@ -253,36 +249,5 @@ def build_rb_features(
     # from the exact-week-filtered schedules. Dome / closed-roof games have
     # wind=0 / temp=70 per compute_weather_features semantics.
     out = attach_weather_features(out, sch)
-
-    # --- Trajectory-trend features (#55 RB feature lift) -------------------
-    # Only the two trend columns probed SIGNAL for RB; age / is_rookie probed
-    # NULL and are intentionally NOT merged (they would be dead schema cols).
-    # Pass the FULL weekly_stats / snap_counts (not the prior_mask-filtered
-    # ws / sc): attach_trajectory_features's rolling helpers .shift(1)
-    # internally for leakage safety, so the current week's value is computed
-    # from prior weeks only. Passing the prior_mask-filtered frames would
-    # strip the current-week row out of the trend output, breaking the
-    # (gsis_id, season, week) merge (every value would resolve NaN).
-    # Mirrors build_wr_features.
-    draft_lookup = build_draft_lookup(draft_picks)
-    traj_idx = out[["gsis_id", "season", "week", "team", "opponent"]].rename(
-        columns={"opponent": "opp"}
-    )
-    traj = attach_trajectory_features(
-        traj_idx, weekly_stats, snap_counts, draft_lookup, Position.RB
-    )
-    out = out.merge(
-        traj[
-            [
-                "gsis_id",
-                "season",
-                "week",
-                "volume_trend_l4_minus_prior_l4",
-                "snap_pct_change_l4_vs_prior_l4",
-            ]
-        ],
-        on=["gsis_id", "season", "week"],
-        how="left",
-    )
 
     return RbFeaturesSchema.validate(out)
