@@ -178,6 +178,13 @@ def main() -> None:
         positions = None
 
     if args.position is not None:
+        # --position is for producing single-position --report runs (e.g. the
+        # #55 dual-run feature A/B). It must NOT touch the gate paths: a
+        # single-position --update-snapshot would overwrite the full-slate
+        # snapshot with one position's rows (corrupting the QB/WR/TE baseline),
+        # and a single-position --check would only validate that position.
+        if not args.report:
+            parser.error("--position is only supported with --report")
         if args.model in ("decomposed-baseline", "ensemble-decomposed") and args.position != "WR":
             parser.error(
                 f"--model {args.model} is WR-only; --position {args.position} is incompatible"
@@ -185,10 +192,15 @@ def main() -> None:
         positions = (Position[args.position],)
 
     tolerances = json.loads(_TOLERANCES_PATH.read_text(encoding="utf-8"))
-    # positions=None is run_backtest's "all positions" default, so one call
-    # covers both the all-positions and single-position cases.
-    run = run_backtest(
-        model_classes=model_classes, positions=positions, features_root=args.features_root
+    # Keep the all-positions path calling run_backtest WITHOUT a positions kwarg
+    # (test_scripts/test_backtest_cli asserts its absence); only pass positions
+    # when --position narrowed the run.
+    run = (
+        run_backtest(
+            model_classes=model_classes, positions=positions, features_root=args.features_root
+        )
+        if positions is not None
+        else run_backtest(model_classes=model_classes, features_root=args.features_root)
     )
 
     if args.update_snapshot:

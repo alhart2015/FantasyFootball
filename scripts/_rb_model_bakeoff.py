@@ -20,6 +20,8 @@ from projections.schemas import Position
 
 MODEL_CLASSES = ("baseline", "lightgbm-nb", "ensemble")
 METRICS = ("composite_rmse", "composite_mae", "spearman_topN")
+# Mirrors run_backtest's held_out_years default; used only for the banner label.
+HELD_OUT_YEARS = (2021, 2022, 2023, 2024)
 
 
 def main() -> None:
@@ -38,6 +40,9 @@ def main() -> None:
     )
     m = run.metrics
     m = m[m["metric"].isin(METRICS)]
+    if m.empty:
+        print(f"(no RB metrics — does {args.features_root} have RB partitions?)")
+        return
     pivot = m.pivot_table(
         index=["metric", "year"],
         columns="model_class",
@@ -50,7 +55,8 @@ def main() -> None:
 
     # Pooled mean across years per metric/model.
     pooled = m.groupby(["metric", "model_class"])["value"].mean().unstack("model_class")
-    print("\n=== Pooled (mean over 2021-2024) ===")
+    yr_lo, yr_hi = min(HELD_OUT_YEARS), max(HELD_OUT_YEARS)
+    print(f"\n=== Pooled (mean over {yr_lo}-{yr_hi}) ===")
     print(pooled.to_string(float_format=lambda x: f"{x:8.4f}"))
 
 
