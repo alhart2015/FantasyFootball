@@ -4,7 +4,8 @@ Runs the walk-forward model backtest for RB ONLY across
 {baseline, lightgbm-nb, ensemble} and prints the composite accuracy +
 ranking metrics per (year, model_class), so we can see whether any
 already-built RB model beats the incumbent `baseline` before designing
-anything. Read-only; not committed.
+anything (and again on the augmented feature set for the #55 G2 gate).
+Read-only diagnostic; kept on the branch for reproducibility.
 """
 
 from __future__ import annotations
