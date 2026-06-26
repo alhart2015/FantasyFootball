@@ -185,12 +185,10 @@ def main() -> None:
         positions = (Position[args.position],)
 
     tolerances = json.loads(_TOLERANCES_PATH.read_text(encoding="utf-8"))
-    run = (
-        run_backtest(
-            model_classes=model_classes, positions=positions, features_root=args.features_root
-        )
-        if positions is not None
-        else run_backtest(model_classes=model_classes, features_root=args.features_root)
+    # positions=None is run_backtest's "all positions" default, so one call
+    # covers both the all-positions and single-position cases.
+    run = run_backtest(
+        model_classes=model_classes, positions=positions, features_root=args.features_root
     )
 
     if args.update_snapshot:
