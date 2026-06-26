@@ -1,7 +1,8 @@
 """Throwaway (#55 follow-up): emit RB baseline per-row walk-forward predictions
 for a given feature-cache root, so we can stratify composite error by usage and
 test whether the trajectory-trend features help the high-volume case even though
-they did not on the full RB population. Read-only; not committed."""
+they did not on the full RB population. Read-only diagnostic; kept for
+reproducibility (see reports/rb_usage_cut_diagnostic_2026-06-25.md)."""
 
 from __future__ import annotations
 
