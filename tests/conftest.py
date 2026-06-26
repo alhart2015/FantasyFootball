@@ -786,25 +786,8 @@ def baseline_weekly_stats_qb() -> pd.DataFrame:
 
 @pytest.fixture
 def baseline_weekly_stats_rb() -> pd.DataFrame:
-    """17 weeks of 2023 + 8 weeks of 2024 + 4 weeks of 2025 RB-shaped stats
-    for 5 synthetic RBs.
-
-    Trajectory-features note (#55 RB feature lift): the trailing-4 minus
-    prior-4 trends require 8+ active games of history per player. Including
-    2023 weeks 1-17 ensures every 2024 row has a full 8-game prior window,
-    so the trend cols are non-NaN even on early 2024 training rows. Without
-    2023, every (l4 - prior_l4) row would be NaN and BaselineModel.fit's
-    dropna would empty the RB training set. Mirrors PR #26's
-    baseline_weekly_stats_wr / the TE extension.
-    """
-    return _build_position_weekly_stats(
-        "RB",
-        season_weeks=[
-            (2023, range(1, 18)),
-            (2024, range(1, 9)),
-            (2025, range(1, 5)),
-        ],
-    )
+    """8 weeks of 2024 + 4 weeks of 2025 RB-shaped stats for 5 synthetic RBs."""
+    return _build_position_weekly_stats("RB")
 
 
 @pytest.fixture
