@@ -37,36 +37,6 @@ def test_build_rb_features_returns_validated_frame(
         assert out[col].dtype == float, f"{col} dtype is {out[col].dtype}, expected float"
 
 
-def test_build_rb_features_includes_trajectory_trend_columns(
-    rb_weekly_stats: pd.DataFrame,
-    rb_snap_counts: pd.DataFrame,
-    rb_depth_charts: pd.DataFrame,
-    rb_ngs_rushing: pd.DataFrame,
-    rb_schedules: pd.DataFrame,
-    fake_pbp_df: pd.DataFrame,
-) -> None:
-    """The two #55 trajectory-trend columns must be attached to the output.
-
-    The small conftest fixtures carry only weeks 1-4 of history, so at
-    as_of_week=5 the trend values are structurally NaN (prior_l4 needs >=8
-    prior active games). That is fine here — populated + leakage behavior is
-    covered by test_rb_trajectory_vegas_leakage.py. This test asserts only
-    that the columns are present.
-    """
-    out = build_rb_features(
-        weekly_stats=rb_weekly_stats,
-        snap_counts=rb_snap_counts,
-        depth_charts=rb_depth_charts,
-        ngs_rushing=rb_ngs_rushing,
-        schedules=rb_schedules,
-        pbp=fake_pbp_df,
-        season=2024,
-        as_of_week=5,
-    )
-    for col in ("volume_trend_l4_minus_prior_l4", "snap_pct_change_l4_vs_prior_l4"):
-        assert col in out.columns, f"missing trajectory-trend column {col}"
-
-
 def test_build_rb_features_one_row_per_rostered_rb(
     rb_weekly_stats: pd.DataFrame,
     rb_snap_counts: pd.DataFrame,
