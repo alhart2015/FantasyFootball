@@ -57,3 +57,40 @@ sensible (recent carry-volume trend captures committee/role shifts the static L4
   is the trend pair. Phase 2's dual-run adoption gate (G2) remains the ship decision.
 
 (Contradicts the spec §2 prior that both families likely NULL — trajectory's trend signal is real.)
+
+## G2 verdict (Phase 2) — **DO_NOT_ADOPT** → STOP, integration reverted
+
+After integrating the two trend columns into `RbFeaturesSchema` + `build_rb_features` +
+`_RB_FEATURE_COLUMNS`, the model bake-off on the augmented cache (`data/features_rb_aug`,
+`reports/rb_model_bakeoff_augmented.md`) vs the old baseline (Phase 0: rmse 6.5661, mae 4.9870,
+spearman 0.9694):
+
+| augmented pooled | baseline | ensemble | lightgbm-nb |
+|---|---:|---:|---:|
+| composite_rmse | 6.5630 | 6.5729 | 6.6043 |
+| composite_mae | 4.9594 | 5.0910 | 5.1516 |
+| spearman_topN | 0.9709 | 0.9694 | 0.9680 |
+
+**Ship decision (baseline):** the probe Phase-2 composite paired ΔRMSE = −0.0044, 95% CI
+[−0.0156, +0.0061] **brackets zero** → fails the adoption-gate `hi_95 < 0` criterion
+(DO_NOT_ADOPT). The absolute bake-off agrees — augmented baseline improves composite RMSE by
+only −0.0031 (0.05%, sub-noise, fantasy-irrelevant); mae −0.028, spearman +0.0015 are likewise
+negligible. (Methodology: for the baseline = Ridge class, the probe's Phase-2 composite is the
+adoption-gate computation; combined with the absolute bake-off it is the G2 ship decision. The
+production `BaselineModel.fit` `dropna` path — which the bake-off exercises — additionally drops
+~40% of RB training rows for the 40%-NaN trend column, so the production effect is if anything
+weaker than the imputed probe.)
+
+**Default decision:** lightgbm-nb (6.6043) and ensemble (6.5729) on the augmented features
+**still lose to the old baseline (6.5661)** — no non-baseline class beats baseline, so no
+`default_model_class` flip is warranted.
+
+**Mechanism:** the trend columns carry a real *rushing-yards* RMSE improvement (pooled −0.173,
+CI [−0.284, −0.060]) but it does **not** survive into composite fantasy points (the other five
+RB stats NULL'd, diluting it), and the dropna training-row penalty offsets the rest.
+
+**Action:** revert the integration (commits 44bfb5f, 4fb2f3e, 4bc783c) — no dead columns shipped
+(spec §6/§8). RB stays on `baseline`. The DFS STOP verdict (#54/#55) **stands for RB**: even after
+exhausting the two unprobed feature families (Vegas NULL; trajectory core NULL; trajectory trend
+SIGNAL on rushing_yards but DO_NOT_ADOPT on composite), RB is not liftable with the available signal.
+Kept: the CLI passthroughs (`--features-root`/`--position`) and all probe/bake-off evidence.
