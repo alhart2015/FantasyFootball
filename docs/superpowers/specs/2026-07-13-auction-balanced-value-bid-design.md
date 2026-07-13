@@ -59,11 +59,12 @@ class BalancedValueBid:
 - `max(1, view.my_open_slots)` makes the divide total (open_slots is ≥ 1 whenever the hero bids, but the guard removes the edge case).
 - Returns an **unclamped desired bid**; the engine clamps to `[min_bid, feasible_max]` per the module contract — no reserve/floor re-implementation.
 - **Deliberately omits `_budget_urgency`** — the single most load-bearing design choice, justified by the re-baseline (urgency-on craters the strategy). This is a per-strategy choice; no existing strategy is touched.
-- Guarded by `__post_init__` (fail-loud on bad tuning), matching the existing `NowOrNeverFlooredStrategy` guard style.
+- Guarded by `__post_init__` (fail-loud on bad tuning), matching the existing `NowOrNeverFlooredStrategy` guard style. Requires adding `import math` to `bid_strategy.py` (not currently imported) for the finiteness checks.
 
 ### Registration
 
-- Add `"balanced": BalancedValueBid()` to `tournament_cli._MODELS` so the `compare` subcommand races it against the field.
+- Add `"balanced": BalancedValueBid()` to `tournament_cli._MODELS` so the `compare` subcommand races it against the field. This makes it the **tenth** contestant.
+- **Update the contestant-set guard test:** `tests/test_draft/test_assistant_auction_tournament_cli.py::test_default_models_are_the_nine_contestants` pins `set(_MODELS)` to the current nine and **will fail** on the new key — update it to include `"balanced"` (ten contestants) and rename it accordingly (e.g. `..._the_ten_contestants`). `test_all_models_conform_to_protocol` then also covers `balanced` automatically (no change needed there).
 - **Deferred:** live-board `BOARD_STRATEGIES` / assistant-CLI wiring (a thin fast-follow; not needed to gather the bake-off data).
 
 ## Testing — `tests/test_draft/test_assistant_auction_bid_strategy.py`
