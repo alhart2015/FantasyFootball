@@ -4,6 +4,23 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction bid-model stack merged + `BalancedValueBid` breakthrough — 2026-07-13 (branch `feat/auction-budget-urgency` → PR to `main`)
+
+**Status:** The full auction bid-model investigation stack (stars-and-scrubs + realistic market + budget-urgency, ~34 commits, Runs C–F) is merged to `main` via PR. Gates green (mypy 332 files, ruff, format; full suite: only the pre-existing `test_backtest_smoke_one_cell` + an unrelated `draft_board` parallel-timeout flake, neither from this branch). **No bid-model winner declared — decision still September 2026.** The dev box (i9-14900KF, RMA pending) ran a 73-min sustained bake-off clean this session (memory `h2h-backtest-native-crash`), which unblocked the merge verification. `INSTRUCTIONS.md` handoff deleted pre-merge.
+
+**What merged:** stars-and-scrubs bidders (`AnchorBudgetBid`/`OverbidValueBid`/`VorpShareBid`) + position-aware hero (Runs C/D); realistic market — value-weighted-random nomination (`nomination_temp`) + bot archetypes (Aggressive/Patient/Balanced) + `PatientValueBid` (Run E); budget-urgency ramp (`_budget_urgency`, `URGENCY_GAIN=3.0`) + `StudsAndDepthBid` (Run F).
+
+**KEY NEW FINDING (this session; diagnostic + prototype — NOT yet in committed code, scratch under the session scratchpad):** every hero strategy finishes *below* the uniform baseline (16-team ≈1% champ; 12-team best `vorpshare` 5% champ / 45% playoff vs baseline 8.3%/50%). An all-bot diagnostic (100 seeds, 12-team, 1100 bot-seats) shows **championships are +0.91 correlated with total projected points, and points come from BALANCED breadth, not stars-and-scrubs** — concentration *hurts* (`corr(champ, top2_share)=−0.65`, `max_price=−0.64`; champ% by #elite peaks at exactly ONE elite). Winning archetype is `Balanced` (champ 25.6%): bids a small premium over fair value (wins contested players) but **caps per-player spend at ~2× the even per-slot share** (forces the budget to spread). Our heroes lose because they are either fair-value-disciplined (win nothing contested) or over-concentrated (starve the 6 other starting slots) — and `_budget_urgency` makes it worse by dumping idle cash on late-round scrubs at up to 4× value.
+
+**Prototype validated (150 seeds, 12-team):** a `BalancedValueBid` hero = `min(fair×(1+premium), pace×budget/open_slots)` with NO urgency is the **best hero, CI-separated, and the first to cross the 50% playoff baseline** (playoff 56.8% / champ 6.6% vs `vorpshare` 45%/5%, `static` 24%/1%); robust to tuning (premium 0.15–0.25, cap 1.5–2×). Toggling `_budget_urgency` ON the same strategy craters it (playoff 57%→35%, champ 6.6%→1.6%) — **this branch's budget-urgency feature is self-harm for a balanced bidder.**
+
+**Forward plan (next branch, e.g. `feat/auction-balanced-value`; brainstorm→spec→plan→implement):**
+- **Slice 1 — ship `BalancedValueBid` + make `_budget_urgency` opt-out/off.** Takes the hero from bottom-tier to ≈baseline. Config: 12-team half-PPR (`data/vorp_2026/half_12team.parquet` + `configs/half_12team.league.json`) is the user's real *auction* size (may drop to 10); 16-team is the *snake* league only.
+- **Slice 2 — nomination warfare.** The hero nominates randomly today (`nomination_temp` shared across seats in `simulation._simulate_to_state`). Give it control: dump studs it doesn't want early to bleed rivals, hold its targets until they're tapped. This is the lever the balanced bots *can't* counter — the path from ≈baseline to *winning the room*. Bigger engine change (per-seat nomination policy + hero hook).
+- Record the diagnostic + prototype as a real "Run G" in `reports/auction_tournament_validation_2026.md` on that branch.
+
+---
+
 ## Auction Strategy — Sane-bots slice + Run B bake-off — shipped (2026-06-17, branch `feat/auction-sane-bots`)
 
 **Status:** Auction sane-bots slice shipped: league-driven `bot_position_bounds` + shared `bot_eligible`; snake field unchanged; Run B recorded.
