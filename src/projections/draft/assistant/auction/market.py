@@ -25,6 +25,18 @@ class SeatView:
     budget: int = 0
 
 
+def _seat_value(
+    seat_view: SeatView, player: pd.Series, baseline_dollars: pd.DataFrame
+) -> float | None:
+    """The player's market dollar for this seat, or None if the seat abstains (full or
+    position-gated). Shared by every archetype so the abstain rule lives in one place."""
+    if seat_view.open_slots <= 0:
+        return None
+    if Position(player["position"]) not in seat_view.eligible_positions:
+        return None
+    return float(baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+
+
 def bot_max_bid(
     seat_view: SeatView,
     player: pd.Series,
@@ -35,11 +47,9 @@ def bot_max_bid(
     price_jitter: float,
 ) -> int:
     """Value-rational WTP centered on the market dollar; abstain (0) if full or position-gated."""
-    if seat_view.open_slots <= 0:
+    base = _seat_value(seat_view, player, baseline_dollars)
+    if base is None:
         return 0
-    if Position(player["position"]) not in seat_view.eligible_positions:
-        return 0
-    base = float(baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
     wtp = base * (1.0 + rng.normal(0.0, price_jitter))
     return round(max(float(config.min_bid), wtp))
 
@@ -132,10 +142,9 @@ class PatientValueBot:
         *,
         price_jitter: float,
     ) -> int:
-        pos = Position(player["position"])
-        if seat_view.open_slots <= 0 or pos not in seat_view.eligible_positions:
+        value = _seat_value(seat_view, player, baseline_dollars)
+        if value is None:
             return 0
-        value = float(baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
         tier = _value_tier(value, baseline_dollars, self.stud_frac, self.scrub_frac)
         noise = 1.0 + rng.normal(0.0, price_jitter)
         if tier == "stud":
@@ -162,10 +171,9 @@ class BalancedBot:
         *,
         price_jitter: float,
     ) -> int:
-        pos = Position(player["position"])
-        if seat_view.open_slots <= 0 or pos not in seat_view.eligible_positions:
+        value = _seat_value(seat_view, player, baseline_dollars)
+        if value is None:
             return 0
-        value = float(baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
         wtp = value * (1.0 + rng.normal(0.0, price_jitter))
         cap = self.pace * (seat_view.budget / seat_view.open_slots)
         return round(max(float(config.min_bid), min(wtp, cap)))

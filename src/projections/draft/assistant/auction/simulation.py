@@ -106,11 +106,10 @@ def _simulate_to_state(
     hero0 = my_seat - 1  # the single 1-based -> 0-based conversion (spec §3.2)
 
     bot_seats = [s for s in range(n) if s != hero0]
-    if bot_archetypes is None:
-        seat_arch: dict[int, BotArchetype] = {s: AggressiveBot() for s in bot_seats}
-    else:
-        _assigned = assign_bot_archetypes(len(bot_seats), bot_archetypes)
-        seat_arch = {s: _assigned[i] for i, s in enumerate(bot_seats)}
+    mix: Sequence[BotArchetype] = bot_archetypes or [AggressiveBot()]
+    seat_arch: dict[int, BotArchetype] = dict(
+        zip(bot_seats, assign_bot_archetypes(len(bot_seats), mix), strict=True)
+    )
 
     minimums, maximums = bot_position_bounds(config.roster_slots)
     pos_by_id = {

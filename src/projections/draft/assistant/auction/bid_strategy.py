@@ -107,7 +107,7 @@ class MarginalValueBid:
 
 
 def _undrafted(pool: pd.DataFrame, drafted: frozenset[str]) -> pd.DataFrame:
-    """Pool rows whose gsis_id is not yet drafted (same isin pattern as InflationBid)."""
+    """Pool rows whose gsis_id is not in `drafted` (the still-available players)."""
     return pool[~pool["gsis_id"].isin(drafted)]
 
 
@@ -121,6 +121,17 @@ def _vorp_threshold(pool: pd.DataFrame, k: int) -> float:
     if len(vorps) <= k:
         return float(vorps.min())
     return float(vorps.nlargest(k).iloc[-1])
+
+
+def _vorp_tier(pool: pd.DataFrame, v: float, stud_frac: float, scrub_frac: float) -> str:
+    """'stud' | 'mid' | 'scrub' for VORP `v`: stud at/above the top-`stud_frac` VORP cut,
+    scrub below the bottom-`scrub_frac` cut, else mid (both cuts by whole-pool VORP rank)."""
+    n = len(pool)
+    if v >= _vorp_threshold(pool, round(stud_frac * n)):
+        return "stud"
+    if v < _vorp_threshold(pool, round((1.0 - scrub_frac) * n)):
+        return "scrub"
+    return "mid"
 
 
 URGENCY_GAIN = 3.0
@@ -209,12 +220,9 @@ class PatientValueBid:
         self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
     ) -> int:
         min_bid = config.min_bid
-        n = len(pool)
-        stud_cut = _vorp_threshold(pool, round(self.stud_frac * n))
-        scrub_cut = _vorp_threshold(pool, round((1.0 - self.scrub_frac) * n))
-        v = float(player["vorp"])
         base = min_bid
-        if not (v >= stud_cut or v < scrub_cut):  # mid-tier: not a stud (let go), not a scrub
+        # mid-tier only: not a stud (let it go), not a scrub ($1)
+        if _vorp_tier(pool, float(player["vorp"]), self.stud_frac, self.scrub_frac) == "mid":
             value = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
             bid = round(value * (1.0 + self.midtier_premium))
             reserve = view.my_budget - min_bid * (view.my_open_slots - 1)
@@ -237,14 +245,11 @@ class StudsAndDepthBid:
         self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
     ) -> int:
         min_bid = config.min_bid
-        n = len(pool)
-        stud_cut = _vorp_threshold(pool, round(self.stud_frac * n))
-        scrub_cut = _vorp_threshold(pool, round((1.0 - self.scrub_frac) * n))
-        v = float(player["vorp"])
+        tier = _vorp_tier(pool, float(player["vorp"]), self.stud_frac, self.scrub_frac)
         auction_dollars = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
-        if v >= stud_cut:  # stud: modest premium to actually win the anchor (unlike static)
+        if tier == "stud":  # modest premium to actually win the anchor (unlike static)
             base: float = auction_dollars * (1.0 + self.stud_premium)
-        elif v < scrub_cut:  # scrub: floor it
+        elif tier == "scrub":  # floor it
             base = float(min_bid)
         else:  # mid-tier depth: fair value, no $1-dumping
             base = float(auction_dollars)
