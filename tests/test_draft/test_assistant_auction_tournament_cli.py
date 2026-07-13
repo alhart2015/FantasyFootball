@@ -48,7 +48,7 @@ def _write_config(path: Path) -> None:
     path.write_text(json.dumps(cfg))
 
 
-def test_default_models_are_the_nine_contestants() -> None:
+def test_default_models_are_the_ten_contestants() -> None:
     assert set(_MODELS) == {
         "static",
         "inflation",
@@ -59,6 +59,7 @@ def test_default_models_are_the_nine_contestants() -> None:
         "patient",
         "patient_deep",
         "studsdepth",
+        "balanced",
     }
 
 

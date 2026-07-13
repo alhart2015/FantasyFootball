@@ -17,6 +17,7 @@ import pandas as pd
 from projections.draft.assistant.auction.bid_strategy import (
     AnchorBudgetBid,
     AuctionBidStrategy,
+    BalancedValueBid,
     InflationBid,
     MarginalValueBid,
     OverbidValueBid,
@@ -57,6 +58,7 @@ _MODELS: dict[str, AuctionBidStrategy] = {
     # most era-robust hero; included as a standing contestant.
     "patient_deep": PatientValueBid(scrub_frac=0.0),
     "studsdepth": StudsAndDepthBid(),
+    "balanced": BalancedValueBid(),
 }
 
 _REALISTIC_FIELD: list[BotArchetype] = [AggressiveBot(), PatientValueBot(), BalancedBot()]
