@@ -7,6 +7,7 @@ Each model returns a *desired* max bid (any int); the engine clamps it to
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -255,3 +256,26 @@ class StudsAndDepthBid:
         else:  # mid-tier depth: fair value, no $1-dumping
             base = float(auction_dollars)
         return round(base * _budget_urgency(view, config))
+
+
+@dataclass(frozen=True)
+class BalancedValueBid:
+    """Balanced-breadth hero: bid a small premium over fair value to win contested players,
+    capped at `pace` x the even per-slot share so the budget spreads into a full roster.
+    Deliberately does NOT apply _budget_urgency (the ramp over-pays late-round scrubs)."""
+
+    premium: float = 0.15
+    pace: float = 2.0
+
+    def __post_init__(self) -> None:
+        if not (self.premium >= 0.0 and math.isfinite(self.premium)):
+            raise ValueError(f"premium must be finite and >= 0; got {self.premium}")
+        if not (self.pace > 0.0 and math.isfinite(self.pace)):
+            raise ValueError(f"pace must be finite and > 0; got {self.pace}")
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        fair = float(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        cap = self.pace * (view.my_budget / max(1, view.my_open_slots))
+        return round(min(fair * (1.0 + self.premium), cap))
