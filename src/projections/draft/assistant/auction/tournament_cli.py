@@ -1,7 +1,7 @@
 """CLI engine for the auction bid-model tournament (spec §3.7). Mirrors tournament_cli.py.
 
 `run([...])` loads the VORP pool + LeagueConfig, attaches is_rookie, loads availability +
-variance params (store-backed), then races the ten bid models against a mixed bot field
+variance params (store-backed), then races the eleven bid models against a mixed bot field
 with randomized nomination and prints per-metric means + CIs and paired diffs.
 No winner is printed (data-gathering, spec §5.1).
 """
@@ -59,6 +59,9 @@ _MODELS: dict[str, AuctionBidStrategy] = {
     "patient_deep": PatientValueBid(scrub_frac=0.0),
     "studsdepth": StudsAndDepthBid(),
     "balanced": BalancedValueBid(),
+    # balanced_flat: the Slice 1 cap-inflation fix — same premium/pace, but the pace cap can't
+    # self-inflate as the hero wins (non_increasing_cap=True). See the 2026-07-14 robust-win-hero spec.
+    "balanced_flat": BalancedValueBid(non_increasing_cap=True),
 }
 
 _REALISTIC_FIELD: list[BotArchetype] = [AggressiveBot(), PatientValueBot(), BalancedBot()]
@@ -169,7 +172,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "(default 0.4); sweep knob.",
     )
     sub = p.add_subparsers(dest="mode", required=True)
-    sub.add_parser("compare", help="Race the ten bid models; record per-metric data.")
+    sub.add_parser("compare", help="Race the eleven bid models; record per-metric data.")
     return p.parse_args(argv)
 
 

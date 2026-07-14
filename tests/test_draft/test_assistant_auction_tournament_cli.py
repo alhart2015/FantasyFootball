@@ -48,7 +48,7 @@ def _write_config(path: Path) -> None:
     path.write_text(json.dumps(cfg))
 
 
-def test_default_models_are_the_ten_contestants() -> None:
+def test_default_models_are_the_eleven_contestants() -> None:
     assert set(_MODELS) == {
         "static",
         "inflation",
@@ -60,7 +60,10 @@ def test_default_models_are_the_ten_contestants() -> None:
         "patient_deep",
         "studsdepth",
         "balanced",
+        "balanced_flat",
     }
+    assert _MODELS["balanced_flat"].non_increasing_cap is True  # the Slice 1 cap fix
+    assert _MODELS["balanced"].non_increasing_cap is False  # inflating control unchanged
 
 
 def test_patient_deep_is_the_scrub_frac_zero_tuning() -> None:
