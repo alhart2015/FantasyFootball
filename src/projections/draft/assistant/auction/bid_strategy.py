@@ -271,10 +271,15 @@ class BalancedValueBid:
     share. The low cap is what forces the spread — raising it backfires (it lets the hero chase
     over-priced studs and starve the roster). Defaults from the 2026-07-14 cap-vs-premium sweep:
     premium=1.0 is a ~2x ESPN-market win (playoff 0.24 -> 0.44) and neutral in the un-inflated
-    model market; the low cap wins both. See reports/auction_tournament_validation_2026.md."""
+    model market; the low cap wins both. See reports/auction_tournament_validation_2026.md.
+
+    `non_increasing_cap=True` clamps the pace cap to the OPENING per-slot share so it can't
+    self-inflate as the hero wins cheap players (the Slice 1 fix, 2026-07-14 robust-win-hero spec);
+    default False keeps the inflating control byte-for-byte."""
 
     premium: float = 1.0
     pace: float = 2.0
+    non_increasing_cap: bool = False
 
     def __post_init__(self) -> None:
         if not (self.premium >= 0.0 and math.isfinite(self.premium)):
@@ -286,5 +291,12 @@ class BalancedValueBid:
         self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
     ) -> int:
         fair = float(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
-        cap = self.pace * (view.my_budget / max(1, view.my_open_slots))
+        per_slot = view.my_budget / max(1, view.my_open_slots)
+        if self.non_increasing_cap:
+            # Never let the cap rise above the OPENING per-slot pace. As a breadth hero wins players
+            # cheaper than its per-slot share, budget/open_slots ratchets up and the inflating cap
+            # balloons (overpays late, lopsided roster — the diagnosed bug). Clamping to the constant
+            # opening share kills the ratchet while still retreating below it when the hero is broke.
+            per_slot = min(per_slot, config.budget / config.roster_size)
+        cap = self.pace * per_slot
         return round(min(fair * (1.0 + self.premium), cap))
