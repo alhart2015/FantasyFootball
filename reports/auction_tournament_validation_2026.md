@@ -408,6 +408,23 @@ Best worst-case `reg_win_pct` across the two markets (top rows):
 
 **This reframes the entire auction investigation.** Every prior "hero is sub-baseline / can't beat the bots" result — Runs A–K and the memory's "0.21 as hero at seat 0" — was measured at **seat 1**, the one broken seat. Seat-averaged, the *current* `balanced` **already beats the field in both markets** (0.526 model / 0.575 espn); at 11 of 12 seats it clears fair share. The "bots overpay so we can't compete" premise was **seat-1 tunnel vision.** A ~0.10 `reg_win_pct` penalty for the *nominate-first* seat in an auction (anyone can bid on anyone) is almost certainly a **modeling artifact** (candidate causes: the hero replaces an rng-consuming bot at its seat, shifting the shared bid-noise stream vs a bots-only field; seat-dependent archetype placement; the fixed gauntlet schedule), and because seat 1 was the default measurement seat it has **biased every recorded auction number downward.** Highest-value next step is to diagnose/fix the seat-1 artifact (a correctness issue) before any further strategy work. Artifacts: scratchpad `seat_{model,espn}.json` (ephemeral).
 
+**Run K seat FIX — 2026-07-14 — root-caused to a `resolve_bids` tie-break bug; FIXED and validated (commit on `feat/auction-robust-win-hero`).** A single-auction roster probe (seat 1 vs 6, same seeds) showed the hero at seat 0 acquiring **exactly 4 min-bid ($1) players every draft** (seat 6: zero), ~120 fewer points. Root cause: `resolve_bids` broke ties by **lowest seat index**, so when the hero and the min-bidding bots (e.g. `PatientValueBot` bids `min_bid` on scrubs) tied at $1, **seat 0 won every one** and hoarded junk that crowded out contested mid-tier value. Pure implementation artifact (lowest-index has no real-auction basis). **Fix:** ties now break **uniformly at random** among the top bidders via the engine rng (`resolve_bids(bids, min_bid, rng)`); the old `test_resolve_ties_break_on_seat_index` (which pinned the bug) is replaced by a randomized-tie-break test; all 153 auction tests pass, ruff/mypy clean.
+
+**Validation (re-swept 12 seats, 20 seeds, both markets):**
+
+| | seat 1 | seat-avg | spread across seats |
+|---|---|---|---|
+| model, before → after | 0.434 → **0.498** | 0.526 → **0.495** | 0.122 → **0.074** |
+| espn, before → after | 0.492 → **0.566** | 0.575 → **0.554** | 0.121 → **0.061** |
+
+Seat 1 moved into the pack (model +0.064, espn +0.074) and the seat curve flattened (spread ~halved; residual ±0.03 is 20-seed noise). **No lone outlier remains — the seat effect is resolved.**
+
+**Corrected, seat-symmetric conclusion for the whole auction investigation:**
+- The pre-fix "hero beats the field at 11/12 seats" was **partly artifact** — with the hero at seats 2–12, a *bot* at seat 0 ate the junk, giving the hero a free boost. Removing it drops the model-market seat-average from 0.526 to **~0.495**.
+- **ESPN-anchored (realistic) market: current `balanced` genuinely beats the field, ~0.554 seat-averaged** (> 0.50) — a real edge from exploiting ESPN mispricing, and it survives the seat fix.
+- **Model market (symmetric, bots price off our own numbers): the hero is ~even (~0.495)** — you cannot systematically beat a field using your own valuations; ~fair-share is the correct expectation.
+- **Every prior auction number measured at seat 1 (Runs A–K, the memory's "0.21 at seat 0") was biased low by this bug** and should be read as pre-fix. `balanced` remains the win% leader among current strategies (≥ `patient_deep` at nearly every seat, both markets). The cap-fix "wash" (Run K) still holds — the tie-break bug affected `balanced` and `balanced_flat` equally.
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.
