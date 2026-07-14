@@ -367,6 +367,18 @@ Playoff% / champ% by model (model-priced vs ESPN-anchored bots):
 
 **Caveats.** (1) The ESPN absolute levels are far below Run H's (best 0.24 vs 0.83): the fresh 2026-07-14 pool is much larger (578 players, only ~42% ESPN-priced), so the unranked-discount fallback dilutes the ESPN signal — the interpretable read is the **within-run** `balanced ≥ patient_deep`, not the absolute level. (2) 12-team only, seat 1, byes off, one 2026 snapshot; 16-team untested. **No winner declared** — the strategy call is September 2026. `balanced` joins as a standing contestant alongside `patient_deep`.
 
+**Run J — 2026-07-14 — `balanced` retune (cap-vs-premium sweep; shipped default `premium` 0.15 → 1.0).** Run I found `balanced` (premium 0.15) below-average in the ESPN-anchored market (playoff 0.24). A cap×premium sweep (12-team half, seat 1, 100 seeds × 300 sims, fresh 2026-07-14 pool) separated the two knobs:
+
+| variant | model playoff% | ESPN playoff% |
+|---|---|---|
+| cap $24, prem 0.15 (old default) | 0.29 | 0.24 |
+| cap $24, prem 0.5 | 0.28 | 0.38 |
+| **cap $24, prem 1.0 (NEW default)** | **0.28** | **0.44** |
+| cap $47, prem 0.15 | 0.22 | 0.20 |
+| cap $71, prem 0.15 | 0.12 | 0.16 |
+
+**Two robust findings.** (1) **A LOW cap wins both markets** — raising `pace` (the per-player cap) monotonically *hurts* (it lets the hero chase over-priced studs and starve depth). (2) **The premium only matters in an INFLATED market** — flat in the model market (the mid-tier clears near fair value, so even a timid premium wins it) but a ~2× swing in the ESPN market (the mid-tier clears *above* fair value, so a high premium is needed to reach the cap and win the contested mid-tier). So **`premium=1.0` is a Pareto improvement** — neutral in the model market, ~2× in ESPN — and is now `BalancedValueBid`'s default; `pace=2.0` (low cap) is unchanged. **Mechanism:** the winning play is to bid the *low* cap on *every* startable player (spread the whole budget into a full roster); the premium is what makes the timid fair-value bid actually reach that cap in an inflated room, and the low cap is what stops the hero over-paying for the studs (which the uncapped `Aggressive` bots win at $50–85 anyway). **Residual (OPEN):** even retuned, `balanced` (~0.44 ESPN) trails the elite `Balanced`-bot tier (~0.68) — a hero-vs-bot gap that is *not* currency (a hero bidding the bots' own `bot$`, capped, also stalls at ~0.24–0.44) and *not* a measurement artifact (a strong hero only drops the bots 0.71→0.68). Next diagnostic: a `price_jitter=0` run to test whether the bots' bid noise accounts for it, or whether it is structural (seat/tie-order). **No winner declared** — Sept decision.
+
 ## Planned experiments / axes to sweep
 
 - **Bid-model bake-off** (the core): `static` vs `inflation` vs `marginal`, all three metrics, at a fixed

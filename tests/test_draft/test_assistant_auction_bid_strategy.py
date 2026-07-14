@@ -537,3 +537,16 @@ def test_balanced_rejects_bad_tuning() -> None:
         BalancedValueBid(pace=float("inf"))
     with pytest.raises(ValueError):
         BalancedValueBid(premium=float("nan"))
+
+
+def test_balanced_default_is_retuned_premium_one() -> None:
+    # Retuned 2026-07-14 (cap-vs-premium sweep): default premium=1.0 bids up to the low pace cap on
+    # the mid-tier so the budget spreads (the winning behavior in inflated markets); pace stays 2.0
+    # (raising the cap backfires). See reports/auction_tournament_validation_2026.md.
+    strat = BalancedValueBid()
+    assert (strat.premium, strat.pace) == (1.0, 2.0)
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [20, 40, 0, 0])
+    view = _view(pool.iloc[:0], budget=100, drafted=set(), baseline=baseline)
+    # fair=20 -> 20*(1+1.0)=40 (premium doubles the value bid); cap=2*(100/3)=66.7 does not bind
+    assert strat.max_bid(view, pool.iloc[0], pool, _config()) == 40

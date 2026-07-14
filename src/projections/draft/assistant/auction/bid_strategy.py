@@ -260,11 +260,20 @@ class StudsAndDepthBid:
 
 @dataclass(frozen=True)
 class BalancedValueBid:
-    """Balanced-breadth hero: bid a small premium over fair value to win contested players,
-    capped at `pace` x the even per-slot share so the budget spreads into a full roster.
-    Deliberately does NOT apply _budget_urgency (the ramp over-pays late-round scrubs)."""
+    """Balanced-breadth hero: spread the whole budget into a full roster by bidding up to a LOW
+    per-player cap (`pace` x the even per-slot share) on every startable player, instead of
+    concentrating on studs. Deliberately does NOT apply _budget_urgency (the ramp over-pays late
+    scrubs).
 
-    premium: float = 0.15
+    `premium` scales the fair-value bid so that in an INFLATED market (e.g. ESPN-anchored bots,
+    where the mid-tier clears above fair value) the bid still reaches the cap and wins the
+    contested mid-tier; `premium=1.0` bids the cap on any player worth more than ~half a per-slot
+    share. The low cap is what forces the spread — raising it backfires (it lets the hero chase
+    over-priced studs and starve the roster). Defaults from the 2026-07-14 cap-vs-premium sweep:
+    premium=1.0 is a ~2x ESPN-market win (playoff 0.24 -> 0.44) and neutral in the un-inflated
+    model market; the low cap wins both. See reports/auction_tournament_validation_2026.md."""
+
+    premium: float = 1.0
     pace: float = 2.0
 
     def __post_init__(self) -> None:
