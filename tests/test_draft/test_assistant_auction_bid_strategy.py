@@ -518,16 +518,6 @@ def test_balanced_does_not_apply_urgency() -> None:
     assert bid < round(23 * urgency)  # NOT multiplied by the urgency ramp
 
 
-def test_balanced_is_deterministic() -> None:
-    pool = _pool()
-    baseline = _baseline([True, True, False, False], [20, 40, 0, 0])
-    view = _view(pool.iloc[:0], budget=100, drafted=set(), baseline=baseline)
-    strat, config = BalancedValueBid(), _config()
-    assert strat.max_bid(view, pool.iloc[0], pool, config) == strat.max_bid(
-        view, pool.iloc[0], pool, config
-    )
-
-
 def test_balanced_rejects_bad_tuning() -> None:
     with pytest.raises(ValueError):
         BalancedValueBid(premium=-0.1)

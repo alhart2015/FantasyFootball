@@ -267,7 +267,7 @@ class BalancedValueBid:
 
     `premium` scales the fair-value bid so that in an INFLATED market (e.g. ESPN-anchored bots,
     where the mid-tier clears above fair value) the bid still reaches the cap and wins the
-    contested mid-tier; `premium=1.0` bids the cap on any player worth more than ~half a per-slot
+    contested mid-tier; `premium=1.0` bids the cap on any player worth more than a full per-slot
     share. The low cap is what forces the spread — raising it backfires (it lets the hero chase
     over-priced studs and starve the roster). Defaults from the 2026-07-14 cap-vs-premium sweep:
     premium=1.0 is a ~2x ESPN-market win (playoff 0.24 -> 0.44) and neutral in the un-inflated
