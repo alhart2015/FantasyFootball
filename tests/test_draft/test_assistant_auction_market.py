@@ -100,8 +100,7 @@ def test_resolve_ties_broken_at_random_not_by_seat_index() -> None:
     # every $1 tie on seat 0 (the seat-1 artifact: ~4 junk min-bid players/draft, ~0.10 win%). Over
     # many rng draws both tied seats win, and a top tie clears at the tied bid.
     winners = {
-        resolve_bids({3: 20, 1: 20}, min_bid=1, rng=np.random.default_rng(s))[0]
-        for s in range(50)
+        resolve_bids({3: 20, 1: 20}, min_bid=1, rng=np.random.default_rng(s))[0] for s in range(50)
     }
     assert winners == {1, 3}
     _, price = resolve_bids({3: 20, 1: 20}, min_bid=1, rng=np.random.default_rng(0))

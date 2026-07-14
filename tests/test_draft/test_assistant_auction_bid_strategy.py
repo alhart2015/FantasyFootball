@@ -543,7 +543,7 @@ def test_balanced_default_is_retuned_premium_one() -> None:
 
 
 def test_balanced_non_increasing_cap_defaults_off() -> None:
-    # Global constraint: the bare constructor keeps the current inflating behavior (control unchanged).
+    # The bare constructor keeps the current inflating behavior (control unchanged).
     assert BalancedValueBid().non_increasing_cap is False
 
 
@@ -554,16 +554,20 @@ def test_balanced_non_increasing_cap_matches_on_opening_pick() -> None:
     view = _view(pool.iloc[:0], budget=100, drafted=set(), baseline=baseline)  # open_slots=3
     infl = BalancedValueBid(premium=0.15, pace=2.0, non_increasing_cap=False)
     flat = BalancedValueBid(premium=0.15, pace=2.0, non_increasing_cap=True)
-    assert flat.max_bid(view, pool.iloc[0], pool, _config()) == 67  # cap=2*(100/3)=66.7; 80*1.15=92 capped
+    assert (
+        flat.max_bid(view, pool.iloc[0], pool, _config()) == 67
+    )  # cap=2*(100/3)=66.7; 80*1.15=92 capped
     assert infl.max_bid(view, pool.iloc[0], pool, _config()) == 67
 
 
 def test_balanced_non_increasing_cap_blocks_inflation_after_cheap_win() -> None:
     # 1 player held, budget still high: budget/open_slots (90/2=45) exceeds the opening per-slot
-    # share (100/3=33.3). The inflating cap balloons; the non-increasing cap holds at the opening pace.
+    # share (100/3=33.3). Inflating cap balloons; non-increasing cap holds at the opening pace.
     pool = _pool()
     baseline = _baseline([True, True, False, False], [80, 40, 0, 0])
-    view = _view(pool.iloc[[2]], budget=90, drafted={"00-0000003"}, baseline=baseline)  # 1 held -> open=2
+    view = _view(
+        pool.iloc[[2]], budget=90, drafted={"00-0000003"}, baseline=baseline
+    )  # 1 held -> open=2
     stud = pool.iloc[0]  # $80 in-pool RB
     infl = BalancedValueBid(premium=0.15, pace=2.0, non_increasing_cap=False).max_bid(
         view, stud, pool, _config()
