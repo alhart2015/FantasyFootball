@@ -222,7 +222,7 @@ In `src/projections/draft/assistant/auction/tournament_cli.py`, add `BalancedVal
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `KMP_DUPLICATE_LIB_OK=TRUE pytest tests/test_draft/test_assistant_auction_tournament_cli.py tests/test_draft/test_assistant_auction_tournament.py -v`
-Expected: PASS (incl. the existing `test_all_models_conform_to_protocol`, which now also covers `balanced`).
+Expected: PASS (incl. the existing `test_every_default_model_satisfies_the_protocol`, which now also covers `balanced`).
 
 - [ ] **Step 5: Lint + type-check**
 

@@ -64,7 +64,7 @@ class BalancedValueBid:
 ### Registration
 
 - Add `"balanced": BalancedValueBid()` to `tournament_cli._MODELS` so the `compare` subcommand races it against the field. This makes it the **tenth** contestant.
-- **Update the contestant-set guard test:** `tests/test_draft/test_assistant_auction_tournament_cli.py::test_default_models_are_the_nine_contestants` pins `set(_MODELS)` to the current nine and **will fail** on the new key — update it to include `"balanced"` (ten contestants) and rename it accordingly (e.g. `..._the_ten_contestants`). `test_all_models_conform_to_protocol` then also covers `balanced` automatically (no change needed there).
+- **Update the contestant-set guard test:** `tests/test_draft/test_assistant_auction_tournament_cli.py::test_default_models_are_the_nine_contestants` pins `set(_MODELS)` to the current nine and **will fail** on the new key — update it to include `"balanced"` (ten contestants) and rename it accordingly (e.g. `..._the_ten_contestants`). `test_every_default_model_satisfies_the_protocol` then also covers `balanced` automatically (it iterates `_MODELS.values()`; no change needed there).
 - **Deferred:** live-board `BOARD_STRATEGIES` / assistant-CLI wiring (a thin fast-follow; not needed to gather the bake-off data).
 
 ## Testing — `tests/test_draft/test_assistant_auction_bid_strategy.py`
