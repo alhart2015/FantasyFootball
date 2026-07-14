@@ -346,6 +346,27 @@ Per-model metrics (mean [95% CI on exp pts]), sorted by exp pts:
 
 **Status (data, no default change):** the **snake-draft broke-bot field is the new methodology baseline** (supersedes the 0.4-discount field; the discount is retained only for flush-bot unranked pricing). `patient_deep` remains the leading **September** candidate — its dominance survived the realism upgrade. Decision still deferred to September per project policy.
 
+**Run I — 2026-07-14** (`half_12team`, seat 1, 150 seeds, n_sims=300, price_jitter=0.15, budget=200; **byes OFF**; **REALISTIC MARKET** — `nomination_temp=1.0` + mixed bot field + snake-draft broke bots; branch `feat/auction-balanced-value`, Slice 1). **Ten contestants** — the nine standing models + the new `balanced` (`BalancedValueBid`: bid `round(min(fair×(1+0.15), 2×my_budget/my_open_slots))` — a small premium over fair value to win contested players, capped at 2× the even per-slot share so the budget spreads, and **deliberately NO `_budget_urgency`**). Fresh 2026 pool (`asof 2026-07-14`, 241 ESPN-priced of 578). Both bot markets A/B'd at identical knobs: `--bot-prices model` (shared-value) vs `--bot-prices espn` (ESPN-anchored).
+
+Playoff% / champ% by model (model-priced vs ESPN-anchored bots):
+
+| model | model playoff | model champ | espn playoff | espn champ |
+|---|---|---|---|---|
+| **balanced** | **0.46** | **0.06** | **0.24** | **0.02** |
+| patient_deep | 0.19 | 0.01 | 0.21 | 0.01 |
+| patient | 0.19 | 0.01 | 0.21 | 0.01 |
+| vorpshare | 0.37 | 0.05 | 0.14 | 0.01 |
+| marginal | 0.08 | 0.00 | 0.13 | 0.01 |
+| inflation | 0.15 | 0.01 | 0.10 | 0.01 |
+| static | 0.13 | 0.01 | 0.10 | 0.01 |
+| studsdepth | 0.12 | 0.01 | 0.07 | 0.00 |
+| overbid | 0.11 | 0.01 | 0.08 | 0.00 |
+| anchors | 0.06 | 0.00 | 0.02 | 0.00 |
+
+**Headline — `balanced` is the top hero in BOTH markets, and matches-or-beats `patient_deep` (the standing breadth leader) in the realistic ESPN market.** Model-priced: `balanced` playoff **0.46** / champ 0.06, CI-separated above `vorpshare` (0.37) and far above `patient_deep` (0.19). ESPN-anchored: `balanced` playoff **0.24** (top), and the paired diff `patient_deep − balanced` (CRN) is **CI-separated in `balanced`'s favor on champ (−0.008 [−0.014, −0.002]) and bye (−0.015 [−0.027, −0.003])**, leans balanced on playoff (+0.022, CI overlaps), ties on points/reg-win. So the **premium+cap** breadth mechanism is at least as strong as `patient_deep`'s **scrub_frac=0** breadth — two independent routes to the same "balanced breadth wins" result. Both spread the budget into a full, high-floor roster instead of concentrating on studs; `balanced` additionally bids a small premium so it actually wins contested mid-tier, and its pace cap makes the spread structural rather than tuning-dependent.
+
+**Caveats.** (1) The ESPN absolute levels are far below Run H's (best 0.24 vs 0.83): the fresh 2026-07-14 pool is much larger (578 players, only ~42% ESPN-priced), so the unranked-discount fallback dilutes the ESPN signal — the interpretable read is the **within-run** `balanced ≥ patient_deep`, not the absolute level. (2) 12-team only, seat 1, byes off, one 2026 snapshot; 16-team untested. **No winner declared** — the strategy call is September 2026. `balanced` joins as a standing contestant alongside `patient_deep`.
+
 ## Planned experiments / axes to sweep
 
 - **Bid-model bake-off** (the core): `static` vs `inflation` vs `marginal`, all three metrics, at a fixed
