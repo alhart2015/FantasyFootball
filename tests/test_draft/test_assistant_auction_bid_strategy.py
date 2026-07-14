@@ -1,11 +1,13 @@
 from collections import Counter
 
 import pandas as pd
+import pytest
 
 from projections.draft.assistant.auction.bid_strategy import (
     URGENCY_GAIN,
     AnchorBudgetBid,
     AuctionView,
+    BalancedValueBid,
     InflationBid,
     MarginalValueBid,
     OverbidValueBid,
@@ -455,3 +457,86 @@ def test_studs_depth_satisfies_protocol() -> None:
     from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
 
     assert isinstance(StudsAndDepthBid(), AuctionBidStrategy)
+
+
+# ---------------------------------------------------------------------------
+# BalancedValueBid (balanced-breadth hero: premium over fair, capped by pace)
+# ---------------------------------------------------------------------------
+
+
+def test_balanced_premium_wins_contested_value() -> None:
+    # mid-tier under the cap -> bid a premium over fair (out-bids a fair-value bidder)
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [20, 40, 0, 0])
+    view = _view(pool.iloc[:0], budget=100, drafted=set(), baseline=baseline)
+    bid = BalancedValueBid(premium=0.15, pace=2.0).max_bid(view, pool.iloc[0], pool, _config())
+    assert bid == 23  # round(20 * 1.15); cap = 2*(100/3) = 66.7 does not bind
+    assert bid > 20  # strictly above fair value
+
+
+def test_balanced_cap_forces_spread_on_studs() -> None:
+    # a stud whose premium'd value exceeds the pace cap -> bid the cap (< fair)
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [80, 40, 0, 0])
+    view = _view(pool.iloc[:0], budget=100, drafted=set(), baseline=baseline)
+    bid = BalancedValueBid(premium=0.15, pace=2.0).max_bid(view, pool.iloc[0], pool, _config())
+    assert bid == 67  # round(2 * 100/3) = round(66.67); 80*1.15=92 does not win
+    assert bid < 80  # strictly below fair value (capped)
+
+
+def test_balanced_cap_tracks_remaining_budget() -> None:
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [80, 40, 0, 0])
+    strat = BalancedValueBid(premium=0.15, pace=2.0)
+    rich = strat.max_bid(
+        _view(pool.iloc[:0], budget=100, drafted=set(), baseline=baseline),
+        pool.iloc[0],
+        pool,
+        _config(),
+    )
+    poor = strat.max_bid(
+        _view(pool.iloc[:0], budget=30, drafted=set(), baseline=baseline),
+        pool.iloc[0],
+        pool,
+        _config(),
+    )
+    assert poor < rich  # cap shrinks with budget: 2*(30/3)=20 vs 2*(100/3)=67
+
+
+def test_balanced_does_not_apply_urgency() -> None:
+    # partial roster + idle cash => _budget_urgency > 1; the bid must NOT be inflated by it.
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [20, 40, 0, 0])
+    view = _view(
+        pool.iloc[[2]], budget=100, drafted={"00-0000003"}, baseline=baseline
+    )  # 1 held -> 2 open
+    config = _config()
+    urgency = _budget_urgency(view, config)
+    assert urgency > 1.5  # sanity: this state carries a real urgency ramp
+    bid = BalancedValueBid(premium=0.15, pace=2.0).max_bid(view, pool.iloc[0], pool, config)
+    assert bid == 23  # round(20 * 1.15); cap = 2*(100/2) = 100 does not bind
+    assert bid < round(23 * urgency)  # NOT multiplied by the urgency ramp
+
+
+def test_balanced_rejects_bad_tuning() -> None:
+    with pytest.raises(ValueError):
+        BalancedValueBid(premium=-0.1)
+    with pytest.raises(ValueError):
+        BalancedValueBid(pace=0.0)
+    with pytest.raises(ValueError):
+        BalancedValueBid(pace=float("inf"))
+    with pytest.raises(ValueError):
+        BalancedValueBid(premium=float("nan"))
+
+
+def test_balanced_default_is_retuned_premium_one() -> None:
+    # Retuned 2026-07-14 (cap-vs-premium sweep): default premium=1.0 bids up to the low pace cap on
+    # the mid-tier so the budget spreads (the winning behavior in inflated markets); pace stays 2.0
+    # (raising the cap backfires). See reports/auction_tournament_validation_2026.md.
+    strat = BalancedValueBid()
+    assert (strat.premium, strat.pace) == (1.0, 2.0)
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [20, 40, 0, 0])
+    view = _view(pool.iloc[:0], budget=100, drafted=set(), baseline=baseline)
+    # fair=20 -> 20*(1+1.0)=40 (premium doubles the value bid); cap=2*(100/3)=66.7 does not bind
+    assert strat.max_bid(view, pool.iloc[0], pool, _config()) == 40

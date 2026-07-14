@@ -4,6 +4,25 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction Strategy — `BalancedValueBid` (Slice 1) shipped + validated (2026-07-14, branch `feat/auction-balanced-value` → PR)
+
+**Status:** New auction bid-model contestant `balanced` (`BalancedValueBid`) shipped via full superpowers-go (spec → spec-review → plan → plan-review → subagent-driven execution → final whole-branch review). Spec/plan `docs/superpowers/specs|plans/2026-07-13-auction-balanced-value*`. **No winner declared — the strategy decision is September 2026.**
+
+**What it is:** `bid = round(min(fair×(1+premium), pace×my_budget/my_open_slots))`, defaults premium=0.15 / pace=2.0 — a small premium over fair value (to *win* contested players) + a per-player pace cap ≈2× the even per-slot share (to *spread* the budget into a full roster), **deliberately WITHOUT `_budget_urgency`** (a this-session investigation found the urgency ramp is self-harm for a well-constructed roster — it dumps idle cash on late scrubs). Registered as the tenth `_MODELS` contestant; every existing strategy untouched (Runs A–H byte-identical).
+
+**Origin (this session's investigation; scratch, re-baselined on main):** an all-bot diagnostic showed championships are ≈+0.91 correlated with total projected points, and points come from BALANCED BREADTH not stars-and-scrubs (concentration *hurts*: `corr(champ, top2_share) ≈ −0.65`). `BalancedValueBid` operationalizes that. NB: `main` independently found the same insight — `patient_deep = PatientValueBid(scrub_frac=0)` — so this is a second, distinct route (premium+cap vs mid-tier-fair-value) to "breadth wins."
+
+**Run I (12-team half, seat 1, 150 seeds × 300 sims; recorded in the report).** `balanced` is the **top hero in BOTH bot markets**:
+- **Model-priced:** playoff **0.46** / champ 0.06 — top on every metric, CI-separated above `vorpshare` (0.37), far above `patient_deep` (0.19).
+- **ESPN-anchored (the realistic market; fresh 2026-07-14 external re-ingest → 241 ESPN-priced of 578):** playoff **0.24** (top), and beats `main`'s standing breadth leader `patient_deep` **CI-separated on champ (+0.008) and bye (+0.015)**, ties on playoff/points. So premium+cap breadth ≥ `patient_deep`'s scrub_frac=0 breadth.
+- **Honest caveats:** even as top hero, absolute levels sit at/below the 0.50 fair-share baseline (the deep-bot-field contention handicap, §3.6). The ESPN absolute level (0.24 vs Run H's 0.83) is pool-dilution-affected (578-player pool, only ~42% ESPN-priced → the unranked fallback dilutes the signal); the interpretable read is the within-run `balanced ≥ patient_deep`, not the level.
+
+**Gates:** full suite 1847 passed; 3 failures all pre-existing / non-branch (`test_backtest_smoke_one_cell` #40, the `test_draft_board_smoke` AppTest parallel-timeout flake, and a pre-existing-broken `test_generate_preset_vorp_tables` test — TODO #55). mypy/ruff/format clean (362 files). Final whole-branch review verdict Fix-then-merge (no Critical/Important); the two docstring fixes applied.
+
+**Next (Slice 2, separate spec):** **nomination warfare** — give the hero control of nominations (all seats nominate randomly today) to bleed rivals dry then pounce; the lever to *exceed* the bot field rather than merely top it. Also: fold `balanced` into the multi-year (#49a) averaging and the 16-team runs before the September call.
+
+---
+
 ## DFS Engine — Layer 1 edge-study VERDICT: **STOP** (2026-06-24, branch `feat/dfs-projection-edge-study-verdict`)
 
 **Status:** the deferred verdict is in. Resolved the TODO #40 blocker (re-ingested raw `pbp`/`ngs`/`snap_counts`/`depth_charts`/`schedules`/`draft_picks` from nflreadpy and rebuilt the full 2018–2024 feature cache — 604 partitions, current schema, Vegas team-context columns genuinely populated), ingested Sleeper weekly projections 2020–2024, and ran the pre-registered study on 2021–2024. Machine report `reports/dfs_projection_edge_2026-06-24.md`. TODO #54/#39/#40.

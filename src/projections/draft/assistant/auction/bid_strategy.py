@@ -7,6 +7,7 @@ Each model returns a *desired* max bid (any int); the engine clamps it to
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -255,3 +256,35 @@ class StudsAndDepthBid:
         else:  # mid-tier depth: fair value, no $1-dumping
             base = float(auction_dollars)
         return round(base * _budget_urgency(view, config))
+
+
+@dataclass(frozen=True)
+class BalancedValueBid:
+    """Balanced-breadth hero: spread the whole budget into a full roster by bidding up to a LOW
+    per-player cap (`pace` x the even per-slot share) on every startable player, instead of
+    concentrating on studs. Deliberately does NOT apply _budget_urgency (the ramp over-pays late
+    scrubs).
+
+    `premium` scales the fair-value bid so that in an INFLATED market (e.g. ESPN-anchored bots,
+    where the mid-tier clears above fair value) the bid still reaches the cap and wins the
+    contested mid-tier; `premium=1.0` bids the cap on any player worth more than a full per-slot
+    share. The low cap is what forces the spread — raising it backfires (it lets the hero chase
+    over-priced studs and starve the roster). Defaults from the 2026-07-14 cap-vs-premium sweep:
+    premium=1.0 is a ~2x ESPN-market win (playoff 0.24 -> 0.44) and neutral in the un-inflated
+    model market; the low cap wins both. See reports/auction_tournament_validation_2026.md."""
+
+    premium: float = 1.0
+    pace: float = 2.0
+
+    def __post_init__(self) -> None:
+        if not (self.premium >= 0.0 and math.isfinite(self.premium)):
+            raise ValueError(f"premium must be finite and >= 0; got {self.premium}")
+        if not (self.pace > 0.0 and math.isfinite(self.pace)):
+            raise ValueError(f"pace must be finite and > 0; got {self.pace}")
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        fair = float(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        cap = self.pace * (view.my_budget / max(1, view.my_open_slots))
+        return round(min(fair * (1.0 + self.premium), cap))

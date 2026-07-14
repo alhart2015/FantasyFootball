@@ -1,7 +1,11 @@
 import pandas as pd
 import pytest
 
-from projections.draft.assistant.auction.bid_strategy import AuctionView, StaticDollarBid
+from projections.draft.assistant.auction.bid_strategy import (
+    AuctionView,
+    BalancedValueBid,
+    StaticDollarBid,
+)
 from projections.draft.assistant.auction.tournament import (
     METRICS,
     AuctionTournamentResult,
@@ -69,6 +73,24 @@ def test_result_has_per_model_per_metric_intervals_and_no_winner() -> None:
     assert set(result.summaries["static"]) == set(METRICS)
     assert not hasattr(result, "winner")  # data-gathering: no winner field exists
     assert result.season_base_seed == 0 + 1_000_000
+
+
+def test_balanced_contestant_races_and_is_scored() -> None:
+    pool = _pool(40)
+    cfg = _config(6)
+    result = run_auction_tournament(
+        {"balanced": BalancedValueBid()},
+        pool,
+        cfg,
+        my_seat=1,
+        n_seeds=4,
+        price_jitter=0.1,
+        base_seed=0,
+        n_sims=50,
+        availability=_avail(pool),
+        params=VarianceParams.load(),
+    )
+    assert set(result.summaries["balanced"]) == set(METRICS)
 
 
 def test_paired_diffs_recorded_for_each_pair() -> None:
