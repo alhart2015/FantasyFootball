@@ -59,8 +59,8 @@ _MODELS: dict[str, AuctionBidStrategy] = {
     "patient_deep": PatientValueBid(scrub_frac=0.0),
     "studsdepth": StudsAndDepthBid(),
     "balanced": BalancedValueBid(),
-    # balanced_flat: the Slice 1 cap-inflation fix — same premium/pace, but the pace cap can't
-    # self-inflate as the hero wins (non_increasing_cap=True). See the 2026-07-14 robust-win-hero spec.
+    # balanced_flat: the Slice 1 cap-inflation fix — same premium/pace, but a pace cap that
+    # can't self-inflate as the hero wins (non_increasing_cap=True). See the robust-win-hero spec.
     "balanced_flat": BalancedValueBid(non_increasing_cap=True),
 }
 

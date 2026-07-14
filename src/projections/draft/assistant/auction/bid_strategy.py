@@ -293,10 +293,10 @@ class BalancedValueBid:
         fair = float(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
         per_slot = view.my_budget / max(1, view.my_open_slots)
         if self.non_increasing_cap:
-            # Never let the cap rise above the OPENING per-slot pace. As a breadth hero wins players
-            # cheaper than its per-slot share, budget/open_slots ratchets up and the inflating cap
-            # balloons (overpays late, lopsided roster — the diagnosed bug). Clamping to the constant
-            # opening share kills the ratchet while still retreating below it when the hero is broke.
+            # Never let the cap exceed the OPENING per-slot pace. A breadth hero that wins
+            # players below its per-slot share ratchets budget/open_slots up, which balloons
+            # the inflating cap (overpays late, lopsided roster). Clamping to the constant
+            # opening share kills the ratchet, yet still retreats below it when broke.
             per_slot = min(per_slot, config.budget / config.roster_size)
         cap = self.pace * per_slot
         return round(min(fair * (1.0 + self.premium), cap))
