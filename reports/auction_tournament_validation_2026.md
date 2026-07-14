@@ -397,6 +397,17 @@ Best worst-case `reg_win_pct` across the two markets (top rows):
 
 **Implication for the goal (data, no decision).** Bid-strategy tuning has hit diminishing returns for `reg_win_pct`: the cap fix is a wash and the ceiling at a fixed seat is set by **seat/nomination position**, which a bid model can't touch. This directly motivates **Slice 2 (nomination warfare / poisoning)** — a nomination-side lever that could specifically address the disadvantaged nominate-first seat — and/or a **seat-effect diagnostic**. Multi-year validation of `balanced_flat` was **not** run (it is gated on regenerating the 2021–2025 pools via re-ingest, and validating a wash isn't worth that cost). `balanced_flat` stays a registered contestant (it is not *worse* on average, and is the cleaner mechanism), but is **not** adopted as a new default. **No winner declared** — Sept decision. Artifacts: `reports/_cap_tuning/2026{,_seat6}/*.json` (untracked).
 
+**Run K seat diagnostic — 2026-07-14 — SEAT 1 IS A LONE STRUCTURAL OUTLIER; the hero already beats the field at 11/12 seats.** Swept the hero seat 1..12 for a fixed probe (`balanced` + `patient_deep`), 20 seeds/seat, n_sims=300, both markets, 2026 12-team half (scratchpad `seat_sweep.py`). `balanced` `reg_win_pct` by seat:
+
+| seat | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | seat-avg |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| model | **0.434** | 0.530 | 0.549 | 0.528 | 0.516 | 0.542 | 0.505 | 0.536 | 0.539 | 0.556 | 0.535 | 0.539 | **0.526** |
+| espn | **0.492** | 0.599 | 0.613 | 0.590 | 0.572 | 0.593 | 0.572 | 0.573 | 0.573 | 0.584 | 0.570 | 0.573 | **0.575** |
+
+**Seat 1 sits ~0.09–0.10 below the tight seats-2–12 cluster** (which all clear the 0.50 fair share) in both markets; `patient_deep` shows the identical shape (seat 1 lowest: 0.387 model / 0.396 espn, rest ~0.51 / ~0.55). So the effect is **structural to seat 1 specifically**, not a smooth curve or random schedule scatter.
+
+**This reframes the entire auction investigation.** Every prior "hero is sub-baseline / can't beat the bots" result — Runs A–K and the memory's "0.21 as hero at seat 0" — was measured at **seat 1**, the one broken seat. Seat-averaged, the *current* `balanced` **already beats the field in both markets** (0.526 model / 0.575 espn); at 11 of 12 seats it clears fair share. The "bots overpay so we can't compete" premise was **seat-1 tunnel vision.** A ~0.10 `reg_win_pct` penalty for the *nominate-first* seat in an auction (anyone can bid on anyone) is almost certainly a **modeling artifact** (candidate causes: the hero replaces an rng-consuming bot at its seat, shifting the shared bid-noise stream vs a bots-only field; seat-dependent archetype placement; the fixed gauntlet schedule), and because seat 1 was the default measurement seat it has **biased every recorded auction number downward.** Highest-value next step is to diagnose/fix the seat-1 artifact (a correctness issue) before any further strategy work. Artifacts: scratchpad `seat_{model,espn}.json` (ephemeral).
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.
