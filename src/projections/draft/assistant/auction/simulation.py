@@ -247,7 +247,7 @@ def _simulate_to_state(
                 pos_by_id[str(nominee_id)], state.nominator, open_seats, seat_eligible, min_bid
             )
         else:
-            winner, price = resolve_bids(bids, min_bid)
+            winner, price = resolve_bids(bids, min_bid, rng)
         state.budgets[winner] -= price
         state.rosters[winner].append((nominee_id, str(player["position"]), price))
         state.drafted.add(nominee_id)

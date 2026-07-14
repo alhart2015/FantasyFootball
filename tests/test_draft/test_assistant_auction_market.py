@@ -80,24 +80,32 @@ def test_full_seat_abstains() -> None:
 
 
 def test_resolve_second_price_plus_min_bid() -> None:
-    winner, price = resolve_bids({0: 40, 1: 25, 2: 10}, min_bid=1)
+    winner, price = resolve_bids({0: 40, 1: 25, 2: 10}, min_bid=1, rng=np.random.default_rng(0))
     assert winner == 0
     assert price == 26  # second-highest (25) + min_bid (1)
 
 
 def test_resolve_caps_at_winner_max() -> None:
-    winner, price = resolve_bids({0: 5, 1: 4}, min_bid=3)
+    winner, price = resolve_bids({0: 5, 1: 4}, min_bid=3, rng=np.random.default_rng(0))
     assert winner == 0
     assert price == min(5, 4 + 3)  # == 5, never above the winner's own ceiling
 
 
 def test_resolve_lone_bidder_pays_min_bid() -> None:
-    assert resolve_bids({2: 80}, min_bid=1) == (2, 1)
+    assert resolve_bids({2: 80}, min_bid=1, rng=np.random.default_rng(0)) == (2, 1)
 
 
-def test_resolve_ties_break_on_seat_index() -> None:
-    winner, _ = resolve_bids({3: 20, 1: 20}, min_bid=1)
-    assert winner == 1
+def test_resolve_ties_broken_at_random_not_by_seat_index() -> None:
+    # Ties must NOT be systematically awarded to the lowest seat index. A lowest-index rule dumped
+    # every $1 tie on seat 0 (the seat-1 artifact: ~4 junk min-bid players/draft, ~0.10 win%). Over
+    # many rng draws both tied seats win, and a top tie clears at the tied bid.
+    winners = {
+        resolve_bids({3: 20, 1: 20}, min_bid=1, rng=np.random.default_rng(s))[0]
+        for s in range(50)
+    }
+    assert winners == {1, 3}
+    _, price = resolve_bids({3: 20, 1: 20}, min_bid=1, rng=np.random.default_rng(0))
+    assert price == 20
 
 
 def test_bot_abstains_when_position_not_eligible() -> None:
