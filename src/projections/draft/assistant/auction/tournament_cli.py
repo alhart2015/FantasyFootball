@@ -38,6 +38,7 @@ from projections.draft.assistant.auction.tournament import (
     AuctionTournamentResult,
     run_auction_tournament,
 )
+from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
@@ -75,6 +76,19 @@ def _load_pool(path: Path) -> pd.DataFrame:
 
 def _load_config(path: Path) -> LeagueConfig:
     return LeagueConfig.model_validate_json(path.read_text())
+
+
+def _load_tournament_inputs(
+    vorp_table: Path, league_config: Path, *, season: int, data_root: Path
+) -> tuple[pd.DataFrame, LeagueConfig, PlayerAvailability, VarianceParams]:
+    """Load the (pool, config, availability, variance-params) bundle a tournament needs. Shared by
+    the CLI `run` and the cap-tuning script so both build byte-identical inputs (cf. backtest)."""
+    pool = _load_pool(vorp_table)
+    config = _load_config(league_config)
+    pool = attach_is_rookie(pool, season=season, data_root=data_root)
+    availability = load_store_availability(pool, season=season, data_root=data_root)
+    params = VarianceParams.load()
+    return pool, config, availability, params
 
 
 def format_compare(result: AuctionTournamentResult) -> str:
@@ -178,11 +192,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def run(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    pool = _load_pool(args.vorp_table)
-    config = _load_config(args.league_config)
-    pool = attach_is_rookie(pool, season=args.season, data_root=args.data_root)
-    availability = load_store_availability(pool, season=args.season, data_root=args.data_root)
-    params = VarianceParams.load()
+    pool, config, availability, params = _load_tournament_inputs(
+        args.vorp_table, args.league_config, season=args.season, data_root=args.data_root
+    )
     bot_prices: Literal["espn", "model"] = "espn" if args.bot_prices == "espn" else "model"
     result = run_auction_tournament(
         _MODELS,

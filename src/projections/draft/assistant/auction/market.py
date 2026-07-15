@@ -53,13 +53,13 @@ def resolve_bids(bids: dict[int, int], min_bid: int, rng: np.random.Generator) -
     artifact. Price is one tick over the runner-up's ceiling, never above the winner's own; a lone
     bidder pays min_bid.
     """
-    max_bid = max(bids.values())
+    ordered = sorted(bids.values(), reverse=True)
+    max_bid = ordered[0]
     tied = sorted(s for s, b in bids.items() if b == max_bid)
     winner_seat = tied[0] if len(tied) == 1 else int(rng.choice(tied))
     if len(bids) == 1:
         return winner_seat, min_bid
-    second_max = sorted(bids.values(), reverse=True)[1]
-    return winner_seat, min(max_bid, second_max + min_bid)
+    return winner_seat, min(max_bid, ordered[1] + min_bid)
 
 
 def resolve_unbid(
