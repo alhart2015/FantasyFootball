@@ -1043,3 +1043,53 @@ def test_hero_nominator_receives_only_valid_candidate_lists() -> None:
         hero_nominator=spy,
     )
     assert calls > 0
+
+
+def test_hero_nominator_draws_central_rng_for_crn(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The override path must still call _sample_nominee (advancing the shared rng) so the control
+    # (None) and poison arms stay CRN-paired at nomination_temp>0. Assert the hook draws the central
+    # nominee exactly as many times as the baseline — _pool(40) has no adp (no snake path) and can't
+    # be exhausted (no forced path), so all 12 nominations go through _sample_nominee.
+    import projections.draft.assistant.auction.simulation as sim
+
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    calls = {"n": 0}
+    real = sim._sample_nominee
+
+    def counting(
+        candidates: list[str], val_by_id: dict[str, float], temp: float, rng: np.random.Generator
+    ) -> str:
+        calls["n"] += 1
+        return real(candidates, val_by_id, temp, rng)
+
+    monkeypatch.setattr(sim, "_sample_nominee", counting)
+
+    calls["n"] = 0
+    sim._simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=None,
+    )
+    baseline = calls["n"]
+    calls["n"] = 0
+    sim._simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=lambda c, ctx: c[0],
+    )
+    hooked = calls["n"]
+    assert hooked == baseline == cfg.roster_size * cfg.n_teams

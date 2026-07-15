@@ -174,7 +174,13 @@ def _simulate_to_state(
         bd["bot_dollars"] = (
             bot_dollars.reindex(bd.index).fillna(bd["auction_dollars"]).astype(pd.Int64Dtype())
         )
-    bot_by_id = {str(g): float(v) for g, v in bd["bot_dollars"].items()}  # value the room bids on
+    # value the room bids on — only the opt-in hero_nominator reads it, so skip the O(pool) build
+    # when the hook is off (mirrors the `trace` guard; the default None path pays nothing here).
+    bot_by_id = (
+        {str(g): float(v) for g, v in bd["bot_dollars"].items()}
+        if hero_nominator is not None
+        else {}
+    )
     all_positions = frozenset(Position)
     state = AuctionState.initial(config)
 
@@ -226,6 +232,12 @@ def _simulate_to_state(
             if nom in snake_boards and nom_fmax == min_bid:
                 nominee_id = snake_boards[nom].best_available(drafted_fs, seat_eligible[nom])
             if nominee_id is None:
+                # Draw the central nominee unconditionally so the shared rng advances identically
+                # whether or not a hero_nominator overrides the pick. Without this, at
+                # nomination_temp>0 the override path skips _sample_nominee's rng.choice and the
+                # stream desyncs after the hero's first nomination — which would break the CRN
+                # pairing the probe's control-vs-poison verdict depends on.
+                nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
                 if nom == hero0 and hero_nominator is not None:
                     ctx = NominationContext(
                         hero_positions=Counter(
@@ -235,12 +247,12 @@ def _simulate_to_state(
                         position_by_id=pos_by_id,
                         position_minimums=minimums,
                     )
-                    nominee_id = hero_nominator(candidates, ctx)
-                    assert nominee_id in candidates, (
-                        "hero_nominator must return a member of candidates"
-                    )
-                else:
-                    nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
+                    override = hero_nominator(candidates, ctx)
+                    # Hard check (not assert): guards the pluggable hook even under `python -O` — a
+                    # non-candidate would else KeyError or dup-draft downstream.
+                    if override not in candidates:
+                        raise ValueError("hero_nominator must return a member of candidates")
+                    nominee_id = override
         assert nominee_id is not None  # guaranteed: pool is non-empty while any seat has open slots
         player = pool_by_id[str(nominee_id)]
 

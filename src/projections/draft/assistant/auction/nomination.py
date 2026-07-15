@@ -52,10 +52,9 @@ def drain_max(candidates: list[str], ctx: NominationContext) -> str:
 def drain_off_position(candidates: list[str], ctx: NominationContext) -> str:
     """Nominate the priciest candidate at a position the hero has already filled to its starter
     requirement; fall back to `drain_max` (priciest overall) when none qualifies."""
-    off = [
-        g
-        for g in candidates
-        if ctx.hero_positions[ctx.position_by_id[str(g)]]
-        >= ctx.position_minimums.get(ctx.position_by_id[str(g)], 0)
-    ]
+    off = []
+    for g in candidates:
+        pos = ctx.position_by_id[str(g)]
+        if ctx.hero_positions[pos] >= ctx.position_minimums.get(pos, 0):
+            off.append(g)
     return max(off or candidates, key=lambda g: ctx.value_by_id[str(g)])
