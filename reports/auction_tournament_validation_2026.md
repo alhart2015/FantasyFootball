@@ -485,6 +485,24 @@ Clearing price vs fair value by draft quartile: **Q1 (studs) 1.34× (34% OVERPAY
 
 **Decision (this branch): retune `BalancedValueBid` default `premium` 1.0 → 0.0** (docstring + `test_balanced_default_is_disciplined_zero_premium` updated). This supersedes the Run J retune (PR #94) and updates Run L's `balanced` worst-case from 0.495 to **0.592**. `balanced` (now premium=0.0) genuinely beats the field in **both** markets (0.62 espn / 0.59 model, both > 0.50 fair share) — the robust-win-hero goal is met with margin. **Caveats:** 2026 pool only, 12-team half-PPR, byes off, ESPN signal diluted (241/578 priced); directional ranking robust, absolute levels market-dependent. **No live-draft winner declared** — the September call stands — but the shipped default is now the best robust hero we have found. This is the baseline Slice 2 (nomination poisoning) must beat (bar is now ~0.59, not ~0.49).
 
+**Run O — 2026-07-15 — Slice 2 nomination-poisoning FEASIBILITY PROBE → NO-GO (but a directional near-miss)** (`half_12team`, all 12 seats × both markets, 20 seeds × 300 sims; **byes OFF**; **REALISTIC MARKET**; branch `feat/auction-nomination-poison-probe`; spec+plan `docs/superpowers/{specs,plans}/2026-07-15-auction-nomination-poisoning*`). Added an opt-in `hero_nominator` hook to the auction loop (hero-only, non-forced-only; `None` byte-identical) + two poison heuristics in `nomination.py`: `drain_max` (nominate the priciest player, forcing the room to spend on a stud the capped hero loses anyway) and `drain_off_position` (nominate the priciest player at a position the hero has already filled its starters for, so the drain lands on opponents who still need it). Bid held fixed at `balanced` p0.0 for all three contestants to isolate the *nomination* lift. Decision made on the **CRN-paired** per-`(seed, seat)` `poison − control` lift (cancels shared noise so a ~+0.02 effect is resolvable). Crash-safe chunked; 24 chunks clean (~30 min).
+
+| contestant | espn level | espn Δ (paired) | model level | model Δ (paired) | seat-stable (espn/model) |
+|---|---|---|---|---|---|
+| `control` (no poison) | 0.621 | — | 0.592 | — | — |
+| `drain_max` | 0.603 | **−0.018** | 0.593 | +0.001 | no / no |
+| `drain_off_position` | 0.636 | **+0.015** | 0.608 | **+0.016** | yes / yes |
+
+Context (seat-avg make_playoffs_pct / champ_pct): `control` espn 0.750/0.200, model 0.700/0.145 · `drain_max` espn 0.723/0.174, model 0.700/0.149 · `drain_off_position` espn **0.781/0.216**, model **0.733/0.164**.
+
+**R8 sanity gate PASSES:** `control` (hook `None`) reproduces Run N `balanced` p0.0 **exactly** (espn 0.621 / model 0.592) — the harness is sound and the paired lift is apples-to-apples.
+
+**Verdict — NO-GO (pre-registered bar: min market Δ ≥ +0.02 AND seat-stable in both markets):**
+- **`drain_max` is actively HARMFUL** — −0.018 in espn (flat in model), not seat-stable. Nominating the single priciest player overall often surfaces a stud the hero itself wanted (or that the disciplined room clears near fair value), so it does not specifically drain opponents. Rejected.
+- **`drain_off_position` is a real, seat-stable, both-market POSITIVE that just misses the bar** — reg_win_pct **+0.015 espn / +0.016 model** (positive at a majority of seats in *both* markets), and a *larger* lift on the deep-run metrics: **playoff ≈ +0.031 / +0.033**, **champ ≈ +0.016 / +0.019**. Targeting the drain at positions the hero is done with works in the intended direction — but the reg_win_pct lift (0.015/0.016) is below the +0.02 goal threshold.
+
+**Conclusion (data; no default change):** nomination poisoning does **not** clear the pre-registered reg_win_pct bar, so the shipped **`balanced` p0.0 hero stands** as the robust-win hero. But `drain_off_position` is a directionally-correct near-miss with a disproportionate playoff/champ lift, so this is a "close, not dead" rather than a flat refutation. **Open decision:** whether to (a) keep the hook + pursue a refined nomination slice (a smarter off-position/enforcement heuristic, or a higher-power run to tighten the ±estimate), or (b) delete the hook and close nomination poisoning. Caveats as Run N (2026 pool, 12-team half, byes off, ESPN diluted); 20×300 CRN-paired is powered for ~+0.02 but 0.015 sits inside the "maybe with more seeds" zone. Artifacts: `reports/_nom_probe/2026/*.json` (untracked). Live-draft call still September.
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.
