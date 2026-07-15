@@ -23,6 +23,7 @@ from projections.draft.assistant.auction.market import (
     resolve_bids,
     resolve_unbid,
 )
+from projections.draft.assistant.auction.nomination import HeroNominator, NominationContext
 from projections.draft.assistant.auction.snake_bot import SnakeBoard, adp_usable
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import bot_eligible, bot_position_bounds
@@ -123,11 +124,14 @@ def _simulate_to_state(
     bot_archetypes: Sequence[BotArchetype] | None = None,
     bot_dollars: pd.Series | None = None,
     trace: list[PickRecord] | None = None,
+    hero_nominator: HeroNominator | None = None,
 ) -> AuctionState:
     """Run the full auction loop; return the final AuctionState (budgets + priced rosters).
 
     If `trace` is provided, one `PickRecord` per award is appended in draft order (diagnostics only;
-    None leaves the hot path unchanged).
+    None leaves the hot path unchanged). If `hero_nominator` is provided, it chooses the hero's
+    nominee on the hero's own non-forced turns (Slice 2 probe); None keeps `_sample_nominee` for all
+    seats. Bots, the snake-broke path, and the forced pool-thin fallback are unaffected either way.
     """
     validate_auction_inputs(pool, config)
     n = config.n_teams
@@ -170,6 +174,7 @@ def _simulate_to_state(
         bd["bot_dollars"] = (
             bot_dollars.reindex(bd.index).fillna(bd["auction_dollars"]).astype(pd.Int64Dtype())
         )
+    bot_by_id = {str(g): float(v) for g, v in bd["bot_dollars"].items()}  # value the room bids on
     all_positions = frozenset(Position)
     state = AuctionState.initial(config)
 
@@ -221,7 +226,21 @@ def _simulate_to_state(
             if nom in snake_boards and nom_fmax == min_bid:
                 nominee_id = snake_boards[nom].best_available(drafted_fs, seat_eligible[nom])
             if nominee_id is None:
-                nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
+                if nom == hero0 and hero_nominator is not None:
+                    ctx = NominationContext(
+                        hero_positions=Counter(
+                            Position(p) for (_g, p, _pr) in state.rosters[hero0]
+                        ),
+                        value_by_id=bot_by_id,
+                        position_by_id=pos_by_id,
+                        position_minimums=minimums,
+                    )
+                    nominee_id = hero_nominator(candidates, ctx)
+                    assert nominee_id in candidates, (
+                        "hero_nominator must return a member of candidates"
+                    )
+                else:
+                    nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
         assert nominee_id is not None  # guaranteed: pool is non-empty while any seat has open slots
         player = pool_by_id[str(nominee_id)]
 
@@ -308,6 +327,7 @@ def simulate_auction(
     nomination_temp: float = 0.0,
     bot_archetypes: Sequence[BotArchetype] | None = None,
     bot_dollars: pd.Series | None = None,
+    hero_nominator: HeroNominator | None = None,
 ) -> dict[int, list[str]]:
     """One full auction; return every seat's roster {seat(1-based): [gsis_id, ...]}."""
     state = _simulate_to_state(
@@ -322,5 +342,6 @@ def simulate_auction(
         nomination_temp=nomination_temp,
         bot_archetypes=bot_archetypes,
         bot_dollars=bot_dollars,
+        hero_nominator=hero_nominator,
     )
     return {seat + 1: [g for (g, _p, _pr) in state.rosters[seat]] for seat in range(config.n_teams)}
