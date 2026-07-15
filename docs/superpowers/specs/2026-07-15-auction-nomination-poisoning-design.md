@@ -52,9 +52,11 @@ The hook does **not** replace the snake-bot broke-nominator path (that path is b
 
 Identical methodology to the Run N premium sweep, so results are directly comparable:
 
-- Seat-averaged `reg_win_pct` (+ `make_playoffs_pct`, `champ_pct` for context) over **12 seats × both markets × 20 seeds × 300 sims**, crash-safe chunked (reuse the `scripts/auction_seat_sweep.py` seat-average + aggregation shape).
+- Seat-averaged `reg_win_pct` (+ `make_playoffs_pct`, `champ_pct` for context) over **12 seats × both markets × 20 seeds × 300 sims**, crash-safe chunked.
 - Contestants, all bidding `balanced` `premium=0.0`: **`control`** (`hero_nominator=None`), **`drain_max`**, **`drain_off_position`**.
-- **Sanity check:** `control` must reproduce the Run N `balanced` figure (~0.59 model / ~0.62 espn seat-avg). If it does not, the probe harness is wrong — stop and fix before reading poison lift.
+- **Common Random Numbers (required for power).** All three contestants share CRN: the same base auction seeds, the same season seeds, and the same seat set, so at a given `(seed, seat)` the *only* difference between `control` and a poison contestant is the hero's nominations. The go/no-go effect (~+0.02) is near the seed-noise floor for independent seat-average *levels* (per-seat cells carry ±~0.03 at 20 seeds), so the decision is made on the **CRN-paired** per-`(seed, seat)` difference `poison − control`, which cancels the shared auction+season noise. The runner therefore records per-`(seed, seat)` `reg_win_pct` for every contestant (not only the seat-averaged mean), so the paired lift and its per-seat sign can be computed.
+- **A new runner is required** (Phase 3), parametrized by *nominator* at a fixed `balanced` p0.0 bid. `scripts/auction_seat_sweep.py` races bid *models* at a fixed nominator and cannot be reused directly; reuse only its seat-average/aggregation *shape* and the Run N CRN seed config. The scratch `premium_sweep.py` (Run N) is the closest template.
+- **Sanity gate (acceptance criterion, see R7):** `control`'s seat-average must reproduce the Run N `balanced` p0.0 figure (~0.59 model / ~0.62 espn) within seed noise. If it does not, the harness is wrong — stop and fix before any poison lift is read.
 
 ## Requirements
 
@@ -64,6 +66,8 @@ Identical methodology to the Run N premium sweep, so results are directly compar
 - **R4 — heuristic correctness.** `drain_max` returns the max-`value_by_id` candidate; `drain_off_position` returns the max-value candidate at an over-filled position, or falls back to `drain_max` when none qualifies.
 - **R5 — bid held fixed.** Every probe contestant uses `BalancedValueBid(premium=0.0)` as the bid strategy; only the nominator varies.
 - **R6 — gates.** `pytest`, `mypy src tests` (strict), `ruff check`, `ruff format --check` all clean.
+- **R7 — CRN + paired decision.** Contestants share CRN (same base seeds, season seeds, seats); the runner records per-`(seed, seat)` `reg_win_pct` per contestant; the go/no-go is computed from the CRN-paired `poison − control` lift, not a comparison of independent levels.
+- **R8 — control sanity gate.** Before any poison lift is read, `control`'s seat-average `reg_win_pct` must reproduce the Run N `balanced` p0.0 figure (~0.59 model / ~0.62 espn) within seed noise. A mismatch means the harness is wrong; stop and fix.
 
 ## Edge cases / failure modes
 
@@ -90,5 +94,9 @@ Identical methodology to the Run N premium sweep, so results are directly compar
 
 ## Go / no-go
 
-- **Go** → a poison heuristic beats `control` by **≥ +0.02 worst-case `reg_win_pct`** (min over the two markets), seat-stable, in **both** markets. Then design the full `NominationStrategy` abstraction + heuristic family as a new slice.
-- **No-go** → neither poison beats `control` in both markets → record as data, the ~0.59 `balanced` p0.0 hero stands, **delete the probe hook**, and close nomination poisoning. Either outcome is a clean, publishable result.
+Define the **paired per-market lift** of a poison contestant as `Δ_market = mean over (seed, seat) of (poison_reg_win_pct − control_reg_win_pct)` in that market (CRN-paired, per R7). Define it as **seat-stable** iff the paired lift `poison − control` is positive at a **majority of the 12 seats** in that market (so the effect is not one or two lucky seats).
+
+- **Go** → some poison heuristic has `min(Δ_model, Δ_espn) ≥ +0.02` **and** is seat-stable in **both** markets. (The lift holds in the *worse* market, not just on average.) Then design the full `NominationStrategy` abstraction + heuristic family as a new slice.
+- **No-go** → no poison clears that bar → record as data, the ~0.59 `balanced` p0.0 hero stands, **delete the probe hook**, and close nomination poisoning.
+
+Either outcome is a clean, publishable result. A poison that helps one market but hurts (or is flat in) the other is a **no-go** for the robust single-hero goal, but is noted for the record.
