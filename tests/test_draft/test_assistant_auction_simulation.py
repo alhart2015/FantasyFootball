@@ -19,6 +19,7 @@ from projections.draft.assistant.auction.market import (
 )
 from projections.draft.assistant.auction.simulation import (
     AuctionState,
+    PickRecord,
     _build_view,
     _feasible_max,
     _sample_nominee,
@@ -121,6 +122,62 @@ def test_returns_full_league_each_seat_full() -> None:
     assert all(len(r) == cfg.roster_size for r in league.values())
     all_ids = [g for r in league.values() for g in r]
     assert len(all_ids) == len(set(all_ids))  # no player drafted twice
+
+
+def test_trace_records_every_pick_in_draft_order() -> None:
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    trace: list[PickRecord] = []
+    state = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(0),
+        trace=trace,
+    )
+    total = cfg.roster_size * cfg.n_teams
+    assert len(trace) == total  # one record per award
+    assert [r.pick for r in trace] == list(range(1, total + 1))  # 1-based draft order
+    priced = {(str(g), pr) for seat in state.rosters for (g, _p, pr) in seat}
+    assert all((r.gsis_id, r.price) in priced for r in trace)  # trace price == awarded price
+    # room_budget is the running sum of remaining budgets: strictly decreasing to sum(state.budgets)
+    budgets = [r.room_budget for r in trace]
+    assert budgets == sorted(budgets, reverse=True)
+    assert trace[-1].room_budget == sum(state.budgets)
+
+
+def test_trace_none_is_behaviour_preserving() -> None:
+    # Appending to `trace` draws no RNG, so a traced run must be byte-identical to an untraced one.
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    untraced = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(3),
+    )
+    trace: list[PickRecord] = []
+    traced = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(3),
+        trace=trace,
+    )
+    assert traced.rosters == untraced.rosters  # identical draft
+    assert traced.budgets == untraced.budgets
+    assert len(trace) == cfg.roster_size * cfg.n_teams
 
 
 def test_determinism_same_seed_same_league() -> None:
