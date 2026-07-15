@@ -480,11 +480,11 @@ def _run_chunk(a: argparse.Namespace) -> int:
 
 
 def _aggregate(a: argparse.Namespace) -> int:
-    chunks = [
-        json.loads(p.read_text())
-        for p in sorted(a.chunk_dir.glob("*.json"))
-        if "market" in json.loads(p.read_text())
-    ]
+    chunks = []
+    for p in sorted(a.chunk_dir.glob("*.json")):
+        data = json.loads(p.read_text())
+        if isinstance(data, dict) and "market" in data and "reg_win_pct_per_seed" in data:
+            chunks.append(data)
     markets = sorted({c["market"] for c in chunks})
     names = list(NOMINATORS)
     # seat-avg level per (market, name), and CRN-paired lift vs control per (market, name)
@@ -508,6 +508,14 @@ def _aggregate(a: argparse.Namespace) -> int:
         for m in markets:
             cells += f"{savg(level, m, name):>14.3f}{savg(paired, m, name):>12.3f}"
         print(f"{name:<20}{cells}")
+    print("\ncontext (seat-avg make_playoffs_pct / champ_pct):")
+    for name in names:
+        cells = ""
+        for m in markets:
+            pos = [c["extra_mean"][name]["make_playoffs_pct"] for c in chunks if c["market"] == m]
+            ch = [c["extra_mean"][name]["champ_pct"] for c in chunks if c["market"] == m]
+            cells += f"  {m}: {np.mean(pos):.3f}/{np.mean(ch):.3f}"
+        print(f"  {name:<20}{cells}")
     print("\ngo/no-go (paired lift vs control; go = min market Δ >= +0.02 AND seat-stable):")
     for name in names:
         if name == "control":
@@ -542,7 +550,8 @@ def _args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    return int(_args(argv).func(_args(argv)))
+    args = _args(argv)
+    return int(args.func(args))
 
 
 if __name__ == "__main__":
