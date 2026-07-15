@@ -425,6 +425,36 @@ Seat 1 moved into the pack (model +0.064, espn +0.074) and the seat curve flatte
 - **Model market (symmetric, bots price off our own numbers): the hero is ~even (~0.495)** — you cannot systematically beat a field using your own valuations; ~fair-share is the correct expectation.
 - **Every prior auction number measured at seat 1 (Runs A–K, the memory's "0.21 at seat 0") was biased low by this bug** and should be read as pre-fix. `balanced` remains the win% leader among current strategies (≥ `patient_deep` at nearly every seat, both markets). The cap-fix "wash" (Run K) still holds — the tie-break bug affected `balanced` and `balanced_flat` equally.
 
+**Run L — 2026-07-15 — FULL-FIELD seat-symmetric sweep (post-fix), GOAL = robust reg-season win%** (`half_12team`, all 12 seats × both bot markets, 20 seeds × 300 sims per (seat, market); **byes OFF**; **REALISTIC MARKET** — `nomination_temp=1.0` + mixed bot field + snake-draft broke bots; branch `feat/auction-fullfield-seat-sweep`). The first clean, apples-to-apples ranking of the **whole registered field** (`tournament_cli._MODELS`, all 11 heroes) with the seat-1 tie-break fix in place — every prior full-field ranking (Runs H/I) was pre-fix and seat-1-only, and the post-fix validation only re-ran a 2-hero probe (`balanced` + `patient_deep`). Crash-safe chunked runner `scripts/auction_seat_sweep.py`; all 24 chunks completed clean (~76 min, zero Raptor Lake faults). Ranked by **seat-averaged `reg_win_pct` worst-case across the two markets** (the robust-win goal metric). 12-team fair share = 0.50.
+
+| rank | hero | espn | model | **worst** |
+|---|---|---|---|---|
+| **1** | **balanced** (shipped default) | **0.554** | **0.495** | **0.495** |
+| 2 | balanced_flat | 0.522 | 0.487 | 0.487 |
+| 3 | patient_deep | 0.516 | 0.474 | 0.474 |
+| 4 | inflation | 0.408 | 0.490 | 0.408 |
+| 5 | static | 0.396 | 0.455 | 0.396 |
+| 6 | overbid | 0.388 | 0.427 | 0.388 |
+| 7 | studsdepth | 0.378 | 0.417 | 0.378 |
+| 8 | patient | 0.398 | 0.373 | 0.373 |
+| 9 | vorpshare | 0.358 | 0.385 | 0.358 |
+| 10 | marginal | 0.255 | 0.237 | 0.237 |
+| 11 | anchors | 0.156 | 0.301 | 0.156 |
+
+**Finding 1 — `balanced` (the current shipped default) is the outright robust win% leader: #1 in BOTH markets and #1 worst-case (0.495).** It tops the ESPN market at **0.554** (a real edge above the 0.50 fair share, from exploiting ESPN mispricing) and narrowly tops the symmetric model market too (0.495 vs `inflation` 0.490). No other strategy beats it in either market. **The robust-win-hero goal is met by the existing default** — the "hero can't beat the bots" premise was seat-1 tunnel vision (Run K), and seat-symmetric the answer is: beat the field in the realistic (ESPN) market, ~fair-share in the model market (you can't systematically beat a field pricing off your own numbers).
+
+**Finding 2 — consistency check passed.** `balanced`'s seat-averages here (ESPN 0.554 / model 0.495) reproduce the Run-K 2-hero validation probe **exactly** — CRN + shared base seed makes each strategy's paired auctions identical whether raced alone or in the full field, so the full-field ranking is trustworthy, not a re-mix artifact.
+
+**Finding 3 — `patient_deep` demoted to #3.** The former "multi-year era-robust leader" (Runs G/H) was crowned pre-fix at seat 1 under the older discount-era methodology; measured seat-symmetric with the fix, `balanced` beats it in both markets (worst-case 0.495 vs 0.474).
+
+**Finding 4 — the stud-buyers are market-split, which is exactly why worst-case demotes them.** `inflation`/`static` are competitive in the *model* market (0.490 / 0.455) but **collapse in ESPN** (0.408 / 0.396): you cannot win overpriced studs cheaply when bots anchor on inflated ESPN values. The worst-case robustness gate punishes this market-fragility correctly — a hero that only wins when the room prices fairly is not robust.
+
+**Finding 5 — the cap-fix "wash" holds at full-field scale.** `balanced` (inflating cap) slightly *edges* `balanced_flat` (non-inflating) in both markets (espn 0.554 vs 0.522, model 0.495 vs 0.487), so the inflating default stays; `balanced_flat` remains a registered contestant (#2, cleaner mechanism, not adopted).
+
+**Finding 6 — no outlier seat remains.** `balanced`'s per-seat spread is tight (espn [0.518, 0.579], model [0.450, 0.523]) with seat 1 sitting right in the pack (espn 0.566 / model 0.498); `patient_deep`/`balanced_flat` show the same flat shape. The seat-1 fix holds across the whole field.
+
+**Caveats.** 20 seeds/seat (12 seats pooled = 240 auction-seeds per market cell → the seat-*average* is fairly tight, but individual per-seat cells carry ±~0.03 noise); 2026 pool only, 12-team half-PPR only, byes off (2026 schedule not ingested → bye/champ cells perturbed, but reg_win_pct — the goal metric — is unaffected); the ESPN signal is diluted by the 42%-priced pool (only 241/578 ESPN-priced → unranked-discount fallback), so treat the **model market as the symmetric control and the ESPN market as the realistic-but-noisier read**. Directional ranking is robust; absolute levels are market-dependent. Artifacts: `reports/_seat_sweep/2026/*.json` (untracked). **No winner declared for the live draft** — the September strategy call stands — but for the stated goal, **`balanced` is the answer, and it is already shipped.** This is the clean baseline Slice 2 (nomination poisoning) must beat.
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.
