@@ -65,6 +65,27 @@ class AuctionState:
         return cls([config.budget] * n, [[] for _ in range(n)], set(), 0)
 
 
+@dataclass(frozen=True)
+class PickRecord:
+    """One awarded nomination, appended to an opt-in `trace` for post-hoc market analysis.
+
+    Records the global pick order the final `AuctionState` cannot reconstruct (rosters are stored
+    per seat, not in draft order). `value` is the model auction_dollars (the shared fair value the
+    model-market bots price on), so `price - value` is the clearing surplus/premium; `room_budget`
+    is the sum of every seat's remaining budget AFTER the award (a proxy for how drained the room is
+    when the player clears). No behavior change — populated only when a caller passes a `trace`.
+    """
+
+    pick: int  # 1-based global pick index (== len(drafted) after the award)
+    gsis_id: str
+    position: str
+    value: float  # model auction_dollars (fair value)
+    price: int  # clearing price paid
+    winner_seat: int  # 0-based
+    room_budget: int  # sum of all seats' budgets after this award
+    forced: bool  # the ungated pool-thin fallback nomination (no eligible-position gate)
+
+
 def _open_slots(state: AuctionState, seat: int, roster_size: int) -> int:
     return roster_size - len(state.rosters[seat])
 
@@ -101,8 +122,13 @@ def _simulate_to_state(
     nomination_temp: float = 0.0,
     bot_archetypes: Sequence[BotArchetype] | None = None,
     bot_dollars: pd.Series | None = None,
+    trace: list[PickRecord] | None = None,
 ) -> AuctionState:
-    """Run the full auction loop; return the final AuctionState (budgets + priced rosters)."""
+    """Run the full auction loop; return the final AuctionState (budgets + priced rosters).
+
+    If `trace` is provided, one `PickRecord` per award is appended in draft order (diagnostics only;
+    None leaves the hot path unchanged).
+    """
     validate_auction_inputs(pool, config)
     n = config.n_teams
     rs = config.roster_size
@@ -251,6 +277,19 @@ def _simulate_to_state(
         state.budgets[winner] -= price
         state.rosters[winner].append((nominee_id, str(player["position"]), price))
         state.drafted.add(nominee_id)
+        if trace is not None:
+            trace.append(
+                PickRecord(
+                    pick=len(state.drafted),
+                    gsis_id=str(nominee_id),
+                    position=str(player["position"]),
+                    value=val_by_id[str(nominee_id)],
+                    price=price,
+                    winner_seat=winner,
+                    room_budget=sum(state.budgets),
+                    forced=forced,
+                )
+            )
         state.nominator = (state.nominator + 1) % n
 
     return state
