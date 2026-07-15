@@ -501,7 +501,16 @@ Context (seat-avg make_playoffs_pct / champ_pct): `control` espn 0.750/0.200, mo
 - **`drain_max` is actively HARMFUL** — −0.018 in espn (flat in model), not seat-stable. Nominating the single priciest player overall often surfaces a stud the hero itself wanted (or that the disciplined room clears near fair value), so it does not specifically drain opponents. Rejected.
 - **`drain_off_position` is a real, seat-stable, both-market POSITIVE that just misses the bar** — reg_win_pct **+0.015 espn / +0.016 model** (positive at a majority of seats in *both* markets), and a *larger* lift on the deep-run metrics: **playoff ≈ +0.031 / +0.033**, **champ ≈ +0.016 / +0.019**. Targeting the drain at positions the hero is done with works in the intended direction — but the reg_win_pct lift (0.015/0.016) is below the +0.02 goal threshold.
 
-**Conclusion (data; no default change):** nomination poisoning does **not** clear the pre-registered reg_win_pct bar, so the shipped **`balanced` p0.0 hero stands** as the robust-win hero. But `drain_off_position` is a directionally-correct near-miss with a disproportionate playoff/champ lift, so this is a "close, not dead" rather than a flat refutation. **Open decision:** whether to (a) keep the hook + pursue a refined nomination slice (a smarter off-position/enforcement heuristic, or a higher-power run to tighten the ±estimate), or (b) delete the hook and close nomination poisoning. Caveats as Run N (2026 pool, 12-team half, byes off, ESPN diluted); 20×300 CRN-paired is powered for ~+0.02 but 0.015 sits inside the "maybe with more seeds" zone. Artifacts: `reports/_nom_probe/2026/*.json` (untracked). Live-draft call still September.
+**Conclusion (data; no default change):** nomination poisoning does **not** clear the pre-registered reg_win_pct bar, so the shipped **`balanced` p0.0 hero stands** as the robust-win hero. `drain_off_position` is a directionally-correct near-miss whose 20-seed espn CI just touched 0, so a **40-seed high-power re-run** (control + drain_off_position only; CI on the CRN-paired lift) was run to resolve "real edge vs noise."
+
+**Run O high-power (40-seed) — RESOLVED, still NO-GO.** 24/24 chunks; R8 gate holds (control espn 0.620 / model 0.589 ≈ Run N). Paired lift with 95% CI over seats (adopt criterion pre-registered as **CI-separated from 0 in BOTH markets**):
+
+| market | 20-seed Δ | 40-seed Δ | 95% CI | seats + | verdict |
+|---|---|---|---|---|---|
+| model | +0.0162 | **+0.0154** | **[+0.003, +0.028]** | 10/12 | **REAL (CI>0)** |
+| espn | +0.0145 | **+0.0066** | [−0.003, +0.016] | 10/12 | **not sep. from 0** |
+
+The espn lift **regressed toward 0** with more data (it was partly noise at 20 seeds); the model lift **held and is now CI-separated**. So `drain_off_position` is a **genuine but market-specific** edge — real in the symmetric *model* market (+0.015), indistinguishable from zero in the realistic *ESPN* market. **Per the pre-registered both-markets criterion → DO NOT ADOPT.** The robust-win goal needs a both-market lift, and ESPN (real auction values) is the market that matters for the live draft; a model-only nomination edge is not robust. **`balanced` p0.0 is the final hero; nomination poisoning is closed for this slice.** The engine `hero_nominator` hook + `nomination.py` remain available in git history for any future ESPN-targeted nomination work. Caveats as Run N. Artifacts: `reports/_nom_probe/{2026,2026_hp}/*.json` (untracked). Live-draft call still September.
 
 ## Planned experiments / axes to sweep
 
