@@ -529,17 +529,18 @@ def test_balanced_rejects_bad_tuning() -> None:
         BalancedValueBid(premium=float("nan"))
 
 
-def test_balanced_default_is_retuned_premium_one() -> None:
-    # Retuned 2026-07-14 (cap-vs-premium sweep): default premium=1.0 bids up to the low pace cap on
-    # the mid-tier so the budget spreads (the winning behavior in inflated markets); pace stays 2.0
-    # (raising the cap backfires). See reports/auction_tournament_validation_2026.md.
+def test_balanced_default_is_disciplined_zero_premium() -> None:
+    # Retuned 2026-07-15 (post seat-1 fix, both-market seat sweep): default premium=0.0 bids
+    # straight fair value (capped) — a premium overpays (chases studs the market inflates, burns the
+    # budget before the discounted mid-tier), and reg_win_pct is monotone-decreasing in premium in
+    # BOTH markets. pace stays 2.0 (the low cap forces the spread). See the validation report.
     strat = BalancedValueBid()
-    assert (strat.premium, strat.pace) == (1.0, 2.0)
+    assert (strat.premium, strat.pace) == (0.0, 2.0)
     pool = _pool()
     baseline = _baseline([True, True, False, False], [20, 40, 0, 0])
     view = _view(pool.iloc[:0], budget=100, drafted=set(), baseline=baseline)
-    # fair=20 -> 20*(1+1.0)=40 (premium doubles the value bid); cap=2*(100/3)=66.7 does not bind
-    assert strat.max_bid(view, pool.iloc[0], pool, _config()) == 40
+    # fair=20 -> 20*(1+0.0)=20 (bid straight fair value); cap=2*(100/3)=66.7 does not bind
+    assert strat.max_bid(view, pool.iloc[0], pool, _config()) == 20
 
 
 def test_balanced_non_increasing_cap_defaults_off() -> None:

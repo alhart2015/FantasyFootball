@@ -453,7 +453,37 @@ Seat 1 moved into the pack (model +0.064, espn +0.074) and the seat curve flatte
 
 **Finding 6 — no outlier seat remains.** `balanced`'s per-seat spread is tight (espn [0.518, 0.579], model [0.450, 0.523]) with seat 1 sitting right in the pack (espn 0.566 / model 0.498); `patient_deep`/`balanced_flat` show the same flat shape. The seat-1 fix holds across the whole field.
 
-**Caveats.** 20 seeds/seat (12 seats pooled = 240 auction-seeds per market cell → the seat-*average* is fairly tight, but individual per-seat cells carry ±~0.03 noise); 2026 pool only, 12-team half-PPR only, byes off (2026 schedule not ingested → bye/champ cells perturbed, but reg_win_pct — the goal metric — is unaffected); the ESPN signal is diluted by the 42%-priced pool (only 241/578 ESPN-priced → unranked-discount fallback), so treat the **model market as the symmetric control and the ESPN market as the realistic-but-noisier read**. Directional ranking is robust; absolute levels are market-dependent. Artifacts: `reports/_seat_sweep/2026/*.json` (untracked). **No winner declared for the live draft** — the September strategy call stands — but for the stated goal, **`balanced` is the answer, and it is already shipped.** This is the clean baseline Slice 2 (nomination poisoning) must beat.
+**Caveats.** 20 seeds/seat (12 seats pooled = 240 auction-seeds per market cell → the seat-*average* is fairly tight, but individual per-seat cells carry ±~0.03 noise); 2026 pool only, 12-team half-PPR only, byes off (2026 schedule not ingested → bye/champ cells perturbed, but reg_win_pct — the goal metric — is unaffected); the ESPN signal is diluted by the 42%-priced pool (only 241/578 ESPN-priced → unranked-discount fallback), so treat the **model market as the symmetric control and the ESPN market as the realistic-but-noisier read**. Directional ranking is robust; absolute levels are market-dependent. Artifacts: `reports/_seat_sweep/2026/*.json` (untracked). **No winner declared for the live draft** — the September strategy call stands — but for the stated goal, **`balanced` is the answer, and it is already shipped.** This is the clean baseline that Runs M–N below improve on (they retune the `balanced` default itself).
+
+**Run M — 2026-07-15 — model-market microstructure diagnostic (is the model market actually unbeatable?).** Motivated by a challenge to the "beating a field that prices off your own numbers is impossible" reading (reg_win_pct is zero-sum → mean 0.50, but a *single* strategy can beat the field average). Added an opt-in `PickRecord` trace to `_simulate_to_state` (branch `feat/auction-market-inefficiency-diagnostic`); scratch harness raced the model market with hero=`balanced` (premium=1.0) at seat 1, 40 seeds × 200 sims, reading **all-seat** metrics from `project_draft` grouped by bot archetype.
+
+Metrics by archetype (fair share 0.50):
+
+| archetype | seats | win% | playoff% | champ% | end budget | roster value $ | spent $ | surplus $ |
+|---|---|---|---|---|---|---|---|---|
+| **BalancedBot** | 3 | **0.619** | **0.753** | **0.181** | 5.6 | **254** | 194 | **+60** |
+| AggressiveBot | 4 | 0.506 | 0.512 | 0.075 | 0.0 | 213 | 200 | +13 |
+| Hero (`balanced` prem1.0) | 1 | 0.493 | 0.474 | 0.045 | 3.8 | 132 | 196 | **−64** |
+| PatientValueBot | 4 | 0.407 | 0.305 | 0.027 | 1.8 | 153 | 198 | −45 |
+
+Clearing price vs fair value by draft quartile: **Q1 (studs) 1.34× (34% OVERPAY)**, Q2 1.03×, **Q3 (mid-tier) 0.76× (24% DISCOUNT)**, Q4 0.85×. Surplus captured per win: BalancedBot **+3.53**, Aggressive +0.75, Patient −2.66, Hero (`balanced`) **−3.75** (worst in the field).
+
+**Finding — the model market is very inefficient, and the shipped hero exploits it BACKWARDS.** `BalancedBot` runs at **0.62 win** by *discipline*: it fades the early studs (which the uncapped aggressive bots bid to 1.34× fair) and banks the Q3 mid-tier discount (0.76× fair, once the room is tapped out), ending with **$254 of talent for $194**. Our hero `balanced` with **premium=1.0 bids fair×2**, so it chases the hot early tier, slams its pace cap early, **burns budget**, and misses the Q3 window — the **worst surplus in the field (−$64)** and only $132 of talent, stuck at 0.49. This **overturns Run J's "premium neutral in the model market"** (Run J was pre-seat-fix at seat 1, contaminated): post-fix, the premium is actively harmful in the model market.
+
+**Run N — 2026-07-15 — premium sweep, both markets, seat-averaged → RETUNE default premium 1.0 → 0.0** (`half_12team`, all 12 seats × both markets, 20 seeds × 300 sims; **byes OFF**; **REALISTIC MARKET**; branch `feat/auction-market-inefficiency-diagnostic`). Raced `BalancedValueBid` at premium {0.0, 0.15, 0.5, 1.0} + `balbot_hero` (the noisy `BalancedBot` rule wrapped as a hero, reading `bot_dollars`) + `patient_deep`, scored by seat-averaged `reg_win_pct` worst-case across markets. Crash-safe chunked runner; 24 chunks clean (~27 min, zero faults).
+
+| contestant | espn | model | **worst** | playoff worst | champ worst |
+|---|---|---|---|---|---|
+| **prem0.0** (disciplined) | 0.621 | 0.592 | **0.592** | **0.700** | **0.145** |
+| prem0.15 | 0.640 | 0.561 | 0.561 | 0.638 | 0.104 |
+| balbot_hero (noisy BalancedBot) | 0.560 | 0.583 | 0.560 | 0.630 | 0.120 |
+| prem0.5 | 0.589 | 0.513 | 0.513 | 0.523 | 0.059 |
+| **prem1.0 (old default)** | 0.554 | 0.495 | 0.495 | 0.484 | 0.043 |
+| patient_deep | 0.516 | 0.474 | 0.474 | 0.436 | 0.037 |
+
+**Finding — the shipped default (premium=1.0) was mis-tuned; premium=0.0 is the robust winner.** reg_win_pct is **monotone-decreasing in premium** on the worst-case metric: dropping 1.0 → 0.0 lifts worst-case win% from **0.495 to 0.592 (+0.097)**, roughly **triples model-market champ% (0.043 → 0.145)** and lifts playoff worst-case 0.484 → 0.700. Crucially, **low premium does NOT crater ESPN — it *improves* it (0.554 → 0.621)**, refuting Run J's "premium=1.0 needed for ESPN" (that tuning was the seat-1 bug). prem0.0 wins ESPN by pricing off *our model values* (exploiting ESPN mispricing) while staying disciplined; `balbot_hero`, which prices off the inflated ESPN values like the bots, only reaches 0.560 — so prem0.0 even beats the raw BalancedBot policy. The ~0.62 BalancedBot ceiling transfers to the hero seat post-fix (`balbot_hero` model 0.583), confirming the pre-fix "0.21 as hero" was entirely the tie-break bug. **Validation:** prem1.0 here reproduces Run L's `balanced` exactly (model 0.495 / espn 0.554) → the +0.097 is apples-to-apples, not a runner artifact. Per-seat vectors are flat (no outlier seat).
+
+**Decision (this branch): retune `BalancedValueBid` default `premium` 1.0 → 0.0** (docstring + `test_balanced_default_is_disciplined_zero_premium` updated). This supersedes the Run J retune (PR #94) and updates Run L's `balanced` worst-case from 0.495 to **0.592**. `balanced` (now premium=0.0) genuinely beats the field in **both** markets (0.62 espn / 0.59 model, both > 0.50 fair share) — the robust-win-hero goal is met with margin. **Caveats:** 2026 pool only, 12-team half-PPR, byes off, ESPN signal diluted (241/578 priced); directional ranking robust, absolute levels market-dependent. **No live-draft winner declared** — the September call stands — but the shipped default is now the best robust hero we have found. This is the baseline Slice 2 (nomination poisoning) must beat (bar is now ~0.59, not ~0.49).
 
 ## Planned experiments / axes to sweep
 

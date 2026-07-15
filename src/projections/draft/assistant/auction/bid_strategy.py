@@ -265,19 +265,23 @@ class BalancedValueBid:
     concentrating on studs. Deliberately does NOT apply _budget_urgency (the ramp over-pays late
     scrubs).
 
-    `premium` scales the fair-value bid so that in an INFLATED market (e.g. ESPN-anchored bots,
-    where the mid-tier clears above fair value) the bid still reaches the cap and wins the
-    contested mid-tier; `premium=1.0` bids the cap on any player worth more than a full per-slot
-    share. The low cap is what forces the spread — raising it backfires (it lets the hero chase
-    over-priced studs and starve the roster). Defaults from the 2026-07-14 cap-vs-premium sweep:
-    premium=1.0 is a ~2x ESPN-market win (playoff 0.24 -> 0.44) and neutral in the un-inflated
-    model market; the low cap wins both. See reports/auction_tournament_validation_2026.md.
+    `premium` scales the fair-value bid (`bid = min(fair*(1+premium), cap)`). Default is 0.0 — bid
+    straight fair value, capped. A premium makes the hero OVERPAY: the market already bids the early
+    studs above fair (they clear ~1.34x fair value), so any premium chases them, slams the cap
+    early, and burns the budget before the discounted mid-tier (which clears ~0.76x fair once the
+    room is tapped out) opens up. The 2026-07-15 both-market seat sweep (post seat-1 tie-break fix)
+    found reg_win_pct monotone-decreasing in premium: 0.0 is the robust worst-case winner (~0.62
+    ESPN / 0.59 model, both above the 0.50 fair share), beating every higher premium in BOTH
+    markets. This SUPERSEDES the earlier premium=1.0 default (Run J), which was tuned on the seat-1
+    bug and is Pareto-worse once it is fixed. Keep `pace=2.0` (the LOW cap is what forces the budget
+    to spread; raising it lets the hero chase over-priced studs and starve the roster). See
+    reports/auction_tournament_validation_2026.md.
 
     `non_increasing_cap=True` clamps the pace cap to the OPENING per-slot share so it can't
     self-inflate as the hero wins cheap players (the Slice 1 fix, 2026-07-14 robust-win-hero spec);
     default False keeps the inflating control byte-for-byte."""
 
-    premium: float = 1.0
+    premium: float = 0.0
     pace: float = 2.0
     non_increasing_cap: bool = False
 
