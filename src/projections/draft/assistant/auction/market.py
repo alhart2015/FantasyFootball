@@ -44,18 +44,22 @@ def bot_max_bid(
     return round(max(float(config.min_bid), wtp))
 
 
-def resolve_bids(bids: dict[int, int], min_bid: int) -> tuple[int, int]:
+def resolve_bids(bids: dict[int, int], min_bid: int, rng: np.random.Generator) -> tuple[int, int]:
     """English (second-price + min_bid) clearing. `bids` maps seat -> clamped max bid.
 
-    Winner is the argmax bid (ties -> lowest seat index). Price is one tick over the
-    runner-up's ceiling, never above the winner's own; a lone bidder pays min_bid.
+    Winner is the argmax bid; ties are broken UNIFORMLY AT RANDOM among the top bidders (via `rng`),
+    not by seat index. A lowest-index tie-break systematically dumped every min-bid ($1) tie on seat
+    0, so whoever sat there hoarded ~4 junk players/draft (~120 pts, ~0.10 reg-win%) — a pure seat
+    artifact. Price is one tick over the runner-up's ceiling, never above the winner's own; a lone
+    bidder pays min_bid.
     """
-    ordered = sorted(bids.items(), key=lambda kv: (-kv[1], kv[0]))
-    winner_seat, winner_max = ordered[0]
-    if len(ordered) == 1:
+    ordered = sorted(bids.values(), reverse=True)
+    max_bid = ordered[0]
+    tied = sorted(s for s, b in bids.items() if b == max_bid)
+    winner_seat = tied[0] if len(tied) == 1 else int(rng.choice(tied))
+    if len(bids) == 1:
         return winner_seat, min_bid
-    second_max = ordered[1][1]
-    return winner_seat, min(winner_max, second_max + min_bid)
+    return winner_seat, min(max_bid, ordered[1] + min_bid)
 
 
 def resolve_unbid(

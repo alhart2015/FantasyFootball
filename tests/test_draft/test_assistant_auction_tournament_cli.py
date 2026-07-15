@@ -5,7 +5,11 @@ import pandas as pd
 import pytest
 
 from projections.draft.assistant._compare import Interval
-from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy, PatientValueBid
+from projections.draft.assistant.auction.bid_strategy import (
+    AuctionBidStrategy,
+    BalancedValueBid,
+    PatientValueBid,
+)
 from projections.draft.assistant.auction.tournament import AuctionTournamentResult
 from projections.draft.assistant.auction.tournament_cli import (
     _MODELS,
@@ -48,7 +52,7 @@ def _write_config(path: Path) -> None:
     path.write_text(json.dumps(cfg))
 
 
-def test_default_models_are_the_ten_contestants() -> None:
+def test_default_models_are_the_eleven_contestants() -> None:
     assert set(_MODELS) == {
         "static",
         "inflation",
@@ -60,7 +64,12 @@ def test_default_models_are_the_ten_contestants() -> None:
         "patient_deep",
         "studsdepth",
         "balanced",
+        "balanced_flat",
     }
+    bf = _MODELS["balanced_flat"]
+    assert isinstance(bf, BalancedValueBid) and bf.non_increasing_cap is True  # Slice 1 cap fix
+    ctrl = _MODELS["balanced"]
+    assert isinstance(ctrl, BalancedValueBid) and ctrl.non_increasing_cap is False  # control
 
 
 def test_patient_deep_is_the_scrub_frac_zero_tuning() -> None:
