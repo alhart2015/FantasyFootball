@@ -8,6 +8,7 @@ import pytest
 from projections.draft.assistant.auction.bid_strategy import (
     AnchorBudgetBid,
     AuctionView,
+    BigStackBid,
     StaticDollarBid,
     StudsAndDepthBid,
 )
@@ -1181,3 +1182,22 @@ def test_market_adp_nomination_nominates_lowest_adp_first() -> None:
     )
     lowest_adp = str(pool.sort_values("consensus_adp")["gsis_id"].iloc[0])
     assert str(trace[0].gsis_id) == lowest_adp
+
+
+def test_bigstack_produces_a_legal_full_roster() -> None:
+    # The engine clamps BigStackBid's (possibly huge) desired bids to feasible_max, so the hero
+    # always fills a legal, full roster with no duplicate players. Spec R4.
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    league = simulate_auction(
+        BigStackBid(reference="field_avg", overpay_gain=2.0),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=_baseline(pool, cfg),
+        price_jitter=0.1,
+        rng=np.random.default_rng(0),
+    )
+    assert all(len(r) == cfg.roster_size for r in league.values())
+    ids = [g for r in league.values() for g in r]
+    assert len(ids) == len(set(ids))
