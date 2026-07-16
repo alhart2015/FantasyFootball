@@ -8,6 +8,7 @@ from projections.draft.assistant.auction.bid_strategy import (
     AnchorBudgetBid,
     AuctionView,
     BalancedValueBid,
+    BigStackBid,
     InflationBid,
     MarginalValueBid,
     OverbidValueBid,
@@ -595,3 +596,116 @@ def test_balanced_non_increasing_cap_still_retreats_when_broke() -> None:
         view, stud, pool, _config()
     )
     assert infl == flat == 20  # cap = 2*(30/3)=20 in both
+
+
+def test_bigstack_falls_back_to_balanced_when_not_big_stack() -> None:
+    # Hero is the short stack ($50 vs $100) -> advantage <= 1 for BOTH references -> no overpay ->
+    # identical to BalancedValueBid (defaults, and a non-default premium/pace).
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [60, 40, 0, 0])
+    view = AuctionView(
+        my_budget=50,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(50, 100),
+        baseline_dollars=baseline,
+    )
+    for ref in ("max_opp", "field_avg"):
+        bs = BigStackBid(reference=ref, overpay_gain=1.0).max_bid(
+            view, pool.iloc[0], pool, _config()
+        )
+        assert bs == BalancedValueBid(premium=0.0).max_bid(view, pool.iloc[0], pool, _config())
+    bs = BigStackBid(reference="field_avg", overpay_gain=1.0, premium=0.15, pace=1.5).max_bid(
+        view, pool.iloc[0], pool, _config()
+    )
+    assert bs == BalancedValueBid(premium=0.15, pace=1.5).max_bid(
+        view, pool.iloc[0], pool, _config()
+    )
+
+
+def test_bigstack_overpays_above_balanced_when_big_stack() -> None:
+    # Hero is the big stack ($60 vs $10). fair=60, per_slot=20 -> balanced cap binds at 40. The
+    # overpay lifts both target and cap -> bid strictly above the balanced 40.
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [60, 40, 0, 0])
+    view = AuctionView(
+        my_budget=60,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(60, 10),
+        baseline_dollars=baseline,
+    )
+    bal = BalancedValueBid(premium=0.0).max_bid(view, pool.iloc[0], pool, _config())
+    for ref in ("max_opp", "field_avg"):
+        bs = BigStackBid(reference=ref, overpay_gain=1.0).max_bid(
+            view, pool.iloc[0], pool, _config()
+        )
+        assert bs > bal
+
+
+def test_bigstack_gain_zero_is_balanced_even_when_big_stack() -> None:
+    # overpay_gain=0 -> overpay is always 0, even as the big stack -> exactly balanced.
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [60, 40, 0, 0])
+    view = AuctionView(
+        my_budget=100,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(100, 20),
+        baseline_dollars=baseline,
+    )
+    for ref in ("max_opp", "field_avg"):
+        bs = BigStackBid(reference=ref, overpay_gain=0.0).max_bid(
+            view, pool.iloc[0], pool, _config()
+        )
+        assert bs == BalancedValueBid(premium=0.0).max_bid(view, pool.iloc[0], pool, _config())
+
+
+def test_field_avg_survives_one_hoarder_but_max_opp_does_not() -> None:
+    # 4 teams: hero $100, one hoarder $100, two poor $20. The richest opponent ties the hero, so
+    # max_opp sees advantage 1 (no overpay); field_avg compares to the LEAGUE AVERAGE per slot
+    # (240/12 = $20 vs the hero's 100/3 = $33) -> still big stack -> overpays. Spec R3.
+    cfg = LeagueConfig(
+        name="t",
+        n_teams=4,
+        budget=100,
+        min_bid=1,
+        roster_slots={RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.BENCH: 1},
+        ruleset=Ruleset.espn_ppr(),
+    )
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [60, 40, 0, 0])
+    view = AuctionView(
+        my_budget=100,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(100, 100, 20, 20),
+        baseline_dollars=baseline,
+    )
+    bal = BalancedValueBid(premium=0.0).max_bid(view, pool.iloc[0], pool, cfg)
+    maxopp = BigStackBid(reference="max_opp", overpay_gain=1.0).max_bid(
+        view, pool.iloc[0], pool, cfg
+    )
+    field = BigStackBid(reference="field_avg", overpay_gain=1.0).max_bid(
+        view, pool.iloc[0], pool, cfg
+    )
+    assert maxopp == bal  # richest opponent ties the hero -> no overpay
+    assert field > bal  # league average is low -> big stack -> overpay
+
+
+def test_bigstack_rejects_bad_params() -> None:
+    with pytest.raises(ValueError, match="reference"):
+        BigStackBid(reference="bogus")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="overpay_gain"):
+        BigStackBid(overpay_gain=-1.0)
+    for bad in (float("nan"), float("inf")):  # inf pins the isfinite half; nan the >= 0 half
+        with pytest.raises(ValueError, match="overpay_gain"):
+            BigStackBid(overpay_gain=bad)

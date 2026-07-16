@@ -546,6 +546,47 @@ espn **regressed back across 0** (lower bound +0.0002 → −0.0007) as its esti
 
 **Findings (data):** (1) EVERY hero improved; the field **compressed** to ~0.47–0.59. Heroes already good under value nomination barely moved (`balanced` +0.001, `patient_deep` +0.056); *collapsed* heroes recovered massively — **`anchors` (stars-and-scrubs) went LAST → #3 (0.156 → 0.555)**, `marginal` +0.24, all stud-buyers ~+0.15. (2) The ranking **scrambled** (`anchors` last→#3; `patient_deep` #3→#9). (3) **The prior "disciplined breadth dominates, stud-buyers collapse" conclusion (Runs E/L) was substantially a nomination-model artifact** — under a realistic ADP board, stud-concentration is viable (studs surface early, when a stars-and-scrubs hero can actually buy them). (4) `balanced` p0.0 remains the (bare) worst-case leader (0.593) — ESPN 0.554→0.684 (up, the aggressive bots overpay for early studs, softening the mid-market for the paced hero), model 0.593 (flat) — but its margin over #2 collapsed **+0.12 → +0.04** (inside 20-seed noise). **Caveats:** single jitter (12 — compression may be jitter-sensitive, unswept), 2026 only, byes off, the uncapped-`Aggressive`-bot overpay drives much of the ESPN effect (bot calibration is a standing open item), and the field-compression makes heroes near-indistinguishable at 20 seeds. **ADP nomination is a candidate realism-baseline for future runs — a methodology call, NOT made here.** No strategy adopted/rejected. Artifacts: `reports/_seat_sweep_adp/2026/*.json` (untracked). Live-draft call still September.
 
+**Run Q — 2026-07-16 — big-stack overspend hero A/B → the overspend lever DOES lift reg-win, but its benefit is concentrated in the (circular) model market; the less-circular ESPN market disfavors the aggressive variant** (`half_12team`, all 12 seats × both markets, 20 seeds × 300 sims; byes OFF; **ADP nomination** `market_adp_jitter=12` — Run P's realism fix; branch `feat/auction-bigstack-overspend`; spec+plan `docs/superpowers/{specs,plans}/2026-07-16-auction-bigstack-overspend*`). Motivated by the Run-P eye-test: `balanced` p0.0 caps every bid at the LOW pace share (`2×budget/open_slots`), never buys studs, and ends with idle budget (miss rosters left ~$69). `BigStackBid` OVERPAYS above fair value (and lifts the pace cap) by `overpay = gain·max(0, advantage−1)`, where `advantage>1` iff the hero holds more remaining budget than the field — deploying a lead instead of stranding it. Two "am I the big stack?" signals × a gain grid, vs the `balanced` p0.0 control (7 contestants, bid-only A/B; nomination/field/seeds/sims held fixed):
+
+- **`max_opp`** — `my_budget / richest opponent's budget` (one hoarding opponent flattens the signal).
+- **`field_avg`** — `my per-slot budget / league-average per-slot budget` (robust to a single hoarder).
+
+reg_win_pct (seat-avg over 12 seats; **worst** = min over markets, the robust-win goal metric):
+
+| contestant | espn | model | worst | Δworst vs balanced |
+|---|---|---|---|---|
+| bigstack_field_avg_g0.5 | 0.651 | **0.666** | **0.651** | **+0.058** |
+| bigstack_field_avg_g1.0 | 0.653 | 0.649 | 0.649 | +0.056 |
+| bigstack_max_opp_g2.0 | 0.689 | 0.616 | 0.616 | +0.023 |
+| bigstack_field_avg_g2.0 | 0.646 | 0.609 | 0.609 | +0.016 |
+| bigstack_max_opp_g0.5 | 0.685 | 0.606 | 0.606 | +0.013 |
+| bigstack_max_opp_g1.0 | **0.690** | 0.606 | 0.606 | +0.013 |
+| balanced (p0.0, control) | 0.684 | 0.593 | 0.593 | — |
+
+Δ vs balanced (espn / model), all three metrics:
+
+| contestant | reg_win | make_playoffs | champ |
+|---|---|---|---|
+| field_avg g0.5 | −0.033 / **+0.073** | −0.054 / **+0.135** | −0.052 / **+0.105** |
+| field_avg g1.0 | −0.030 / **+0.056** | −0.054 / **+0.107** | −0.051 / **+0.075** |
+| field_avg g2.0 | −0.038 / +0.016 | −0.064 / +0.032 | −0.068 / +0.020 |
+| max_opp g0.5 | +0.001 / +0.014 | +0.002 / +0.029 | +0.003 / +0.017 |
+| max_opp g1.0 | +0.006 / +0.013 | +0.007 / +0.030 | +0.011 / +0.016 |
+| max_opp g2.0 | +0.006 / +0.023 | +0.006 / +0.046 | +0.009 / +0.026 |
+
+**Sanity gate PASSES:** `balanced` (control) reproduces Run P **exactly** (espn 0.684 / model 0.593) — the bid-only A/B is apples-to-apples.
+
+**Findings (data — nothing adopted):**
+1. **The overspend lever works on the goal metric:** *every* `BigStackBid` variant beats `balanced` on worst-case reg_win (all ≥ 0.606 vs 0.593). This is the first hero we have found that lifts the **model-market** floor above `balanced` — a mild counter to the "a field pricing off your own numbers is unbeatable by construction" reading (a single strategy can still beat the field *average*).
+2. **Two distinct behaviors.** `field_avg` **trades ESPN for model**: it raises the model floor a lot (reg_win +0.06–0.07, playoff +0.11–0.14, champ +0.08–0.11 at gain 0.5–1.0) but pays a consistent **ESPN tax** (reg_win −0.03–0.04, playoff/champ −0.05–0.07). Its worst-case wins *because* it lifts its own weak market (model) above `balanced`'s weak market — a floor-raise, ceiling-cost. `max_opp` is a **smaller both-market-non-negative** lift (ESPN ≈ flat, model +0.01–0.02 reg_win), no market taxed.
+3. **Gain tuning:** for `field_avg`, **lower gain is better** (g0.5 ≥ g1.0 ≫ g2.0) — g2.0 over-deploys and gives back most of the model gain while deepening the ESPN tax. For `max_opp` the gain barely matters (the trigger fires rarely). Best worst-case overall: **`field_avg` g0.5 (0.651)**.
+4. **Circularity caveat — this is the important one.** The **model** market is highly self-referential: bots price off our SOS `auction_dollars`, the hero prices off the same numbers, AND `project_draft` scores the resulting rosters with the same projections. `field_avg`'s big *model* gain is therefore partly a shared-worldview artifact — the hero overspends on players our model loves, judged by a scorer that shares that love. The **ESPN** market is the less-circular test (bots price off ESPN values, hero+scorer off our model), and there the aggressive `field_avg` overspend **loses** on all three metrics; only the conservative `max_opp` stays neutral. So the apparent "overspend helps" is strongest exactly where the measurement is most self-confirming, and weakest/negative where it is most independent. Read `max_opp`'s tiny both-market lift as the more trustworthy signal, and `field_avg`'s model surge with heavy discount.
+5. **Mechanism (hypothesis, consistent with the split):** `field_avg` keys off the league-average budget — in ESPN the uncapped `Aggressive` bots overpay early, dropping the average, so the hero reads itself as the big stack and overpays *into an already-inflated market* (−EV); in the model market bots leave budget on the table, so the hero genuinely is the big stack and converts idle cash to talent (+EV, the thesis). `max_opp` keys off the single richest opponent, who in ESPN is usually still flush early, suppressing the trigger — which is why it dodges the ESPN tax.
+
+**Caveats:** single jitter (12), 2026 pool only, 12-team half-PPR, byes OFF, ESPN signal diluted (241/578 priced), and — unlike Run O — this is an **unpaired** seat-avg A/B (no CRN pairing), so the small `max_opp` deltas (≈ the ±0.03/20-seed per-cell noise band; the seat-avg is tighter but these are near it) are not resolved from zero; a CRN-paired re-run would tighten them. `field_avg`'s model gains (+0.05–0.07) and its ESPN tax (−0.03–0.04, consistent across all three gains) both clear the band. Unspent-budget was **not directly measured** (the summaries expose only win/playoff/champ/points), so "converts idle cash to talent" is inferred from the market split, not observed.
+
+**No strategy adopted or rejected.** `balanced` p0.0 remains the shipped default; `BigStackBid` is a **validated opt-in** (unit-tested, engine-solvent, not registered in `tournament_cli._MODELS`). In isolation the data favors `field_avg` g0.5 on the worst-case goal metric and `max_opp` as the conservative both-market-safe deploy — but the circularity caveat means neither is a live-draft recommendation. Next candidate probes: a CRN-paired re-run to resolve `max_opp`; a jitter sweep; and hardening the ESPN market (bot calibration) so the less-circular signal carries more weight. Artifacts: `reports/_bigstack/2026/*.json` (untracked). Live-draft call still September.
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.
