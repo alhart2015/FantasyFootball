@@ -1127,3 +1127,57 @@ def test_hero_nominator_override_branch_consumes_no_extra_rng() -> None:
     )
     assert overridden.rosters == baseline.rosters
     assert overridden.budgets == baseline.budgets
+
+
+def test_market_adp_jitter_none_matches_default() -> None:
+    # market_adp_jitter=None is byte-identical to omitting it (value nomination unchanged).
+    cfg = _config(n_teams=4)
+    pool = _pool_with_adp(40)
+    bd = _baseline(pool, cfg)
+    a = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+    )
+    b = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+        market_adp_jitter=None,
+    )
+    assert a.rosters == b.rosters
+    assert a.budgets == b.budgets
+
+
+def test_market_adp_nomination_nominates_lowest_adp_first() -> None:
+    # With jitter=0 the shared market board is strict ADP order, so the very first (non-forced)
+    # nominee is the lowest-consensus_adp player — proof the ADP-market override replaces the
+    # value-weighted nominee. _pool_with_adp sets consensus_adp = 1..n ascending.
+    cfg = _config(n_teams=4)
+    pool = _pool_with_adp(40)
+    bd = _baseline(pool, cfg)
+    trace: list[PickRecord] = []
+    _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+        market_adp_jitter=0.0,
+        trace=trace,
+    )
+    lowest_adp = str(pool.sort_values("consensus_adp")["gsis_id"].iloc[0])
+    assert str(trace[0].gsis_id) == lowest_adp

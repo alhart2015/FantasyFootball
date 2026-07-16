@@ -528,6 +528,24 @@ With correct pairing the espn CI initially tightened to **[+0.0002, +0.0156]** a
 
 espn **regressed back across 0** (lower bound +0.0002 → −0.0007) as its estimate shrank (+0.0079 → +0.0052) — the knife-edge did not hold. Model held (real, robust). **Final verdict: NO-GO** — `drain_off_position` is a genuine, robust edge in the **symmetric model market only** (+0.010, CI-separated across 40→80 seeds); in the realistic **ESPN market it is not distinguishable from zero** once firmed up. The pre-registered both-markets criterion fails at espn, so the bottom line matches the original Run O (model-specific, not adopted) — but now on **rigorous** footing (correct CRN, 80 seeds) instead of the buggy 40-seed run that reached NO-GO for the *wrong* reason. `balanced` p0.0 stays the hero; the `hero_nominator` hook + `nomination.py` remain a **validated opt-in probe** (real in model, not robust in espn), not wired into the default. **Methodological note:** the interim verdict flipped twice — buggy NO-GO → corrected marginal GO → firmed-up NO-GO — a case study in why CRN correctness *and* adequate power both matter (the loop-review CRN catch and the 80-seed firm-up each changed it). Artifacts: `reports/_nom_probe/2026_hp80/*.json` (definitive); `2026_hp/` (40-seed corrected), `2026_hp_precrn/` (pre-fix, invalid). Live-draft call still September.
 
+**Run P — 2026-07-16 — ADP-driven nomination (market realism fix) → the strategy ranking is LARGELY a nomination-model artifact** (`half_12team`, all 11 `_MODELS` × 12 seats × both markets, 20 seeds × 300 sims; byes OFF; branch `feat/auction-adp-nomination`). Motivated by an eye-test failure: value-weighted-random nomination weights by OUR model's `auction_dollars`, so players our model under-rates fall implausibly late — Justin Jefferson (consensus ADP **12.4**, ESPN value $47) cleared **$24 at pick 85 of 204**. Added an opt-in `market_adp_jitter` engine option: flush seats nominate via a shared noisy-ADP "market board" (reuses `SnakeBoard`, noise drawn once/draft) — the room nominates roughly in ADP order with human randomness — instead of value-weighted-random. Under it (jitter 12) JJ goes **pick 8 / $61** (realistic). Re-ran the full-field bake-off vs the value-nomination baseline (Run L worst-cases, `balanced` from Run N p0.0):
+
+| hero | value-nom worst | ADP-nom worst (espn/model) | Δ |
+|---|---|---|---|
+| balanced (p0.0) | 0.592 | **0.593** (0.684 / 0.593) | +0.001 |
+| balanced_flat | 0.487 | 0.593 (0.684 / 0.593) | +0.106 |
+| anchors | **0.156** | **0.555** (0.564 / 0.555) | **+0.399** |
+| static | 0.396 | 0.549 | +0.153 |
+| inflation | 0.408 | 0.548 | +0.140 |
+| studsdepth | 0.378 | 0.542 | +0.164 |
+| vorpshare | 0.358 | 0.540 | +0.182 |
+| overbid | 0.388 | 0.539 | +0.151 |
+| patient_deep | 0.474 | 0.530 | +0.056 |
+| patient | 0.373 | 0.529 | +0.156 |
+| marginal | 0.237 | 0.472 | +0.235 |
+
+**Findings (data):** (1) EVERY hero improved; the field **compressed** to ~0.47–0.59. Heroes already good under value nomination barely moved (`balanced` +0.001, `patient_deep` +0.056); *collapsed* heroes recovered massively — **`anchors` (stars-and-scrubs) went LAST → #3 (0.156 → 0.555)**, `marginal` +0.24, all stud-buyers ~+0.15. (2) The ranking **scrambled** (`anchors` last→#3; `patient_deep` #3→#9). (3) **The prior "disciplined breadth dominates, stud-buyers collapse" conclusion (Runs E/L) was substantially a nomination-model artifact** — under a realistic ADP board, stud-concentration is viable (studs surface early, when a stars-and-scrubs hero can actually buy them). (4) `balanced` p0.0 remains the (bare) worst-case leader (0.593) — ESPN 0.554→0.684 (up, the aggressive bots overpay for early studs, softening the mid-market for the paced hero), model 0.593 (flat) — but its margin over #2 collapsed **+0.12 → +0.04** (inside 20-seed noise). **Caveats:** single jitter (12 — compression may be jitter-sensitive, unswept), 2026 only, byes off, the uncapped-`Aggressive`-bot overpay drives much of the ESPN effect (bot calibration is a standing open item), and the field-compression makes heroes near-indistinguishable at 20 seeds. **ADP nomination is a candidate realism-baseline for future runs — a methodology call, NOT made here.** No strategy adopted/rejected. Artifacts: `reports/_seat_sweep_adp/2026/*.json` (untracked). Live-draft call still September.
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.

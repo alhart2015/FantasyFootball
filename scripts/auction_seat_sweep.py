@@ -117,6 +117,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
         nomination_temp=1.0,
         bot_archetypes=_REALISTIC_FIELD,
         bot_prices=market,
+        market_adp_jitter=args.market_adp_jitter,
     )
     payload = {
         "market": market,
@@ -125,6 +126,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
         "n_seeds": args.seeds,
         "n_sims": args.n_sims,
         "season": args.season,
+        "market_adp_jitter": args.market_adp_jitter,
         "reg_win_pct": {n: result.summaries[n]["reg_win_pct"].point for n in result.summaries},
         "all_metrics": {
             n: {m: result.summaries[n][m].point for m in result.summaries[n]}
@@ -206,6 +208,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     r.add_argument("--n-sims", type=int, default=300)
     r.add_argument("--seed", type=int, default=0, help="Base RNG seed (shared across seats = CRN).")
     r.add_argument("--bot-prices", choices=("espn", "model"), required=True)
+    r.add_argument(
+        "--market-adp-jitter",
+        type=float,
+        default=None,
+        help="If set, flush seats nominate by a shared noisy-ADP market board with this jitter "
+        "(realistic ADP-ordered nomination) instead of value-weighted-random. Omit = value nom.",
+    )
     r.add_argument("--data-root", type=Path, default=Path("data"))
     r.add_argument("--out", type=Path, required=True, help="Chunk JSON output path.")
     r.set_defaults(func=_run_chunk)
