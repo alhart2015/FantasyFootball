@@ -485,6 +485,49 @@ Clearing price vs fair value by draft quartile: **Q1 (studs) 1.34× (34% OVERPAY
 
 **Decision (this branch): retune `BalancedValueBid` default `premium` 1.0 → 0.0** (docstring + `test_balanced_default_is_disciplined_zero_premium` updated). This supersedes the Run J retune (PR #94) and updates Run L's `balanced` worst-case from 0.495 to **0.592**. `balanced` (now premium=0.0) genuinely beats the field in **both** markets (0.62 espn / 0.59 model, both > 0.50 fair share) — the robust-win-hero goal is met with margin. **Caveats:** 2026 pool only, 12-team half-PPR, byes off, ESPN signal diluted (241/578 priced); directional ranking robust, absolute levels market-dependent. **No live-draft winner declared** — the September call stands — but the shipped default is now the best robust hero we have found. This is the baseline Slice 2 (nomination poisoning) must beat (bar is now ~0.59, not ~0.49).
 
+**Run O — 2026-07-15 — Slice 2 nomination-poisoning FEASIBILITY PROBE → NO-GO (but a directional near-miss)** (`half_12team`, all 12 seats × both markets, 20 seeds × 300 sims; **byes OFF**; **REALISTIC MARKET**; branch `feat/auction-nomination-poison-probe`; spec+plan `docs/superpowers/{specs,plans}/2026-07-15-auction-nomination-poisoning*`). Added an opt-in `hero_nominator` hook to the auction loop (hero-only, non-forced-only; `None` byte-identical) + two poison heuristics in `nomination.py`: `drain_max` (nominate the priciest player, forcing the room to spend on a stud the capped hero loses anyway) and `drain_off_position` (nominate the priciest player at a position the hero has already filled its starters for, so the drain lands on opponents who still need it). Bid held fixed at `balanced` p0.0 for all three contestants to isolate the *nomination* lift. Decision made on the **CRN-paired** per-`(seed, seat)` `poison − control` lift (cancels shared noise so a ~+0.02 effect is resolvable). Crash-safe chunked; 24 chunks clean (~30 min).
+
+| contestant | espn level | espn Δ (paired) | model level | model Δ (paired) | seat-stable (espn/model) |
+|---|---|---|---|---|---|
+| `control` (no poison) | 0.621 | — | 0.592 | — | — |
+| `drain_max` | 0.603 | **−0.018** | 0.593 | +0.001 | no / no |
+| `drain_off_position` | 0.636 | **+0.015** | 0.608 | **+0.016** | yes / yes |
+
+Context (seat-avg make_playoffs_pct / champ_pct): `control` espn 0.750/0.200, model 0.700/0.145 · `drain_max` espn 0.723/0.174, model 0.700/0.149 · `drain_off_position` espn **0.781/0.216**, model **0.733/0.164**.
+
+**R8 sanity gate PASSES:** `control` (hook `None`) reproduces Run N `balanced` p0.0 **exactly** (espn 0.621 / model 0.592) — the harness is sound and the paired lift is apples-to-apples.
+
+**Verdict — NO-GO (pre-registered bar: min market Δ ≥ +0.02 AND seat-stable in both markets):**
+- **`drain_max` is actively HARMFUL** — −0.018 in espn (flat in model), not seat-stable. Nominating the single priciest player overall often surfaces a stud the hero itself wanted (or that the disciplined room clears near fair value), so it does not specifically drain opponents. Rejected.
+- **`drain_off_position` is a real, seat-stable, both-market POSITIVE that just misses the bar** — reg_win_pct **+0.015 espn / +0.016 model** (positive at a majority of seats in *both* markets), and a *larger* lift on the deep-run metrics: **playoff ≈ +0.031 / +0.033**, **champ ≈ +0.016 / +0.019**. Targeting the drain at positions the hero is done with works in the intended direction — but the reg_win_pct lift (0.015/0.016) is below the +0.02 goal threshold.
+
+**Conclusion (data; no default change):** nomination poisoning does **not** clear the pre-registered reg_win_pct bar, so the shipped **`balanced` p0.0 hero stands** as the robust-win hero. `drain_off_position` is a directionally-correct near-miss whose 20-seed espn CI just touched 0, so a **40-seed high-power re-run** (control + drain_off_position only; CI on the CRN-paired lift) was run to resolve "real edge vs noise."
+
+**Run O high-power (40-seed) — RESOLVED, still NO-GO.** 24/24 chunks; R8 gate holds (control espn 0.620 / model 0.589 ≈ Run N). Paired lift with 95% CI over seats (adopt criterion pre-registered as **CI-separated from 0 in BOTH markets**):
+
+| market | 20-seed Δ | 40-seed Δ | 95% CI | seats + | verdict |
+|---|---|---|---|---|---|
+| model | +0.0162 | **+0.0154** | **[+0.003, +0.028]** | 10/12 | **REAL (CI>0)** |
+| espn | +0.0145 | **+0.0066** | [−0.003, +0.016] | 10/12 | **not sep. from 0** |
+
+The espn lift appeared to **regress toward 0** with more data. **⚠️ This 40-seed run's CRN was compromised by a bug (see correction below); the firmed-up verdict lands back at NO-GO, but for the right reason — a model-market-only edge.**
+
+**Run O CORRECTION (2026-07-15) — a CRN bug compromised the verdict; corrected + firmed-up = NO-GO (a real MODEL-market-only edge, not robust in ESPN).** A `/loop-review` of the Slice-2 diff caught a **CRN desync bug** in the `hero_nominator` hook: at `nomination_temp>0` the override path skipped the `_sample_nominee` `rng.choice` draw that the `control` path consumes, so the shared rng diverged after the hero's first nomination — breaking the CRN pairing for ~90% of every draft. That inflated the paired-lift CIs (the pairing that cancels shared bot-bid noise was mostly not happening), which is exactly why espn "spanned 0." Fixed (always draw the central nominee, then override; regression-tested — commit `f9ccb0e`), and the 40-seed probe was **re-run on the corrected engine** (24/24 chunks; control espn 0.620 / model 0.589, R8 holds):
+
+| market | buggy-CRN Δ (95% CI) | **fixed-CRN Δ (95% CI)** | seats + | verdict |
+|---|---|---|---|---|
+| model | +0.0154 [+0.003, +0.028] | **+0.0135 [+0.0065, +0.0206]** | 10/12 | **REAL (CI>0)** |
+| espn | +0.0066 [−0.003, +0.016] | **+0.0079 [+0.0002, +0.0156]** | 9/12 | **REAL (CI>0)** |
+
+With correct pairing the espn CI initially tightened to **[+0.0002, +0.0156]** at 40 seeds — both markets *barely* CI-separated, a **marginal GO**. But espn's +0.0002 lower bound was knife-edge (~p=0.05), so an **80-seed firm-up** was run to test its robustness:
+
+| market | 40-seed (fixed CRN) | 80-seed firm-up | seats + | verdict |
+|---|---|---|---|---|
+| model | +0.0135 [+0.0065, +0.0206] | **+0.0096 [+0.0020, +0.0173]** | 10/12 | **REAL (CI>0)** |
+| espn | +0.0079 [+0.0002, +0.0156] | **+0.0052 [−0.0007, +0.0110]** | 9/12 | **not sep. from 0** |
+
+espn **regressed back across 0** (lower bound +0.0002 → −0.0007) as its estimate shrank (+0.0079 → +0.0052) — the knife-edge did not hold. Model held (real, robust). **Final verdict: NO-GO** — `drain_off_position` is a genuine, robust edge in the **symmetric model market only** (+0.010, CI-separated across 40→80 seeds); in the realistic **ESPN market it is not distinguishable from zero** once firmed up. The pre-registered both-markets criterion fails at espn, so the bottom line matches the original Run O (model-specific, not adopted) — but now on **rigorous** footing (correct CRN, 80 seeds) instead of the buggy 40-seed run that reached NO-GO for the *wrong* reason. `balanced` p0.0 stays the hero; the `hero_nominator` hook + `nomination.py` remain a **validated opt-in probe** (real in model, not robust in espn), not wired into the default. **Methodological note:** the interim verdict flipped twice — buggy NO-GO → corrected marginal GO → firmed-up NO-GO — a case study in why CRN correctness *and* adequate power both matter (the loop-review CRN catch and the 80-seed firm-up each changed it). Artifacts: `reports/_nom_probe/2026_hp80/*.json` (definitive); `2026_hp/` (40-seed corrected), `2026_hp_precrn/` (pre-fix, invalid). Live-draft call still September.
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.

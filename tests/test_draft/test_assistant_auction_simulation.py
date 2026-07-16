@@ -953,3 +953,177 @@ def test_snake_substream_is_seed_only_and_shared() -> None:
     # would perturb the bot field). Compare the streams' first draws directly — deterministic, not a
     # flaky board comparison: the two fixed seeds produce two fixed, distinct values.
     assert bidding.random() != np.random.default_rng([base, _SNAKE_SUBSTREAM]).random()
+
+
+def test_hero_nominator_none_matches_default() -> None:
+    # None hook is byte-identical to no hook: same rosters and budgets (spec R1).
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    a = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(0),
+    )
+    b = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(0),
+        hero_nominator=None,
+    )
+    assert a.rosters == b.rosters
+    assert a.budgets == b.budgets
+
+
+def test_hero_nominator_choice_changes_the_draft() -> None:
+    # Two different hero nominators (priciest vs cheapest) diverge deterministically -> the hook
+    # fires and the returned id is actually used (spec R2 behavioral evidence).
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    priciest = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=0.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=lambda c, ctx: max(c, key=lambda g: ctx.value_by_id[str(g)]),
+    )
+    cheapest = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=0.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=lambda c, ctx: min(c, key=lambda g: ctx.value_by_id[str(g)]),
+    )
+    assert priciest.rosters != cheapest.rosters
+    for state in (priciest, cheapest):  # both are still valid, full drafts
+        assert all(len(r) == cfg.roster_size for r in state.rosters)
+        ids = [g for r in state.rosters for (g, _p, _pr) in r]
+        assert len(ids) == len(set(ids))
+
+
+def test_hero_nominator_receives_only_valid_candidate_lists() -> None:
+    # Every candidate list the hero sees is non-empty and dup-free (spec R3, checked live).
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    calls = 0
+
+    def spy(candidates: list[str], ctx: object) -> str:
+        nonlocal calls
+        calls += 1
+        assert candidates
+        assert len({str(g) for g in candidates}) == len(candidates)
+        return candidates[0]
+
+    _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(0),
+        hero_nominator=spy,
+    )
+    assert calls > 0
+
+
+def test_hero_nominator_draws_central_rng_for_crn(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The override path must still call _sample_nominee (advancing the shared rng) so the control
+    # (None) and poison arms stay CRN-paired at nomination_temp>0. Assert the hook draws the central
+    # nominee exactly as many times as the baseline — _pool(40) has no adp (no snake path) and can't
+    # be exhausted (no forced path), so all 12 nominations go through _sample_nominee.
+    import projections.draft.assistant.auction.simulation as sim
+
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    calls = {"n": 0}
+    real = sim._sample_nominee
+
+    def counting(
+        candidates: list[str], val_by_id: dict[str, float], temp: float, rng: np.random.Generator
+    ) -> str:
+        calls["n"] += 1
+        return real(candidates, val_by_id, temp, rng)
+
+    monkeypatch.setattr(sim, "_sample_nominee", counting)
+
+    sim._simulate_to_state(  # baseline run starts with the counter at its init 0
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=None,
+    )
+    baseline = calls["n"]
+    calls["n"] = 0
+    sim._simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=lambda c, ctx: c[0],
+    )
+    hooked = calls["n"]
+    assert hooked == baseline == cfg.roster_size * cfg.n_teams
+
+
+def test_hero_nominator_override_branch_consumes_no_extra_rng() -> None:
+    # Stronger CRN guard than the call-count test: at temp=0 the central draw is deterministic
+    # (candidates[0], no rng) and a hook returning candidates[0] picks the SAME nominee, so the
+    # override branch must yield a BYTE-IDENTICAL draft to the None baseline. Any future rng.* added
+    # inside the `nom == hero0` override block would draw in the hook arm only, diverging this draft
+    # and tripping the test — a desync the _sample_nominee call-count parity check cannot see.
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    baseline = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=0.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=None,
+    )
+    overridden = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=0.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=lambda c, ctx: c[0],
+    )
+    assert overridden.rosters == baseline.rosters
+    assert overridden.budgets == baseline.budgets
