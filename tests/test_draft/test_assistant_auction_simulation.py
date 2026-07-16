@@ -1309,18 +1309,21 @@ def test_market_adp_jitter_without_usable_adp_raises() -> None:
 
 def test_bigstack_produces_a_legal_full_roster() -> None:
     # The engine clamps BigStackBid's (possibly huge) desired bids to feasible_max, so the hero
-    # always fills a legal, full roster with no duplicate players. Spec R4.
+    # always fills a legal, full roster with no duplicate players. Spec R4. BOTH references are run
+    # through a real auction: max_opp is the branch whose _advantage calls opp.remove()/max(), which
+    # field_avg never touches, so it needs its own integration coverage.
     cfg = _config(n_teams=4)
     pool = _pool(40)
-    league = simulate_auction(
-        BigStackBid(reference="field_avg", overpay_gain=2.0),
-        1,
-        pool,
-        cfg,
-        baseline_dollars=_baseline(pool, cfg),
-        price_jitter=0.1,
-        rng=np.random.default_rng(0),
-    )
-    assert all(len(r) == cfg.roster_size for r in league.values())
-    ids = [g for r in league.values() for g in r]
-    assert len(ids) == len(set(ids))
+    for reference in ("field_avg", "max_opp"):
+        league = simulate_auction(
+            BigStackBid(reference=reference, overpay_gain=2.0),
+            1,
+            pool,
+            cfg,
+            baseline_dollars=_baseline(pool, cfg),
+            price_jitter=0.1,
+            rng=np.random.default_rng(0),
+        )
+        assert all(len(r) == cfg.roster_size for r in league.values())
+        ids = [g for r in league.values() for g in r]
+        assert len(ids) == len(set(ids))

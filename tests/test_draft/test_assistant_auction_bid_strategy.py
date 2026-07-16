@@ -706,3 +706,6 @@ def test_bigstack_rejects_bad_params() -> None:
         BigStackBid(reference="bogus")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="overpay_gain"):
         BigStackBid(overpay_gain=-1.0)
+    for bad in (float("nan"), float("inf")):  # inf pins the isfinite half; nan the >= 0 half
+        with pytest.raises(ValueError, match="overpay_gain"):
+            BigStackBid(overpay_gain=bad)
