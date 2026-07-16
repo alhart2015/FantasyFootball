@@ -58,6 +58,15 @@ def aggregate_seat_sweep(
     coverage-complete heroes (scored in every market x seat cell) are eligible to be `best`; a
     worst-case built from missing cells is not a real worst-case. `rows` is sorted worst-case desc
     for display; `best` (skipping partials) is the authoritative robust winner."""
+    # Guard the nomination axis: value-nom (market_adp_jitter absent/None) and ADP-nom chunks price
+    # different markets, so pooling them into one (market, seat) average silently blends regimes and
+    # yields a winner that matches no real configuration. Refuse rather than mislead.
+    jitters = {c.get("market_adp_jitter") for c in chunks}
+    if len(jitters) > 1:
+        raise ValueError(
+            f"chunks mix market_adp_jitter values {sorted(map(str, jitters))}; value-nom and "
+            "ADP-nom drafts must not be aggregated together — separate them by chunk directory."
+        )
     # (market, model, seat) -> reg_win_pct; the seat key dedups re-run chunks of the same cell.
     cell: dict[tuple[str, str, int], float] = {}
     for c in chunks:
