@@ -266,6 +266,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from projections.draft.assistant.auction.bid_strategy import BalancedValueBid, BigStackBid
@@ -277,8 +278,15 @@ from projections.draft.assistant.auction.tournament_cli import (
 )
 from projections.draft.auction import has_usable_espn_prices
 
-# Import the aggregation/loader from the committed seat-sweep runner (scripts/ is on sys.path).
-from auction_seat_sweep import _load_chunks, aggregate_seat_sweep  # type: ignore[import-not-found]
+# scripts/ is NOT on sys.path at runtime (pyproject mypy_path and the pytest conftest put it there
+# only for mypy and pytest). This runner is always invoked from the repo root, so add scripts/
+# explicitly before importing the committed seat-sweep helpers.
+sys.path.insert(0, "scripts")
+
+from auction_seat_sweep import (  # noqa: E402  # type: ignore[import-not-found]
+    _load_chunks,
+    aggregate_seat_sweep,
+)
 
 POOL = Path("data/vorp_2026/half_12team.parquet")
 CFG = Path("data/vorp_2026/half_12team.league.json")
@@ -316,17 +324,66 @@ def _run_chunk(a: argparse.Namespace) -> int:
     return 0
 
 
+def _seat_avg_metric(
+    chunks: list[dict[str, object]], metric: str
+) -> tuple[list[str], dict[str, dict[str, float]]]:
+    """Seat-average an arbitrary metric under each chunk's 'all_metrics' -> (markets, table) where
+    table[name][market] is the mean over seats. Mirrors aggregate_seat_sweep's cell/mean logic but
+    for make_playoffs_pct / champ_pct, which aggregate_seat_sweep (reg_win_pct-only) does not
+    surface. All 7 contestants race in every chunk, so every present market has a value per name."""
+    cell: dict[tuple[str, str, int], float] = {}
+    for c in chunks:
+        m, seat = str(c["market"]), int(c["seat"])  # type: ignore[call-overload]
+        am = c.get("all_metrics")
+        if not isinstance(am, dict):
+            continue
+        for name, metrics in am.items():
+            if isinstance(metrics, dict) and metric in metrics:
+                cell[(m, str(name), seat)] = float(metrics[metric])
+    markets = sorted({m for m, _n, _s in cell})
+    names = sorted({n for _m, n, _s in cell})
+    table: dict[str, dict[str, float]] = {}
+    for name in names:
+        table[name] = {}
+        for mk in markets:
+            vals = [v for (m2, n2, _s), v in cell.items() if m2 == mk and n2 == name]
+            if vals:
+                table[name][mk] = sum(vals) / len(vals)
+    return markets, table
+
+
+def _print_metric_table(chunks: list[dict[str, object]], metric: str) -> None:
+    markets, table = _seat_avg_metric(chunks, metric)
+    if not table:
+        return
+    base = table.get("balanced", {})
+    print(f"\n{metric} (seat-avg):")
+    print(f"{'contestant':<22}" + "".join(f"{m:>10}" for m in markets))
+    for name in sorted(table):
+        cells = "".join(f"{table[name].get(m, float('nan')):>10.3f}" for m in markets)
+        print(f"{name:<22}{cells}")
+    print("  delta vs balanced:")
+    for name in sorted(table):
+        if name == "balanced":
+            continue
+        cells = "".join(
+            f"{table[name].get(m, 0.0) - base.get(m, 0.0):>+10.3f}" for m in markets
+        )
+        print(f"  {name:<20}{cells}")
+
+
 def _aggregate(a: argparse.Namespace) -> int:
     chunks, skipped = _load_chunks(a.chunk_dir)
     markets, seats, rows, best = aggregate_seat_sweep(chunks)
     print(f"seats: {seats} | skipped: {skipped}")
+    print(f"reg_win_pct (seat-avg):")
     print(f"{'contestant':<22}" + "".join(f"{m:>10}" for m in markets) + f"{'worst':>10}")
     ctrl = next((r for r in rows if r.name == "balanced"), None)
     for row in rows:
         cells = "".join(f"{c:>10.3f}" if c is not None else f"{'-':>10}" for c in row.seat_avg)
         print(f"{row.name:<22}{cells}{row.worst:>10.3f}")
     if ctrl is not None:
-        print("\ndelta vs balanced (per market):")
+        print("  delta vs balanced:")
         for row in rows:
             if row.name == "balanced":
                 continue
@@ -336,6 +393,9 @@ def _aggregate(a: argparse.Namespace) -> int:
             ]
             cells = "".join(f"{x:>+10.3f}" if x is not None else f"{'-':>10}" for x in d)
             print(f"  {row.name:<20}{cells}")
+    # Spec Interpretation requires the playoff/champ deltas too, not just reg_win_pct.
+    _print_metric_table(chunks, "make_playoffs_pct")
+    _print_metric_table(chunks, "champ_pct")
     return 0
 
 
@@ -377,7 +437,7 @@ Write `<scratchpad>/bigstack_driver.sh` (resumable, one bounded process per `(se
 
 Run: `python <scratchpad>/bigstack_sweep.py aggregate --chunk-dir reports/_bigstack/2026`
 - **Sanity:** `balanced` reproduces its Run-P ADP figure (~espn 0.684 / model 0.593). If not, stop.
-- Read the seat-avg table + the per-market delta-vs-balanced for each variant×gain.
+- Read all three seat-avg tables (`reg_win_pct`, `make_playoffs_pct`, `champ_pct`) + the per-market delta-vs-balanced under each, for every variant×gain.
 
 - [ ] **Step 5: Write the Run + memory**
 
