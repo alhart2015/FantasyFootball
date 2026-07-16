@@ -5,6 +5,7 @@ Returns every seat's roster as {seat(1-based): [gsis_id, ...]} — the project_d
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections import Counter
 from collections.abc import Sequence
@@ -125,6 +126,7 @@ def _simulate_to_state(
     bot_dollars: pd.Series | None = None,
     trace: list[PickRecord] | None = None,
     hero_nominator: HeroNominator | None = None,
+    market_adp_jitter: float | None = None,
 ) -> AuctionState:
     """Run the full auction loop; return the final AuctionState (budgets + priced rosters).
 
@@ -132,6 +134,14 @@ def _simulate_to_state(
     None leaves the hot path unchanged). If `hero_nominator` is provided, it chooses the hero's
     nominee on the hero's own non-forced turns (Slice 2 probe); None keeps `_sample_nominee` for all
     seats. Bots, the snake-broke path, and the forced pool-thin fallback are unaffected either way.
+
+    If `market_adp_jitter` is set, FLUSH nominations use a single shared noisy-ADP "market board"
+    (`SnakeBoard`, noise drawn once per draft) instead of the value-weighted `_sample_nominee`: the
+    room nominates roughly in ADP order with human randomness. None keeps the value-based
+    nomination. (Realism probe: value nomination lets players our model under-rates fall implausibly
+    late.) It must be finite and >= 0, and the pool must carry a usable `consensus_adp` — a bad
+    value or an ADP-less pool raises `ValueError` rather than silently degrading to value nomination
+    (which would mislabel the run as an ADP-market draft).
     """
     validate_auction_inputs(pool, config)
     n = config.n_teams
@@ -149,9 +159,29 @@ def _simulate_to_state(
     if snake_rng is None:
         snake_rng = rng.spawn(1)[0]  # CRN-safe: spawn advances the seed-sequence, not rng's stream
     adp_ok = adp_usable(pool)
+    if market_adp_jitter is not None:
+        # Fail loudly rather than silently degrade: a bad jitter would either crash SnakeBoard
+        # (negative std) or nominate by gsis-alphabetical order (NaN std -> all-NaN noisy), and a
+        # jitter set on an ADP-less pool would fall back to value nomination — each mislabeling the
+        # run as an ADP-market draft and corrupting the value-nom-vs-ADP-nom comparison.
+        if not math.isfinite(market_adp_jitter) or market_adp_jitter < 0.0:
+            raise ValueError(f"market_adp_jitter must be finite and >= 0; got {market_adp_jitter}")
+        if not adp_ok:
+            raise ValueError(
+                "market_adp_jitter was set but the pool has no usable consensus_adp; ADP-market "
+                "nomination would silently fall back to value nomination."
+            )
     # Per-bot fixed noisy-ADP boards; broke bots consume these to snipe their snake target (Task 4).
     snake_boards: dict[int, SnakeBoard] = (
         {s: SnakeBoard(pool, snake_rng) for s in bot_seats} if adp_ok else {}
+    )
+    # Optional shared market board: flush seats nominate roughly in ADP order (noise drawn once).
+    # spawn() uses the seed-sequence, not snake_rng's stream, so the per-bot boards stay intact.
+    # (market_adp_jitter not None implies adp_ok here — the guard above raises otherwise.)
+    market_board: SnakeBoard | None = (
+        SnakeBoard(pool, snake_rng.spawn(1)[0], adp_jitter=market_adp_jitter)
+        if market_adp_jitter is not None
+        else None
     )
 
     minimums, maximums = bot_position_bounds(config.roster_slots)
@@ -240,6 +270,14 @@ def _simulate_to_state(
                 # stream desyncs after the hero's first nomination — which would break the CRN
                 # pairing the probe's control-vs-poison verdict depends on.
                 nominee_id = _sample_nominee(candidates, val_by_id, nomination_temp, rng)
+                if market_board is not None:
+                    # Realism override: flush seats nominate by the shared noisy-ADP market board
+                    # (ADP order + jitter). The value draw above still runs so the rng stays aligned
+                    # (the board consumes no rng); value nomination lets model-underrated players
+                    # fall implausibly late, which this replaces with an ADP-ordered market.
+                    board_pick = market_board.best_available(drafted_fs, frozenset(union))
+                    if board_pick is not None:
+                        nominee_id = board_pick
                 if nom == hero0 and hero_nominator is not None:
                     ctx = NominationContext(
                         hero_positions=Counter(
@@ -342,6 +380,7 @@ def simulate_auction(
     bot_archetypes: Sequence[BotArchetype] | None = None,
     bot_dollars: pd.Series | None = None,
     hero_nominator: HeroNominator | None = None,
+    market_adp_jitter: float | None = None,
 ) -> dict[int, list[str]]:
     """One full auction; return every seat's roster {seat(1-based): [gsis_id, ...]}."""
     state = _simulate_to_state(
@@ -357,5 +396,6 @@ def simulate_auction(
         bot_archetypes=bot_archetypes,
         bot_dollars=bot_dollars,
         hero_nominator=hero_nominator,
+        market_adp_jitter=market_adp_jitter,
     )
     return {seat + 1: [g for (g, _p, _pr) in state.rosters[seat]] for seat in range(config.n_teams)}

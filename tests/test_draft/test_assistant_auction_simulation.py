@@ -1127,3 +1127,180 @@ def test_hero_nominator_override_branch_consumes_no_extra_rng() -> None:
     )
     assert overridden.rosters == baseline.rosters
     assert overridden.budgets == baseline.budgets
+
+
+def test_market_adp_jitter_none_matches_default() -> None:
+    # market_adp_jitter=None is byte-identical to omitting it (value nomination unchanged).
+    cfg = _config(n_teams=4)
+    pool = _pool_with_adp(40)
+    bd = _baseline(pool, cfg)
+    a = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+    )
+    b = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+        market_adp_jitter=None,
+    )
+    assert a.rosters == b.rosters
+    assert a.budgets == b.budgets
+
+
+def test_market_adp_nomination_nominates_lowest_adp_first() -> None:
+    # With jitter=0 the shared market board is strict ADP order, so the very first (non-forced)
+    # nominee is the lowest-consensus_adp player — proof the ADP-market override replaces the
+    # value-weighted nominee. _pool_with_adp sets consensus_adp = 1..n ascending.
+    cfg = _config(n_teams=4)
+    pool = _pool_with_adp(40)
+    bd = _baseline(pool, cfg)
+    trace: list[PickRecord] = []
+    _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+        market_adp_jitter=0.0,
+        trace=trace,
+    )
+    lowest_adp = str(pool.sort_values("consensus_adp")["gsis_id"].iloc[0])
+    assert str(trace[0].gsis_id) == lowest_adp
+
+
+def test_market_board_override_consumes_the_unconditional_value_draw() -> None:
+    # CRN invariant: `_sample_nominee` is drawn UNCONDITIONALLY before the market-board override, so
+    # the shared rng advances identically whether or not the board overrides — the pairing the
+    # value-nom-vs-ADP-nom and control-vs-poison verdicts depend on. Proof at temp>0 (the production
+    # sweep regime): the jitter=0 board picks the SAME nominees regardless of nomination_temp (first
+    # assert), but the discarded value draw consumes rng ONLY at temp>0 (temp=0 returns
+    # candidates[0] with no rng), so the two runs' downstream bids/prices — hence rosters — MUST
+    # diverge (second assert). Identical nominees + divergent rosters isolates the cause to the rng
+    # the value draw consumes. If a refactor guarded that draw on the board (`if market_board is
+    # None: ...`), nomination_temp would stop mattering and the rosters would collapse to identical,
+    # tripping this test. (A temp=0 byte-identical test can't see it: at temp=0 the draw is free.)
+    cfg = _config(n_teams=4)
+    pool = _pool_with_adp(40)
+    bd = _baseline(pool, cfg)
+    trace0: list[PickRecord] = []
+    trace1: list[PickRecord] = []
+    at_temp0 = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=0.0,
+        rng=np.random.default_rng(0),
+        market_adp_jitter=0.0,
+        trace=trace0,
+    )
+    at_temp1 = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=1.0,
+        rng=np.random.default_rng(0),
+        market_adp_jitter=0.0,
+        trace=trace1,
+    )
+    assert [r.gsis_id for r in trace0] == [r.gsis_id for r in trace1]  # same board-driven nominees
+    assert at_temp0.rosters != at_temp1.rosters  # only the discarded value draw's rng differs
+
+
+def test_market_board_leaves_broke_bot_snake_nominations_untouched() -> None:
+    # Broke bots take the snake-target path (nominee_id set BEFORE the `if nominee_id is None`
+    # guard), so the shared market board — nested inside that guard — must never override them. Both
+    # runs pin the hero's nomination with a hero_nominator (which fires AFTER the board), making the
+    # hero's own market override a guaranteed no-op; the comparison then isolates the BROKE-BOT
+    # path, so it can't false-pass on an incidental hero value==ADP coincidence. Setting the jitter
+    # must be byte-identical to leaving it off. If the override were hoisted out of the broke guard,
+    # broke bots would nominate the market's global lowest-ADP player instead of their snake target
+    # and this draft would diverge.
+    # budget == min_bid*roster_size -> every bot broke from pick 1 (snake path)
+    cfg = _broke_config()
+    pool = _pool_with_adp(40)
+    bd = _baseline(pool, cfg)
+    without = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=0.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=lambda c, ctx: c[0],
+    )
+    with_market = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=0.0,
+        rng=np.random.default_rng(0),
+        market_adp_jitter=0.0,
+        hero_nominator=lambda c, ctx: c[0],
+    )
+    assert without.rosters == with_market.rosters
+    assert without.budgets == with_market.budgets
+
+
+def test_market_adp_jitter_rejects_invalid_values() -> None:
+    # A NaN/inf/negative jitter must raise, not silently produce gsis-alphabetical nomination (NaN)
+    # or crash deep in SnakeBoard (negative std) while the chunk still records an "ADP-market" run.
+    cfg = _config(n_teams=4)
+    pool = _pool_with_adp(40)
+    bd = _baseline(pool, cfg)
+    for bad in (float("nan"), float("inf"), -1.0):
+        with pytest.raises(ValueError, match="market_adp_jitter"):
+            _simulate_to_state(
+                StaticDollarBid(),
+                1,
+                pool,
+                cfg,
+                baseline_dollars=bd,
+                price_jitter=0.1,
+                rng=np.random.default_rng(0),
+                market_adp_jitter=bad,
+            )
+
+
+def test_market_adp_jitter_without_usable_adp_raises() -> None:
+    # Asking for ADP-market nomination on a pool with no consensus_adp must raise rather than
+    # silently fall back to value nomination (which would mislabel the run as ADP-nom).
+    cfg = _config(n_teams=4)
+    pool = _pool(40)  # no consensus_adp column -> adp_usable is False
+    bd = _baseline(pool, cfg)
+    with pytest.raises(ValueError, match="consensus_adp"):
+        _simulate_to_state(
+            StaticDollarBid(),
+            1,
+            pool,
+            cfg,
+            baseline_dollars=bd,
+            price_jitter=0.1,
+            rng=np.random.default_rng(0),
+            market_adp_jitter=8.0,
+        )

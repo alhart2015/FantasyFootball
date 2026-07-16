@@ -58,6 +58,15 @@ def aggregate_seat_sweep(
     coverage-complete heroes (scored in every market x seat cell) are eligible to be `best`; a
     worst-case built from missing cells is not a real worst-case. `rows` is sorted worst-case desc
     for display; `best` (skipping partials) is the authoritative robust winner."""
+    # Guard the nomination axis: value-nom (market_adp_jitter absent/None) and ADP-nom chunks price
+    # different markets, so pooling them into one (market, seat) average silently blends regimes and
+    # yields a winner that matches no real configuration. Refuse rather than mislead.
+    jitters = {c.get("market_adp_jitter") for c in chunks}
+    if len(jitters) > 1:
+        raise ValueError(
+            f"chunks mix market_adp_jitter values {sorted(map(str, jitters))}; value-nom and "
+            "ADP-nom drafts must not be aggregated together — separate them by chunk directory."
+        )
     # (market, model, seat) -> reg_win_pct; the seat key dedups re-run chunks of the same cell.
     cell: dict[tuple[str, str, int], float] = {}
     for c in chunks:
@@ -117,6 +126,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
         nomination_temp=1.0,
         bot_archetypes=_REALISTIC_FIELD,
         bot_prices=market,
+        market_adp_jitter=args.market_adp_jitter,
     )
     payload = {
         "market": market,
@@ -125,6 +135,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
         "n_seeds": args.seeds,
         "n_sims": args.n_sims,
         "season": args.season,
+        "market_adp_jitter": args.market_adp_jitter,
         "reg_win_pct": {n: result.summaries[n]["reg_win_pct"].point for n in result.summaries},
         "all_metrics": {
             n: {m: result.summaries[n][m].point for m in result.summaries[n]}
@@ -206,6 +217,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     r.add_argument("--n-sims", type=int, default=300)
     r.add_argument("--seed", type=int, default=0, help="Base RNG seed (shared across seats = CRN).")
     r.add_argument("--bot-prices", choices=("espn", "model"), required=True)
+    r.add_argument(
+        "--market-adp-jitter",
+        type=float,
+        default=None,
+        help="If set, flush seats nominate by a shared noisy-ADP market board with this jitter "
+        "(realistic ADP-ordered nomination) instead of value-weighted-random. Omit = value nom.",
+    )
     r.add_argument("--data-root", type=Path, default=Path("data"))
     r.add_argument("--out", type=Path, required=True, help="Chunk JSON output path.")
     r.set_defaults(func=_run_chunk)

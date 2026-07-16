@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from scripts.auction_seat_sweep import _load_chunks, aggregate_seat_sweep
 
 
@@ -87,3 +88,26 @@ def test_load_chunks_skips_unreadable_and_foreign(tmp_path: Path) -> None:
     chunks, skipped = _load_chunks(tmp_path)
     assert len(chunks) == 1 and chunks[0]["market"] == "model"
     assert skipped == 3
+
+
+def test_aggregate_rejects_mixed_market_adp_jitter() -> None:
+    # value-nom (jitter absent/None) and ADP-nom (jitter set) chunks price different markets, so
+    # pooling them would silently blend regimes; aggregate_seat_sweep must refuse a mixed set.
+    mixed: list[dict[str, object]] = [
+        {"market": "model", "seat": 1, "reg_win_pct": {"a": 0.5}},  # no key -> None (value-nom)
+        {"market": "model", "seat": 2, "reg_win_pct": {"a": 0.5}, "market_adp_jitter": 12.0},
+    ]
+    with pytest.raises(ValueError, match="market_adp_jitter"):
+        aggregate_seat_sweep(mixed)
+
+
+def test_aggregate_accepts_uniform_market_adp_jitter() -> None:
+    # A single shared jitter value is not a mix -> aggregates normally (guards against a guard that
+    # over-triggers on legitimate same-regime sweeps).
+    uniform: list[dict[str, object]] = [
+        {"market": "model", "seat": 1, "reg_win_pct": {"a": 0.4}, "market_adp_jitter": 12.0},
+        {"market": "model", "seat": 2, "reg_win_pct": {"a": 0.6}, "market_adp_jitter": 12.0},
+    ]
+    _markets, _seats, rows, _best = aggregate_seat_sweep(uniform)
+    val = rows[0].seat_avg[0]
+    assert val is not None and abs(val - 0.5) < 1e-9  # mean(0.4, 0.6)

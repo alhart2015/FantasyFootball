@@ -91,6 +91,7 @@ def run_auction_tournament(
     bot_archetypes: Sequence[BotArchetype] | None = None,
     bot_prices: Literal["espn", "model"] = "espn",
     unranked_discount: float | None = None,
+    market_adp_jitter: float | None = None,
 ) -> AuctionTournamentResult:
     if season_base_seed is None:
         season_base_seed = base_seed + 1_000_000
@@ -136,6 +137,7 @@ def run_auction_tournament(
                 nomination_temp=nomination_temp,
                 bot_archetypes=bot_archetypes,
                 bot_dollars=bot_dollars,
+                market_adp_jitter=market_adp_jitter,
             )
             proj = project_draft(
                 league,
