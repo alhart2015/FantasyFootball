@@ -176,11 +176,13 @@ def _simulate_to_state(
         )
     # value the room bids on — only the opt-in hero_nominator reads it, so skip the O(pool) build
     # when the hook is off (mirrors the `trace` guard; the default None path pays nothing here).
-    bot_by_id = (
-        {str(g): float(v) for g, v in bd["bot_dollars"].items()}
-        if hero_nominator is not None
-        else {}
-    )
+    # When bot_dollars is None the room bids on auction_dollars, so reuse val_by_id verbatim.
+    if hero_nominator is None:
+        bot_by_id: dict[str, float] = {}
+    elif bot_dollars is None:
+        bot_by_id = val_by_id
+    else:
+        bot_by_id = {str(g): float(v) for g, v in bd["bot_dollars"].items()}
     all_positions = frozenset(Position)
     state = AuctionState.initial(config)
 

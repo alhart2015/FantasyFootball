@@ -59,4 +59,4 @@ def drain_off_position(candidates: list[str], ctx: NominationContext) -> str:
         pos = ctx.position_by_id[str(g)]
         if ctx.hero_positions[pos] >= ctx.position_minimums.get(pos, 0):
             off.append(g)
-    return max(off or candidates, key=lambda g: ctx.value_by_id[str(g)])
+    return drain_max(off or candidates, ctx)  # priciest among the off-position set (or all)

@@ -1066,8 +1066,7 @@ def test_hero_nominator_draws_central_rng_for_crn(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(sim, "_sample_nominee", counting)
 
-    calls["n"] = 0
-    sim._simulate_to_state(
+    sim._simulate_to_state(  # baseline run starts with the counter at its init 0
         StaticDollarBid(),
         1,
         pool,
@@ -1093,3 +1092,38 @@ def test_hero_nominator_draws_central_rng_for_crn(monkeypatch: pytest.MonkeyPatc
     )
     hooked = calls["n"]
     assert hooked == baseline == cfg.roster_size * cfg.n_teams
+
+
+def test_hero_nominator_override_branch_consumes_no_extra_rng() -> None:
+    # Stronger CRN guard than the call-count test: at temp=0 the central draw is deterministic
+    # (candidates[0], no rng) and a hook returning candidates[0] picks the SAME nominee, so the
+    # override branch must yield a BYTE-IDENTICAL draft to the None baseline. Any future rng.* added
+    # inside the `nom == hero0` override block would draw in the hook arm only, diverging this draft
+    # and tripping the test — a desync the _sample_nominee call-count parity check cannot see.
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    baseline = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=0.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=None,
+    )
+    overridden = _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        nomination_temp=0.0,
+        rng=np.random.default_rng(0),
+        hero_nominator=lambda c, ctx: c[0],
+    )
+    assert overridden.rosters == baseline.rosters
+    assert overridden.budgets == baseline.budgets
