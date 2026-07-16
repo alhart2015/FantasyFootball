@@ -1,7 +1,7 @@
 # Big-Stack Overspend Hero (Auction) — Design
 
 **Status:** design approved (brainstorming, 2026-07-16).
-**Branch:** `feat/auction-bigstack-overspend` (stacked on `feat/auction-adp-nomination` / PR #99 — needs `market_adp_jitter`).
+**Branch:** `feat/auction-bigstack-overspend` (stacked on `feat/auction-adp-nomination` / PR #99 — Phase 3 needs `market_adp_jitter` from #99). **Merge order:** #99 lands first, then this branch rebases onto `main`; its PR should not merge before #99.
 
 ## Problem
 
@@ -64,9 +64,13 @@ Opponent budgets come from `view.budgets_by_seat` (all seats) minus the hero's o
 
 ### Registration & measurement
 
-- Register in `tournament_cli._MODELS` (or race directly in the sweep) two contestants: `bigstack_maxopp = BigStackBid(reference="max_opp")` and `bigstack_field = BigStackBid(reference="field_avg")`, plus the existing `balanced` (p0.0) control.
-- A/B via the seat-sweep harness under ADP nomination (`--market-adp-jitter 12`), seat-averaged over 12 seats × both markets, `reg_win_pct` (+ playoff/champ), 20 seeds × 300 sims — the Run-P methodology.
-- Sweep `overpay_gain ∈ {0.5, 1.0, 2.0}` for both variants (too small won't deploy; too large overpays into −EV). This is a race of ≤ 7 contestants (2 variants × 3 gains + control), reusing the `auction_seat_sweep.py` runner (which already races a `_MODELS`-style dict).
+- Phase 3 races a **dedicated contestant dict**, NOT `tournament_cli._MODELS` (the shipped default field must not be polluted with sweep variants). Exactly **7 contestants**: `balanced = BalancedValueBid(premium=0.0)` (the control, once) + `BigStackBid(reference=r, overpay_gain=g)` for `r ∈ {"max_opp", "field_avg"}` × `g ∈ {0.5, 1.0, 2.0}`. Registering a *chosen* variant into `_MODELS` is deferred to after the result (a separate decision, per the September policy).
+- A/B via the seat-sweep runner's contestant/aggregation shape under ADP nomination (`--market-adp-jitter 12`), seat-averaged over 12 seats × both markets, `reg_win_pct` (+ playoff/champ), 20 seeds × 300 sims — the Run-P methodology. `auction_seat_sweep.py` races `_MODELS` specifically, so Phase 3 either parametrizes it to accept a custom contestant dict or uses a dedicated runner in the Run-N `premium_sweep` mould; the plan picks one.
+- The three `overpay_gain` values {0.5, 1.0, 2.0} probe the tuning curve: too small won't deploy, too large overpays into −EV.
+
+### Interpretation (data-gathering — no adopt bar)
+
+There is **no pre-registered adopt/reject threshold** (the strategy decision is September). The Phase-3 deliverable is the *characterized* lift: for each `BigStackBid` variant×gain, report its seat-averaged `reg_win_pct` (+ playoff/champ) and the **delta vs `balanced` p0.0** in **both** markets, and flag whether each delta **exceeds the seed-noise band** (the per-seat spread at 20 seeds, ≈ ±0.03 per market cell; the seat-average is tighter — note if a delta sits inside it). "It works" = a delta clearly above noise in at least the ESPN market where the budget-deployment lever should bite; a wash/negative is an equally valid recorded result. No strategy is adopted from this run.
 
 ## Requirements
 
