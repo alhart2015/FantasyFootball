@@ -431,7 +431,38 @@ Expected: 7 contestant keys (`balanced` + 6 `bigstack_*`); no traceback.
 
 - [ ] **Step 3: Crash-safe driver + launch**
 
-Write `<scratchpad>/bigstack_driver.sh` (resumable, one bounded process per `(seat, market)`, 12 seats × 2 markets = 24 chunks, `--seeds 20 --n-sims 300`, output `reports/_bigstack/2026/`), modeled on `reports/_seat_sweep_adp/adp_bakeoff_driver.sh`. Launch with `run_in_background: true`. Expected ~40 min (7 contestants), all chunks `rc=0`.
+Write `<scratchpad>/bigstack_driver.sh` (resumable: skips any chunk that is already valid JSON; one bounded `python` process per `(seat, market)` for the dev-box Raptor Lake fault — memory `h2h-backtest-native-crash`). Substitute `<scratchpad>` with this session's real scratch path.
+
+```bash
+#!/usr/bin/env bash
+# Big-stack overspend A/B: 7 contestants (balanced + BigStackBid x {max_opp,field_avg} x
+# {0.5,1.0,2.0}), 12 seats x 2 markets, market_adp_jitter=12 (baked into the runner). Crash-safe,
+# resumable (skips valid-JSON chunks). Run from repo root.
+set -u
+cd /c/Users/HartAlden/FantasyFootball
+RUNNER="<scratchpad>/bigstack_sweep.py"   # this session's scratch runner from Step 1
+OUT=reports/_bigstack/2026
+LOG=$OUT/driver.log
+mkdir -p "$OUT"
+echo "=== driver start $(date) ===" >> "$LOG"
+for market in model espn; do
+  for seat in $(seq 1 12); do
+    f="$OUT/${market}_seat${seat}.json"
+    if [ -f "$f" ] && python -c "import json,sys;json.load(open(sys.argv[1]))" "$f" 2>/dev/null; then
+      echo "skip $f" >> "$LOG"; continue
+    fi
+    s=$(date +%s)
+    python "$RUNNER" run --seat "$seat" --market "$market" --seeds 20 --n-sims 300 --out "$f" \
+      >> "$LOG" 2>&1
+    rc=$?; e=$(date +%s)
+    echo "chunk market=$market seat=$seat rc=$rc $((e-s))s $(date)" >> "$LOG"
+    if [ $rc -ne 0 ]; then echo "CHUNK FAILED market=$market seat=$seat rc=$rc" >> "$LOG"; fi
+  done
+done
+echo "=== driver done $(date) ===" >> "$LOG"
+```
+
+Launch with the Bash tool `run_in_background: true`: `bash <scratchpad>/bigstack_driver.sh`. Expected ~40–75 min (7 contestants × 24 chunks); every chunk logs `rc=0`. Monitor the log until `=== driver done ===`; re-launch to resume if the box faults (valid chunks are skipped).
 
 - [ ] **Step 4: Aggregate + interpret**
 
