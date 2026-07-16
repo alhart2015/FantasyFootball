@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from collections import Counter
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -304,3 +304,56 @@ class BalancedValueBid:
             per_slot = min(per_slot, config.budget / config.roster_size)
         cap = self.pace * per_slot
         return round(min(fair * (1.0 + self.premium), cap))
+
+
+@dataclass(frozen=True)
+class BigStackBid:
+    """Balanced-breadth hero that OVERPAYS in proportion to its remaining-budget lead on the field.
+
+    When the hero is the "big stack" (more remaining budget than the table), unused budget is pure
+    waste — so it bids above fair value and lifts the low pace cap, letting it win/pay-up on
+    contested players and deploy the lead (second-price still clears uncontested players at min_bid,
+    so cash only moves when an opponent is pushing the price). When NOT the big stack it is exactly
+    `BalancedValueBid(premium, pace)`. Two `advantage` signals:
+
+    - "max_opp": my_budget / richest opponent's budget (one hoarding opponent flattens it).
+    - "field_avg": my per-slot budget / the league-average per-slot budget (robust to one hoarder).
+
+    See docs/superpowers/specs/2026-07-16-auction-bigstack-overspend-design.md.
+    """
+
+    overpay_gain: float = 1.0
+    reference: Literal["max_opp", "field_avg"] = "field_avg"
+    premium: float = 0.0
+    pace: float = 2.0
+
+    def __post_init__(self) -> None:
+        if self.reference not in ("max_opp", "field_avg"):
+            raise ValueError(f"reference must be 'max_opp' or 'field_avg'; got {self.reference!r}")
+        if not (self.overpay_gain >= 0.0 and math.isfinite(self.overpay_gain)):
+            raise ValueError(f"overpay_gain must be finite and >= 0; got {self.overpay_gain}")
+        if not (self.premium >= 0.0 and math.isfinite(self.premium)):
+            raise ValueError(f"premium must be finite and >= 0; got {self.premium}")
+        if not (self.pace > 0.0 and math.isfinite(self.pace)):
+            raise ValueError(f"pace must be finite and > 0; got {self.pace}")
+
+    def _advantage(self, view: AuctionView, config: LeagueConfig) -> float:
+        """>1 iff the hero is the big stack (more remaining budget than the reference field)."""
+        if self.reference == "max_opp":
+            opp = list(view.budgets_by_seat)
+            opp.remove(view.my_budget)  # drop one instance of the hero's own budget
+            return view.my_budget / max(max(opp), config.min_bid)
+        total_open = _total_open_slots(view, config)
+        league_per_slot = sum(view.budgets_by_seat) / max(1, total_open)
+        my_per_slot = view.my_budget / max(1, view.my_open_slots)
+        return my_per_slot / max(league_per_slot, config.min_bid)
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        fair = float(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        per_slot = view.my_budget / max(1, view.my_open_slots)
+        overpay = self.overpay_gain * max(0.0, self._advantage(view, config) - 1.0)
+        target = fair * (1.0 + self.premium + overpay)
+        cap = self.pace * per_slot * (1.0 + overpay)
+        return round(min(target, cap))
