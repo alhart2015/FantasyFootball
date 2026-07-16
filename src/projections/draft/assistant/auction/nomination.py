@@ -7,13 +7,15 @@ priciest player at a position the hero has already filled, so the drain lands on
 need that slot. See docs/superpowers/specs/2026-07-15-auction-nomination-poisoning-design.md.
 
 PROBE VERDICT (Run O, reports/auction_tournament_validation_2026.md) — NO-GO, retained as a probe.
-A 40-seed CRN-paired sweep found `drain_max` harmful and `drain_off_position` a genuine but
-MARKET-SPECIFIC edge: real in the symmetric model market (+0.015 reg_win_pct, 95% CI-separated from
-0) yet indistinguishable from zero in the realistic ESPN market (+0.007, CI spans 0). It fails the
-pre-registered both-markets robustness bar, so the shipped `balanced` p0.0 hero does NOT wire in a
-`hero_nominator` (the engine hook defaults to None = today's value-weighted-random nomination). This
-module + hook are kept as a tested, opt-in extension point for any future ESPN-targeted nomination
-work, not as an adopted strategy.
+An 80-seed CRN-paired sweep found `drain_max` harmful and `drain_off_position` a genuine but
+MARKET-SPECIFIC edge: real in the symmetric model market (+0.010 reg_win_pct, 95% CI-separated from
+0, robust across 40->80 seeds) yet NOT distinguishable from zero in the realistic ESPN market
+(+0.005, CI [-0.001, +0.011] spans 0 once firmed up). It fails the pre-registered both-markets
+robustness bar, so the shipped `balanced` p0.0 hero does NOT wire in a `hero_nominator` (the engine
+hook defaults to None = today's value-weighted-random nomination). This module + hook are kept as a
+tested, opt-in extension point for any future ESPN-targeted nomination work, not as an adopted
+strategy. (History: a CRN-desync bug in the hook briefly flipped the interim verdict to a marginal
+GO; the fix + the 80-seed firm-up settled it here. See Run O.)
 """
 
 from __future__ import annotations

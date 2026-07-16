@@ -510,7 +510,23 @@ Context (seat-avg make_playoffs_pct / champ_pct): `control` espn 0.750/0.200, mo
 | model | +0.0162 | **+0.0154** | **[+0.003, +0.028]** | 10/12 | **REAL (CI>0)** |
 | espn | +0.0145 | **+0.0066** | [−0.003, +0.016] | 10/12 | **not sep. from 0** |
 
-The espn lift **regressed toward 0** with more data (it was partly noise at 20 seeds); the model lift **held and is now CI-separated**. So `drain_off_position` is a **genuine but market-specific** edge — real in the symmetric *model* market (+0.015), indistinguishable from zero in the realistic *ESPN* market. **Per the pre-registered both-markets criterion → DO NOT ADOPT.** The robust-win goal needs a both-market lift, and ESPN (real auction values) is the market that matters for the live draft; a model-only nomination edge is not robust. **`balanced` p0.0 is the final hero; nomination poisoning is closed for this slice.** The engine `hero_nominator` hook + `nomination.py` remain available in git history for any future ESPN-targeted nomination work. Caveats as Run N. Artifacts: `reports/_nom_probe/{2026,2026_hp}/*.json` (untracked). Live-draft call still September.
+The espn lift appeared to **regress toward 0** with more data. **⚠️ This 40-seed run's CRN was compromised by a bug (see correction below); the firmed-up verdict lands back at NO-GO, but for the right reason — a model-market-only edge.**
+
+**Run O CORRECTION (2026-07-15) — a CRN bug compromised the verdict; corrected + firmed-up = NO-GO (a real MODEL-market-only edge, not robust in ESPN).** A `/loop-review` of the Slice-2 diff caught a **CRN desync bug** in the `hero_nominator` hook: at `nomination_temp>0` the override path skipped the `_sample_nominee` `rng.choice` draw that the `control` path consumes, so the shared rng diverged after the hero's first nomination — breaking the CRN pairing for ~90% of every draft. That inflated the paired-lift CIs (the pairing that cancels shared bot-bid noise was mostly not happening), which is exactly why espn "spanned 0." Fixed (always draw the central nominee, then override; regression-tested — commit `f9ccb0e`), and the 40-seed probe was **re-run on the corrected engine** (24/24 chunks; control espn 0.620 / model 0.589, R8 holds):
+
+| market | buggy-CRN Δ (95% CI) | **fixed-CRN Δ (95% CI)** | seats + | verdict |
+|---|---|---|---|---|
+| model | +0.0154 [+0.003, +0.028] | **+0.0135 [+0.0065, +0.0206]** | 10/12 | **REAL (CI>0)** |
+| espn | +0.0066 [−0.003, +0.016] | **+0.0079 [+0.0002, +0.0156]** | 9/12 | **REAL (CI>0)** |
+
+With correct pairing the espn CI initially tightened to **[+0.0002, +0.0156]** at 40 seeds — both markets *barely* CI-separated, a **marginal GO**. But espn's +0.0002 lower bound was knife-edge (~p=0.05), so an **80-seed firm-up** was run to test its robustness:
+
+| market | 40-seed (fixed CRN) | 80-seed firm-up | seats + | verdict |
+|---|---|---|---|---|
+| model | +0.0135 [+0.0065, +0.0206] | **+0.0096 [+0.0020, +0.0173]** | 10/12 | **REAL (CI>0)** |
+| espn | +0.0079 [+0.0002, +0.0156] | **+0.0052 [−0.0007, +0.0110]** | 9/12 | **not sep. from 0** |
+
+espn **regressed back across 0** (lower bound +0.0002 → −0.0007) as its estimate shrank (+0.0079 → +0.0052) — the knife-edge did not hold. Model held (real, robust). **Final verdict: NO-GO** — `drain_off_position` is a genuine, robust edge in the **symmetric model market only** (+0.010, CI-separated across 40→80 seeds); in the realistic **ESPN market it is not distinguishable from zero** once firmed up. The pre-registered both-markets criterion fails at espn, so the bottom line matches the original Run O (model-specific, not adopted) — but now on **rigorous** footing (correct CRN, 80 seeds) instead of the buggy 40-seed run that reached NO-GO for the *wrong* reason. `balanced` p0.0 stays the hero; the `hero_nominator` hook + `nomination.py` remain a **validated opt-in probe** (real in model, not robust in espn), not wired into the default. **Methodological note:** the interim verdict flipped twice — buggy NO-GO → corrected marginal GO → firmed-up NO-GO — a case study in why CRN correctness *and* adequate power both matter (the loop-review CRN catch and the 80-seed firm-up each changed it). Artifacts: `reports/_nom_probe/2026_hp80/*.json` (definitive); `2026_hp/` (40-seed corrected), `2026_hp_precrn/` (pre-fix, invalid). Live-draft call still September.
 
 ## Planned experiments / axes to sweep
 
