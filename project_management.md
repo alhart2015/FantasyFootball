@@ -1,6 +1,8 @@
 # Project Management
 
-Running log of project status, decisions, and next steps. Append new entries at the top; keep the bottom as the long-tail backlog. Specs live in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`, single-task TODOs in `TODO.md`.
+Running log of project status, decisions, and next steps. Append new entries at the top; keep the bottom as the long-tail backlog. Specs live in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`, concrete open items in [GitHub issues](https://github.com/alhart2015/FantasyFootball/issues) (labeled by sub-project).
+
+> **`TODO.md` was retired 2026-07-17** — open items moved to GitHub issues. Resolve any historical `TODO #N` reference (in this log below, or in the archival `docs/superpowers/**` and `reports/**`) by searching issues for the phrase `Migrated from TODO #N` — e.g. TODO #52 → [#103](https://github.com/alhart2015/FantasyFootball/issues/103), TODO #49 → [#105](https://github.com/alhart2015/FantasyFootball/issues/105), TODO #55 (broken test) → [#126](https://github.com/alhart2015/FantasyFootball/issues/126). Completed items were **not** migrated (they have no issue); recover their detail from git history — `git show <sha>:TODO.md` for a `<sha>` predating the deletion.
 
 ---
 

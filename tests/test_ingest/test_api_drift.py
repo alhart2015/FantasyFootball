@@ -19,8 +19,8 @@ column conventions and would force the smokes to handle two contracts.
 
 When a smoke fails: read the assertion message, confirm the raw column
 rename or addition upstream, and patch the corresponding ingest module
-(rename map, _KEEP list, schema, or normalize step). Add a TODO #16-style
-note to `TODO.md` if the drift was non-trivial."""
+(rename map, _KEEP list, schema, or normalize step). If the drift was
+non-trivial, add it to the ingest-drift checklist (GitHub issue #130)."""
 
 from __future__ import annotations
 

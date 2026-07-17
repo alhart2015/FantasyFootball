@@ -9,6 +9,6 @@ Status: the Projections Core foundations layer is in place (schemas, distributio
 - **Contributing:** `CONTRIBUTING.md` — setup, daily commands, workflow, pattern recipes.
 - **Claude Code instructions:** `CLAUDE.md` — auto-loaded conventions for AI-assisted development.
 - **Current status & next actions:** `project_management.md`.
-- **Open items:** `TODO.md`.
+- **Open items:** [GitHub issues](https://github.com/alhart2015/FantasyFootball/issues) — labeled by sub-project (`draft-hub`, `auction`, `dfs`, `mid-season`, `projections-core`, `infra`).
 - **Designs:** `docs/superpowers/specs/`.
 - **Implementation plans:** `docs/superpowers/plans/`.
