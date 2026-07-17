@@ -587,6 +587,34 @@ reg_win_pct (seat-avg over 12 seats; **worst** = min over markets, the robust-wi
 
 **No strategy adopted or rejected.** `balanced` p0.0 remains the shipped default; `BigStackBid` is a **validated opt-in** (unit-tested, engine-solvent, not registered in `tournament_cli._MODELS`). In isolation the data favors `field_avg` g0.5 on the worst-case goal metric and `max_opp` as the conservative both-market-safe deploy — but the circularity caveat means neither is a live-draft recommendation. Next candidate probes: a CRN-paired re-run to resolve `max_opp`; a jitter sweep; and hardening the ESPN market (bot calibration) so the less-circular signal carries more weight. Artifacts: `reports/_bigstack/2026/*.json` (untracked). Live-draft call still September.
 
+**Run R — 2026-07-16 — stack-ratio CONVEX-aggression sweep → convexity FIXES the linear ESPN penalty and wins the goal metric, but the roster-shape trace REFUTES the "deploy into late depth" mechanism (it damps early over-aggression instead)** (`half_12team`, all 12 seats × both markets, 20 seeds × 300 sims; byes OFF; **ADP nomination** `market_adp_jitter=12`; branch `feat/auction-stack-ratio-bid`; spec+plan `docs/superpowers/{specs,plans}/2026-07-16-auction-stack-ratio-bid*`). Motivated by the Run-Q ESPN-degradation trace (`espn_overspend_trace.py`): `field_avg`'s linear cap-lift fires early (bots drain the field's budget early → advantage spikes by Q1) and chases early studs. **User's principle:** make aggression a CONVEX function of the raw budget ratio so it stays disciplined at a moderate lead and only unleashes at a dominant one. `StackRatioBid`: `mult = 1 + gain·max(0, ratio−1)^curve`, `ratio = my_budget / mean(opponent budgets)`, lifts BOTH target and cap; reduces to `balanced` at `ratio ≤ 1`. `curve=1` recovers the linear (field_avg-style) ramp; `curve>1` is convex. Swept `gain {0.5,1,2} × curve {1,2,3}` + `balanced` control (10 contestants, bid-only A/B). Crash-safe; 24 chunks clean (~104 min).
+
+reg_win_pct (seat-avg; **worst** = min over markets):
+
+| contestant | espn | model | worst | Δworst vs balanced |
+|---|---|---|---|---|
+| sr_g0.5_c2 | 0.679 | 0.670 | **0.670** | **+0.077** |
+| sr_g0.5_c1 (linear) | 0.666 | 0.675 | 0.666 | +0.073 |
+| sr_g2.0_c3 | 0.665 | 0.664 | 0.664 | +0.071 |
+| sr_g0.5_c3 | **0.686** | 0.661 | 0.661 | +0.068 |
+| sr_g1.0_c2 | 0.664 | 0.658 | 0.658 | +0.065 |
+| sr_g1.0_c3 | 0.676 | 0.657 | 0.657 | +0.064 |
+| sr_g1.0_c1 (linear) | 0.667 | 0.645 | 0.645 | +0.052 |
+| sr_g2.0_c2 | 0.667 | 0.641 | 0.641 | +0.048 |
+| sr_g2.0_c1 (linear) | 0.648 | 0.608 | 0.608 | +0.015 |
+| balanced (control) | 0.684 | 0.593 | 0.593 | — |
+
+**Sanity gate PASSES:** `balanced` reproduces Run Q **exactly** (espn 0.684 / model 0.593).
+
+**Findings (data — nothing adopted):**
+1. **Every stack-ratio variant beats `balanced` on the worst-case goal metric** (all ≥ 0.608 vs 0.593); **low gain (0.5) + convex is best** — `sr_g0.5_c2` = 0.670 worst-case (+0.077), the best hero found on this metric to date (beats `BigStackBid` `field_avg` from Run Q). High gain (2.0) is worst (over-aggressive), mirroring the Run-J/Q "low aggression wins."
+2. **Convexity fixes the linear ESPN penalty.** ESPN Δ vs balanced by curve: the **linear** `curve=1` variants all LOSE ESPN (−0.017 to −0.036, reproducing `field_avg`); the **convex** ones claw it back to ~even (gain 0.5: c1 −0.018 → c2 −0.005 → c3 **+0.002**). So convexity does exactly what the user predicted for the *win metric* — it removes the early-stud-chasing penalty.
+3. **BUT the roster-shape trace (`stackratio_shape.py`, seat 1, 10 seeds, spend share by draft quartile) REFUTES the intended "deploy surplus into late depth" mechanism.** The stack-ratio hero (every curve) is MORE front-loaded than `balanced` — ESPN Q1 share 0.64–0.67 vs balanced's 0.39, at higher top-5 concentration (0.58–0.60 vs 0.50), leftover $0 vs $10. Convexity only *marginally* softens the front-loading (Q1 0.67→0.64, top5 0.60→0.58). **Reason:** in ESPN the aggressive bots overpay early → the field's budget drains early → the ratio spikes by mid-Q1 → the multiplier fires *early* regardless of curve; convexity delays it a touch (enough to remove the ESPN penalty) but cannot push deployment to Q3/Q4, and second-price makes genuine late deployment moot. So convexity's `reg_win` gain comes from **damping early over-aggression**, NOT from depth-deployment. The surplus is deployed (leftover $0 vs $10) but into *earlier, more concentrated* buys — just slightly less so than linear.
+
+**Caveats:** the worst-case improvement is concentrated in the (circular) model market (field_avg + scorer share our valuations); in the less-circular ESPN market the convex variants are ~EVEN with `balanced` (within the ±0.03 band), not clearly better — so this "deploys the surplus without the ESPN penalty" rather than "clearly beats balanced where it matters most." One-seat roster-shape trace; single jitter (12); 2026 pool only; byes off. **Deferred alternatives (noted for later): per-slot budget ratio, and a pure power-law multiplier family.**
+
+**No strategy adopted or rejected.** `balanced` p0.0 remains the shipped default; `StackRatioBid` is a **validated opt-in** (unit-tested, engine-solvent, not in `_MODELS`). In isolation the data favors `sr_g0.5_c2` (low-gain convex) on the worst-case metric — the best hero found so far — but the ESPN wash + model circularity mean it is not a live-draft recommendation, and its mechanism is early-aggression-damping, not the depth-deployment the user was after. Artifacts: `reports/_stackratio/2026/*.json` (untracked). Live-draft call still September.
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.
