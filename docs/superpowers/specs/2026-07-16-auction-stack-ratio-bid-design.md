@@ -69,7 +69,7 @@ Convex curves (`curve>1`) keep the multiplier ≈ 1 at **moderate** leads (so th
 
 - Phase 3 races a **dedicated contestant dict** (NOT `_MODELS`): `balanced = BalancedValueBid(premium=0.0)` (control) + `StackRatioBid(gain=g, curve=c)` for `g ∈ {0.5, 1.0, 2.0}` × `c ∈ {1, 2, 3}` (9 variants + control = 10 contestants).
 - A/B under ADP nomination (`market_adp_jitter=12`), seat-averaged over 12 seats × both markets, 20 seeds × 300 sims — the Run-P/Q methodology, so the lift is attributable to the bid.
-- **Roster-shape readout:** beyond `reg_win_pct` (+ playoff/champ), report each variant's **spend by draft quartile** (early-stud vs late-depth) and top-N concentration, via the `PickRecord` trace — so the sweep answers the user's actual question (what ratio → multiplier relationship, and does convexity defer spend to depth) not just "which wins."
+- **Roster-shape readout (separate trace run):** `run_auction_tournament` (the win-rate sweep) does NOT expose the `PickRecord` trace, so roster shape comes from a **separate** `_simulate_to_state`-with-`trace` analysis, on a **bounded** contestant set — `balanced` (control) + `StackRatioBid(curve=1)` (the linear baseline) + the **best convex variant** the sweep surfaces — at a representative hero seat across the sweep seeds, both markets. It reports each of those three heroes' **spend share by draft quartile** (early-stud vs late-depth) and **top-5 spend concentration** (share of budget on the 5 most-expensive buys), mirroring `espn_overspend_trace.py`. This answers the user's actual question — what ratio → multiplier relationship, and does convexity defer spend to depth — not just "which wins."
 
 ### Interpretation (data-gathering — no adopt bar)
 
@@ -77,7 +77,7 @@ No pre-registered adopt/reject threshold (the strategy decision is September). T
 
 ## Requirements
 
-- **R1 — fallback identity.** At `ratio ≤ 1` (hero not ahead) OR `gain = 0`, `StackRatioBid(gain, curve, pace).max_bid(...)` returns exactly `BalancedValueBid(premium=0.0, pace=pace).max_bid(...)` (unit test on shared views).
+- **R1 — fallback identity.** At `ratio ≤ 1` (hero not ahead) OR `gain = 0`, `StackRatioBid(gain, curve, pace).max_bid(...)` returns exactly `BalancedValueBid(premium=0.0, pace=pace).max_bid(...)` — compared against `BalancedValueBid`'s default `non_increasing_cap=False` (which `StackRatioBid`'s plain `per_slot = my_budget/max(1, open_slots)` mirrors) — on shared views (unit test).
 - **R2 — convexity & monotonicity.** For `ratio > 1`, `mult` is strictly increasing in `ratio`; and for `curve > 1`, `mult` at a moderate ratio (e.g. 1.14) is strictly less than the `curve=1` linear multiplier, while at `ratio = 2` both equal `1 + gain` (unit test).
 - **R3 — ratio definition.** The ratio uses the **mean opponent** remaining budget `(Σ budgets_by_seat − my_budget)/(n_teams−1)`, not a per-slot figure. A unit test constructs a view with known `budgets_by_seat` (e.g. hero 200, opponents averaging 100 → ratio 2.0) and asserts the resulting `mult`/bid.
 - **R4 — solvency.** `StackRatioBid` returns a finite desired bid; the engine clamps to `feasible_max`, so the hero always fills a legal, full roster (engine-invariant + a `simulate_auction` smoke).
