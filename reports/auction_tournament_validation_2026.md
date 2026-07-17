@@ -643,6 +643,34 @@ reg_win_pct (seat-avg; **worst** = min over markets):
 
 **No strategy adopted or rejected.** `balanced` p0.0 remains the shipped default. But **`sr_g0.2_c2` (StackRatioBid gain=0.2, curve=2) is now the leading candidate** in the whole auction investigation: it is the only hero to beat `balanced` in BOTH markets, including the honest ESPN one — a genuine (if small) edge, unlike the model-only/circular gains of every prior overspend variant. Recommended next: a CRN-paired re-run at gain ∈ {0.1, 0.2, 0.3} × curve {2,3} to tighten the small ESPN deltas, and the deferred axes (per-slot ratio, power-law). Artifacts: `reports/_stackratio_gain/2026/*.json` (untracked). Live-draft call still September.
 
+**Run T — 2026-07-17 — CRN-PAIRED re-run of the low-gain grid → confirms `sr_g0.2_c2`'s ESPN edge is REAL, not noise: the paired 95% CI on reg-win% AND champ% EXCLUDES ZERO in the less-circular market** (`half_12team`, all 12 seats × both markets, 20 seeds × 300 sims; byes OFF; ADP nomination `market_adp_jitter=12`; branch `feat/auction-stack-ratio-bid`; scratch `stackratio_paired.py`). Motivated by Run S: the ESPN reg-win edge (+0.010) sat near the seat-averaged noise floor, so Run S leaned on the champ delta + cross-variant consistency rather than a resolved reg-win CI. **This run resolves it.** Key realization: `run_auction_tournament` is *already* common-random-numbers paired — every contestant plays the identical auction draw (`default_rng(base_seed+s)`) and identical season draw (`default_rng(season_base_seed+s)`) per seed, and already returns `paired_diffs = bootstrap(per[a] − per[b])`. Run S **discarded** those and compared two overlapping *marginal* CIs; this run **records the paired diff** (contestant − `balanced`), where the shared-world variance cancels — a far tighter test. Tight grid `gain {0.1, 0.2, 0.3} × curve {2, 3}` + `balanced` control (7 contestants). Crash-safe; 24 chunks clean (~50 min).
+
+**Reproducibility anchor PASSES exactly:** because seed(name, s) depends only on `base_seed+s` (not the contestant set), `balanced` (espn 0.684 / model 0.593) and `sr_g0.2_c2` (espn 0.693 / model 0.669) reproduce **Run S bit-for-bit** — the pipeline is verified consistent and the CRN pairing is genuinely shared.
+
+**ESPN market (the meaningful, less-circular one) — paired diff `contestant − balanced`, seat-stratified 95% CI. `*` = excludes 0.**
+
+| contestant | reg_win% | champ% | make_playoffs% | bye% |
+|---|---|---|---|---|
+| sr_g0.1_c2 | +0.0093 [+.0041,+.0145] `*` | +0.0178 [+.0085,+.0271] `*` | +0.0075 [+.0002,+.0149] `*` | +0.0268 `*` |
+| sr_g0.1_c3 | +0.0084 [+.0029,+.0140] `*` | +0.0151 [+.0057,+.0244] `*` | +0.0072 [−.0007,+.0151] | +0.0268 `*` |
+| **sr_g0.2_c2** | **+0.0096 [+.0037,+.0154] `*`** | **+0.0192 [+.0090,+.0293] `*`** | +0.0081 [−.0004,+.0166] | +0.0257 `*` |
+| sr_g0.2_c3 | +0.0087 [+.0038,+.0135] `*` | +0.0161 [+.0067,+.0254] `*` | +0.0085 [+.0015,+.0156] `*` | +0.0216 `*` |
+| sr_g0.3_c2 | +0.0070 [+.0018,+.0123] `*` | +0.0119 [+.0024,+.0213] `*` | +0.0059 [−.0016,+.0134] | +0.0179 `*` |
+| sr_g0.3_c3 | +0.0048 [−.0007,+.0104] | +0.0095 [+.0003,+.0187] `*` | +0.0031 [−.0047,+.0109] | +0.0145 `*` |
+
+**Model market (circular):** every variant × metric is strongly positive and excludes 0 — e.g. `sr_g0.2_c2` reg-win +0.0762 [+.0686,+.0838], champ +0.1138 [+.1038,+.1239]. Consistent with Runs Q–S; carries the circularity caveat, so not the load-bearing signal.
+
+**Findings (data — nothing adopted):**
+1. **The ESPN edge is real for `sr_g0.2_c2`.** Its paired reg-win% diff (+0.0096, CI [+0.0037, +0.0154]) and champ% diff (+0.0192, CI [+0.0090, +0.0293]) **both exclude zero** — what Run S's marginal comparison could not establish. The CRN pairing shrinks the reg-win CI to ±0.006 (vs the ≈±0.03/20-seed marginal band), which is what resolves a +0.010 effect. bye% is also clearly positive (+0.0257 `*`). make_playoffs% is directionally positive (+0.0081) but its CI just touches zero (lo −0.0004) — **not resolved**.
+2. **It is a family effect, not a lucky cell.** Across the six low-gain convex variants: reg-win clears 0 in **5/6** (only the highest gain×curve, `sr_g0.3_c3`, straddles), champ in **6/6**, bye in **6/6**. A gentle monotone confirms Run S's tuning: the edge fades as gain rises (0.1–0.2 > 0.3) and `curve=2` ≥ `curve=3` on reg-win/champ. `sr_g0.2_c2` is the strongest reg-win + champ cell — the same winner Run S named.
+3. **`sr_g0.2_c2` reproduces as the leading candidate under a stricter test.** It is the only hero in the investigation to beat `balanced` in the honest ESPN market, and that win now survives a paired-CI significance check on two of the three goal metrics (reg-win, champ), not just a point-estimate.
+
+**Method note:** each (seat, market) chunk yields a 20-seed paired bootstrap CI per contestant; the 12 seats are combined as **fixed strata** (weight 1/12 — the goal metric's definition), per-seat SE recovered as CI-width/(2·1.96) and pooled as `SE = √(Σ SEₛ²)/12`. This is exact for independent seats under a normal approximation; the approximation is well-justified here — per-seat CIs are near-symmetric (median asymmetry 6%, max 27%). A full stratified *resampling* bootstrap would need the raw per-seed vectors, which the tournament does not currently expose (it returns only bootstrapped Intervals); exposing them is a possible small follow-up if a tighter method is ever wanted.
+
+**Caveats:** the edge is **real but small** (~+0.010 reg-win, ~+0.019 champ) — statistically resolved, not large. make_playoffs% remains unresolved (CI touches 0). Everything is still single jitter (12), 2026 pool only, 12-team half-PPR, byes OFF, ESPN signal diluted (241/578 priced). The model-market surge keeps its circularity caveat; only the ESPN result is load-bearing, and that is the one now confirmed. Unspent-budget still not directly measured.
+
+**No strategy adopted or rejected.** `balanced` p0.0 remains the shipped default. `StackRatioBid` stays a **validated opt-in** (unit-tested, engine-solvent, not in `_MODELS`). In isolation the data now favors **`sr_g0.2_c2`** more firmly than after Run S: its ESPN advantage on reg-win% and champ% is significant under CRN pairing, making it the strongest genuinely-non-circular hero found — but it is one pool, one jitter, one season, and the September call still stands. Remaining probes (unchanged): jitter sweep + multi-year re-run to test robustness of the small edge; the deferred per-slot-ratio and power-law axes; direct unspent-budget measurement. Artifacts: `reports/_stackratio_paired/2026/*.json` (untracked). Live-draft call still September.
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.
