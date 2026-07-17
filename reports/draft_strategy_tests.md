@@ -620,6 +620,40 @@ Feeds Test 18 (positional-target strategies): cap the dead tails (QB≤2, TE≤2
 
 ---
 
+### Test 19 — `now_or_never_floored` vs `season_value` (H2H mirror-paired, 2024 + 2025) — the floored-vs-sv A/B (issue #113)
+
+**What it is.** The tracked follow-up from the floored slice (Test 10 / issue #113, migrated from TODO #42). Tests 7/8 established, in the mirror-paired H2H harness, that `season_value` beats plain `now_or_never` on the regular-season axis by a robust margin (ACTUAL: sv−nn win% **+6.38** in 2025 / **+5.70** in 2024; playoff% **+15.6** / **+16.0**), with championship% a wash (nn ≈ sv). This A/B asks: **does the scarcity floor close that gap?** Same harness as Tests 7–10, only seat-role B swapped `now_or_never` → `season_value`; `now_or_never_floored` at the shipped default **F=40 / λ=1**. Unlike Test 10 (analytic vs analytic), `season_value` is Monte-Carlo (n_sims=200), so this is a heavy `season_value`-class run, not a light one. **ACTUAL axis = the honest yardstick.**
+
+**Setup.** Identical to Test 10: 16-team half-PPR mirror-paired field (4 `now_or_never_floored` at seats {2,6,10,14} + 4 `season_value` at {4,8,12,16} + 8 constrained-ADP bots), ESPN preseason half-PPR + Sleeper ADP draft basis, ESPN weekly projections set lineups, `weekly_stats` half-PPR actuals score, 14-week schedule → top-6 playoff → champion, 200 seeds × 200 sims, jitter 8. `configs/league_espn_half_16team.json`. **Clean run: 20/20 chunks, zero crashes/retries.** Adds a **CRN-paired per-seed diff** (mean of the 4 floored seats − mean of the 4 sv seats per seed, percentile bootstrap) — the paired-diff Test 10 lacked; both strategies share the same board/bots within each seed, so the diff is a true paired counterfactual.
+
+**Results (ACTUAL axis; marginal means + CRN-paired diff; ✱ = 95% CI excludes 0):**
+
+| Season | metric | floored | season_value | bot | paired Δ (floored − sv) [95% CI] |
+|--------|--------|--------:|-------------:|----:|----------------------------------|
+| **2025** | win%    | 49.1 | **55.0** | 47.9 | **−5.88** [−7.30, −4.59] ✱ (sv) |
+| **2025** | playoff%| 37.1 | **50.2** | 31.3 | **−13.12** [−17.38, −8.38] ✱ (sv) |
+| **2025** | champ%  | **12.4** | 5.4 | 3.6 | **+7.00** [+4.38, +9.88] ✱ (floored) |
+| **2025** | PF      | 1024.7 | **1071.4** | 1011.8 | −46.62 [−55.2, −38.2] ✱ (sv) |
+| **2024** | win%    | **66.7** | 57.4 | 38.0 | **+9.28** [+8.04, +10.52] ✱ (floored) |
+| **2024** | playoff%| **78.6** | 52.0 | 9.7 | **+26.62** [+22.88, +30.88] ✱ (floored) |
+| **2024** | champ%  | **16.6** | 6.6 | 0.9 | **+10.00** [+6.62, +13.00] ✱ (floored) |
+| **2024** | PF      | **1238.5** | 1142.8 | 958.7 | +95.67 [+88.3, +102.8] ✱ (floored) |
+
+(All 16-seat marginals conserve correctly: playoff% → 37.5%, champ% → 6.25%, win% → 50% per season. PROJECTED axis agrees directionally — 2024 floored−sv win +16.3/playoff +42.8/champ +14.4; 2025 win −4.8/playoff −7.6/champ +11.4.)
+
+**Result — the answer is season-dependent; the one cross-season-robust signal is championship%.**
+- **Championship%: floored > season_value in BOTH seasons, CI-separated (+7.0 in 2025, +10.0 in 2024).** The floor hands the scarcity family a real title-rate edge over `season_value` that plain `now_or_never` never had (Tests 7/8: nn ≈ sv on champ%). This is the durable takeaway, and it is a *larger* champ edge in direct H2H than Test 15's solo-hero eval (floored 29.3 vs sv 27.3): in a shared bracket, floored's higher-ceiling rosters beat sv's high-floor rosters head-to-head.
+- **Win% / playoff-make (the gap the issue asks about) — does NOT close cleanly:**
+  - **2025 (sv's strong year): the floor does not close it.** sv still leads win% by −5.88 (vs the original sv−nn +6.38) and playoff by −13.1 (vs +15.6) — barely narrowed. `season_value` remains the regular-season leader.
+  - **2024 (the scarcity-friendly year): the floor reverses it.** floored beats sv +9.28 win% / +26.62 playoff% — from "sv +5.70 over nn" to "floored +9.28 over sv." Read the *magnitude* with care: 2024 is the year `now_or_never` already beat the field (Test 8), and shared-pool non-transitivity (who you draft against / play) inflates the swing.
+- **Reconciles with the solo real-outcome eval (Test 15).** There, over 5 availability-correct seasons, floored beat sv on pooled win% (−1.89 ✱) and edged champ%. This direct 2-season mirror-paired H2H **agrees on champ% (floored ahead, wider in direct competition)** but shows **win%/playoff is season-split when the two share a pool** — exactly the pool-contention/schedule confound Test 11 flagged as the reason the solo eval exists. The two designs answer different questions; both put floored ahead on titles.
+
+**Bottom line (isolated, no verdict).** The floor does **not** produce a clean "`now_or_never` has caught up to `season_value` on the regular season." In 2025 `season_value` keeps its win%/playoff edge; in 2024 floored overtakes it outright. The durable cross-season effect is that **`now_or_never_floored` wins more championships than `season_value` (both seasons, CI-separated)** — the floored/scarcity family owns the ceiling, `season_value` owns the 2025 regular-season floor. Consistent with (and sharper than) Tests 9 & 15's win%/champ% split. **No adopt/reject** (standing decide-at-end rule; draft months out). Default unchanged (this A/B tunes nothing): `_DEFAULT_FLOOR=40.0`, `_DEFAULT_FLOOR_WEIGHT=1.0`.
+
+Caveats: two seasons / one format / ESPN-half draft basis; `season_value` MC (n_sims=200); marginal **and** paired CIs reported (paired improves on Test 10); shared-pool non-transitivity means absolute magnitudes (esp. 2024) are field-sensitive — the solo Test 15 is the less-confounded cross-check; bots = noisy-ADP human proxy (TODO #46). Reproduce: `scripts/h2h_backtest_chunked.py --season {2024,2025} --league-config configs/league_espn_half_16team.json --n-seeds 200 --strategy-n-sims 200 --jitter 8 --strategy-a now_or_never_floored --strategy-b season_value --floor 40 --floor-weight 1 --checkpoint-dir _h2h_ckpt_113_{2024,2025}` then `scripts/_ab_113_analyze.py --checkpoint-dir _h2h_ckpt_113_{Y} --season {Y}` for the paired diffs (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
+
+---
+
 ## Future tests (backlog)
 
 ### F1 — Head-to-head season simulation (the realistic objective) — ✅ DONE → see **Test 7 (F1)** above. sv wins more games + playoff berths (both scorings); championship a wash (nn ≈ sv).
