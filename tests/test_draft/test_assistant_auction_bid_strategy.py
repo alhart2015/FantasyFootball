@@ -726,9 +726,13 @@ def test_stackratio_falls_back_to_balanced_when_not_ahead() -> None:
         budgets_by_seat=(50, 100),
         baseline_dollars=baseline,
     )
-    for curve in (1.0, 2.0, 3.0):
-        sr = StackRatioBid(gain=1.0, curve=curve).max_bid(behind, pool.iloc[0], pool, _config())
-        assert sr == BalancedValueBid(premium=0.0).max_bid(behind, pool.iloc[0], pool, _config())
+    for curve in (1.0, 2.0, 3.0):  # explicit pace on both sides: identity independent of defaults
+        sr = StackRatioBid(gain=1.0, curve=curve, pace=2.5).max_bid(
+            behind, pool.iloc[0], pool, _config()
+        )
+        assert sr == BalancedValueBid(premium=0.0, pace=2.5).max_bid(
+            behind, pool.iloc[0], pool, _config()
+        )
     ahead = AuctionView(
         my_budget=100,
         my_open_slots=3,
@@ -740,12 +744,38 @@ def test_stackratio_falls_back_to_balanced_when_not_ahead() -> None:
     )
     sr0 = StackRatioBid(gain=0.0, curve=2.0).max_bid(ahead, pool.iloc[0], pool, _config())
     assert sr0 == BalancedValueBid(premium=0.0).max_bid(ahead, pool.iloc[0], pool, _config())
-    srp = StackRatioBid(gain=1.0, curve=2.0, pace=1.5).max_bid(
-        behind, pool.iloc[0], pool, _config()
+
+
+def test_stackratio_scales_bid_by_multiplier_when_ahead() -> None:
+    # Pins max_bid's VALUE in the ahead (mult>1) regime — the strategy's whole point, and the
+    # mult-factoring: bid = round(mult * min(fair, pace*per_slot)). The fallback test only covers
+    # mult==1 (where factoring is trivially equal).
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [60, 40, 0, 0])
+    cfg = _config()
+    # target binds: my 100 vs opp 50 -> ratio 2, mult 2; per_slot 33.3, cap 66.7 > fair 60.
+    tgt = AuctionView(
+        my_budget=100,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(100, 50),
+        baseline_dollars=baseline,
     )
-    assert srp == BalancedValueBid(premium=0.0, pace=1.5).max_bid(
-        behind, pool.iloc[0], pool, _config()
+    assert BalancedValueBid(premium=0.0).max_bid(tgt, pool.iloc[0], pool, cfg) == 60
+    assert StackRatioBid(gain=1.0, curve=1.0).max_bid(tgt, pool.iloc[0], pool, cfg) == 120  # 2 * 60
+    # cap binds: my 30 vs opp 15 -> ratio 2, mult 2; per_slot 10, cap 20 < fair 60 -> 2 * 20 = 40.
+    capv = AuctionView(
+        my_budget=30,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(30, 15),
+        baseline_dollars=baseline,
     )
+    assert StackRatioBid(gain=1.0, curve=1.0).max_bid(capv, pool.iloc[0], pool, cfg) == 40
 
 
 def test_stackratio_multiplier_is_convex_and_monotonic() -> None:
@@ -782,6 +812,23 @@ def test_stackratio_multiplier_is_convex_and_monotonic() -> None:
     )  # at ratio 2, (1)^curve = 1 -> 1+gain
     same = StackRatioBid(gain=1.0, curve=2.0)
     assert same._multiplier(dominant, cfg) > same._multiplier(moderate, cfg)  # monotonic in ratio
+    # AMPLIFICATION regime (ratio > 2): convex gives a LARGER mult than linear (opposite of the
+    # damping below ratio 2). my 150 vs opp 50 -> ratio 3; gain 1: c1 -> 1+2=3, c2 -> 1+2^2=5,
+    # c3 -> 1+2^3=9. Guards a regression that clamps the base to 1 (flattening mult above ratio 2).
+    amp = AuctionView(
+        my_budget=150,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(150, 50),
+        baseline_dollars=baseline,
+    )  # opp_mean 50 -> ratio 3.0
+    a1 = StackRatioBid(gain=1.0, curve=1.0)._multiplier(amp, cfg)
+    a2 = StackRatioBid(gain=1.0, curve=2.0)._multiplier(amp, cfg)
+    a3 = StackRatioBid(gain=1.0, curve=3.0)._multiplier(amp, cfg)
+    # convex AMPLIFIES a dominant lead (higher curve -> more aggressive: mult 3 < 5 < 9)
+    assert abs(a1 - 3.0) < 1e-9 and abs(a2 - 5.0) < 1e-9 and abs(a3 - 9.0) < 1e-9
 
 
 def test_stackratio_uses_mean_opponent_budget() -> None:
@@ -823,3 +870,6 @@ def test_stackratio_rejects_bad_params() -> None:
             StackRatioBid(curve=bad)
     with pytest.raises(ValueError, match="pace"):
         StackRatioBid(pace=0.0)
+    for bad in (float("nan"), float("inf"), -1.0):
+        with pytest.raises(ValueError, match="pace"):
+            StackRatioBid(pace=bad)

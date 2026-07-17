@@ -365,12 +365,17 @@ class StackRatioBid:
 
     `mult = 1 + gain * max(0, ratio - 1) ** curve`, where `ratio = my_budget / mean(opponent
     budgets)`, lifts BOTH the value target and the low pace cap. `curve > 1` keeps the hero
-    disciplined at a MODERATE lead (mult ~ 1) and only unleashes at a DOMINANT ratio — which arises
-    late, when only depth remains — so surplus deploys into depth via the draft's timing, not a
-    value-tier gate. At `ratio <= 1` (or `gain = 0`) it is exactly `BalancedValueBid(premium=0.0,
-    pace)`. `curve = 1` recovers a linear (BigStackBid field_avg-style) ramp.
+    disciplined at a MODERATE lead (mult ~ 1) and only ramps up at a DOMINANT ratio; `curve = 1`
+    recovers a linear (BigStackBid field_avg-style) ramp. At `ratio <= 1` (or `gain = 0`) it is
+    exactly `BalancedValueBid(premium=0.0, pace)`.
 
-    See docs/superpowers/specs/2026-07-16-auction-stack-ratio-bid-design.md.
+    Design intent was to defer the surplus to late-round depth, but the Run-R roster-shape trace
+    showed the ratio spikes EARLY (the field's aggressive bots drain their budgets early), so the
+    hero front-loads regardless of curve; convexity's measured effect is to DAMP that early
+    over-aggression (which removes the linear ramp's ESPN penalty), not to shift spend to depth.
+
+    See docs/superpowers/specs/2026-07-16-auction-stack-ratio-bid-design.md and Run R in
+    reports/auction_tournament_validation_2026.md.
     """
 
     gain: float = 1.0
@@ -396,7 +401,6 @@ class StackRatioBid:
     ) -> int:
         fair = float(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
         per_slot = view.my_budget / max(1, view.my_open_slots)
-        mult = self._multiplier(view, config)
-        target = fair * mult
-        cap = self.pace * per_slot * mult
-        return round(min(target, cap))
+        # mult scales target (fair) and cap (pace*per_slot) uniformly (unlike BigStackBid's
+        # asymmetric factors) and mult > 0, so it factors out of the min.
+        return round(self._multiplier(view, config) * min(fair, self.pace * per_slot))
