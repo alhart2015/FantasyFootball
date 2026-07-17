@@ -529,7 +529,7 @@ def main() -> int:
                 n += 1
             tot = spent_all or 1.0
             print(f"{hname:<14}" + "".join(f"{q[k] / tot:>7.2f}" for k in (1, 2, 3, 4))
-                  + f"{top5 / tot:>8.2f}{(200 * n - spent_all) / n:>8.0f}")
+                  + f"{top5 / tot:>8.2f}{(config.budget * n - spent_all) / n:>8.0f}")
     return 0
 
 
