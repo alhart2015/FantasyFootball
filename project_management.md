@@ -1,6 +1,6 @@
 # Project Management
 
-Running log of project status, decisions, and next steps. Append new entries at the top; keep the bottom as the long-tail backlog. Specs live in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`, single-task TODOs in `TODO.md`.
+Running log of project status, decisions, and next steps. Append new entries at the top; keep the bottom as the long-tail backlog. Specs live in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`, concrete open items in [GitHub issues](https://github.com/alhart2015/FantasyFootball/issues) (labeled by sub-project).
 
 ---
 

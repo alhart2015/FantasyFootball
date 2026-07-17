@@ -23,9 +23,9 @@ Tests, mypy strict, and ruff are gates, not suggestions. A failing test means th
 
 ## Stay in sync
 
-**At the start of any work session, read `project_management.md` and `TODO.md` first.** They are the running source of truth for current status, the recommended next action, the decision log, and open items.
+**At the start of any work session, read `project_management.md` first, and skim the open [GitHub issues](https://github.com/alhart2015/FantasyFootball/issues).** `project_management.md` is the running source of truth for current status, the recommended next action, and the decision log; **GitHub issues are the concrete open items** (labeled by sub-project — `draft-hub`, `auction`, `dfs`, `mid-season`, `projections-core`, `infra`).
 
-**At the end of any meaningful work — a completed plan, a foundational decision, an architecture call — update them.** No need to log every commit, but anything that future-you (or another agent) would benefit from knowing belongs in `project_management.md` (status, decisions, backlog) or `TODO.md` (concrete open items). Heuristic: would I want this in front of me when I open a fresh session next week? If yes, write it down.
+**At the end of any meaningful work — a completed plan, a foundational decision, an architecture call — update them.** No need to log every commit, but anything that future-you (or another agent) would benefit from knowing belongs in `project_management.md` (status, decisions, backlog) or a [GitHub issue](https://github.com/alhart2015/FantasyFootball/issues) (concrete open items — open one, or comment on the relevant existing issue). Heuristic: would I want this in front of me when I open a fresh session next week? If yes, write it down.
 
 ## Workflow rule
 
@@ -52,7 +52,7 @@ Before writing new logic, check whether the codebase already solves the problem.
 
 - Setup, daily commands, workflow, pattern recipes: `CONTRIBUTING.md`
 - Current status, decision log, backlog: `project_management.md`
-- Concrete open items: `TODO.md`
+- Concrete open items: [GitHub issues](https://github.com/alhart2015/FantasyFootball/issues) (filter by sub-project label)
 - Designs: `docs/superpowers/specs/`
 - Implementation plans: `docs/superpowers/plans/`
 

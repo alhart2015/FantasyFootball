@@ -109,7 +109,7 @@ This project uses the superpowers spec → plan → execute discipline.
 Before opening a PR:
 
 - [ ] **Run `pytest -v` and confirm all tests pass.** This is the only manual gate; we deliberately don't run GitHub Actions CI. mypy and ruff are caught by pre-commit.
-- [ ] If the work is foundational (a completed plan, an architectural decision, a convention change), update `project_management.md` (decision log + next-action) and/or `TODO.md`.
+- [ ] If the work is foundational (a completed plan, an architectural decision, a convention change), update `project_management.md` (decision log + next-action) and/or the relevant [GitHub issue](https://github.com/alhart2015/FantasyFootball/issues) (close it, or open/comment as needed).
 - [ ] If a new convention emerged, capture it in `CONTRIBUTING.md` (this file) so it's repo-resident, not memory-only.
 - [ ] Confirm the spec and plan are committed on the feature branch.
 
@@ -239,7 +239,7 @@ Run them after any `nfl_data_py` version change in `pyproject.toml`:
 pytest -m network --run-network -q
 ```
 
-Each smoke fetches a tiny live slice (one season — currently 2023) for one ingest source, asserts every raw column the corresponding `_normalize_one_season` reads is present, and runs the normalize end-to-end so pandera surfaces dtype / value drift too. When a smoke fails, the assertion message names the missing column(s); patch the corresponding ingest module's `_RENAME` / `_KEEP` / schema and re-run. If the drift was non-trivial, log a TODO note alongside the existing TODO #16 entries.
+Each smoke fetches a tiny live slice (one season — currently 2023) for one ingest source, asserts every raw column the corresponding `_normalize_one_season` reads is present, and runs the normalize end-to-end so pandera surfaces dtype / value drift too. When a smoke fails, the assertion message names the missing column(s); patch the corresponding ingest module's `_RENAME` / `_KEEP` / schema and re-run. If the drift was non-trivial, add it to the ingest-drift checklist ([issue #130](https://github.com/alhart2015/FantasyFootball/issues/130)).
 
 When you add a new ingest source, add a matching smoke test alongside the synthetic-fixture test — the pattern is one `test_<source>_api_columns_and_schema` function per source.
 
@@ -262,7 +262,7 @@ git diff tests/backtest/model_metrics.json    # review the metric deltas
 git add tests/backtest/model_metrics.json
 ```
 
-Auto-invalidation is TODO #21 (see TODO.md).
+Auto-invalidation is tracked in [issue #129](https://github.com/alhart2015/FantasyFootball/issues/129) (small ingest / feature-cache / CLI backlog).
 
 ### Running the backtest gate before opening a PR
 
