@@ -357,3 +357,46 @@ class BigStackBid:
         target = fair * (1.0 + self.premium + overpay)
         cap = self.pace * per_slot * (1.0 + overpay)
         return round(min(target, cap))
+
+
+@dataclass(frozen=True)
+class StackRatioBid:
+    """Balanced-breadth hero whose aggression scales CONVEXLY with its budget ratio to the field.
+
+    `mult = 1 + gain * max(0, ratio - 1) ** curve`, where `ratio = my_budget / mean(opponent
+    budgets)`, lifts BOTH the value target and the low pace cap. `curve > 1` keeps the hero
+    disciplined at a MODERATE lead (mult ~ 1) and only unleashes at a DOMINANT ratio — which arises
+    late, when only depth remains — so surplus deploys into depth via the draft's timing, not a
+    value-tier gate. At `ratio <= 1` (or `gain = 0`) it is exactly `BalancedValueBid(premium=0.0,
+    pace)`. `curve = 1` recovers a linear (BigStackBid field_avg-style) ramp.
+
+    See docs/superpowers/specs/2026-07-16-auction-stack-ratio-bid-design.md.
+    """
+
+    gain: float = 1.0
+    curve: float = 2.0
+    pace: float = 2.0
+
+    def __post_init__(self) -> None:
+        if not (self.gain >= 0.0 and math.isfinite(self.gain)):
+            raise ValueError(f"gain must be finite and >= 0; got {self.gain}")
+        if not (self.curve > 0.0 and math.isfinite(self.curve)):
+            raise ValueError(f"curve must be finite and > 0; got {self.curve}")
+        if not (self.pace > 0.0 and math.isfinite(self.pace)):
+            raise ValueError(f"pace must be finite and > 0; got {self.pace}")
+
+    def _multiplier(self, view: AuctionView, config: LeagueConfig) -> float:
+        """Convex aggression multiplier (>= 1.0; exactly 1.0 when the hero is not ahead)."""
+        opp_mean = (sum(view.budgets_by_seat) - view.my_budget) / max(1, config.n_teams - 1)
+        ratio = view.my_budget / max(opp_mean, config.min_bid)
+        return float(1.0 + self.gain * max(0.0, ratio - 1.0) ** self.curve)
+
+    def max_bid(
+        self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
+    ) -> int:
+        fair = float(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
+        per_slot = view.my_budget / max(1, view.my_open_slots)
+        mult = self._multiplier(view, config)
+        target = fair * mult
+        cap = self.pace * per_slot * mult
+        return round(min(target, cap))

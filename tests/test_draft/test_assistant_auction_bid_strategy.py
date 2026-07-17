@@ -13,6 +13,7 @@ from projections.draft.assistant.auction.bid_strategy import (
     MarginalValueBid,
     OverbidValueBid,
     PatientValueBid,
+    StackRatioBid,
     StaticDollarBid,
     StudsAndDepthBid,
     VorpShareBid,
@@ -709,3 +710,116 @@ def test_bigstack_rejects_bad_params() -> None:
     for bad in (float("nan"), float("inf")):  # inf pins the isfinite half; nan the >= 0 half
         with pytest.raises(ValueError, match="overpay_gain"):
             BigStackBid(overpay_gain=bad)
+
+
+def test_stackratio_falls_back_to_balanced_when_not_ahead() -> None:
+    # ratio <= 1 (hero the short stack: 50 vs opp mean 100) -> mult 1 -> identical to balanced, for
+    # every curve; and gain=0 -> mult 1 even when AHEAD; and a non-default pace.
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [60, 40, 0, 0])
+    behind = AuctionView(
+        my_budget=50,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(50, 100),
+        baseline_dollars=baseline,
+    )
+    for curve in (1.0, 2.0, 3.0):
+        sr = StackRatioBid(gain=1.0, curve=curve).max_bid(behind, pool.iloc[0], pool, _config())
+        assert sr == BalancedValueBid(premium=0.0).max_bid(behind, pool.iloc[0], pool, _config())
+    ahead = AuctionView(
+        my_budget=100,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(100, 20),
+        baseline_dollars=baseline,
+    )
+    sr0 = StackRatioBid(gain=0.0, curve=2.0).max_bid(ahead, pool.iloc[0], pool, _config())
+    assert sr0 == BalancedValueBid(premium=0.0).max_bid(ahead, pool.iloc[0], pool, _config())
+    srp = StackRatioBid(gain=1.0, curve=2.0, pace=1.5).max_bid(
+        behind, pool.iloc[0], pool, _config()
+    )
+    assert srp == BalancedValueBid(premium=0.0, pace=1.5).max_bid(
+        behind, pool.iloc[0], pool, _config()
+    )
+
+
+def test_stackratio_multiplier_is_convex_and_monotonic() -> None:
+    # curve>1 damps a MODERATE lead (ratio 1.14) but not a DOMINANT one (ratio 2.0), and the mult is
+    # monotonic increasing in ratio. Tests _multiplier directly (max_bid clamps can mask it).
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [60, 40, 0, 0])
+    cfg = _config()  # n_teams=2
+    moderate = AuctionView(
+        my_budget=80,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(80, 70),
+        baseline_dollars=baseline,
+    )  # opp_mean 70 -> ratio 80/70 = 1.143
+    dominant = AuctionView(
+        my_budget=100,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(100, 50),
+        baseline_dollars=baseline,
+    )  # opp_mean 50 -> ratio 2.0
+    m_lin = StackRatioBid(gain=1.0, curve=1.0)._multiplier(moderate, cfg)
+    m_cvx = StackRatioBid(gain=1.0, curve=2.0)._multiplier(moderate, cfg)
+    assert m_cvx < m_lin  # convex: 1 + (0.143)^2 < 1 + 0.143
+    d_lin = StackRatioBid(gain=1.0, curve=1.0)._multiplier(dominant, cfg)
+    d_cvx = StackRatioBid(gain=1.0, curve=3.0)._multiplier(dominant, cfg)
+    assert (
+        abs(d_lin - 2.0) < 1e-9 and abs(d_cvx - 2.0) < 1e-9
+    )  # at ratio 2, (1)^curve = 1 -> 1+gain
+    same = StackRatioBid(gain=1.0, curve=2.0)
+    assert same._multiplier(dominant, cfg) > same._multiplier(moderate, cfg)  # monotonic in ratio
+
+
+def test_stackratio_uses_mean_opponent_budget() -> None:
+    # ratio keys on the MEAN opponent budget, not max or min or per-slot. 4 teams: hero 200,
+    # opponents 40/100/160 -> mean 100 -> ratio 2.0 (max would give 1.25, min would give 5.0).
+    cfg = LeagueConfig(
+        name="t",
+        n_teams=4,
+        budget=200,
+        min_bid=1,
+        roster_slots={RosterSlot.RB: 1, RosterSlot.WR: 1, RosterSlot.BENCH: 1},
+        ruleset=Ruleset.espn_ppr(),
+    )
+    pool = _pool()
+    baseline = _baseline([True, True, False, False], [60, 40, 0, 0])
+    view = AuctionView(
+        my_budget=200,
+        my_open_slots=3,
+        my_positions=Counter(),
+        my_roster=pool.iloc[:0],
+        drafted=frozenset(),
+        budgets_by_seat=(200, 40, 100, 160),
+        baseline_dollars=baseline,
+    )
+    mult = StackRatioBid(gain=1.0, curve=2.0)._multiplier(view, cfg)
+    assert abs(mult - 2.0) < 1e-9  # opp_mean (40+100+160)/3 = 100 -> ratio 2.0 -> 1 + 1*(1)^2 = 2.0
+
+
+def test_stackratio_rejects_bad_params() -> None:
+    with pytest.raises(ValueError, match="gain"):
+        StackRatioBid(gain=-1.0)
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="gain"):
+            StackRatioBid(gain=bad)
+    with pytest.raises(ValueError, match="curve"):
+        StackRatioBid(curve=0.0)  # curve must be > 0 (curve=0 -> 0**0=1 -> step, not a ramp)
+    for bad in (float("nan"), float("inf"), -1.0):
+        with pytest.raises(ValueError, match="curve"):
+            StackRatioBid(curve=bad)
+    with pytest.raises(ValueError, match="pace"):
+        StackRatioBid(pace=0.0)
