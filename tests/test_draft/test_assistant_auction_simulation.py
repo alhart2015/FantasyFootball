@@ -9,6 +9,7 @@ from projections.draft.assistant.auction.bid_strategy import (
     AnchorBudgetBid,
     AuctionView,
     BigStackBid,
+    StackRatioBid,
     StaticDollarBid,
     StudsAndDepthBid,
 )
@@ -1317,6 +1318,27 @@ def test_bigstack_produces_a_legal_full_roster() -> None:
     for reference in ("field_avg", "max_opp"):
         league = simulate_auction(
             BigStackBid(reference=reference, overpay_gain=2.0),
+            1,
+            pool,
+            cfg,
+            baseline_dollars=_baseline(pool, cfg),
+            price_jitter=0.1,
+            rng=np.random.default_rng(0),
+        )
+        assert all(len(r) == cfg.roster_size for r in league.values())
+        ids = [g for r in league.values() for g in r]
+        assert len(ids) == len(set(ids))
+
+
+def test_stackratio_produces_a_legal_full_roster() -> None:
+    # The engine clamps StackRatioBid's (possibly huge) desired bids to feasible_max, so the hero
+    # always fills a legal, full, dup-free roster. Spec R4. Both a linear (curve=1) and a convex
+    # (curve=3) config run through a real auction.
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    for gain, curve in ((2.0, 1.0), (1.0, 3.0)):
+        league = simulate_auction(
+            StackRatioBid(gain=gain, curve=curve),
             1,
             pool,
             cfg,
