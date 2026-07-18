@@ -8,7 +8,7 @@ raw_vorp).
     python scripts/waiver_pool_assessment.py \
         --vorp-table data/vorp_2026/half_16team.parquet \
         --league-config data/vorp_2026/half_16team.league.json \
-        --hero-strategy now_or_never_floored --seeds 200 --out reports/waiver_pool_2026.md
+        --hero-strategy now_or_never_floored --seeds 200
 """
 
 from __future__ import annotations
@@ -32,14 +32,17 @@ from projections.draft.backtest.waiver_pool import undrafted_pool_by_position
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import VorpTableSchema
 
-_METRIC_COLS = (
-    "top1_vorp",
-    "top2_vorp",
-    "top3_vorp",
-    "best_avail_proj_pts",
-    "n_above_replacement",
-    "drain_rate",
+# (metric key, display header): single source of truth for the six metrics. Tuple order is
+# the report's column order; run_assessment aggregates the same set (order-agnostic there).
+_TABLE_COLS = (
+    ("top1_vorp", "TOP1_VORP"),
+    ("top2_vorp", "TOP2_VORP"),
+    ("top3_vorp", "TOP3_VORP"),
+    ("best_avail_proj_pts", "BEST_PROJ"),
+    ("n_above_replacement", "#>REPL"),
+    ("drain_rate", "DRAIN%"),
 )
+_METRIC_COLS = tuple(m for m, _ in _TABLE_COLS)
 _ANALYTIC = ("now_or_never", "now_or_never_floored", "raw_vorp")
 
 
@@ -58,6 +61,19 @@ def _build_hero(key: str, n_teams: int) -> DraftStrategy:
     )
 
 
+def _bootstrap_or_nan(vals: np.ndarray, *, seed: int) -> tuple[float, float, float]:
+    """Bootstrap mean + 95% CI over the non-NaN values; all-NaN -> (nan, nan, nan).
+
+    Dropping per-seed NaN keeps one fully-drained-position seed from collapsing the whole
+    cell to NaN; the all-NaN guard avoids bootstrap_mean crashing on an empty array.
+    """
+    vals = vals[~np.isnan(vals)]
+    if not len(vals):
+        return float("nan"), float("nan"), float("nan")
+    iv = bootstrap_mean(vals, seed=seed)
+    return iv.point, iv.lo_95, iv.hi_95
+
+
 def run_assessment(
     pool: pd.DataFrame,
     config: LeagueConfig,
@@ -70,9 +86,19 @@ def run_assessment(
 ) -> pd.DataFrame:
     """Run `seeds` hero+bots drafts and aggregate per-(position, metric) to mean+95% CI.
 
-    Returns a long-format frame: columns position, metric, mean, lo95, hi95 (one row
-    per position x metric).
+    Returns a long-format frame: columns position, metric, mean, lo95, hi95 (one row per
+    position x metric). Per-seed NaN is dropped before bootstrapping, so each metric is
+    averaged over the seeds where it is defined; for a position that fully drains on some
+    seeds (thin pools only -- never at 16-team), top*_vorp is then conditional on
+    availability, so read it alongside drain% / # above-repl.
     """
+    if seeds < 1:
+        raise ValueError(f"seeds must be >= 1, got {seeds}")
+    if "consensus_adp" not in pool.columns or pool["consensus_adp"].isna().all():
+        raise ValueError(
+            "pool has no populated consensus_adp -- the ADP bots in the draft sim need it. "
+            "Pass a consensus-path VORP table (not a weekly-path one)."
+        )
     layout = hero_seat_layout(hero_seat=hero_seat, hero_label="hero", n_teams=config.n_teams)
     seat_strategies: dict[int, DraftStrategy | None] = {
         s: (hero if lbl == "hero" else None) for s, lbl in layout.items()
@@ -87,30 +113,37 @@ def run_assessment(
     out_rows: list[dict[str, object]] = []
     for position, grp in stacked.groupby("position", sort=False):
         for metric in _METRIC_COLS:
-            iv = bootstrap_mean(grp[metric].to_numpy(dtype=float), seed=base_seed)
+            point, lo95, hi95 = _bootstrap_or_nan(grp[metric].to_numpy(dtype=float), seed=base_seed)
             out_rows.append(
-                {
-                    "position": position,
-                    "metric": metric,
-                    "mean": iv.point,
-                    "lo95": iv.lo_95,
-                    "hi95": iv.hi_95,
-                }
+                {"position": position, "metric": metric, "mean": point, "lo95": lo95, "hi95": hi95}
             )
     return pd.DataFrame(out_rows)
 
 
 def format_assessment(agg: pd.DataFrame) -> str:
-    """Render the per-position table, positions sorted by mean top1_vorp descending."""
-    wide = agg.pivot(index="position", columns="metric", values="mean")
-    wide = wide.sort_values("top1_vorp", ascending=False)
-    lines = ["POSITION  TOP1_VORP  TOP2   TOP3   BEST_PROJ  #>REPL  DRAIN%"]
-    for position, r in wide.iterrows():
-        lines.append(
-            f"{position!s:<8}  {float(r['top1_vorp']):8.1f}  {float(r['top2_vorp']):5.1f}  "
-            f"{float(r['top3_vorp']):5.1f}  {float(r['best_avail_proj_pts']):8.1f}  "
-            f"{float(r['n_above_replacement']):5.1f}  {float(r['drain_rate']) * 100:5.1f}"
-        )
+    """Per-position table sorted by mean top1_vorp desc; each metric as `mean [lo95, hi95]`.
+
+    `drain_rate` is shown as a percentage. A NaN cell (a position drained in every seed,
+    or a 0/0 drain_rate) renders as `nan [nan, nan]` — a real "undefined here" signal.
+    """
+    piv = {
+        stat: agg.pivot(index="position", columns="metric", values=stat)
+        for stat in ("mean", "lo95", "hi95")
+    }
+    order = piv["mean"].sort_values("top1_vorp", ascending=False).index
+
+    def cell(pos: object, metric: str) -> str:
+        scale = 100.0 if metric == "drain_rate" else 1.0
+        m = float(piv["mean"].loc[pos, metric]) * scale
+        lo = float(piv["lo95"].loc[pos, metric]) * scale
+        hi = float(piv["hi95"].loc[pos, metric]) * scale
+        return f"{m:.1f} [{lo:.1f}, {hi:.1f}]"
+
+    w = 24
+    lines = ["POS   " + "".join(f"{h:<{w}}" for _, h in _TABLE_COLS)]
+    for pos in order:
+        cells = "".join(f"{cell(pos, m):<{w}}" for m, _ in _TABLE_COLS)
+        lines.append(f"{pos!s:<6}{cells}")
     return "\n".join(lines)
 
 
@@ -146,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     text = format_assessment(agg)
     print(text)
     if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text + "\n")
     return 0
 

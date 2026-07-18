@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
-from waiver_pool_assessment import _build_hero, format_assessment, run_assessment
+from waiver_pool_assessment import (
+    _bootstrap_or_nan,
+    _build_hero,
+    format_assessment,
+    run_assessment,
+)
 
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, RosterSlot, VorpTableSchema
@@ -68,3 +74,23 @@ def test_run_assessment_smoke() -> None:
     text = format_assessment(agg)
     for pos in ("QB", "RB", "WR", "TE"):
         assert pos in text
+
+
+def test_format_assessment_renders_nan_cells() -> None:
+    # A fully-drained position aggregates to NaN; the table must render it, not crash.
+    rows = []
+    for pos in ("QB", "RB", "WR", "TE"):
+        v = float("nan") if pos == "TE" else 1.0
+        for metric in _METRICS:
+            rows.append({"position": pos, "metric": metric, "mean": v, "lo95": v, "hi95": v})
+    text = format_assessment(pd.DataFrame(rows))
+    assert "nan" in text.lower()  # TE row's NaN cells render without error
+
+
+def test_bootstrap_or_nan_drops_nan_and_handles_all_nan() -> None:
+    # NaN dropped -> mean over the defined values.
+    point, lo, hi = _bootstrap_or_nan(np.array([5.0, np.nan, 5.0]), seed=0)
+    assert point == 5.0 and lo == 5.0 and hi == 5.0
+    # All-NaN -> (nan, nan, nan) else-branch (bootstrap_mean would crash on an empty array).
+    p2, lo2, hi2 = _bootstrap_or_nan(np.array([np.nan, np.nan]), seed=0)
+    assert np.isnan(p2) and np.isnan(lo2) and np.isnan(hi2)

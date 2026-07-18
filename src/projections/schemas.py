@@ -1168,7 +1168,9 @@ class WaiverPoolSchema(pa.DataFrameModel):
     top1_vorp: Series[float] = pa.Field(nullable=True)
     top2_vorp: Series[float] = pa.Field(nullable=True)
     top3_vorp: Series[float] = pa.Field(nullable=True)
-    best_avail_proj_pts: Series[float] = pa.Field(ge=0, nullable=True)
+    # No ge bound: mirrors VorpTableSchema.season_mean_fpts (unconstrained) — the best
+    # available player's projection can in principle be negative on a weird pool.
+    best_avail_proj_pts: Series[float] = pa.Field(nullable=True)
     n_above_replacement: Series[int] = pa.Field(ge=0)
     drain_rate: Series[float] = pa.Field(ge=0, le=1, nullable=True)
 

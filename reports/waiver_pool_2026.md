@@ -23,7 +23,7 @@ Positions ranked by "how good is the best guy you can still grab" (best-availabl
 - **RB, TE, and QB are drained to zero above-replacement talent in essentially every draft (drain ≈ 100%).** The best player you can still grab at each is **at or below replacement**: RB −1.5 (≈ a replacement-level back), TE −3.2, and QB a steep **−24.1** (the best free-agent QB projects ~24 season points below the startable line — the 16-team QB streaming pool is genuinely poor once ~20 startable QBs are gone).
 - **Absolute vs relative depletion agree.** `#>repl` (absolute depth left) and `drain%` (relative to the position's startable supply) tell the same story: QB/RB/TE hit 0 left / 100% drained; WR keeps a sliver.
 
-At N=200 the ordering is unambiguous — the WR-vs-rest gap (best-available +15 vs −1.5/−3.2/−24) dwarfs sampling noise (per-cell 95% CIs computed in `run_assessment`).
+The tool emits a 95% bootstrap CI per cell (spec §5); at N=200 they are tight — best-available VORP **WR +15.2 [14.6, 15.7]**, RB −1.5 [−1.5, −1.4], TE −3.2 [−3.2, −3.2], QB −24.1 [−25.0, −23.2] — so the WR-vs-rest ordering is unambiguous; the gap dwarfs sampling noise.
 
 ## Tie-back to the scarcity thread
 
@@ -37,5 +37,6 @@ This is consistent with the broader investigation's scarcity findings (Tests 7�
 - **Bots are a noisy-ADP human proxy** — the single biggest realism lever (TODO #46; find the migrated issue via `Migrated from TODO #46`); the whole readout rests on how the bot field drains positions.
 - **Hero is second-order** — one analytic-strategy seat vs 15 bots barely moves the aggregate wire; the readout is a property of 16-team depth, not the hero.
 - **"Replacement" is this pool's per-position line** — "drained" means no *above-replacement* talent left, not literally no rosterable player (a below-replacement QB can still be started; the VORP just quantifies how far below the startable line the wire sits).
+- **`top*_vorp` is conditional-on-availability for *thin-pool* configs.** The aggregator drops seeds where a position fully drains (0 undrafted) before averaging, so on a shallower league / superflex config where a position empties on some seeds, that position's `top*_vorp` mean reflects only the seeds where a player remained (survivorship-optimistic) — read it alongside `drain%` / `# above-repl`, which stay unconditional. **Moot here:** at 16-team half-PPR no position ever fully drains, so every cell averages over all 200 seeds.
 
 **Reproduce:** `python scripts/waiver_pool_assessment.py --vorp-table data/vorp_2026/half_16team.parquet --league-config data/vorp_2026/half_16team.league.json --hero-strategy now_or_never_floored --seeds 200` (PowerShell, `KMP_DUPLICATE_LIB_OK=TRUE`).
