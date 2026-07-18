@@ -41,9 +41,11 @@ Computes, for **one** draft, per position `p ∈ {QB, RB, WR, TE}`:
 - **`top1_vorp`, `top2_vorp`, `top3_vorp`** — the three highest `vorp` values among undrafted players at `p` (the best-available curve; shows how fast quality falls off the wire). Fewer than 3 undrafted at a position → the missing ranks are `NaN` (never happens for the real pool, but handled).
 - **`best_avail_proj_pts`** — `season_mean_fpts` of the `top1_vorp` player (the raw-points anchor for the single best available; within a position, VORP-rank == proj-rank since `replacement_fpts` is a per-position constant).
 - **`n_above_replacement`** — count of undrafted players at `p` with `vorp > 0` (streamable-quality remaining; `vorp > 0` ⇔ above the pool's own per-position `replacement_fpts`).
-- **`drain_rate`** — `drafted_above_replacement / total_above_replacement` for `p` (fraction of the position's startable-quality players that got taken). Normalizes for position depth so QB (few startable) and WR (many) are comparable; high = drained hard = thin wire. Equals `1 − n_above_replacement / total_above_replacement`.
+- **`drain_rate`** — `drafted_above_replacement / total_above_replacement` for `p` (fraction of the position's startable-quality players that got taken). Normalizes for position depth so QB (few startable) and WR (many) are comparable; high = drained hard = thin wire. Equals `1 − n_above_replacement / total_above_replacement`. **When `total_above_replacement == 0`** (no player at `p` is above replacement in the whole pool — a 0/0), `drain_rate` is `NaN` and `n_above_replacement` is `0`; the test asserts `NaN`.
 
-**Purity:** the drafted set is `union of all rosters.values()`; everything else is a group-by on `pool`. No sim, no RNG, no I/O → trivially unit-testable on a hand-built fixture. Output is validated with a new light `WaiverPoolSchema` (per the module-boundary convention).
+**Purity:** the drafted set is `union of all rosters.values()`; everything else is a group-by on `pool`. No sim, no RNG, no I/O → trivially unit-testable on a hand-built fixture.
+
+**Output — `WaiverPoolSchema`** (validated per the module-boundary convention): one row per position, indexed by `position` (`pd.StringDtype("pyarrow")`, values in `{QB, RB, WR, TE}`); columns `top1_vorp`, `top2_vorp`, `top3_vorp`, `best_avail_proj_pts` (all `float64`, may be `NaN`), `n_above_replacement` (`int64`), `drain_rate` (`float64`, in `[0, 1]` or `NaN`). Always all four position rows, even when a position is fully drafted (its top-N and `best_avail_proj_pts` are then `NaN`).
 
 ## 4. The driver — `scripts/waiver_pool_assessment.py` (thin)
 
@@ -51,7 +53,7 @@ Loads a VORP table + league config, builds a **hero + 15 constrained-ADP bots** 
 
 Flags (all defaulted): `--vorp-table` (default `data/vorp_2026/half_16team.parquet`), `--league-config` (default the sibling `.league.json`), `--hero-strategy` (default `now_or_never_floored`; the analytic keys `now_or_never`/`now_or_never_floored`/`raw_vorp` are supported without availability), `--hero-seat` (default 1), `--seeds` (default 200), `--jitter` (default 8.0), `--base-seed` (default 0), `--out` (optional report path).
 
-The hero strategy is constructed from its key by a small local `_build_hero(key, n_teams)` (analytic strategies only — `NowOrNeverFlooredStrategy(LogisticSurvival(default_sigma(n_teams)))` etc.); an MC key raises a clear "needs availability, not supported in v1" error rather than silently mis-building.
+The hero strategy is constructed from its key by a small local `_build_hero(key, n_teams)` (analytic strategies only — `NowOrNeverFlooredStrategy(LogisticSurvival(default_sigma(n_teams)))` etc.); an MC key raises a clear "needs availability, not supported in v1" error rather than silently mis-building. The floored hero uses the **shipped default floor** (`_DEFAULT_FLOOR=40` / `_DEFAULT_FLOOR_WEIGHT=1`); no floor flags in v1.
 
 ## 5. Output & report
 
