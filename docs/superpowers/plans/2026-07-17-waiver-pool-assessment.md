@@ -26,7 +26,7 @@
 
 **Files:**
 - Modify: `src/projections/schemas.py` (add class after `HeroResultSchema`, ~line 1153)
-- Test: `tests/test_schemas.py` (append; if a waiver test module is cleaner, create `tests/test_draft/test_backtest/test_waiver_pool.py` and put the schema test there with Task 2's — either is fine, keep one home)
+- Test: `tests/test_draft/test_backtest/test_waiver_pool.py` (new file; the schema test lives here alongside Task 2's function tests)
 
 **Interfaces:**
 - Produces: `WaiverPoolSchema` (pandera `DataFrameModel`) with columns `position` (str, isin skill positions, unique), `top1_vorp`/`top2_vorp`/`top3_vorp` (float, nullable), `best_avail_proj_pts` (float, ge=0, nullable), `n_above_replacement` (int, ge=0), `drain_rate` (float, ge=0, le=1, nullable).
@@ -315,9 +315,9 @@ def undrafted_pool_by_position(
 
         undf = pool[at_pos & undrafted]
         top = np.sort(undf["vorp"].to_numpy())[::-1]  # descending
-
-        def _nth(k: int) -> float:
-            return float(top[k]) if len(top) > k else float("nan")
+        top1 = float(top[0]) if len(top) > 0 else float("nan")
+        top2 = float(top[1]) if len(top) > 1 else float("nan")
+        top3 = float(top[2]) if len(top) > 2 else float("nan")
 
         if len(undf):
             best_proj = float(undf.loc[undf["vorp"].idxmax(), "season_mean_fpts"])
@@ -327,9 +327,9 @@ def undrafted_pool_by_position(
         rows.append(
             {
                 "position": p.value,
-                "top1_vorp": _nth(0),
-                "top2_vorp": _nth(1),
-                "top3_vorp": _nth(2),
+                "top1_vorp": top1,
+                "top2_vorp": top2,
+                "top3_vorp": top3,
                 "best_avail_proj_pts": best_proj,
                 "n_above_replacement": int((undf["vorp"] > 0).sum()),
                 "drain_rate": (drafted_above / total_above) if total_above else float("nan"),
