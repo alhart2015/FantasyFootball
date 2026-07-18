@@ -6,6 +6,19 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Hub — floored-vs-`season_value` H2H A/B run (issue #113, 2026-07-17, branch `chore/issue-113-floored-vs-sv-ab`)
+
+**Status:** the tracked follow-up from the scarcity-floor slice (issue [#113](https://github.com/alhart2015/FantasyFootball/issues/113), migrated from TODO #42) is **run and logged as Test 19** in `reports/draft_strategy_tests.md`. `now_or_never_floored` (F=40 / λ=1, shipped default) vs `season_value` in the Test 7–10 mirror-paired H2H harness, 2024 + 2025, 200 seeds × 200 sims, ACTUAL axis (the honest yardstick). Clean run on the crashy box (20/20 chunks, **zero crashes/retries**). Added a CRN-paired per-seed diff (`scripts/_ab_113_analyze.py`) — the paired-diff Test 10 lacked. Nothing tuned; default unchanged.
+
+**The question it answers — "does the floor close `now_or_never`'s gap to `season_value`?" (Tests 7/8: sv−nn win% +6.4/+5.7, playoff% +15.6/+16.0):**
+- **Championship%: floored > sv in BOTH seasons, CI-separated (+7.0 in 2025, +10.0 in 2024).** The durable, cross-season signal — the floor buys the scarcity family a real title-rate edge over sv that plain `now_or_never` never had (nn ≈ sv on champ). Wider here than Test 15's solo eval because direct-H2H pits floored's ceiling rosters against sv's high-floor rosters in the bracket.
+- **Win% / playoff — season-split, no clean closure.** 2025 (sv's strong year): the floor does **not** close it — sv still leads win −5.9 / playoff −13.1. 2024 (scarcity-friendly year): the floor **reverses** it — floored +9.3 win / +26.6 playoff (magnitude inflated by 2024's pool + shared-pool non-transitivity; read with care).
+- **Reconciles with Test 15** (solo hero, 5 availability-correct seasons: floored > sv on pooled win% −1.89 ✱, edges champ%): same title-edge direction; win%/playoff only splits once the two **share a pool** (the pool-contention/schedule confound Test 11 was built to avoid). Both designs put floored ahead on titles.
+
+**Read (isolated, no verdict — standing decide-at-end rule; the single strategy call is ~Sept 2026):** the floor does not make `now_or_never` "catch up" to `season_value` on the regular season; it makes the scarcity family the **championship** leader over sv (both seasons) while sv keeps the 2025 regular-season floor — sharpening the win%/champ% split seen in Tests 9 & 15. Issue #113 closed.
+
+---
+
 ## Auction Strategy — `BalancedValueBid` (Slice 1) shipped + validated (2026-07-14, branch `feat/auction-balanced-value` → PR)
 
 **Status:** New auction bid-model contestant `balanced` (`BalancedValueBid`) shipped via full superpowers-go (spec → spec-review → plan → plan-review → subagent-driven execution → final whole-branch review). Spec/plan `docs/superpowers/specs|plans/2026-07-13-auction-balanced-value*`. **No winner declared — the strategy decision is September 2026.**
