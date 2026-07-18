@@ -1152,6 +1152,31 @@ class HeroResultSchema(pa.DataFrameModel):
         coerce = True
 
 
+class WaiverPoolSchema(pa.DataFrameModel):
+    """Per-position undrafted-pool ("waiver wire") metrics for ONE simulated draft.
+
+    Output of `undrafted_pool_by_position`. Exactly one row per skill position
+    (QB/RB/WR/TE), always all four even when a position is fully drafted (its
+    `top*_vorp` / `best_avail_proj_pts` are then NaN). `top{1,2,3}_vorp` are the
+    three highest undrafted `vorp` at the position (NaN when fewer remain; `vorp`
+    may be negative). `n_above_replacement` counts undrafted players with vorp > 0.
+    `drain_rate` = drafted-above-replacement / total-above-replacement in [0, 1],
+    NaN when the position has no above-replacement players in the pool (0/0).
+    """
+
+    position: Series[str] = pa.Field(isin=_SKILL_POSITION_VALUES, unique=True)
+    top1_vorp: Series[float] = pa.Field(nullable=True)
+    top2_vorp: Series[float] = pa.Field(nullable=True)
+    top3_vorp: Series[float] = pa.Field(nullable=True)
+    best_avail_proj_pts: Series[float] = pa.Field(ge=0, nullable=True)
+    n_above_replacement: Series[int] = pa.Field(ge=0)
+    drain_rate: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
 class PreseasonFeaturesSchema(pa.DataFrameModel):
     """One row per (gsis_id, season) for every player on depth_charts_{season}
     with position in {QB, RB, WR, TE}. Inputs to PreseasonModel.predict_season_distribution.
