@@ -90,7 +90,11 @@ def main(argv: list[str] | None = None) -> int:
         bot_dollars = espn_anchored_bot_prices(pool, config, model_values=baseline)
     field = build_field(args.field, args.overbid)
     name_by_id = dict(zip(pool["gsis_id"].astype(str), pool["full_name"], strict=True))
-    fair_by_id = baseline["auction_dollars"].to_dict()
+    # generate_auction_values returns a reset-index frame; key fair value by gsis_id the way the
+    # engine does (simulation.py sets the same index) or every lookup silently misses and reads $0.
+    fair_by_id = dict(
+        zip(baseline["gsis_id"].astype(str), baseline["auction_dollars"], strict=True)
+    )
 
     names = [s.strip() for s in args.strategies.split(",") if s.strip()]
     unknown = [n for n in names if n not in CONTESTANTS]

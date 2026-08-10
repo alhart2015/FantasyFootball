@@ -198,9 +198,19 @@ class PatientValueBot:
 
 @dataclass(frozen=True)
 class BalancedBot:
-    """Aggressive WTP, but paced: never spends more than `pace` x its even per-slot share."""
+    """Aggressive WTP, but paced: never spends more than `pace` x its even per-slot share.
+
+    `overbid` (default 0.0, byte-for-byte the bot every prior run measured against) lifts the WTP
+    over the bot's own board the way `AggressiveBot.overbid` does. The pair is what separates a
+    realistic over-payer from a caricature: `AggressiveBot` has NO pace cap, so its only ceiling is
+    the engine's solvency clamp (up to budget - min_bid*(slots-1), i.e. $188 of a $200 budget on a
+    single player). A room of those drains ~85% of its money in the first quarter of the draft and
+    fills the rest at $1, forcing stars-and-scrubs on everyone. A paced over-bidder overpays AND
+    still rosters a full team, which is what a real aggressive manager does.
+    """
 
     pace: float = 2.0
+    overbid: float = 0.0
 
     def max_bid(
         self,
@@ -216,7 +226,7 @@ class BalancedBot:
         if seat_view.open_slots <= 0 or pos not in seat_view.eligible_positions:
             return 0
         value = float(baseline_dollars.loc[player["gsis_id"], "bot_dollars"])
-        wtp = value * (1.0 + rng.normal(0.0, price_jitter))
+        wtp = value * (1.0 + self.overbid) * (1.0 + rng.normal(0.0, price_jitter))
         cap = self.pace * (seat_view.budget / seat_view.open_slots)
         return round(max(float(config.min_bid), min(wtp, cap)))
 

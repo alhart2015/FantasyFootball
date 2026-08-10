@@ -63,33 +63,52 @@ CONTESTANTS: dict[str, AuctionBidStrategy] = {
     "sr_g0.3_c2": StackRatioBid(gain=0.3, curve=2.0),
 }
 
-# An under-bidder who buys depth and strands cash: halves its bid on studs (never wins one), pays
-# exactly fair value — no premium — on the mid tier, and $1s the bottom third. Against a room that
-# pays over the board it loses most contested lots, so it reaches the endgame with budget left.
-# Contrast the stock `PatientValueBot`, whose 0.35 mid-tier premium makes it a depth *spender*.
-_HOARDER = PatientValueBot(understud=0.5, midtier_premium=0.0, stud_frac=0.10, scrub_frac=0.35)
+# The under-bidder: the library's stock `PatientValueBot` at its defaults — under-bids studs at
+# 0.5x (never wins one), pays a mid-tier premium out of the reserve it saved, $1s the bottom half.
+# Deliberately NOT re-tuned to force leftover cash: how much a patient bidder actually strands is
+# an OUTPUT of the market (how hard the room bids it out of lots), not an input to be assumed.
+_HOARDER = PatientValueBot()
 
 
-def build_field(name: str, overbid: float) -> list[BotArchetype]:
+# Pace cap for the over-bidding archetype, calibrated against the realized price curve rather than
+# assumed: at 4.5x the even per-slot share the top player of a 12-team $200 draft clears ~$69 (~34%
+# of a budget), ~13 players beat $50, and 19% of the room's money is still live at pick 48 of 156.
+# The UNPACED AggressiveBot instead clears its top player at ~$105 and is down to 7% by pick 48,
+# which forces stars-and-scrubs on every seat and makes the late pool free — a caricature that
+# flatters any hero whose plan is to buy the tail. See `overbidder_unpaced` to reproduce it.
+_OVERBID_PACE = 4.5
+
+
+def build_field(name: str, overbid: float, pace: float = _OVERBID_PACE) -> list[BotArchetype]:
     """Named opponent-field mix, round-robined across the bot seats by the engine.
 
-    `overbid` is the fraction over the field's own board that the aggressive archetypes pay; it
-    applies only to fields that contain them.
+    `overbid` is the fraction over the field's own board that the aggressive archetypes pay;
+    `pace` caps any one buy at that multiple of their even per-slot share. Both apply only to
+    fields that contain an aggressive archetype.
     """
-    if name == "realistic":  # the standing cross-run baseline; `overbid` does not apply
+    if name == "realistic":  # the standing cross-run baseline; overbid/pace do not apply
         return list(_REALISTIC_FIELD)
     if name == "overbidder":
-        # 5-cycle -> with 11 bot seats: 9 over-bidders, 2 hoarders (~18% of the room).
-        ob = AggressiveBot(overbid=overbid)
+        # 5-cycle -> with 11 bot seats: 9 over-bidders, 2 patient seats (~18% of the room).
+        ob = BalancedBot(pace=pace, overbid=overbid)
         return [ob, ob, ob, ob, _HOARDER]
-    if name == "overbidder_only":  # sensitivity: no hoarders at all
-        return [AggressiveBot(overbid=overbid)]
-    if name == "balanced_field":  # sensitivity: a disciplined room
+    if name == "overbidder_unpaced":  # the no-pace-cap caricature, kept reproducible
+        ob_u = AggressiveBot(overbid=overbid)
+        return [ob_u, ob_u, ob_u, ob_u, _HOARDER]
+    if name == "overbidder_only":  # sensitivity: no patient seats at all
+        return [BalancedBot(pace=pace, overbid=overbid)]
+    if name == "balanced_field":  # sensitivity: a disciplined room that pays fair value
         return [BalancedBot()]
     raise ValueError(f"unknown field {name!r}")
 
 
-FIELDS: tuple[str, ...] = ("realistic", "overbidder", "overbidder_only", "balanced_field")
+FIELDS: tuple[str, ...] = (
+    "realistic",
+    "overbidder",
+    "overbidder_unpaced",
+    "overbidder_only",
+    "balanced_field",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +140,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
         availability=availability,
         params=params,
         nomination_temp=1.0,
-        bot_archetypes=build_field(args.field, args.overbid),
+        bot_archetypes=build_field(args.field, args.overbid, args.overbid_pace),
         bot_prices=market,
         market_adp_jitter=args.market_adp_jitter,
     )
@@ -130,6 +149,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
         "seat": args.seat,
         "field": args.field,
         "overbid": args.overbid,
+        "overbid_pace": args.overbid_pace,
         "base_seed": args.seed,
         "n_seeds": args.seeds,
         "n_sims": args.n_sims,
@@ -279,7 +299,7 @@ def _load_chunks(chunk_dir: Path) -> tuple[list[dict[str, object]], int]:
 def _guard_homogeneous(chunks: Sequence[dict[str, object]]) -> None:
     """Refuse to pool chunks that priced different markets. Mixing nomination models or opponent
     fields into one average yields a winner that matches no real configuration."""
-    for key in ("market_adp_jitter", "field", "overbid", "n_seeds", "n_sims"):
+    for key in ("market_adp_jitter", "field", "overbid", "overbid_pace", "n_seeds", "n_sims"):
         seen = {json.dumps(c.get(key)) for c in chunks}
         if len(seen) > 1:
             raise ValueError(
@@ -296,6 +316,7 @@ def _aggregate(args: argparse.Namespace) -> int:
     head = chunks[0]
     print(
         f"field={head.get('field')} overbid={head.get('overbid')} "
+        f"pace={head.get('overbid_pace')} "
         f"adp_jitter={head.get('market_adp_jitter')} seeds={head.get('n_seeds')} "
         f"sims={head.get('n_sims')} chunks={len(chunks)}"
     )
@@ -368,6 +389,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=float,
         default=0.20,
         help="Fraction over its own board the aggressive archetypes pay (0 = value-rational).",
+    )
+    r.add_argument(
+        "--overbid-pace",
+        type=float,
+        default=_OVERBID_PACE,
+        help="Cap on any one buy by the aggressive archetypes, as a multiple of their even "
+        "per-slot share. Calibrated to 4.5 (top stud ~$69 in a 12-team $200 draft).",
     )
     r.add_argument(
         "--market-adp-jitter",
