@@ -77,26 +77,39 @@ _HOARDER = PatientValueBot()
 # which forces stars-and-scrubs on every seat and makes the late pool free — a caricature that
 # flatters any hero whose plan is to buy the tail. See `overbidder_unpaced` to reproduce it.
 _OVERBID_PACE = 4.5
+# "opening" holds the cap at a CONSTANT `pace x budget/roster_size`, so a bot can chase two or
+# three expensive players and then be forced to $1 filler. Under the "running" basis the cap
+# shrinks with every purchase, so a seat that lands one stud can never afford a second: only ~5 of
+# 12 seats ended with two $50+ players, versus ~10 of 12 here, and almost no seat went star-heavy
+# early then bargain-hunting late. Real aggressive managers bust that way; the running basis
+# structurally forbids it.
+_OVERBID_BASIS: Literal["running", "opening"] = "opening"
 
 
-def build_field(name: str, overbid: float, pace: float = _OVERBID_PACE) -> list[BotArchetype]:
+def build_field(
+    name: str,
+    overbid: float,
+    pace: float = _OVERBID_PACE,
+    basis: Literal["running", "opening"] = _OVERBID_BASIS,
+) -> list[BotArchetype]:
     """Named opponent-field mix, round-robined across the bot seats by the engine.
 
     `overbid` is the fraction over the field's own board that the aggressive archetypes pay;
-    `pace` caps any one buy at that multiple of their even per-slot share. Both apply only to
-    fields that contain an aggressive archetype.
+    `pace` caps any one buy at that multiple of a per-slot share, and `basis` picks whether that
+    share is the shrinking running one or the constant opening one. All three apply only to fields
+    that contain an aggressive archetype.
     """
     if name == "realistic":  # the standing cross-run baseline; overbid/pace do not apply
         return list(_REALISTIC_FIELD)
     if name == "overbidder":
         # 5-cycle -> with 11 bot seats: 9 over-bidders, 2 patient seats (~18% of the room).
-        ob = BalancedBot(pace=pace, overbid=overbid)
+        ob = BalancedBot(pace=pace, overbid=overbid, pace_basis=basis)
         return [ob, ob, ob, ob, _HOARDER]
     if name == "overbidder_unpaced":  # the no-pace-cap caricature, kept reproducible
         ob_u = AggressiveBot(overbid=overbid)
         return [ob_u, ob_u, ob_u, ob_u, _HOARDER]
     if name == "overbidder_only":  # sensitivity: no patient seats at all
-        return [BalancedBot(pace=pace, overbid=overbid)]
+        return [BalancedBot(pace=pace, overbid=overbid, pace_basis=basis)]
     if name == "balanced_field":  # sensitivity: a disciplined room that pays fair value
         return [BalancedBot()]
     raise ValueError(f"unknown field {name!r}")
@@ -140,7 +153,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
         availability=availability,
         params=params,
         nomination_temp=1.0,
-        bot_archetypes=build_field(args.field, args.overbid, args.overbid_pace),
+        bot_archetypes=build_field(args.field, args.overbid, args.overbid_pace, args.overbid_basis),
         bot_prices=market,
         market_adp_jitter=args.market_adp_jitter,
     )
@@ -150,6 +163,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
         "field": args.field,
         "overbid": args.overbid,
         "overbid_pace": args.overbid_pace,
+        "overbid_basis": args.overbid_basis,
         "base_seed": args.seed,
         "n_seeds": args.seeds,
         "n_sims": args.n_sims,
@@ -299,7 +313,15 @@ def _load_chunks(chunk_dir: Path) -> tuple[list[dict[str, object]], int]:
 def _guard_homogeneous(chunks: Sequence[dict[str, object]]) -> None:
     """Refuse to pool chunks that priced different markets. Mixing nomination models or opponent
     fields into one average yields a winner that matches no real configuration."""
-    for key in ("market_adp_jitter", "field", "overbid", "overbid_pace", "n_seeds", "n_sims"):
+    for key in (
+        "market_adp_jitter",
+        "field",
+        "overbid",
+        "overbid_pace",
+        "overbid_basis",
+        "n_seeds",
+        "n_sims",
+    ):
         seen = {json.dumps(c.get(key)) for c in chunks}
         if len(seen) > 1:
             raise ValueError(
@@ -316,7 +338,7 @@ def _aggregate(args: argparse.Namespace) -> int:
     head = chunks[0]
     print(
         f"field={head.get('field')} overbid={head.get('overbid')} "
-        f"pace={head.get('overbid_pace')} "
+        f"pace={head.get('overbid_pace')}/{head.get('overbid_basis')} "
         f"adp_jitter={head.get('market_adp_jitter')} seeds={head.get('n_seeds')} "
         f"sims={head.get('n_sims')} chunks={len(chunks)}"
     )
@@ -396,6 +418,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=_OVERBID_PACE,
         help="Cap on any one buy by the aggressive archetypes, as a multiple of their even "
         "per-slot share. Calibrated to 4.5 (top stud ~$69 in a 12-team $200 draft).",
+    )
+    r.add_argument(
+        "--overbid-basis",
+        choices=("running", "opening"),
+        default=_OVERBID_BASIS,
+        help="Whether the pace cap shrinks as a bot spends ('running') or stays at the constant "
+        "opening per-slot share ('opening', the default — lets a bot buy two studs then bust).",
     )
     r.add_argument(
         "--market-adp-jitter",
