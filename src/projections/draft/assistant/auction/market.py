@@ -33,14 +33,22 @@ def bot_max_bid(
     rng: np.random.Generator,
     *,
     price_jitter: float,
+    overbid: float = 0.0,
 ) -> int:
-    """Value-rational WTP centered on the market dollar; abstain (0) if full or position-gated."""
+    """WTP centered on the market dollar lifted by `overbid`; abstain (0) if full or gated.
+
+    `overbid=0.0` (the default) is value-rational — WTP centered exactly on the market dollar — and
+    consumes RNG identically to any other value, so raising it changes prices without perturbing
+    the shared draw. A positive `overbid` models a room that systematically pays above its own
+    board; the engine's feasible-max clamp still forces such a seat to $1 out the tail once it has
+    spent through its budget.
+    """
     if seat_view.open_slots <= 0:
         return 0
     if Position(player["position"]) not in seat_view.eligible_positions:
         return 0
     base = float(baseline_dollars.loc[player["gsis_id"], "bot_dollars"])
-    wtp = base * (1.0 + rng.normal(0.0, price_jitter))
+    wtp = base * (1.0 + overbid) * (1.0 + rng.normal(0.0, price_jitter))
     return round(max(float(config.min_bid), wtp))
 
 
@@ -125,7 +133,14 @@ def _value_tier(
 
 @dataclass(frozen=True)
 class AggressiveBot:
-    """Today's bot: value*(1+noise), blows budget early. Delegates to bot_max_bid."""
+    """Today's bot: value*(1+overbid)*(1+noise), blows budget early. Delegates to bot_max_bid.
+
+    `overbid` defaults to 0.0 — the value-rational bot every prior run was measured against, kept
+    byte-for-byte. Set it positive to model a room that habitually pays over its own board (the
+    `overbidder` field in scripts/auction_field_bakeoff.py).
+    """
+
+    overbid: float = 0.0
 
     def max_bid(
         self,
@@ -138,7 +153,13 @@ class AggressiveBot:
         price_jitter: float,
     ) -> int:
         return bot_max_bid(
-            seat_view, player, baseline_dollars, config, rng, price_jitter=price_jitter
+            seat_view,
+            player,
+            baseline_dollars,
+            config,
+            rng,
+            price_jitter=price_jitter,
+            overbid=self.overbid,
         )
 
 
@@ -177,9 +198,19 @@ class PatientValueBot:
 
 @dataclass(frozen=True)
 class BalancedBot:
-    """Aggressive WTP, but paced: never spends more than `pace` x its even per-slot share."""
+    """Aggressive WTP, but paced: never spends more than `pace` x its even per-slot share.
+
+    `overbid` (default 0.0, byte-for-byte the bot every prior run measured against) lifts the WTP
+    over the bot's own board the way `AggressiveBot.overbid` does. The pair is what separates a
+    realistic over-payer from a caricature: `AggressiveBot` has NO pace cap, so its only ceiling is
+    the engine's solvency clamp (up to budget - min_bid*(slots-1), i.e. $188 of a $200 budget on a
+    single player). A room of those drains ~85% of its money in the first quarter of the draft and
+    fills the rest at $1, forcing stars-and-scrubs on everyone. A paced over-bidder overpays AND
+    still rosters a full team, which is what a real aggressive manager does.
+    """
 
     pace: float = 2.0
+    overbid: float = 0.0
 
     def max_bid(
         self,
@@ -195,7 +226,7 @@ class BalancedBot:
         if seat_view.open_slots <= 0 or pos not in seat_view.eligible_positions:
             return 0
         value = float(baseline_dollars.loc[player["gsis_id"], "bot_dollars"])
-        wtp = value * (1.0 + rng.normal(0.0, price_jitter))
+        wtp = value * (1.0 + self.overbid) * (1.0 + rng.normal(0.0, price_jitter))
         cap = self.pace * (seat_view.budget / seat_view.open_slots)
         return round(max(float(config.min_bid), min(wtp, cap)))
 
