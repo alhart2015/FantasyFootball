@@ -35,7 +35,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy, StackRatioBid
+from projections.draft.assistant.auction.bid_strategy import (
+    AuctionBidStrategy,
+    OverbidValueBid,
+    StackRatioBid,
+)
 from projections.draft.assistant.auction.market import (
     DEFAULT_PRICE_JITTER,
     AggressiveBot,
@@ -58,6 +62,9 @@ _Z95 = 1.959963984540054
 # are library-tested opt-ins deliberately kept out of `_MODELS`, so name them explicitly here.
 CONTESTANTS: dict[str, AuctionBidStrategy] = {
     **_MODELS,
+    # The bake-off winner minus its late-draft ramp: stronger AND executable from a printed
+    # sheet, since the ramp is the one part a human cannot reproduce. See OverbidValueBid.
+    "overbid_noramp": OverbidValueBid(use_urgency=False),
     "sr_g0.1_c2": StackRatioBid(gain=0.1, curve=2.0),
     "sr_g0.2_c2": StackRatioBid(gain=0.2, curve=2.0),
     "sr_g0.3_c2": StackRatioBid(gain=0.3, curve=2.0),
