@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     bot_dollars: pd.Series | None = None
     if args.bot_prices == "espn" and has_usable_espn_prices(pool):
         bot_dollars = espn_anchored_bot_prices(pool, config, model_values=baseline)
-    field = build_field(args.field, args.overbid, args.overbid_pace)
+    field = build_field(args.field, args.overbid, args.overbid_pace, n_bots=config.n_teams - 1)
     hero_strategy = CONTESTANTS[args.strategy]
     seats = _parse_seats(args.seats, config.n_teams)
     season_base_seed = args.seed + 1_000_000  # tournament.py's default derivation

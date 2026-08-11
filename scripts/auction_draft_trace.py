@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     bot_dollars: pd.Series | None = None
     if args.bot_prices == "espn" and has_usable_espn_prices(pool):
         bot_dollars = espn_anchored_bot_prices(pool, config, model_values=baseline)
-    field = build_field(args.field, args.overbid, args.overbid_pace)
+    field = build_field(args.field, args.overbid, args.overbid_pace, n_bots=config.n_teams - 1)
     name_by_id = dict(zip(pool["gsis_id"].astype(str), pool["full_name"], strict=True))
     espn_by_id = dict(zip(pool["gsis_id"].astype(str), pool["espn_auction_dollars"], strict=True))
 

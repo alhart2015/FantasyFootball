@@ -84,6 +84,26 @@ _OVERBID_PACE = 4.5
 # early then bargain-hunting late. Real aggressive managers bust that way; the running basis
 # structurally forbids it.
 _OVERBID_BASIS: Literal["running", "opening"] = "opening"
+# Per-seat spread of the pace cap, as a fraction of `pace`. A field of IDENTICAL over-bidders puts
+# the same hard ceiling on all of them -- at pace 4.5 every bot stops dead at $69 -- and the hero,
+# which has no cap of its own, wins any player it wants by bidding exactly $70. That is a wall to
+# step over, not a market, and it hands a free win to whichever hero is willing to pay over sheet
+# value. Spreading the cap across seats (here 4.5 +/- 35% -> ceilings from ~$45 to ~$93) removes the
+# single cliff: there is always some seat still bidding above the hero's next dollar.
+_OVERBID_PACE_JITTER = 0.35
+_PATIENT_EVERY = 5  # every 5th bot seat is a patient bidder (~2 of 11 in a 12-team league)
+
+
+def _spread_paces(pace: float, jitter: float, n: int) -> list[float]:
+    """`n` pace values evenly spanning `pace*(1±jitter)`, deterministic (no RNG -> CRN-safe).
+
+    Ordered low-to-high; which seat draws which is set by `assign_bot_archetypes` and shifts as the
+    hero seat moves, so the seat sweep already averages over the assignment.
+    """
+    if n <= 1:
+        return [pace]
+    lo, hi = pace * (1.0 - jitter), pace * (1.0 + jitter)
+    return [lo + (hi - lo) * i / (n - 1) for i in range(n)]
 
 
 def build_field(
@@ -91,28 +111,46 @@ def build_field(
     overbid: float,
     pace: float = _OVERBID_PACE,
     basis: Literal["running", "opening"] = _OVERBID_BASIS,
+    *,
+    n_bots: int | None = None,
+    pace_jitter: float = _OVERBID_PACE_JITTER,
 ) -> list[BotArchetype]:
     """Named opponent-field mix, round-robined across the bot seats by the engine.
 
     `overbid` is the fraction over the field's own board that the aggressive archetypes pay;
     `pace` caps any one buy at that multiple of a per-slot share, and `basis` picks whether that
-    share is the shrinking running one or the constant opening one. All three apply only to fields
-    that contain an aggressive archetype.
+    share is the shrinking running one or the constant opening one.
+
+    When `n_bots` is given and `pace_jitter > 0`, the returned list is exactly `n_bots` long and
+    every aggressive seat gets its OWN cap, so the room has no single ceiling. Without `n_bots` the
+    5-entry cycle is returned unchanged (identical caps), which is what earlier runs used.
     """
     if name == "realistic":  # the standing cross-run baseline; overbid/pace do not apply
         return list(_REALISTIC_FIELD)
-    if name == "overbidder":
-        # 5-cycle -> with 11 bot seats: 9 over-bidders, 2 patient seats (~18% of the room).
-        ob = BalancedBot(pace=pace, overbid=overbid, pace_basis=basis)
-        return [ob, ob, ob, ob, _HOARDER]
     if name == "overbidder_unpaced":  # the no-pace-cap caricature, kept reproducible
         ob_u = AggressiveBot(overbid=overbid)
         return [ob_u, ob_u, ob_u, ob_u, _HOARDER]
-    if name == "overbidder_only":  # sensitivity: no patient seats at all
-        return [BalancedBot(pace=pace, overbid=overbid, pace_basis=basis)]
     if name == "balanced_field":  # sensitivity: a disciplined room that pays fair value
         return [BalancedBot()]
-    raise ValueError(f"unknown field {name!r}")
+    if name not in ("overbidder", "overbidder_only"):
+        raise ValueError(f"unknown field {name!r}")
+
+    with_patient = name == "overbidder"
+    if n_bots is None or pace_jitter <= 0.0:  # uniform-cap cycle (pre-jitter behaviour)
+        ob = BalancedBot(pace=pace, overbid=overbid, pace_basis=basis)
+        return [ob, ob, ob, ob, _HOARDER] if with_patient else [ob]
+    seats = list(range(n_bots))
+    patient = {i for i in seats if with_patient and i % _PATIENT_EVERY == _PATIENT_EVERY - 1}
+    paces = _spread_paces(pace, pace_jitter, n_bots - len(patient))
+    out: list[BotArchetype] = []
+    agg = 0
+    for i in seats:
+        if i in patient:
+            out.append(_HOARDER)
+            continue
+        out.append(BalancedBot(pace=paces[agg], overbid=overbid, pace_basis=basis))
+        agg += 1
+    return out
 
 
 FIELDS: tuple[str, ...] = (
@@ -153,7 +191,14 @@ def _run_chunk(args: argparse.Namespace) -> int:
         availability=availability,
         params=params,
         nomination_temp=1.0,
-        bot_archetypes=build_field(args.field, args.overbid, args.overbid_pace, args.overbid_basis),
+        bot_archetypes=build_field(
+            args.field,
+            args.overbid,
+            args.overbid_pace,
+            args.overbid_basis,
+            n_bots=config.n_teams - 1,
+            pace_jitter=args.overbid_pace_jitter,
+        ),
         bot_prices=market,
         market_adp_jitter=args.market_adp_jitter,
     )
@@ -164,6 +209,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
         "overbid": args.overbid,
         "overbid_pace": args.overbid_pace,
         "overbid_basis": args.overbid_basis,
+        "overbid_pace_jitter": args.overbid_pace_jitter,
         "base_seed": args.seed,
         "n_seeds": args.seeds,
         "n_sims": args.n_sims,
@@ -319,6 +365,7 @@ def _guard_homogeneous(chunks: Sequence[dict[str, object]]) -> None:
         "overbid",
         "overbid_pace",
         "overbid_basis",
+        "overbid_pace_jitter",
         "n_seeds",
         "n_sims",
     ):
@@ -339,6 +386,7 @@ def _aggregate(args: argparse.Namespace) -> int:
     print(
         f"field={head.get('field')} overbid={head.get('overbid')} "
         f"pace={head.get('overbid_pace')}/{head.get('overbid_basis')} "
+        f"pace_jitter={head.get('overbid_pace_jitter')} "
         f"adp_jitter={head.get('market_adp_jitter')} seeds={head.get('n_seeds')} "
         f"sims={head.get('n_sims')} chunks={len(chunks)}"
     )
@@ -425,6 +473,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=_OVERBID_BASIS,
         help="Whether the pace cap shrinks as a bot spends ('running') or stays at the constant "
         "opening per-slot share ('opening', the default — lets a bot buy two studs then bust).",
+    )
+    r.add_argument(
+        "--overbid-pace-jitter",
+        type=float,
+        default=_OVERBID_PACE_JITTER,
+        help="Per-seat spread of the pace cap as a fraction of --overbid-pace. 0 gives every bot "
+        "the same ceiling, which the hero can simply outbid by $1.",
     )
     r.add_argument(
         "--market-adp-jitter",
