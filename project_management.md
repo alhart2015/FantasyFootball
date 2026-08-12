@@ -6,7 +6,7 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
-## Draft Hub — Live AUCTION board (UI parity with the snake board) — shipped (2026-08-11, branch `feat/auction-live-board`)
+## Draft Hub — Live AUCTION board (co-pilot; snake board keeps mock mode) — shipped (2026-08-12, branch `feat/auction-live-board`, PR #136)
 
 **Status:** the live-draft UI now covers **both** formats. `streamlit run scripts/auction_board.py` is the auction companion to `scripts/draft_board.py`: it says how much to bid on each player, who to nominate, and records who bought whom for how much. The `docs/auction-draft-guide-will-league.md` section that said "there is no auction draft tracker in this repo" is now wrong and has been rewritten.
 
@@ -16,13 +16,27 @@ Running log of project status, decisions, and next steps. Append new entries at 
 - **`scripts/auction_board.py`** — three-column view (sold log + undo · bid panel/nomination/bid board · roster + budgets), click-a-row-to-price flow, explicit `Player → Team for $N` confirm button (so a mis-recorded winner takes a deliberate click), autosave to `data/auction_sessions/` after every sale + sidebar resume.
 
 **Refactors it pulled in (no behavior change; all prior runs reproduce):**
-- **`auction/registry.py`** — the bid-model registry promoted out of `tournament_cli._MODELS` (now an alias) so the tournament, `auction_field_bakeoff.CONTESTANTS`, and the board can't drift on what a strategy name means. `ALL_BID_MODELS` = the tournament eleven + the validated opt-ins (`overbid_noramp`, the `sr_g*_c2` family) — exactly the bake-off's old contestant set.
+- **`auction/registry.py`** — the bid-model registry promoted out of `tournament_cli._MODELS` (alias since deleted; every consumer imports the registry, and the three mappings are `MappingProxyType` so no consumer can mutate the shared roster) so the tournament, `auction_field_bakeoff.CONTESTANTS`, and the board can't drift on what a strategy name means. `ALL_BID_MODELS` = the tournament eleven + the validated opt-ins (`overbid_noramp`, the `sr_g*_c2` family) — exactly the bake-off's old contestant set.
 - **`bid_strategy.build_engine_dollars`** / **`surplus_inflation`** — the `AuctionView.baseline_dollars` builder and the inflation formula extracted from `simulation.py` / `InflationBid` and shared, so a live draft and a simulated one build the hero's view identically.
 - **`live.build_player_names`** — the id_map-overlaid-with-pool name map shared by both sessions.
 
 **Board default:** `balanced` (the robust win% leader in both markets), with `overbid_noramp` — the printed cheat sheet's plan — one dropdown click away. The board declares no winner; the strategy call is still September 2026.
 
-**Gates:** full suite **1937 passed** (`tests/test_draft` 599 passed; 30 new controller tests + 6 AppTest smokes). The only remaining failures are the two documented pre-existing ones (`test_backtest_smoke_one_cell` [#40], `test_generate_preset_vorp_tables` [#126]). **Fixed the long-standing `test_draft_board_smoke` parallel flake** while here: it was AppTest's 3s wall-clock default losing to CPU contention under `pytest -n auto`, not a real failure — both smoke files now pass an explicit generous `default_timeout`. mypy strict clean (373 files), ruff check + format clean. Verified against the real Will-league table (578 players, 241 ESPN-priced): the board's advice matches the guide's (Derrick Henry a target well above the room's anchor; Chase/JSN flagged negative-edge = let them go).
+**Gates (re-measured 2026-08-12, after the review pass below):** full suite **1952 passed, 18 skipped**, run as `pytest -q` with the two documented pre-existing failures deselected (`test_backtest_smoke_one_cell` [#40], `test_generate_preset_vorp_tables` [#126]). mypy strict clean (373 files), ruff check + format clean.
+
+> The original entry here claimed "1937 passed … the only remaining failures are the two pre-existing ones", and the PR body claimed "816 passed, 1 failed" — three different numbers for one run, none of them reproducible. Numbers in this log are now taken from a recorded gate run rather than hand-copied.
+
+**Fixed the long-standing `test_draft_board_smoke` parallel flake** while here: AppTest's 3s wall-clock default losing to CPU contention under `pytest -n auto`, not a real failure — both smoke files now pass an explicit generous `default_timeout`. Verified against the real Will-league table (578 players, 241 ESPN-priced): the board's advice matches the guide's (Derrick Henry a target well above the room's anchor; Chase/JSN flagged negative-edge = let them go).
+
+**Review pass (loop-review, 2026-08-12).** Three reviewers (correctness / quality / intent) over the full branch diff produced 46 findings, 42 after merging duplicate framings. **27 fixed, 1 refuted, 2 parked to issues, 12 recorded below threshold.** Ledger at `.git/loop-review/feat-auction-live-board/`. The ones worth remembering:
+
+- **The AppTest smokes had never run.** `AppTest.from_file()` resolves a relative path against the *caller's* directory, so all eleven board smokes (six new, five pre-existing) raised `FileNotFoundError` the moment `streamlit` was installed — and the `[ui]` extra was not installed in the venv, so every one of them hit `importorskip` and skipped. The gate reported skips; the branch reported coverage. **This is the reason to install `.[ui]` in any environment that claims to test the boards**, and the repo deliberately runs no CI (`CONTRIBUTING.md`), so `pytest -v` locally is the only thing that would ever catch it.
+- **Auction state is (player, seat), snake state is player-order.** Two defects came from copying snake-board code whose correctness depended on pick order fixing the seat: the projected-eval cache key (omitted the buyer, so undo-then-reaward served a stale league) and the sale-recording widgets (keyed on lot number, so a price typed for one player survived onto the next). Anything ported from the snake board needs this checked.
+- **`feasible_max` at zero open slots** read `budget + min_bid`. Three call sites had independently worked around it; the board's status bar had not. Guarded at the root.
+- **Model heuristics were rendered as facts.** "No rival can outbid you" / "your roster can no longer take this position" are `bot_eligible`/`bot_position_bounds` — roster-discipline heuristics, not league rules. The docstrings were honest; the user-facing strings were not.
+- **The Will-league guide set the board up for the wrong league** (built-in preset instead of `configs/will_half12_pass5.league.json` + `data/vorp_2026/will_half12.parquet`), so its numbers would have silently disagreed with the cheat sheet the same document says to trust.
+- **Session-layer duplication extracted:** `project_completed_league`, `build_roster_rows` (which also fixed the same silent overflow-player drop on the *snake* board), `filter_named_pool`, and `build_market_dollars` moved to `projections.draft.auction` and now shared with `run_auction_tournament`. UI-layer duplication (eight helpers across the two Streamlit apps) parked as [#138](https://github.com/alhart2015/FantasyFootball/issues/138) — a design call, not a defect.
+- **Parked:** no mock-auction mode ([#137](https://github.com/alhart2015/FantasyFootball/issues/137)); the "UI parity" claim was corrected rather than the gap papered over.
 
 ---
 
