@@ -73,7 +73,9 @@ def _autosave(s: LiveAuctionSession) -> None:
     s.save(Path(path))
 
 
-VIEW_MODES = ("Full board", "Minimal (live draft)")
+FULL_MODE = "Full board"
+MINIMAL_MODE = "Minimal (live draft)"
+VIEW_MODES = (FULL_MODE, MINIMAL_MODE)
 
 
 def _sidebar() -> None:
@@ -230,6 +232,73 @@ def _selectable(named: pd.DataFrame, cols: list[str], key: str) -> None:
     )
 
 
+def _record_sale(
+    s: LiveAuctionSession,
+    advice: BidAdvice,
+    *,
+    prefix: str,
+    winner_label: str = "Winning team",
+    price_label: str = "Price paid ($)",
+) -> tuple[int | None, int]:
+    """Winner + price widgets. Returns `(winner, price)`; winner is None until one is chosen.
+
+    Shared by both views so the safety properties cannot drift apart -- they were duplicated
+    verbatim while the comments explaining WHY lived only on one copy, which is the copy that
+    would have stayed correct.
+
+    - **Keys carry the staged player and the chosen winner.** Streamlit retains a widget's
+      value once its key exists, so a lot-number-only key let a price typed for a $46 stud
+      survive onto a $3 backup, one click from being recorded. The winner belongs in the price
+      key for the same reason: switching to a poorer seat shrinks `max_value` under a retained
+      value.
+    - **No default winner.** The hero wins roughly one lot in `n_teams`, so a pre-selected
+      seat is wrong for most lots and confirm is a single click away.
+    - **Seats with no open slot are not offered.** `record_purchase` rejects them, and
+      `feasible_max` is meaningless there.
+    """
+    lot_key = f"{prefix}{len(s.purchases)}_{advice.gsis_id}"
+    seats = [seat for seat in s.seats if s.open_slots(seat) > 0]
+    if not seats:
+        st.warning("No team has an open roster slot.")
+        return None, s.league.min_bid
+    winner = st.selectbox(
+        winner_label,
+        seats,
+        index=None,
+        placeholder="Select the winning team…",
+        format_func=s.team_label,
+        key=f"{prefix}winner_{lot_key}",
+    )
+    if winner is None:
+        return None, s.league.min_bid
+    cap = max(s.league.min_bid, s.feasible_max(int(winner)))
+    price = st.number_input(
+        price_label,
+        min_value=s.league.min_bid,
+        max_value=cap,
+        value=max(s.league.min_bid, min(advice.market_value, cap)),
+        step=1,
+        key=f"{prefix}price_{lot_key}_{winner}",
+    )
+    return int(winner), int(price)
+
+
+def _confirm_sale(s: LiveAuctionSession, advice: BidAdvice, winner: int, price: int) -> bool:
+    """The confirm button. Spells out the whole sentence, which is the mis-record guard."""
+    label = f"✅ {advice.full_name} → {s.team_label(int(winner))} for ${int(price)}"
+    if not st.button(label, key=f"confirm_{len(s.purchases)}_{advice.gsis_id}", type="primary"):
+        return False
+    try:
+        s.record_purchase(advice.gsis_id, int(winner), int(price))
+    except ValueError as exc:
+        st.warning(str(exc))
+        return False
+    st.session_state["pending_player"] = None
+    st.session_state["m_nom_last"] = None
+    _autosave(s)
+    return True
+
+
 def _bid_panel(s: LiveAuctionSession) -> None:
     """The staged player: what to bid, and the form that records who actually bought him."""
     pending = st.session_state.get("pending_player")
@@ -276,80 +345,46 @@ def _bid_panel(s: LiveAuctionSession) -> None:
     # Widget keys carry the staged player, and the price also carries the chosen winner.
     # Keyed on the lot number alone, Streamlit retains the widget's value when a different
     # player is staged for the same lot: a price typed for a $46 stud survived onto a $3
-    # backup, one click from being recorded. The winner belongs in the price key for the
-    # same reason -- switching to a poorer seat shrinks max_value under a retained value.
-    lot_key = f"{len(s.purchases)}_{advice.gsis_id}"
-    # A seat with no open roster slot cannot take the player: record_purchase rejects it,
-    # and feasible_max is meaningless there (it reads budget + min_bid at zero slots).
-    seats = [seat for seat in s.seats if s.open_slots(seat) > 0]
-    winner: int | None = None
-    price = s.league.min_bid
-    if not seats:
-        st.warning("No team has an open roster slot.")
-    else:
-        winner = st.selectbox(
-            "Winning team",
-            seats,
-            # No default. The hero wins roughly one lot in n_teams, so a pre-selected seat is
-            # the wrong answer for most lots and confirm is a single click away -- exactly the
-            # mis-record the explicit confirm button exists to prevent.
-            index=None,
-            placeholder="Select the winning team…",
-            format_func=s.team_label,
-            key=f"winner_{lot_key}",
-        )
-        if winner is not None:
-            cap = max(s.league.min_bid, s.feasible_max(int(winner)))
-            price = st.number_input(
-                "Price paid ($)",
-                min_value=s.league.min_bid,
-                max_value=cap,
-                value=max(s.league.min_bid, min(advice.market_value, cap)),
-                step=1,
-                key=f"price_{lot_key}_{winner}",
-            )
+    winner, price = _record_sale(s, advice, prefix="")
     confirm, clear = st.columns([4, 1])
     if winner is None:
         confirm.button(
             "Select the winning team to record this sale",
-            key=f"confirm_{lot_key}",
+            key=f"confirm_{len(s.purchases)}_{advice.gsis_id}",
             disabled=True,
         )
     else:
-        label = f"✅ {advice.full_name} → {s.team_label(int(winner))} for ${int(price)}"
-        if confirm.button(label, key=f"confirm_{lot_key}", type="primary"):
-            try:
-                s.record_purchase(advice.gsis_id, int(winner), int(price))
-            except ValueError as exc:
-                st.warning(str(exc))
-                return
-            st.session_state["pending_player"] = None
-            _autosave(s)
-            st.rerun()
+        with confirm:
+            if _confirm_sale(s, advice, int(winner), int(price)):
+                st.rerun()
     if clear.button("✕ clear", key="clear_pending"):
         st.session_state["pending_player"] = None
+        st.session_state["m_nom_last"] = None
         st.rerun()
 
 
-def _nomination_panel(s: LiveAuctionSession) -> None:
+def _nomination_panel(s: LiveAuctionSession, *, top: int = 12, verbose: bool = True) -> None:
+    """Who to nominate. `top`/`verbose` are the only things the two views disagree on."""
     if s.is_complete:
         return
+    columns = (
+        ["full_name", "position", "value", "market", "max_bid", "room_max", "i_want"]
+        if verbose
+        else ["full_name", "position", "market", "i_want"]
+    )
     with st.expander("🎤 Who to nominate", expanded=s.is_my_nomination):
         sug = s.suggested_nomination()
         if sug is None:
             st.caption("Nothing left to nominate.")
             return
-        st.markdown(f"**Nominate: {s.name(sug)}**")
-        st.caption(NOMINATION_NOTES[s.nomination_mode])
-        board = s.nomination_board(top=12)
-        st.caption(
-            "`i_want` = your roster can take him and your ceiling clears the room's price. "
-            "A high-`market`, `i_want`-False player drains rivals' money, not yours."
-        )
-        st.dataframe(
-            board[["full_name", "position", "value", "market", "max_bid", "room_max", "i_want"]],
-            hide_index=True,
-        )
+        st.markdown(f"**{'Nominate: ' if verbose else ''}{s.name(sug)}**")
+        if verbose:
+            st.caption(NOMINATION_NOTES[s.nomination_mode])
+            st.caption(
+                "`i_want` = your roster can take him and your ceiling clears the room's price. "
+                "A high-`market`, `i_want`-False player drains rivals' money, not yours."
+            )
+        st.dataframe(s.nomination_board(top=top)[columns], hide_index=True)
 
 
 def _bid_board_panel(s: LiveAuctionSession) -> None:
@@ -543,43 +578,12 @@ def _option_label(s: LiveAuctionSession, gsis_id: str) -> str:
 
 
 def _minimal_record(s: LiveAuctionSession, advice: BidAdvice) -> None:
-    """Winner + price + confirm. Same widget-keying safety as the full board's panel."""
-    lot_key = f"{len(s.purchases)}_{advice.gsis_id}"
-    seats = [seat for seat in s.seats if s.open_slots(seat) > 0]
-    if not seats:
-        st.warning("No team has an open roster slot.")
-        return
-    c1, c2 = st.columns([2, 1])
-    winner = c1.selectbox(
-        "Won by",
-        seats,
-        index=None,
-        placeholder="Which team?",
-        format_func=s.team_label,
-        key=f"m_winner_{lot_key}",
-    )
+    """The same record widgets the full board uses, with terser labels."""
+    winner, price = _record_sale(s, advice, prefix="m_", winner_label="Won by", price_label="Price")
     if winner is None:
-        c2.empty()
-        st.button("Pick the winning team", disabled=True, key=f"m_confirm_{lot_key}")
+        st.button("Pick the winning team", disabled=True, key=f"m_confirm_{len(s.purchases)}")
         return
-    cap = max(s.league.min_bid, s.feasible_max(int(winner)))
-    price = c2.number_input(
-        "Price",
-        min_value=s.league.min_bid,
-        max_value=cap,
-        value=max(s.league.min_bid, min(advice.market_value, cap)),
-        step=1,
-        key=f"m_price_{lot_key}_{winner}",
-    )
-    label = f"✅ {advice.full_name} → {s.team_label(int(winner))} for ${int(price)}"
-    if st.button(label, key=f"m_confirm_{lot_key}", type="primary"):
-        try:
-            s.record_purchase(advice.gsis_id, int(winner), int(price))
-        except ValueError as exc:
-            st.warning(str(exc))
-            return
-        st.session_state["pending_player"] = None
-        _autosave(s)
+    if _confirm_sale(s, advice, winner, price):
         st.rerun()
 
 
@@ -671,30 +675,26 @@ def _minimal_view(s: LiveAuctionSession) -> None:
             st.divider()
             _minimal_record(s, advice)
 
-    with st.expander("🎤 Who to nominate", expanded=s.is_my_nomination):
-        sug = s.suggested_nomination()
-        if sug is None:
-            st.caption("Nothing left to nominate.")
-        else:
-            st.markdown(f"**{s.name(sug)}**")
-            st.dataframe(
-                s.nomination_board(top=5)[["full_name", "position", "market", "i_want"]],
-                hide_index=True,
-            )
+    _nomination_panel(s, top=5, verbose=False)
 
     _minimal_footer(s)
 
 
 def main() -> None:
     st.set_page_config(page_title="Auction Board", layout="wide")
-    st.title("💰 Live Auction Board")
+    minimal = st.session_state.get("view_mode") == MINIMAL_MODE
+    # No h1 title in minimal mode. `st.title` renders at the same size as a markdown `#`, so a
+    # decorative banner sat level with the bid number and directly above it -- in a window the
+    # whole mode exists to keep small. The bid number has to be the largest thing on screen.
+    if not minimal:
+        st.title("💰 Live Auction Board")
     _sidebar()
 
     s: LiveAuctionSession | None = st.session_state.get("session")
     if s is None:
         st.info("Configure the auction in the sidebar and click **Start / restart auction**.")
         return
-    if st.session_state.get("view_mode") == VIEW_MODES[1]:
+    if minimal:
         _minimal_view(s)
         return
     _status_bar(s)

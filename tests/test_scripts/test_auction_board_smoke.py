@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
-from scripts.auction_board import _available_ids, _option_label
+from scripts.auction_board import MINIMAL_MODE, _available_ids, _option_label
 
 _N = 96
 _IDS = [f"00-000{i:04d}" for i in range(1, _N + 1)]
@@ -239,7 +239,7 @@ def _minimal(sess=None, tmp_path: Path | None = None, named: bool = True):  # ty
     if sess is not None and named:
         sess.team_names = tuple(f"Squad {seat}" for seat in sess.seats)
     at = _app(sess, tmp_path)
-    at.session_state["view_mode"] = "Minimal (live draft)"
+    at.session_state["view_mode"] = MINIMAL_MODE
     return at
 
 
@@ -388,3 +388,17 @@ def test_completed_auction_skips_the_naming_gate_but_keeps_undo(tmp_path: Path) 
     at.button(key="m_undo").click().run()
     assert not at.exception
     assert len(at.session_state["session"].purchases) == before - 1
+
+
+def test_minimal_mode_makes_the_bid_number_the_largest_thing_on_screen(tmp_path: Path) -> None:
+    """`st.title` renders as h1, exactly like the markdown `#` the bid number uses, so the
+    decorative banner competed with the number it sits above -- in a deliberately small
+    window. Minimal mode drops the title; the full board keeps it."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    at = _minimal(sess, tmp_path).run()
+    assert not at.exception
+    assert not at.title, "the h1 banner still competes with the bid number"
+
+    full = _app(_smoke_session(), tmp_path).run()
+    assert full.title, "the full board should still have its title"
