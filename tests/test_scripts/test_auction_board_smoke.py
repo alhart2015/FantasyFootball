@@ -169,6 +169,22 @@ def test_winner_must_be_chosen_and_full_teams_are_not_offered(tmp_path: Path) ->
     assert len(_winner_box(at2).options) == full.league.n_teams - 1
 
 
+def test_projection_cache_key_distinguishes_the_buyer() -> None:
+    """The projected-eval cache must key on (player, seat, price), not on players alone.
+
+    An auction's rosters are (player, seat) pairs -- unlike a snake draft, where pick order
+    alone fixes the seat and a player-only key is sound. Undo a sale, re-award the same
+    player to a different team, and a player-only key is byte-identical while the rosters
+    differ, so the board would serve the previous league's win%/champ% numbers."""
+    sess = _smoke_session()
+    sess.record_purchase(_IDS[0], 2, 25)
+    before = sess.state_key
+    sess.undo()
+    sess.record_purchase(_IDS[0], 3, 25)  # same player, same price, different team
+    assert sess.state_key != before
+    assert tuple(p[0] for p in sess.state_key) == tuple(p[0] for p in before)  # players agree
+
+
 def test_board_undo_removes_the_last_sale(tmp_path: Path) -> None:
     pytest.importorskip("streamlit")
     sess = _smoke_session()

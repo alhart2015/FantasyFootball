@@ -377,9 +377,15 @@ def _log_col(s: LiveAuctionSession) -> None:
 
 
 @st.cache_data(show_spinner=False)
-def _cached_projection(session_token: str, purchases: tuple[str, ...], n_sims: int) -> dict:  # type: ignore[type-arg]
+def _cached_projection(
+    session_token: str, purchases: tuple[tuple[str, int, int], ...], n_sims: int
+) -> dict:  # type: ignore[type-arg]
     """Cache the projected-league eval on (session, purchases, n_sims). Pulls the live session +
-    an optional injected availability from session_state (tests inject; prod loads from store)."""
+    an optional injected availability from session_state (tests inject; prod loads from store).
+
+    `purchases` is the session's `state_key` — (player, seat, price) triples, not bare player
+    ids. An auction's rosters are (player, seat) pairs, so a player-only key would serve the
+    previous projection after an undo re-awarded the same player to a different team."""
     s: LiveAuctionSession = st.session_state["session"]
     avail = st.session_state.get("_eval_availability")
     res = s.project_league_outcomes(n_sims=n_sims, availability=avail)
@@ -398,7 +404,7 @@ def _results_section(s: LiveAuctionSession) -> None:
         return
     token = st.session_state.get("session_token", "")
     with st.spinner("Simulating seasons…"):
-        res = _cached_projection(token, tuple(str(p.gsis_id) for p in s.purchases), 2000)
+        res = _cached_projection(token, s.state_key, 2000)
     n = s.league.n_teams
     me = res[s.my_seat]
     c1, c2, c3, c4 = st.columns(4)

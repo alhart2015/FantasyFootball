@@ -272,10 +272,20 @@ class LiveAuctionSession:
         return range(1, self.league.n_teams + 1)
 
     @property
-    def _fingerprint(self) -> tuple[tuple[str, int, int], ...]:
-        """The purchase list — the only mutable state, and the key the seat memo hangs on.
-        (Length alone would collide: an undo followed by a different award is the same length.)"""
+    def state_key(self) -> tuple[tuple[str, int, int], ...]:
+        """The purchase list — the only mutable state, and the key every memo hangs on.
+
+        Public because callers outside this class cache off it too: `scripts/auction_board.py`
+        keys its projected-eval cache on this. The seat matters as much as the player — an
+        auction's rosters are (player, seat) pairs, unlike a snake draft where pick order
+        alone determines the seat — and so does the price, since budgets follow from it.
+        (Length alone would collide: an undo followed by a different award is the same length.)
+        """
         return tuple((str(p.gsis_id), p.seat, p.price) for p in self.purchases)
+
+    @property
+    def _fingerprint(self) -> tuple[tuple[str, int, int], ...]:
+        return self.state_key
 
     def _seat_state(self) -> _SeatState:
         """Per-seat rosters/spend/eligibility, recomputed only when a purchase changes.
