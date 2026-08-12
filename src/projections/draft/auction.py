@@ -11,6 +11,9 @@ Spec: docs/superpowers/specs/2026-05-16-auction-values-design.md
 
 from __future__ import annotations
 
+import warnings
+from typing import Literal
+
 import pandas as pd
 
 from projections.draft._pool import _reject_duplicate_gsis_ids, _select_pool
@@ -194,3 +197,42 @@ def espn_anchored_bot_prices(
 
 
 __all__ = ["espn_anchored_bot_prices", "generate_auction_values", "has_usable_espn_prices"]
+
+
+def build_market_dollars(
+    pool: pd.DataFrame,
+    config: LeagueConfig,
+    *,
+    market: Literal["espn", "model"] = "espn",
+    unranked_discount: float | None = None,
+) -> tuple[pd.DataFrame, pd.Series | None]:
+    """`(baseline_dollars, bot_dollars)` for a live auction — the tournament's own market setup.
+
+    `baseline_dollars` is our SOS valuation of `pool`; `bot_dollars` is what the ROOM is expected
+    to pay (real ESPN auction values re-allocated over the budget when `market="espn"` and the
+    pool carries them, else None = the room bids our values). Mirrors `run_auction_tournament`,
+    including its fallbacks: an ESPN request on a pool without usable ESPN prices warns and falls
+    back to model pricing rather than failing the draft.
+    """
+    if market not in ("espn", "model"):
+        raise ValueError(f"market must be 'espn' or 'model'; got {market!r}")
+    baseline = generate_auction_values(pool, config)
+    if market == "model":
+        return baseline, None
+    if not has_usable_espn_prices(pool):
+        warnings.warn(
+            "no usable espn_auction_dollars in the pool; "
+            "falling back to model (shared-value) pricing.",
+            stacklevel=2,
+        )
+        return baseline, None
+    try:
+        bot = espn_anchored_bot_prices(
+            pool, config, model_values=baseline, unranked_discount=unranked_discount
+        )
+    except ValueError as exc:  # degenerate rounding drift — same fallback the tournament takes
+        warnings.warn(
+            f"espn_anchored_bot_prices failed ({exc}); falling back to model.", stacklevel=2
+        )
+        return baseline, None
+    return baseline, bot

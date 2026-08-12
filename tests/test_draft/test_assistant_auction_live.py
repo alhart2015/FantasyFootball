@@ -22,9 +22,9 @@ from projections.draft.assistant.auction.live import (
     BOARD_BID_MODELS,
     DEFAULT_BID_MODEL,
     LiveAuctionSession,
-    build_market_dollars,
 )
 from projections.draft.assistant.auction.registry import BID_MODELS
+from projections.draft.auction import build_market_dollars
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, Position, RosterSlot, Ruleset
 

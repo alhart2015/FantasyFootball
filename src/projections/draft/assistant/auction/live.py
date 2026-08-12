@@ -18,7 +18,6 @@ pieces the tournament already measured:
 from __future__ import annotations
 
 import json
-import warnings
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -48,11 +47,7 @@ from projections.draft.assistant.league_projection import SeatProjection, projec
 from projections.draft.assistant.live import attach_names, build_player_names
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
-from projections.draft.auction import (
-    espn_anchored_bot_prices,
-    generate_auction_values,
-    has_usable_espn_prices,
-)
+from projections.draft.auction import build_market_dollars
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import (
     allocate_roster_slots,
@@ -156,45 +151,6 @@ class AuctionRosterView:
     filled: pd.DataFrame  # columns: slot, gsis_id, full_name, position, price
     open_slots: dict[RosterSlot, int]
     spent: int
-
-
-def build_market_dollars(
-    pool: pd.DataFrame,
-    config: LeagueConfig,
-    *,
-    market: Literal["espn", "model"] = "espn",
-    unranked_discount: float | None = None,
-) -> tuple[pd.DataFrame, pd.Series | None]:
-    """`(baseline_dollars, bot_dollars)` for a live auction — the tournament's own market setup.
-
-    `baseline_dollars` is our SOS valuation of `pool`; `bot_dollars` is what the ROOM is expected
-    to pay (real ESPN auction values re-allocated over the budget when `market="espn"` and the
-    pool carries them, else None = the room bids our values). Mirrors `run_auction_tournament`,
-    including its fallbacks: an ESPN request on a pool without usable ESPN prices warns and falls
-    back to model pricing rather than failing the draft.
-    """
-    if market not in ("espn", "model"):
-        raise ValueError(f"market must be 'espn' or 'model'; got {market!r}")
-    baseline = generate_auction_values(pool, config)
-    if market == "model":
-        return baseline, None
-    if not has_usable_espn_prices(pool):
-        warnings.warn(
-            "market='espn' but the pool has no usable espn_auction_dollars; "
-            "falling back to model (shared-value) pricing.",
-            stacklevel=2,
-        )
-        return baseline, None
-    try:
-        bot = espn_anchored_bot_prices(
-            pool, config, model_values=baseline, unranked_discount=unranked_discount
-        )
-    except ValueError as exc:  # degenerate rounding drift — same fallback the tournament takes
-        warnings.warn(
-            f"espn_anchored_bot_prices failed ({exc}); falling back to model.", stacklevel=2
-        )
-        return baseline, None
-    return baseline, bot
 
 
 @dataclass
