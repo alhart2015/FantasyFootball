@@ -128,6 +128,16 @@ class BidAdvice:
     room_ceiling: int  # richest opponent who can roster this position
     eligible: bool
 
+    @property
+    def i_want(self) -> bool:
+        """Worth buying: your roster can take him and your ceiling reaches the room's price."""
+        return self.eligible and self.max_bid >= self.market_value
+
+    @property
+    def uncontested(self) -> bool:
+        """You out-reach every rival the model expects to bid on this position."""
+        return self.eligible and self.max_bid > self.room_ceiling
+
 
 @dataclass(frozen=True)
 class _SeatState:
@@ -669,7 +679,7 @@ class LiveAuctionSession:
                     "market": a.market_value,
                     "max_bid": a.max_bid,
                     "room_max": a.room_ceiling,
-                    "i_want": a.eligible and a.max_bid >= a.market_value,
+                    "i_want": a.i_want,
                     "gsis_id": a.gsis_id,
                 }
             )

@@ -569,3 +569,21 @@ def test_load_rejects_an_unknown_saved_market(tmp_path: Path) -> None:
     path.write_text(json.dumps(blob))
     with pytest.raises(ValueError, match="saved market must be"):
         LiveAuctionSession.load(path, id_map=_id_map(), pool=_pool())
+
+
+def test_want_and_uncontested_verdicts_live_on_the_advice() -> None:
+    """`i_want` / `uncontested` are the session's rules, so the view renders them rather than
+    re-deriving them. The board used to restate the want rule with `<` where
+    `nomination_board` used `>=`, leaving `max_bid == market_value` classified by only one."""
+    s = _session()
+    a = s.advise(_IDS[0])
+    assert a.i_want == (a.eligible and a.max_bid >= a.market_value)
+    assert a.uncontested == (a.eligible and a.max_bid > a.room_ceiling)
+    # the nomination board reports the same verdict for the same player
+    board = s.nomination_board(top=40)
+    row = board.loc[board["gsis_id"] == a.gsis_id]
+    if len(row):
+        assert bool(row.iloc[0]["i_want"]) == a.i_want
+    # an ineligible player is never wanted and never uncontested
+    ineligible = dataclasses.replace(a, eligible=False, max_bid=0)
+    assert not ineligible.i_want and not ineligible.uncontested

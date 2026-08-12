@@ -252,14 +252,14 @@ def _bid_panel(s: LiveAuctionSession) -> None:
     c1.metric("Worth to us", f"${advice.fair_value}")
     c2.metric("Room's price", f"${advice.market_value}")
     c3.metric("Best rival can bid", f"${advice.room_ceiling}")
-    if advice.eligible and advice.max_bid > advice.room_ceiling:
+    if advice.uncontested:
         # "should", not "cannot": room_ceiling counts only rivals our roster-discipline model
         # says would still buy this position. A real manager with money can bid on anything.
         st.success(
             "You should win this one — your ceiling clears every rival the model expects "
             "to bid here. (A rival who ignores roster discipline still can.)"
         )
-    elif advice.eligible and advice.max_bid < advice.market_value:
+    elif advice.eligible and not advice.i_want:
         st.warning("The room is anchored above your ceiling — expect to lose this one. Let it go.")
 
     st.markdown("**Record the sale**")
