@@ -223,6 +223,7 @@ data/manifests/
 data/sanity_checks/
 data/external_projections/
 data/draft_sessions/
+data/auction_sessions/
 data/dfs_universe_*.parquet
 *.duckdb
 

@@ -9,6 +9,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+# AppTest's 3s default is a wall-clock budget for the whole script run; under `pytest -n auto`
+# the CPU contention alone blows it (the long-standing parallel flake on this file). Generous,
+# not slow: the run finishes in well under a second when it has a core to itself.
+_TIMEOUT = 60
+
 
 def _smoke_session(picks: list[str] | None = None, my_slot: int = 1, n_teams: int = 12):  # type: ignore[no-untyped-def]
     from projections.draft.assistant.live import LiveDraftSession
@@ -67,7 +72,7 @@ def test_draft_board_loads_without_session() -> None:
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("scripts/draft_board.py").run()
+    at = AppTest.from_file("scripts/draft_board.py", default_timeout=_TIMEOUT).run()
     assert not at.exception
     assert any("Start" in str(getattr(el, "value", "")) for el in at.info)
 
@@ -76,7 +81,7 @@ def test_board_shows_best_available_and_drops_search_box() -> None:
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("scripts/draft_board.py")
+    at = AppTest.from_file("scripts/draft_board.py", default_timeout=_TIMEOUT)
     at.session_state["session"] = _smoke_session(my_slot=1)
     at.session_state["session_token"] = "tok"
     at.session_state["autosave_path"] = None
@@ -93,7 +98,7 @@ def test_board_confirm_records_staged_pick(tmp_path: Path) -> None:
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("scripts/draft_board.py")
+    at = AppTest.from_file("scripts/draft_board.py", default_timeout=_TIMEOUT)
     at.session_state["session"] = _smoke_session(my_slot=1)  # pick 1 is mine
     at.session_state["session_token"] = "tok"
     at.session_state["autosave_path"] = str(tmp_path / "auto.json")
@@ -109,7 +114,7 @@ def test_board_opponent_adp_shortcut_records(tmp_path: Path) -> None:
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("scripts/draft_board.py")
+    at = AppTest.from_file("scripts/draft_board.py", default_timeout=_TIMEOUT)
     at.session_state["session"] = _smoke_session(my_slot=2)  # pick 1 is an opponent's
     at.session_state["session_token"] = "tok"
     at.session_state["autosave_path"] = str(tmp_path / "auto.json")
@@ -131,7 +136,7 @@ def test_board_results_panel_runs_projected_eval(tmp_path: Path) -> None:
     full = list(sess.pool["gsis_id"].astype(str))[: sess.league.n_teams * sess.league.roster_size]
     sess.picks = [validate_gsis_id(g) for g in full]
     assert sess.is_complete
-    at = AppTest.from_file("scripts/draft_board.py")
+    at = AppTest.from_file("scripts/draft_board.py", default_timeout=_TIMEOUT)
     at.session_state["session"] = sess
     at.session_state["session_token"] = "tok"
     at.session_state["autosave_path"] = str(tmp_path / "auto.json")

@@ -104,18 +104,30 @@ python scripts/auction_cheat_sheet.py \
 
 That rewrites both the `.csv` and the `.txt`.
 
-## About the draft-tracker UI
+## The draft-tracker UI (optional)
 
-**There is no auction draft tracker in this repo, and the UI will not help you here.**
+There is now a live **auction** board. The printed sheet still works on its own — the board
+is for people who'd rather have the numbers update themselves as the room spends.
 
-`streamlit run scripts/draft_board.py` launches a live board, but it is built for **snake
-drafts only** — it tracks pick order and draft slots, has no concept of a budget or a
-bid, and its strategy menu contains snake strategies (`season_value`, `now_or_never`, …).
-`overbid_noramp` is an auction bid model and does not appear there. Running it for this
-league would give you advice for the wrong format.
+```bash
+streamlit run scripts/auction_board.py
+```
 
-For this auction, the printed sheet *is* the tool. Track budgets on paper or in the
-league site's own auction room.
+Set it up in the sidebar (scoring, teams, your seat, bid model — pick `overbid_noramp` to
+follow this guide, or leave the default `balanced`), click **Start / restart auction**, and:
+
+- **Bid board** — every available player with the maximum to bid on him. Click a row.
+- The clicked player shows a big **Bid up to $X**, plus what he's worth to us, what the room
+  is expected to pay, and the most any rival team can still bid. If your number clears the
+  rival ceiling, the board says so — the lot is yours if you want it.
+- **Record the sale** — pick the winning team, type the price, click. Budgets, rosters, and
+  every recommendation update off it. There's an undo.
+- **Who to nominate** — a shortlist, marked with whether you actually want each player.
+
+It autosaves after every sale, so you can close the tab and click **Resume last auction**.
+
+`streamlit run scripts/draft_board.py` is the **snake** board — pick order and draft slots,
+no concept of a budget. Don't use it for this league.
 
 ## Draft day
 

@@ -6,6 +6,26 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Hub — Live AUCTION board (UI parity with the snake board) — shipped (2026-08-11, branch `feat/auction-live-board`)
+
+**Status:** the live-draft UI now covers **both** formats. `streamlit run scripts/auction_board.py` is the auction companion to `scripts/draft_board.py`: it says how much to bid on each player, who to nominate, and records who bought whom for how much. The `docs/auction-draft-guide-will-league.md` section that said "there is no auction draft tracker in this repo" is now wrong and has been rewritten.
+
+**Shape (same as the snake board — a testable, Streamlit-free session + a thin view):**
+- **`projections.draft.assistant.auction.live.LiveAuctionSession`** — the controller. It holds the ordered `Purchase` list (gsis_id, seat, price) as the only mutable state; budgets, rosters, eligibility, nomination candidates, and every recommendation derive from it. It reuses the engine's own pieces rather than reimplementing them, so the number the board shows is the number the *measured* strategy would have bid: an `AuctionBidStrategy` scored against a real `AuctionView`, clamped to `[min_bid, feasible_max]` exactly as `simulation._simulate_to_state` clamps a hero's desire; `bot_eligible`/`bot_position_bounds` for the roster-discipline gate (the hero is gated like a bot, spec R2); the engine's value-first nomination rule plus the tested-but-not-adopted poison nominators. Surfaces `advise()` (one player), `bid_board()` (the priced board), `nomination_board()`, `budget_table()`, `purchase_log()`, `inflation()`, `my_roster_view()`, undo, save/load, and `project_league_outcomes()` (the same end-of-draft projected-season eval the snake board runs).
+- **`room_ceiling(position)`** is the one genuinely new signal: the most any *opponent who can still roster that position* is able to bid. When your max bid clears it the lot is yours — a fact the printed sheet cannot express because it depends on live budgets.
+- **`scripts/auction_board.py`** — three-column view (sold log + undo · bid panel/nomination/bid board · roster + budgets), click-a-row-to-price flow, explicit `Player → Team for $N` confirm button (so a mis-recorded winner takes a deliberate click), autosave to `data/auction_sessions/` after every sale + sidebar resume.
+
+**Refactors it pulled in (no behavior change; all prior runs reproduce):**
+- **`auction/registry.py`** — the bid-model registry promoted out of `tournament_cli._MODELS` (now an alias) so the tournament, `auction_field_bakeoff.CONTESTANTS`, and the board can't drift on what a strategy name means. `ALL_BID_MODELS` = the tournament eleven + the validated opt-ins (`overbid_noramp`, the `sr_g*_c2` family) — exactly the bake-off's old contestant set.
+- **`bid_strategy.build_engine_dollars`** / **`surplus_inflation`** — the `AuctionView.baseline_dollars` builder and the inflation formula extracted from `simulation.py` / `InflationBid` and shared, so a live draft and a simulated one build the hero's view identically.
+- **`live.build_player_names`** — the id_map-overlaid-with-pool name map shared by both sessions.
+
+**Board default:** `balanced` (the robust win% leader in both markets), with `overbid_noramp` — the printed cheat sheet's plan — one dropdown click away. The board declares no winner; the strategy call is still September 2026.
+
+**Gates:** full suite **1937 passed** (`tests/test_draft` 599 passed; 30 new controller tests + 6 AppTest smokes). The only remaining failures are the two documented pre-existing ones (`test_backtest_smoke_one_cell` [#40], `test_generate_preset_vorp_tables` [#126]). **Fixed the long-standing `test_draft_board_smoke` parallel flake** while here: it was AppTest's 3s wall-clock default losing to CPU contention under `pytest -n auto`, not a real failure — both smoke files now pass an explicit generous `default_timeout`. mypy strict clean (373 files), ruff check + format clean. Verified against the real Will-league table (578 players, 241 ESPN-priced): the board's advice matches the guide's (Derrick Henry a target well above the room's anchor; Chase/JSN flagged negative-edge = let them go).
+
+---
+
 ## Draft Hub — floored-vs-`season_value` H2H A/B run (issue #113, 2026-07-17, branch `chore/issue-113-floored-vs-sv-ab`)
 
 **Status:** the tracked follow-up from the scarcity-floor slice (issue [#113](https://github.com/alhart2015/FantasyFootball/issues/113), migrated from TODO #42) is **run and logged as Test 19** in `reports/draft_strategy_tests.md`. `now_or_never_floored` (F=40 / λ=1, shipped default) vs `season_value` in the Test 7–10 mirror-paired H2H harness, 2024 + 2025, 200 seeds × 200 sims, ACTUAL axis (the honest yardstick). Clean run on the crashy box (20/20 chunks, **zero crashes/retries**). Added a CRN-paired per-seed diff (`scripts/_ab_113_analyze.py`) — the paired-diff Test 10 lacked. Nothing tuned; default unchanged.

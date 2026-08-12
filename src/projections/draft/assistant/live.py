@@ -139,6 +139,21 @@ class RosterView:
     open_slots: dict[RosterSlot, int]
 
 
+def build_player_names(id_map: pd.DataFrame, pool: pd.DataFrame) -> dict[str, str]:
+    """gsis_id -> full_name: id_map names overlaid with the pool's own `full_name`.
+
+    The consensus pool carries `full_name` for players absent from id_map (placeholder-gsis
+    rookies); those names win so every drafted/available player resolves. A pool player with a
+    null name falls back to id_map. Shared by the snake and auction live sessions.
+    """
+    names: dict[str, str] = dict(zip(id_map["gsis_id"], id_map["full_name"], strict=False))
+    if "full_name" in pool.columns:
+        for gid, nm in zip(pool["gsis_id"], pool["full_name"], strict=False):
+            if pd.notna(nm):
+                names[str(gid)] = str(nm)
+    return names
+
+
 def attach_names(df: pd.DataFrame, names: Mapping[str, str]) -> pd.DataFrame:
     """Return a copy of `df` with a `full_name` column from a prebuilt name map.
 
@@ -185,14 +200,7 @@ class LiveDraftSession:
         (placeholder-gsis rookies); those names win so every drafted/available player
         resolves. A pool player with a null name falls back to id_map, then '—'.
         """
-        names: dict[str, str] = dict(
-            zip(self.id_map["gsis_id"], self.id_map["full_name"], strict=False)
-        )
-        if "full_name" in self.pool.columns:
-            for gid, nm in zip(self.pool["gsis_id"], self.pool["full_name"], strict=False):
-                if pd.notna(nm):
-                    names[str(gid)] = str(nm)
-        return names
+        return build_player_names(self.id_map, self.pool)
 
     @cached_property
     def _id_map_ids(self) -> frozenset[str]:
