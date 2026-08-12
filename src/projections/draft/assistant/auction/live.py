@@ -66,6 +66,10 @@ BOARD_BID_MODEL_NAMES: tuple[str, ...] = tuple(BOARD_BID_MODELS)
 # BOTH the model-priced and ESPN-anchored markets across all 12 seats (PR #95, Run N).
 DEFAULT_BID_MODEL = "balanced"
 
+# Slot label for a rostered player who has no allocatable slot. `record_purchase` records what
+# the room did without enforcing positional eligibility, so this state is reachable.
+_NO_SLOT = "(no slot)"
+
 # Nomination modes the board offers. `value` is the engine's own rule; the other two are the
 # Slice 2 poison probes, retained as tested opt-ins with a NO-GO verdict (see auction.nomination).
 NOMINATION_MODES: tuple[str, ...] = ("value", "drain_off_position", "drain_max")
@@ -335,8 +339,17 @@ class LiveAuctionSession:
         return self.league.roster_size - len(self._seat_state().rosters[seat])
 
     def feasible_max(self, seat: int) -> int:
-        """The engine's solvency ceiling: what a seat can bid and still $1 out its roster."""
-        return self.budget(seat) - self.league.min_bid * (self.open_slots(seat) - 1)
+        """The engine's solvency ceiling: what a seat can bid and still $1 out its roster.
+
+        Zero for a seat with no open slot — it cannot bid at all. Without that guard the
+        formula reads `budget + min_bid` there, i.e. more than the seat has, which the board's
+        status bar printed as "Your max bid" while the budget ledger (which guards the same
+        expression) showed 0 for the same seat on the same screen.
+        """
+        open_ = self.open_slots(seat)
+        if open_ <= 0:
+            return 0
+        return self.budget(seat) - self.league.min_bid * (open_ - 1)
 
     def positions(self, seat: int) -> Counter[Position]:
         return Counter(self._position_by_id[g] for g in self._seat_state().rosters[seat])
@@ -633,6 +646,22 @@ class LiveAuctionSession:
                 "price": prices[gid],
             }
             for gid, pos, slot in placements
+        ]
+        # `allocate_roster_slots` omits a player with no open slot, but `record_purchase`
+        # deliberately does not enforce positional eligibility — it records what the room
+        # actually did. So a third QB in a thin-bench league is on the roster and counted in
+        # `spent`, yet has no placement. Show him rather than losing him silently.
+        placed = {gid for gid, _, _ in placements}
+        rows += [
+            {
+                "slot": _NO_SLOT,
+                "gsis_id": gid,
+                "full_name": self.name(gid),
+                "position": self._position_by_id[gid].value,
+                "price": prices[gid],
+            }
+            for gid in mine
+            if gid not in placed
         ]
         filled = pd.DataFrame(rows, columns=["slot", "gsis_id", "full_name", "position", "price"])
         open_slots: dict[RosterSlot, int] = {

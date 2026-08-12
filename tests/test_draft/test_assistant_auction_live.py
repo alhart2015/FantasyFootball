@@ -164,6 +164,40 @@ def test_feasible_max_reserves_a_dollar_for_every_other_slot() -> None:
     assert s.feasible_max(1) == 100 - (rs - 2)
 
 
+def test_feasible_max_is_zero_for_a_seat_with_no_open_slot() -> None:
+    """A full seat cannot bid. The bare formula reads budget + min_bid at zero open slots --
+    more than the seat has -- which the board printed as "Your max bid" while the budget
+    ledger, which guards the same expression, showed 0 for that seat on the same screen."""
+    s = _session()
+    for i in range(s.league.roster_size):
+        s.record_purchase(_IDS[i], 1, 1)
+    assert s.open_slots(1) == 0
+    assert s.budget(1) > 0  # money left over, so the unguarded formula would be positive
+    assert s.feasible_max(1) == 0
+
+
+def test_my_roster_view_keeps_a_player_with_no_allocatable_slot() -> None:
+    """`record_purchase` records what the room did without enforcing positional eligibility,
+    so a roster can hold a player `allocate_roster_slots` has no slot for. He must still
+    appear -- `spent` counts his price either way, and dropping him loses a bought player."""
+    s = _session()
+    qbs = [g for g in _IDS if s._position_by_id[g] is Position.QB]
+    # QB1 + 4 bench = 5 placeable (QB is not FLEX-eligible), so the sixth has no slot.
+    bought = qbs[:6]
+    for gid in bought:
+        s.record_purchase(gid, s.my_seat, 5)
+    from projections.draft.roster_eligibility import allocate_roster_slots
+
+    placements, _, _ = allocate_roster_slots(
+        ((g, Position.QB) for g in bought), s.league.roster_slots
+    )
+    assert len(placements) < len(bought), "fixture no longer overflows; the test would be vacuous"
+    view = s.my_roster_view()
+    assert set(view.filled["gsis_id"]) == set(bought)
+    assert view.spent == 30
+    assert view.filled["price"].sum() == view.spent
+
+
 @pytest.mark.parametrize(
     ("gsis", "seat", "price", "match"),
     [
