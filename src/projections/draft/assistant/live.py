@@ -147,6 +147,29 @@ class RosterView:
 NO_SLOT = "(no slot)"
 
 
+def filter_named_pool(
+    avail: pd.DataFrame,
+    names: Mapping[str, str],
+    position: Position | None = None,
+    query: str = "",
+) -> pd.DataFrame:
+    """Available players filtered by position and name, with canonical names attached.
+
+    The drop-then-reattach is deliberate: a pool-sourced `full_name` column would make
+    `attach_names` raise on a duplicate column, and the resolved name (pool over id_map) is the
+    one that matches what the board displays, so rookies search the way they render. Shared by
+    both boards; neither sorts or caps here, because they rank by different columns.
+    """
+    if position is not None:
+        avail = avail[avail["position"] == position.value]
+    if "full_name" in avail.columns:
+        avail = avail.drop(columns=["full_name"])
+    named = attach_names(avail, names)
+    if query:
+        named = named[named["full_name"].str.contains(query, case=False, na=False, regex=False)]
+    return named
+
+
 def build_roster_rows(
     ids_with_positions: Sequence[tuple[str, Position]],
     roster_slots: Mapping[RosterSlot, int],
@@ -375,16 +398,7 @@ class LiveDraftSession:
         player an unfiltered cross-position top-N would hide. Names use the same
         pool-over-id_map source as `player_names` (so rookies match what's displayed).
         """
-        avail = self.available_pool()
-        if position is not None:
-            avail = avail[avail["position"] == position.value]
-        # Drop a pre-existing full_name column (pool-sourced) so attach_names can insert the
-        # canonical resolved name (pool-over-id_map) without a duplicate-column error.
-        if "full_name" in avail.columns:
-            avail = avail.drop(columns=["full_name"])
-        named = attach_names(avail, self.player_names)
-        if query:
-            named = named[named["full_name"].str.contains(query, case=False, na=False, regex=False)]
+        named = filter_named_pool(self.available_pool(), self.player_names, position, query)
         return named.sort_values("vorp", ascending=False).head(top).reset_index(drop=True)
 
     def mock_advance_to_my_pick(self) -> list[GsisId]:

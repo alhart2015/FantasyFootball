@@ -47,9 +47,9 @@ from projections.draft.assistant.league_projection import (
     project_completed_league,
 )
 from projections.draft.assistant.live import (
-    attach_names,
     build_player_names,
     build_roster_rows,
+    filter_named_pool,
 )
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.auction import build_market_dollars
@@ -470,14 +470,7 @@ class LiveAuctionSession:
         the per-player model call, which for `marginal` costs a lineup solve each; the returned
         rows are then sorted by `max_bid` descending.
         """
-        avail = self.available_pool()
-        if position is not None:
-            avail = avail[avail["position"] == position.value]
-        if "full_name" in avail.columns:
-            avail = avail.drop(columns=["full_name"])
-        named = attach_names(avail, self.player_names)
-        if query:
-            named = named[named["full_name"].str.contains(query, case=False, na=False, regex=False)]
+        named = filter_named_pool(self.available_pool(), self.player_names, position, query)
         if named.empty:
             return pd.DataFrame(
                 columns=[
