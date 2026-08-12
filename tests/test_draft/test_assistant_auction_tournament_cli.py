@@ -10,9 +10,9 @@ from projections.draft.assistant.auction.bid_strategy import (
     BalancedValueBid,
     PatientValueBid,
 )
+from projections.draft.assistant.auction.registry import BID_MODELS as _MODELS
 from projections.draft.assistant.auction.tournament import AuctionTournamentResult
 from projections.draft.assistant.auction.tournament_cli import (
-    _MODELS,
     _format_espn_diagnostic,
     _parse_args,
     format_compare,

@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from projections.draft.assistant.availability_loader import load_store_availability
+from projections.draft.assistant.league_projection import N_BYES, PLAYOFF_SIZE
 from projections.draft.assistant.live import (
     BOARD_STRATEGIES,
     MC_STRATEGIES,
@@ -400,7 +401,7 @@ def _results_section(s: LiveDraftSession) -> None:
         res = _cached_projection(token, tuple(s.picks), n_sims)
     n = s.league.n_teams
     me = res[s.my_slot]
-    base = {"playoff": 6 / n, "bye": 2 / n, "champ": 1 / n}
+    base = {"playoff": PLAYOFF_SIZE / n, "bye": N_BYES / n, "champ": 1 / n}
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Reg-season win%", f"{me['reg_win_pct']:.1%}", "vs 50%")
     c2.metric("Make playoffs", f"{me['make_playoffs_pct']:.1%}", f"vs {base['playoff']:.1%}")

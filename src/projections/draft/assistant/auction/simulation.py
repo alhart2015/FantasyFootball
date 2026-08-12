@@ -15,7 +15,11 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.assistant._compare import validate_pool_size
-from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy, AuctionView
+from projections.draft.assistant.auction.bid_strategy import (
+    AuctionBidStrategy,
+    AuctionView,
+    build_engine_dollars,
+)
 from projections.draft.assistant.auction.market import (
     AggressiveBot,
     BotArchetype,
@@ -196,14 +200,8 @@ def _simulate_to_state(
     }
     # Row lookup by id, built once — avoids an O(pool) boolean scan to fetch the nominee each round.
     pool_by_id = {str(g): row for g, row in pool.set_index("gsis_id", drop=False).iterrows()}
-    bd = baseline_dollars.set_index("gsis_id")
+    bd = build_engine_dollars(baseline_dollars, bot_dollars)
     nominate_order = bd.sort_values("auction_dollars", ascending=False).index.tolist()
-    if bot_dollars is None:
-        bd["bot_dollars"] = bd["auction_dollars"]
-    else:
-        bd["bot_dollars"] = (
-            bot_dollars.reindex(bd.index).fillna(bd["auction_dollars"]).astype(pd.Int64Dtype())
-        )
     # value the room bids on — only the opt-in hero_nominator reads it, so skip the O(pool) build
     # when the hook is off (mirrors the `trace` guard; the default None path pays nothing here).
     # When bot_dollars is None the room bids on auction_dollars, so reuse val_by_id verbatim.

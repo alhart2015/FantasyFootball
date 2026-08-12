@@ -14,18 +14,6 @@ from typing import Literal
 
 import pandas as pd
 
-from projections.draft.assistant.auction.bid_strategy import (
-    AnchorBudgetBid,
-    AuctionBidStrategy,
-    BalancedValueBid,
-    InflationBid,
-    MarginalValueBid,
-    OverbidValueBid,
-    PatientValueBid,
-    StaticDollarBid,
-    StudsAndDepthBid,
-    VorpShareBid,
-)
 from projections.draft.assistant.auction.market import (
     DEFAULT_PRICE_JITTER,
     AggressiveBot,
@@ -33,6 +21,7 @@ from projections.draft.assistant.auction.market import (
     BotArchetype,
     PatientValueBot,
 )
+from projections.draft.assistant.auction.registry import BID_MODELS
 from projections.draft.assistant.auction.tournament import (
     METRICS,
     AuctionTournamentResult,
@@ -45,25 +34,6 @@ from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.auction import generate_auction_values, has_usable_espn_prices
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, VorpTableSchema
-
-_MODELS: dict[str, AuctionBidStrategy] = {
-    "static": StaticDollarBid(),
-    "inflation": InflationBid(),
-    "marginal": MarginalValueBid(),
-    "anchors": AnchorBudgetBid(),
-    "overbid": OverbidValueBid(),
-    "vorpshare": VorpShareBid(),
-    "patient": PatientValueBid(),
-    # patient_deep: the scrub_frac=0 tuning — hoard mid-tier breadth (bid real value across the
-    # whole non-stud pool, no $1-dumping the bottom half). The multi-year bake-off found this the
-    # most era-robust hero; included as a standing contestant.
-    "patient_deep": PatientValueBid(scrub_frac=0.0),
-    "studsdepth": StudsAndDepthBid(),
-    "balanced": BalancedValueBid(),
-    # balanced_flat: the Slice 1 cap-inflation fix — same premium/pace, but a pace cap that
-    # can't self-inflate as the hero wins (non_increasing_cap=True). See the robust-win-hero spec.
-    "balanced_flat": BalancedValueBid(non_increasing_cap=True),
-}
 
 _REALISTIC_FIELD: list[BotArchetype] = [AggressiveBot(), PatientValueBot(), BalancedBot()]
 
@@ -197,7 +167,7 @@ def run(argv: list[str] | None = None) -> int:
     )
     bot_prices: Literal["espn", "model"] = "espn" if args.bot_prices == "espn" else "model"
     result = run_auction_tournament(
-        _MODELS,
+        BID_MODELS,
         pool,
         config,
         my_seat=args.my_seat,

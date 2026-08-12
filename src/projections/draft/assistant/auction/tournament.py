@@ -6,7 +6,6 @@ winner (spec §5.1) — the adopt decision is the user's, in September.
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
@@ -22,11 +21,7 @@ from projections.draft.assistant.auction.simulation import simulate_auction, val
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.league_projection import project_draft
 from projections.draft.assistant.performance_variance import VarianceParams
-from projections.draft.auction import (
-    espn_anchored_bot_prices,
-    generate_auction_values,
-    has_usable_espn_prices,
-)
+from projections.draft.auction import build_market_dollars
 from projections.draft.league_config import LeagueConfig
 
 _SNAKE_SUBSTREAM = 20260619  # dedicated sub-key for the broke-bot ADP noise (CRN: shared bot field)
@@ -97,28 +92,13 @@ def run_auction_tournament(
         season_base_seed = base_seed + 1_000_000
     validate_auction_inputs(pool, config)
     _validate(config, my_seat=my_seat, n_seeds=n_seeds, price_jitter=price_jitter, n_sims=n_sims)
-    baseline_dollars = generate_auction_values(pool, config)  # config-determined; computed once
+    # Validate our own parameter name (the caller passed `bot_prices`), then share the pricing
+    # itself with the live board so a simulated room and a live one cannot be priced differently.
     if bot_prices not in ("espn", "model"):
         raise ValueError(f"bot_prices must be 'espn' or 'model'; got {bot_prices!r}")
-    bot_dollars: pd.Series | None = None
-    if bot_prices == "espn":
-        if not has_usable_espn_prices(pool):
-            warnings.warn(
-                "bot_prices='espn' but pool has no usable espn_auction_dollars; "
-                "falling back to model (shared-value) bot pricing.",
-                stacklevel=2,
-            )
-        else:
-            try:
-                bot_dollars = espn_anchored_bot_prices(
-                    pool, config, model_values=baseline_dollars, unranked_discount=unranked_discount
-                )
-            except ValueError as exc:
-                warnings.warn(
-                    f"espn_anchored_bot_prices failed ({exc}); falling back to model pricing.",
-                    stacklevel=2,
-                )
-                bot_dollars = None
+    baseline_dollars, bot_dollars = build_market_dollars(
+        pool, config, market=bot_prices, unranked_discount=unranked_discount
+    )
 
     per: dict[str, dict[str, np.ndarray]] = {
         name: {m: np.empty(n_seeds, dtype=np.float64) for m in METRICS} for name in strategies

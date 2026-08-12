@@ -7,7 +7,7 @@ decision to existing engine functions. scripts/draft_board.py is a thin view ove
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -17,11 +17,13 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
-from projections.draft.assistant.league_projection import SeatProjection, project_draft
+from projections.draft.assistant.league_projection import (
+    SeatProjection,
+    project_completed_league,
+)
 from projections.draft.assistant.opponent import bot_pick
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.pick_timing import my_next_pick, slot_for
-from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.assistant.roster_score import optimal_lineup_points
 from projections.draft.assistant.state import DraftState, build_draft_state
 from projections.draft.assistant.strategy import (
@@ -139,6 +141,91 @@ class RosterView:
     open_slots: dict[RosterSlot, int]
 
 
+# Slot label for a rostered player who has no allocatable slot. Reachable on both boards:
+# `allocate_roster_slots` omits an overflow player, and neither session forbids buying/drafting
+# one, so he must be shown rather than silently dropped from the roster table.
+NO_SLOT = "(no slot)"
+
+
+def filter_named_pool(
+    avail: pd.DataFrame,
+    names: Mapping[str, str],
+    position: Position | None = None,
+    query: str = "",
+) -> pd.DataFrame:
+    """Available players filtered by position and name, with canonical names attached.
+
+    The drop-then-reattach is deliberate: a pool-sourced `full_name` column would make
+    `attach_names` raise on a duplicate column, and the resolved name (pool over id_map) is the
+    one that matches what the board displays, so rookies search the way they render. Shared by
+    both boards; neither sorts or caps here, because they rank by different columns.
+    """
+    if position is not None:
+        avail = avail[avail["position"] == position.value]
+    if "full_name" in avail.columns:
+        avail = avail.drop(columns=["full_name"])
+    named = attach_names(avail, names)
+    if query:
+        named = named[named["full_name"].str.contains(query, case=False, na=False, regex=False)]
+    return named
+
+
+def build_roster_rows(
+    ids_with_positions: Sequence[tuple[str, Position]],
+    roster_slots: Mapping[RosterSlot, int],
+    name_of: Callable[[str], str],
+    *,
+    prices: Mapping[str, int] | None = None,
+) -> tuple[pd.DataFrame, dict[RosterSlot, int]]:
+    """A roster table and its remaining open STARTING slots, shared by both live boards.
+
+    `allocate_roster_slots` documents that it omits a player with no open slot. Both sessions
+    used to let that player vanish from the roster table while still counting him elsewhere
+    (the auction's `spent` included his price), so overflow players are appended here under
+    `NO_SLOT` instead. `prices` adds a `price` column; omit it for a snake draft, which has no
+    per-player cost.
+    """
+    placements, open_, _ = allocate_roster_slots(ids_with_positions, roster_slots)
+    # `is not None`, not truthiness: an empty mapping is a seat that has bought nothing yet,
+    # which still needs the column. Dropping it made the auction roster table raise KeyError.
+    cols = ["slot", "gsis_id", "full_name", "position"] + (["price"] if prices is not None else [])
+
+    def _row(gid: str, pos: Position, slot: str) -> dict[str, object]:
+        row: dict[str, object] = {
+            "slot": slot,
+            "gsis_id": gid,
+            "full_name": name_of(gid),
+            "position": pos.value,
+        }
+        if prices is not None:
+            row["price"] = prices[gid]
+        return row
+
+    rows = [_row(gid, pos, slot.value) for gid, pos, slot in placements]
+    placed = {gid for gid, _, _ in placements}
+    rows += [_row(gid, pos, NO_SLOT) for gid, pos in ids_with_positions if gid not in placed]
+    filled = pd.DataFrame(rows, columns=cols)
+    open_slots: dict[RosterSlot, int] = {
+        s: c for s, c in open_.items() if c > 0 and s != RosterSlot.BENCH
+    }
+    return filled, open_slots
+
+
+def build_player_names(id_map: pd.DataFrame, pool: pd.DataFrame) -> dict[str, str]:
+    """gsis_id -> full_name: id_map names overlaid with the pool's own `full_name`.
+
+    The consensus pool carries `full_name` for players absent from id_map (placeholder-gsis
+    rookies); those names win so every drafted/available player resolves. A pool player with a
+    null name falls back to id_map. Shared by the snake and auction live sessions.
+    """
+    names: dict[str, str] = dict(zip(id_map["gsis_id"], id_map["full_name"], strict=False))
+    if "full_name" in pool.columns:
+        for gid, nm in zip(pool["gsis_id"], pool["full_name"], strict=False):
+            if pd.notna(nm):
+                names[str(gid)] = str(nm)
+    return names
+
+
 def attach_names(df: pd.DataFrame, names: Mapping[str, str]) -> pd.DataFrame:
     """Return a copy of `df` with a `full_name` column from a prebuilt name map.
 
@@ -185,14 +272,7 @@ class LiveDraftSession:
         (placeholder-gsis rookies); those names win so every drafted/available player
         resolves. A pool player with a null name falls back to id_map, then '—'.
         """
-        names: dict[str, str] = dict(
-            zip(self.id_map["gsis_id"], self.id_map["full_name"], strict=False)
-        )
-        if "full_name" in self.pool.columns:
-            for gid, nm in zip(self.pool["gsis_id"], self.pool["full_name"], strict=False):
-                if pd.notna(nm):
-                    names[str(gid)] = str(nm)
-        return names
+        return build_player_names(self.id_map, self.pool)
 
     @cached_property
     def _id_map_ids(self) -> frozenset[str]:
@@ -290,22 +370,11 @@ class LiveDraftSession:
 
     def my_roster_view(self) -> RosterView:
         state = self.state()
-        placements, open_, _ = allocate_roster_slots(
-            zip(state.my_pick_ids, state.my_roster, strict=False), self.league.roster_slots
+        filled, open_slots = build_roster_rows(
+            list(zip(state.my_pick_ids, state.my_roster, strict=False)),
+            self.league.roster_slots,
+            self.name,
         )
-        rows = [
-            {
-                "slot": slot.value,
-                "gsis_id": gid,
-                "full_name": self.name(gid),
-                "position": pos.value,
-            }
-            for gid, pos, slot in placements
-        ]
-        filled = pd.DataFrame(rows, columns=["slot", "gsis_id", "full_name", "position"])
-        open_slots: dict[RosterSlot, int] = {
-            s: c for s, c in open_.items() if c > 0 and s != RosterSlot.BENCH
-        }
         return RosterView(filled=filled, open_slots=open_slots)
 
     def best_available_by_position(self, top: int) -> dict[Position, pd.DataFrame]:
@@ -329,16 +398,7 @@ class LiveDraftSession:
         player an unfiltered cross-position top-N would hide. Names use the same
         pool-over-id_map source as `player_names` (so rookies match what's displayed).
         """
-        avail = self.available_pool()
-        if position is not None:
-            avail = avail[avail["position"] == position.value]
-        # Drop a pre-existing full_name column (pool-sourced) so attach_names can insert the
-        # canonical resolved name (pool-over-id_map) without a duplicate-column error.
-        if "full_name" in avail.columns:
-            avail = avail.drop(columns=["full_name"])
-        named = attach_names(avail, self.player_names)
-        if query:
-            named = named[named["full_name"].str.contains(query, case=False, na=False, regex=False)]
+        named = filter_named_pool(self.available_pool(), self.player_names, position, query)
         return named.sort_values("vorp", ascending=False).head(top).reset_index(drop=True)
 
     def mock_advance_to_my_pick(self) -> list[GsisId]:
@@ -375,26 +435,21 @@ class LiveDraftSession:
         """
         if not self.is_complete:
             raise ValueError("draft must be complete to project league outcomes")
-        pool = attach_is_rookie(self.pool, season=self.season, data_root=data_root)
-        if availability is None:
-            from projections.draft.assistant.availability_loader import load_store_availability
-
-            availability = load_store_availability(pool, season=self.season, data_root=data_root)
-        if params is None:
-            params = VarianceParams.load()
         n_teams = self.league.n_teams
         rosters = {
             slot: [str(p) for i, p in enumerate(self.picks) if slot_for(i + 1, n_teams) == slot]
             for slot in range(1, n_teams + 1)
         }
-        return project_draft(
-            rosters=rosters,
-            pool=pool,
+        return project_completed_league(
+            rosters,
+            self.pool,
+            self.league,
+            season=self.season,
+            n_sims=n_sims,
+            seed=seed,
             availability=availability,
             params=params,
-            league_config=self.league,
-            n_sims=n_sims,
-            rng=np.random.default_rng(seed),
+            data_root=data_root,
         )
 
     def to_state_dict(self) -> dict[str, object]:

@@ -51,9 +51,15 @@ Pre-commit runs lint + format + typecheck on every commit. You don't need to rem
 
 The Python public API is `from projections import ...`. CLI verbs (`python -m projections refresh|project|backtest|query`) are coming in Plan 4 and aren't built yet.
 
-## Live draft board (Draft Assistant UI)
+## Live draft boards (Draft Assistant UI)
 
-Install the UI extra once: `pip install -e ".[ui]"`. Then:
+Install the UI extra once: `pip install -e ".[ui]"`. There are two boards — one per draft
+format. Both take the same inputs from the sidebar (a consensus VORP parquet from
+`generate_vorp_table.py --source consensus`, `data/raw/id_map.parquet`, and a league-config
+JSON or a built-in preset), and both keep all logic in a testable, Streamlit-free session
+object with the script as a thin view.
+
+### Snake
 
 ```bash
 streamlit run scripts/draft_board.py
@@ -61,11 +67,29 @@ streamlit run scripts/draft_board.py
 
 Co-pilot mode: log every pick (yours + opponents'); opponents get a one-click ADP
 suggestion. Mock mode: opponents are auto-drafted; "Advance to my pick" runs the field
-to your turn; the draft ends with an optimal-lineup scorecard. Inputs (set in the
-sidebar): a consensus VORP parquet (`generate_vorp_table.py --source consensus`),
-`data/raw/id_map.parquet`, and a league-config JSON. Sessions autosave to
-`data/draft_sessions/` and can be resumed from the sidebar. All draft logic lives in the
-testable `projections.draft.assistant.live.LiveDraftSession`; the script is a thin view.
+to your turn; the draft ends with an optimal-lineup scorecard. Sessions autosave to
+`data/draft_sessions/` and can be resumed from the sidebar. Logic:
+`projections.draft.assistant.live.LiveDraftSession`.
+
+### Auction
+
+```bash
+streamlit run scripts/auction_board.py
+```
+
+Prices the top 40 available players (search filters the whole pool) through a registered bid
+model (`auction.registry`), clamped
+to the same `[min_bid, feasible_max]` window the simulation engine applies, and shows it
+against what the room is anchored on (ESPN-anchored when the table carries ESPN values) and
+the richest rival ceiling for that position. Also suggests who to nominate, and records each
+sale (winner + price) — budgets, rosters, eligibility, and every recommendation derive from
+that log. Undo, autosave to `data/auction_sessions/`, sidebar resume, and an end-of-draft
+projected-season eval. Logic:
+`projections.draft.assistant.auction.live.LiveAuctionSession`.
+
+The auction board is **co-pilot only** — there is no mock-auction mode yet, so it has no
+analogue of the snake board's auto-drafting field or "Advance to my pick". Tracked in
+[#137](https://github.com/alhart2015/FantasyFootball/issues/137).
 
 ## Workflow
 

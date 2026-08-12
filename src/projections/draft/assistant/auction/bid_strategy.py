@@ -48,6 +48,41 @@ def _surplus_money(view: AuctionView, config: LeagueConfig) -> int:
     return sum(view.budgets_by_seat) - config.min_bid * _total_open_slots(view, config)
 
 
+def build_engine_dollars(
+    baseline_dollars: pd.DataFrame, bot_dollars: pd.Series | None = None
+) -> pd.DataFrame:
+    """Build the frame `AuctionView.baseline_dollars` carries: `AuctionValuesSchema` columns
+    indexed by `gsis_id`, plus a `bot_dollars` column — the price the ROOM anchors on.
+
+    `bot_dollars` (e.g. `espn_anchored_bot_prices`) may cover only part of the board; missing
+    entries fall back to our own `auction_dollars`. `None` means the room bids on our own values.
+    Shared by the simulation engine and the live auction board so a hero's mid-draft view is
+    built exactly the same way in a real draft as in the tournament it was measured in.
+    """
+    bd = baseline_dollars.set_index("gsis_id")
+    if bot_dollars is None:
+        bd["bot_dollars"] = bd["auction_dollars"]
+    else:
+        bd["bot_dollars"] = (
+            bot_dollars.reindex(bd.index).fillna(bd["auction_dollars"]).astype(pd.Int64Dtype())
+        )
+    return bd
+
+
+def surplus_inflation(view: AuctionView, config: LeagueConfig) -> float:
+    """Live market inflation: surplus money left in the room / surplus value left on the board.
+
+    >1 means the remaining players will clear ABOVE their static dollar value (the room has more
+    money than board left); <1 means bargains. 1.0 when no value remains. `InflationBid` re-prices
+    with it; the live board reports it.
+    """
+    money = _surplus_money(view, config)
+    bd = view.baseline_dollars
+    undrafted_in_pool = bd[bd["in_pool"] & ~bd.index.isin(view.drafted)]
+    value = float((undrafted_in_pool["auction_dollars"] - config.min_bid).sum())
+    return money / value if value > 0 else 1.0
+
+
 @dataclass(frozen=True)
 class StaticDollarBid:
     """v1 — bid straight to the static SOS dollar."""
@@ -67,12 +102,8 @@ class InflationBid:
         self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
     ) -> int:
         min_bid = config.min_bid
-        money = _surplus_money(view, config)
-        bd = view.baseline_dollars
-        undrafted_in_pool = bd[bd["in_pool"] & ~bd.index.isin(view.drafted)]
-        value = float((undrafted_in_pool["auction_dollars"] - min_bid).sum())
-        inflation = money / value if value > 0 else 1.0
-        base = int(bd.loc[player["gsis_id"], "auction_dollars"])
+        inflation = surplus_inflation(view, config)
+        base = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
         bid = min_bid + (base - min_bid) * inflation
         return round(bid * _budget_urgency(view, config))
 

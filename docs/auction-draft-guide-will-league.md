@@ -104,18 +104,45 @@ python scripts/auction_cheat_sheet.py \
 
 That rewrites both the `.csv` and the `.txt`.
 
-## About the draft-tracker UI
+## The draft-tracker UI (optional)
 
-**There is no auction draft tracker in this repo, and the UI will not help you here.**
+There is now a live **auction** board. The printed sheet still works on its own — the board
+is for people who'd rather have the numbers update themselves as the room spends.
 
-`streamlit run scripts/draft_board.py` launches a live board, but it is built for **snake
-drafts only** — it tracks pick order and draft slots, has no concept of a budget or a
-bid, and its strategy menu contains snake strategies (`season_value`, `now_or_never`, …).
-`overbid_noramp` is an auction bid model and does not appear there. Running it for this
-league would give you advice for the wrong format.
+```bash
+streamlit run scripts/auction_board.py
+```
 
-For this auction, the printed sheet *is* the tool. Track budgets on paper or in the
-league site's own auction room.
+**Point it at this league, not the built-in preset.** The sidebar's presets are generic
+(WR3/FLEX1, bench 9, 4-pt passing TDs); this league is WR2/FLEX2, bench 5, **5-pt passing
+TDs**. Different roster shape and different scoring means different VORP, so a preset-loaded
+board would quietly disagree with the printed sheet above. In the sidebar open **Advanced**
+and set both overrides to the same files the cheat sheet was generated from:
+
+- **LeagueConfig JSON (overrides preset)** → `configs/will_half12_pass5.league.json`
+- **VORP parquet (overrides preset)** → `data/vorp_2026/will_half12.parquet`
+
+Then set your seat, pick the bid model — **`overbid_noramp`** is this guide's plan and what
+the sheet's numbers assume; `balanced` is the repo-wide default and a different plan, so
+switching to it means the sheet and the board no longer agree — and click **Start / restart
+auction**.
+
+- **Bid board** — the top 40 available players by our own values, each with the maximum to
+  bid on him. The search box filters the whole pool, so anyone not in the top 40 is still
+  reachable by name. Click a row.
+- The clicked player shows a big **Bid up to $X**, plus what he's worth to us, what the room
+  is expected to pay, and the most any rival team can still bid. If your number clears that
+  ceiling the board says so — but read it as "you should win this one", not a guarantee. The
+  ceiling only counts rivals our roster-discipline model thinks would still buy the position;
+  a real manager with money can bid on anything.
+- **Record the sale** — pick the winning team, type the price, click. Budgets, rosters, and
+  every recommendation update off it. There's an undo.
+- **Who to nominate** — a shortlist, marked with whether you actually want each player.
+
+It autosaves after every sale, so you can close the tab and click **Resume last auction**.
+
+`streamlit run scripts/draft_board.py` is the **snake** board — pick order and draft slots,
+no concept of a budget. Don't use it for this league.
 
 ## Draft day
 

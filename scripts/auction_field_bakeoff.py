@@ -35,11 +35,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from projections.draft.assistant.auction.bid_strategy import (
-    AuctionBidStrategy,
-    OverbidValueBid,
-    StackRatioBid,
-)
+from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
 from projections.draft.assistant.auction.market import (
     DEFAULT_PRICE_JITTER,
     AggressiveBot,
@@ -47,9 +43,9 @@ from projections.draft.assistant.auction.market import (
     BotArchetype,
     PatientValueBot,
 )
+from projections.draft.assistant.auction.registry import ALL_BID_MODELS
 from projections.draft.assistant.auction.tournament import METRICS, run_auction_tournament
 from projections.draft.assistant.auction.tournament_cli import (
-    _MODELS,
     _REALISTIC_FIELD,
     _load_tournament_inputs,
 )
@@ -57,18 +53,11 @@ from projections.draft.auction import has_usable_espn_prices
 
 _Z95 = 1.959963984540054
 
-# The hero contestants: every registered bid model, plus the low-gain convex StackRatio variants
-# that Run T resolved as the only heroes to beat `balanced` in the less-circular ESPN market. They
-# are library-tested opt-ins deliberately kept out of `_MODELS`, so name them explicitly here.
-CONTESTANTS: dict[str, AuctionBidStrategy] = {
-    **_MODELS,
-    # The bake-off winner minus its late-draft ramp: stronger AND executable from a printed
-    # sheet, since the ramp is the one part a human cannot reproduce. See OverbidValueBid.
-    "overbid_noramp": OverbidValueBid(use_urgency=False),
-    "sr_g0.1_c2": StackRatioBid(gain=0.1, curve=2.0),
-    "sr_g0.2_c2": StackRatioBid(gain=0.2, curve=2.0),
-    "sr_g0.3_c2": StackRatioBid(gain=0.3, curve=2.0),
-}
+# The hero contestants: every registered bid model, plus the library-tested opt-ins (the no-ramp
+# overbid variant and the low-gain convex StackRatio variants that Run T resolved as the only
+# heroes to beat `balanced` in the less-circular ESPN market), which are deliberately kept out of
+# the tournament roster. `registry.ALL_BID_MODELS` is exactly that union.
+CONTESTANTS: dict[str, AuctionBidStrategy] = ALL_BID_MODELS
 
 # The under-bidder: the library's stock `PatientValueBot` at its defaults — under-bids studs at
 # 0.5x (never wins one), pays a mid-tier premium out of the reserve it saved, $1s the bottom half.
