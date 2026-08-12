@@ -1,4 +1,4 @@
-"""Full-field post-seat-fix sweep: race ALL registered bid heroes (`tournament_cli._MODELS`)
+"""Full-field post-seat-fix sweep: race ALL registered bid heroes (`auction.registry.BID_MODELS`)
 across every hero seat (1..N) in BOTH bot markets, scored by reg_win_pct, and rank by the
 seat-averaged worst-case across markets (the robust-win-hero goal metric).
 
@@ -24,9 +24,9 @@ from pathlib import Path
 from typing import Literal, NamedTuple
 
 from projections.draft.assistant.auction.market import DEFAULT_PRICE_JITTER
+from projections.draft.assistant.auction.registry import BID_MODELS
 from projections.draft.assistant.auction.tournament import run_auction_tournament
 from projections.draft.assistant.auction.tournament_cli import (
-    _MODELS,
     _REALISTIC_FIELD,
     _load_tournament_inputs,
 )
@@ -113,7 +113,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
             "mislabeled model-priced. Use --bot-prices model or a pool with ESPN values."
         )
     result = run_auction_tournament(
-        _MODELS,
+        BID_MODELS,
         pool,
         config,
         my_seat=args.seat,

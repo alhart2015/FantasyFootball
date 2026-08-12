@@ -24,8 +24,9 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.auction.market import assign_bot_archetypes
+from projections.draft.assistant.auction.registry import BID_MODELS
 from projections.draft.assistant.auction.simulation import AuctionState, _simulate_to_state
-from projections.draft.assistant.auction.tournament_cli import _MODELS, _REALISTIC_FIELD, _load_pool
+from projections.draft.assistant.auction.tournament_cli import _REALISTIC_FIELD, _load_pool
 from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.league_projection import SeatProjection, project_draft
 from projections.draft.assistant.performance_variance import VarianceParams
@@ -84,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.disable(logging.WARNING)
     warnings.filterwarnings("ignore")
     p = argparse.ArgumentParser(description="Inspect a bid-model's best/worst auction drafts.")
-    p.add_argument("--strategy", default="patient_deep", choices=sorted(_MODELS))
+    p.add_argument("--strategy", default="patient_deep", choices=sorted(BID_MODELS))
     p.add_argument("--season", type=int, default=2026)
     p.add_argument("--scoring", default="half", choices=("half", "ppr", "std"))
     p.add_argument("--size", type=int, default=12, choices=(10, 12, 16))
@@ -127,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
             pool, config, model_values=baseline, unranked_discount=args.unranked_discount
         )
 
-    hero = _MODELS[args.strategy]
+    hero = BID_MODELS[args.strategy]
     seat0, n, budget = args.seat - 1, config.n_teams, config.budget
     bot_seats = [s for s in range(n) if s != seat0]
     assigned = assign_bot_archetypes(len(bot_seats), _REALISTIC_FIELD)

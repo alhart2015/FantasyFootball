@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import warnings
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -61,7 +62,7 @@ from projections.draft.roster_eligibility import (
 from projections.schemas import GsisId, Position, RosterSlot, validate_gsis_id
 
 # The board's bid-model menu — the tournament roster plus the validated opt-ins.
-BOARD_BID_MODELS: dict[str, AuctionBidStrategy] = ALL_BID_MODELS
+BOARD_BID_MODELS: Mapping[str, AuctionBidStrategy] = ALL_BID_MODELS
 BOARD_BID_MODEL_NAMES: tuple[str, ...] = tuple(BOARD_BID_MODELS)
 # `balanced` (BalancedValueBid, premium 0.0) is the shipped default: the robust win% leader in
 # BOTH the model-priced and ESPN-anchored markets across all 12 seats (PR #95, Run N).

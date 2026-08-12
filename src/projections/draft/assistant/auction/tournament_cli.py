@@ -35,10 +35,6 @@ from projections.draft.auction import generate_auction_values, has_usable_espn_p
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 
-# The tournament roster now lives in auction.registry (shared with the bake-off and the live
-# board). Kept under the historical private name for the analysis scripts that import it.
-_MODELS = BID_MODELS
-
 _REALISTIC_FIELD: list[BotArchetype] = [AggressiveBot(), PatientValueBot(), BalancedBot()]
 
 
@@ -171,7 +167,7 @@ def run(argv: list[str] | None = None) -> int:
     )
     bot_prices: Literal["espn", "model"] = "espn" if args.bot_prices == "espn" else "model"
     result = run_auction_tournament(
-        _MODELS,
+        BID_MODELS,
         pool,
         config,
         my_seat=args.my_seat,

@@ -6,11 +6,18 @@ roster: the no-ramp overbid variant and the low-gain convex StackRatio family. T
 bake-off script and the live auction board offer `ALL_BID_MODELS` (both sets).
 
 Promoted out of `tournament_cli._MODELS` so the tournament, the analysis scripts, and
-`auction/live.py` can't drift apart on what a strategy name means. `tournament_cli._MODELS`
-remains as an alias for the scripts that import it.
+`auction/live.py` can't drift apart on what a strategy name means. Every consumer now imports
+from here; the old private alias is gone.
+
+The three mappings are read-only. Consumers bind the *same* object, so a `pop`/`__setitem__`
+to subset one run would silently redefine the tournament roster and the live board's menu
+process-wide. Take a `dict(...)` copy to build a variant.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
+from types import MappingProxyType
 
 from projections.draft.assistant.auction.bid_strategy import (
     AnchorBudgetBid,
@@ -26,7 +33,7 @@ from projections.draft.assistant.auction.bid_strategy import (
     VorpShareBid,
 )
 
-BID_MODELS: dict[str, AuctionBidStrategy] = {
+_BID_MODELS: dict[str, AuctionBidStrategy] = {
     "static": StaticDollarBid(),
     "inflation": InflationBid(),
     "marginal": MarginalValueBid(),
@@ -45,7 +52,7 @@ BID_MODELS: dict[str, AuctionBidStrategy] = {
     "balanced_flat": BalancedValueBid(non_increasing_cap=True),
 }
 
-EXTRA_BID_MODELS: dict[str, AuctionBidStrategy] = {
+_EXTRA_BID_MODELS: dict[str, AuctionBidStrategy] = {
     # The bake-off winner minus its late-draft ramp: stronger AND executable from a printed
     # sheet, since the ramp is the one part a human cannot reproduce. See OverbidValueBid.
     "overbid_noramp": OverbidValueBid(use_urgency=False),
@@ -56,6 +63,10 @@ EXTRA_BID_MODELS: dict[str, AuctionBidStrategy] = {
     "sr_g0.3_c2": StackRatioBid(gain=0.3, curve=2.0),
 }
 
-ALL_BID_MODELS: dict[str, AuctionBidStrategy] = {**BID_MODELS, **EXTRA_BID_MODELS}
+BID_MODELS: Mapping[str, AuctionBidStrategy] = MappingProxyType(_BID_MODELS)
+EXTRA_BID_MODELS: Mapping[str, AuctionBidStrategy] = MappingProxyType(_EXTRA_BID_MODELS)
+ALL_BID_MODELS: Mapping[str, AuctionBidStrategy] = MappingProxyType(
+    {**_BID_MODELS, **_EXTRA_BID_MODELS}
+)
 
 __all__ = ["ALL_BID_MODELS", "BID_MODELS", "EXTRA_BID_MODELS"]

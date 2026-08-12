@@ -110,12 +110,25 @@ class _FixedBid:
 
 
 def test_registry_is_the_tournament_roster() -> None:
-    """tournament_cli._MODELS is now an alias, so the tournament and board can't drift."""
-    from projections.draft.assistant.auction.tournament_cli import _MODELS
+    """The board offers the tournament's own models, so a name means one thing everywhere.
 
-    assert _MODELS is BID_MODELS
+    Asserts the contract, not object identity: `_MODELS is BID_MODELS` would have passed with
+    a broken registry and failed on a harmless defensive copy.
+    """
     assert set(BID_MODELS) <= set(BOARD_BID_MODELS)
+    for name, model in BID_MODELS.items():
+        assert BOARD_BID_MODELS[name] is model, f"{name} is not the strategy the tournament raced"
     assert "overbid_noramp" in BOARD_BID_MODELS  # the printed cheat sheet's plan
+
+
+def test_registry_mappings_are_read_only() -> None:
+    """Every consumer binds the same object, so a mutation would redefine the tournament
+    roster and the live board's menu process-wide."""
+    with pytest.raises(TypeError):  # mappingproxy rejects item assignment
+        BID_MODELS["static"] = BID_MODELS["balanced"]  # type: ignore[index]
+    with pytest.raises(AttributeError):  # ...and has no mutating methods at all
+        BOARD_BID_MODELS.pop("balanced")  # type: ignore[attr-defined]
+    assert dict(BID_MODELS)  # a copy is still the sanctioned way to build a variant
 
 
 def test_build_engine_dollars_falls_back_to_our_value() -> None:
