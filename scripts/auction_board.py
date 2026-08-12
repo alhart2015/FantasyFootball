@@ -487,25 +487,38 @@ def _team_names_gate(s: LiveAuctionSession) -> bool:
     """
     if any(n.strip() for n in s.team_names):
         return True
+    if st.session_state.get("skip_team_names"):
+        if st.button("① Name the teams", key="reopen_naming"):
+            st.session_state["skip_team_names"] = False
+            st.rerun()
+        return True
     st.subheader("① Name the teams")
     st.caption("So the confirm button reads a real name instead of “Team 6”. One time only.")
     with st.form("team_names_form"):
         names = [
             st.text_input(
                 f"Seat {seat}" + (" (you)" if seat == s.my_seat else ""),
-                value=("You" if seat == s.my_seat else f"Team {seat}"),
+                value=s.team_label(seat),
                 key=f"tn_{seat}",
             )
             for seat in s.seats
         ]
         if st.form_submit_button("Save names & start", type="primary"):
-            s.team_names = tuple(n.strip() or f"Team {i + 1}" for i, n in enumerate(names))
+            # Keyed on `seat`, and blanks fall back through `team_label`, so clearing your own
+            # box restores "You" rather than writing "Team 1" over the hero marker.
+            s.team_names = tuple(
+                n.strip() or s.team_label(seat) for seat, n in zip(s.seats, names, strict=True)
+            )
             _autosave(s)
             st.rerun()
     # An escape so the gate can never strand a session (e.g. resuming to check one number).
-    if st.button("Skip — use Team 1…N"):
-        s.team_names = tuple(f"Team {seat}" for seat in s.seats)
-        _autosave(s)
+    # `_SKIPPED` rather than "Team N": the latter is truthy, so it would satisfy the re-entry
+    # test above and permanently disable the gate with no rename affordance anywhere in this
+    # mode -- leaving the operator in exactly the state the gate exists to prevent. A blank
+    # marker keeps `team_label`'s own defaults ("You" for your seat) and lets the gate return.
+    if st.button("Skip for now — use default names", key="skip_names"):
+        s.team_names = ()
+        st.session_state["skip_team_names"] = True
         st.rerun()
     return False
 
@@ -570,17 +583,39 @@ def _minimal_record(s: LiveAuctionSession, advice: BidAdvice) -> None:
         st.rerun()
 
 
+def _minimal_footer(s: LiveAuctionSession) -> None:
+    """Money left, slots, lots sold — and undo.
+
+    Rendered on the complete branch too: a mis-recorded FINAL lot is the one an operator most
+    needs to fix, and it was previously reachable only by switching views.
+    """
+    foot, undo = st.columns([3, 1])
+    foot.caption(
+        f"${s.budget(s.my_seat)} left · {s.open_slots(s.my_seat)} slots · "
+        f"{len(s.purchases)}/{s.league.total_pool_size} sold"
+    )
+    if s.purchases and undo.button("↶ Undo", key="m_undo"):
+        s.undo()
+        st.session_state["pending_player"] = None
+        st.session_state["m_nom_last"] = None
+        _autosave(s)
+        st.rerun()
+
+
 def _minimal_view(s: LiveAuctionSession) -> None:
     """The live-draft surface: nominate, read a number, record the sale. Nothing else.
 
     Deliberately omits the sold log, rosters, budget table, bid board and projected eval --
     all of which the Yahoo draft UI already shows the operator. See the design doc.
     """
-    if not _team_names_gate(s):
-        return
     if s.is_complete:
+        # Before the naming gate: a finished auction does not need names, and showing a setup
+        # form for a draft that is over reads as a bug.
         st.subheader("✅ Auction complete")
         st.caption("Switch to **Full board** in the sidebar for the projected-season eval.")
+        _minimal_footer(s)
+        return
+    if not _team_names_gate(s):
         return
 
     st.subheader("② Who was nominated?")
@@ -647,17 +682,7 @@ def _minimal_view(s: LiveAuctionSession) -> None:
                 hide_index=True,
             )
 
-    foot, undo = st.columns([3, 1])
-    foot.caption(
-        f"${s.budget(s.my_seat)} left · {s.open_slots(s.my_seat)} slots · "
-        f"{len(s.purchases)}/{s.league.total_pool_size} sold"
-    )
-    if s.purchases and undo.button("↶ Undo", key="m_undo"):
-        s.undo()
-        st.session_state["pending_player"] = None
-        st.session_state["m_nom_last"] = None
-        _autosave(s)
-        st.rerun()
+    _minimal_footer(s)
 
 
 def main() -> None:

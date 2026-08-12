@@ -331,3 +331,60 @@ def test_minimal_mode_hides_what_yahoo_already_shows(tmp_path: Path) -> None:
     # caught, so a re-added dataframe or metric row would have slipped straight through.
     assert len(at.dataframe) == 1, "only the nomination shortlist renders a table"
     assert len(at.metric) == 0, "no status-bar metrics before a player is staged"
+
+
+def test_skip_escape_is_reversible_and_keeps_the_you_marker(tmp_path: Path) -> None:
+    """The escape must not become a one-way trip into the state the gate exists to prevent.
+
+    It used to write "Team 1"…"Team N" -- truthy, so the gate's re-entry test never fired
+    again, there is no rename affordance anywhere in minimal mode, and it overwrote the
+    operator's own seat so `team_label` stopped returning "You" in BOTH views and in the
+    persisted autosave.
+    """
+    pytest.importorskip("streamlit")
+    sess = _smoke_session(my_seat=1)
+    at = _minimal(sess, tmp_path, named=False).run()
+    assert not at.exception
+    at.button(key="skip_names").click().run()
+    assert not at.exception
+    live = at.session_state["session"]
+    assert live.team_label(1) == "You", "the escape overwrote the hero marker"
+    assert live.team_label(2) == "Team 2"
+    # the lot UI is reachable...
+    assert any("Nominated player" in str(getattr(sb, "label", "")) for sb in at.selectbox)
+    # ...and naming is still reachable, so the escape is not one-way
+    at.button(key="reopen_naming").click().run()
+    assert not at.exception
+    assert any("Name the teams" in str(getattr(h, "value", "")) for h in at.subheader)
+
+
+def test_blanking_your_own_seat_restores_the_you_marker(tmp_path: Path) -> None:
+    """A blank fell back to `Team {i+1}`, which wrote "Team 1" over the hero's own label."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session(my_seat=1)
+    at = _minimal(sess, tmp_path, named=False).run()
+    at.text_input(key="tn_1").set_value("").run()
+    at.button(key="FormSubmitter:team_names_form-Save names & start").click().run()
+    assert not at.exception
+    assert at.session_state["session"].team_label(1) == "You"
+
+
+def test_completed_auction_skips_the_naming_gate_but_keeps_undo(tmp_path: Path) -> None:
+    """A finished auction should not be asked to name teams, and a mis-recorded FINAL lot is
+    exactly the one that needs undo -- previously reachable only by switching views."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session(n_teams=6)
+    gid = iter(_IDS)
+    seat = 1
+    while not sess.is_complete:
+        if sess.open_slots(seat) == 0:
+            seat += 1
+        sess.record_purchase(next(gid), seat, 1)
+    at = _minimal(sess, tmp_path, named=False).run()  # complete AND unnamed
+    assert not at.exception
+    assert not any("Name the teams" in str(getattr(h, "value", "")) for h in at.subheader)
+    assert any("Auction complete" in str(getattr(h, "value", "")) for h in at.subheader)
+    before = len(at.session_state["session"].purchases)
+    at.button(key="m_undo").click().run()
+    assert not at.exception
+    assert len(at.session_state["session"].purchases) == before - 1
