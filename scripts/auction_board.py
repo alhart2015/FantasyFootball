@@ -28,9 +28,11 @@ from projections.draft.assistant.auction.live import (
     DEFAULT_BID_MODEL,
     NOMINATION_MODES,
     NOMINATION_NOTES,
+    BidAdvice,
     LiveAuctionSession,
 )
 from projections.draft.assistant.league_projection import N_BYES, PLAYOFF_SIZE
+from projections.draft.assistant.live import filter_named_pool
 from projections.draft.assistant.presets import (
     DEFAULT_SCORING,
     DEFAULT_TEAMS,
@@ -71,7 +73,12 @@ def _autosave(s: LiveAuctionSession) -> None:
     s.save(Path(path))
 
 
+VIEW_MODES = ("Full board", "Minimal (live draft)")
+
+
 def _sidebar() -> None:
+    st.sidebar.radio("View", VIEW_MODES, key="view_mode")
+    st.sidebar.divider()
     st.sidebar.header("⚙ Setup")
     scoring = st.sidebar.selectbox(
         "Scoring",
@@ -467,6 +474,171 @@ def _results_section(s: LiveAuctionSession) -> None:
     )
 
 
+# --------------------------------------------------------------------------- minimal mode
+
+
+def _team_names_gate(s: LiveAuctionSession) -> bool:
+    """Name the teams before the draft starts. Returns True once naming is done.
+
+    A gate, not a setting: every confirm button in this mode reads `Player → <name> for $N`,
+    and that sentence is the only thing between a misheard winner and a corrupted purchase
+    log. `Team 6` does not do that job under time pressure. A resumed session already carries
+    names, so this appears once.
+    """
+    if any(n.strip() for n in s.team_names):
+        return True
+    st.subheader("① Name the teams")
+    st.caption("So the confirm button reads a real name instead of “Team 6”. One time only.")
+    with st.form("team_names_form"):
+        names = [
+            st.text_input(
+                f"Seat {seat}" + (" (you)" if seat == s.my_seat else ""),
+                value=("You" if seat == s.my_seat else f"Team {seat}"),
+                key=f"tn_{seat}",
+            )
+            for seat in s.seats
+        ]
+        if st.form_submit_button("Save names & start", type="primary"):
+            s.team_names = tuple(n.strip() or f"Team {i + 1}" for i, n in enumerate(names))
+            _autosave(s)
+            st.rerun()
+    # An escape so the gate can never strand a session (e.g. resuming to check one number).
+    if st.button("Skip — use Team 1…N"):
+        s.team_names = tuple(f"Team {seat}" for seat in s.seats)
+        _autosave(s)
+        st.rerun()
+    return False
+
+
+def _available_options(s: LiveAuctionSession) -> dict[str, str]:
+    """`{"Name (POS)": gsis_id}` for every available player — the autocomplete's options.
+
+    Labelled with the position so two players sharing a surname stay distinguishable, and
+    built from the same resolved names the rest of the board displays.
+    """
+    pool = filter_named_pool(s.available_pool(), s.player_names)
+    return {
+        f"{row.full_name} ({row.position})": str(row.gsis_id)
+        for row in pool.itertuples()
+        if isinstance(getattr(row, "full_name", None), str)
+    }
+
+
+def _minimal_record(s: LiveAuctionSession, advice: BidAdvice) -> None:
+    """Winner + price + confirm. Same widget-keying safety as the full board's panel."""
+    lot_key = f"{len(s.purchases)}_{advice.gsis_id}"
+    seats = [seat for seat in s.seats if s.open_slots(seat) > 0]
+    if not seats:
+        st.warning("No team has an open roster slot.")
+        return
+    c1, c2 = st.columns([2, 1])
+    winner = c1.selectbox(
+        "Won by",
+        seats,
+        index=None,
+        placeholder="Which team?",
+        format_func=s.team_label,
+        key=f"m_winner_{lot_key}",
+    )
+    if winner is None:
+        c2.empty()
+        st.button("Pick the winning team", disabled=True, key=f"m_confirm_{lot_key}")
+        return
+    cap = max(s.league.min_bid, s.feasible_max(int(winner)))
+    price = c2.number_input(
+        "Price",
+        min_value=s.league.min_bid,
+        max_value=cap,
+        value=max(s.league.min_bid, min(advice.market_value, cap)),
+        step=1,
+        key=f"m_price_{lot_key}_{winner}",
+    )
+    label = f"✅ {advice.full_name} → {s.team_label(int(winner))} for ${int(price)}"
+    if st.button(label, key=f"m_confirm_{lot_key}", type="primary"):
+        try:
+            s.record_purchase(advice.gsis_id, int(winner), int(price))
+        except ValueError as exc:
+            st.warning(str(exc))
+            return
+        st.session_state["pending_player"] = None
+        _autosave(s)
+        st.rerun()
+
+
+def _minimal_view(s: LiveAuctionSession) -> None:
+    """The live-draft surface: nominate, read a number, record the sale. Nothing else.
+
+    Deliberately omits the sold log, rosters, budget table, bid board and projected eval --
+    all of which the Yahoo draft UI already shows the operator. See the design doc.
+    """
+    if not _team_names_gate(s):
+        return
+    if s.is_complete:
+        st.subheader("✅ Auction complete")
+        st.caption("Switch to **Full board** in the sidebar for the projected-season eval.")
+        return
+
+    options = _available_options(s)
+    st.subheader("② Who was nominated?")
+    picked = st.selectbox(
+        "Nominated player",
+        list(options),
+        index=None,
+        placeholder="Type a player name…",
+        label_visibility="collapsed",
+        key=f"m_nom_{len(s.purchases)}",
+    )
+    if picked is not None:
+        st.session_state["pending_player"] = options[picked]
+    pending = st.session_state.get("pending_player")
+
+    if pending and str(pending) in set(options.values()):
+        try:
+            advice = s.advise(str(pending))
+        except ValueError as exc:
+            st.warning(str(exc))
+            st.session_state["pending_player"] = None
+        else:
+            st.divider()
+            if not advice.eligible:
+                st.error(f"PASS — the plan is done buying {advice.position}.")
+            else:
+                st.markdown(f"# 🔨 ${advice.max_bid}")
+                st.caption(f"**{advice.full_name}** · {advice.position} — bid up to this")
+                if advice.uncontested:
+                    st.success("You should win this one — your ceiling clears every likely rival.")
+                elif not advice.i_want:
+                    st.warning("Room is anchored above your ceiling — let it go.")
+            st.caption(
+                f"worth to us ${advice.fair_value} · room pays ${advice.market_value} · "
+                f"best rival ${advice.room_ceiling}"
+            )
+            st.divider()
+            _minimal_record(s, advice)
+
+    with st.expander("🎤 Who to nominate", expanded=s.is_my_nomination):
+        sug = s.suggested_nomination()
+        if sug is None:
+            st.caption("Nothing left to nominate.")
+        else:
+            st.markdown(f"**{s.name(sug)}**")
+            st.dataframe(
+                s.nomination_board(top=5)[["full_name", "position", "market", "i_want"]],
+                hide_index=True,
+            )
+
+    foot, undo = st.columns([3, 1])
+    foot.caption(
+        f"${s.budget(s.my_seat)} left · {s.open_slots(s.my_seat)} slots · "
+        f"{len(s.purchases)}/{s.league.total_pool_size} sold"
+    )
+    if s.purchases and undo.button("↶ Undo", key="m_undo"):
+        s.undo()
+        st.session_state["pending_player"] = None
+        _autosave(s)
+        st.rerun()
+
+
 def main() -> None:
     st.set_page_config(page_title="Auction Board", layout="wide")
     st.title("💰 Live Auction Board")
@@ -475,6 +647,9 @@ def main() -> None:
     s: LiveAuctionSession | None = st.session_state.get("session")
     if s is None:
         st.info("Configure the auction in the sidebar and click **Start / restart auction**.")
+        return
+    if st.session_state.get("view_mode") == VIEW_MODES[1]:
+        _minimal_view(s)
         return
     _status_bar(s)
     left, center, right = st.columns([1.1, 2.4, 1.2])

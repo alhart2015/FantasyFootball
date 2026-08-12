@@ -92,6 +92,11 @@ def _app(sess=None, tmp_path: Path | None = None, pending: str | None = None):  
     return at
 
 
+def _winner_box_named(at: Any, label: str) -> Any:
+    """A selectbox found by label, so tests do not pin Streamlit widget keys."""
+    return next(sb for sb in at.selectbox if label in str(getattr(sb, "label", "")))
+
+
 def _winner_box(at: Any) -> Any:
     """The 'Winning team' selectbox, found by label so the test does not pin the widget key."""
     return next(sb for sb in at.selectbox if "Winning team" in str(getattr(sb, "label", "")))
@@ -226,3 +231,74 @@ def test_board_results_panel_runs_projected_eval(tmp_path: Path) -> None:
     at.button(key="run_projected_eval").click().run()
     assert not at.exception
     assert any("Championship" in str(getattr(m, "label", "")) for m in at.metric)
+
+
+def _minimal(sess=None, tmp_path: Path | None = None, named: bool = True):  # type: ignore[no-untyped-def]
+    """An app in minimal mode, teams named by default so the gate is out of the way."""
+    if sess is not None and named:
+        sess.team_names = tuple(f"Squad {seat}" for seat in sess.seats)
+    at = _app(sess, tmp_path)
+    at.session_state["view_mode"] = "Minimal (live draft)"
+    return at
+
+
+def test_minimal_mode_gates_on_team_names_then_lets_them_through() -> None:
+    """Naming is step one: the confirm sentence has to read a real name, not 'Team 6'."""
+    pytest.importorskip("streamlit")
+    at = _minimal(_smoke_session(), named=False).run()
+    assert not at.exception
+    assert any("Name the teams" in str(getattr(h, "value", "")) for h in at.subheader)
+    # the lot UI is not reachable until naming is done
+    assert not any("Nominated player" in str(getattr(sb, "label", "")) for sb in at.selectbox)
+
+    at2 = _minimal(_smoke_session()).run()
+    assert not at2.exception
+    assert not any("Name the teams" in str(getattr(h, "value", "")) for h in at2.subheader)
+
+
+def test_minimal_mode_names_reach_the_session(tmp_path: Path) -> None:
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    at = _minimal(sess, tmp_path, named=False).run()
+    assert not at.exception
+    at.text_input(key="tn_2").set_value("Will's Team").run()
+    at.text_input(key="tn_3").set_value("   ").run()  # blank falls back, never an empty label
+    at.button(key="FormSubmitter:team_names_form-Save names & start").click().run()
+    assert not at.exception
+    live = at.session_state["session"]
+    assert live.team_label(2) == "Will's Team"
+    assert live.team_label(3) == "Team 3"
+    assert (tmp_path / "auto.json").exists()  # names survive a resume, so the gate stays shut
+
+
+def test_minimal_mode_prices_a_nominee_and_records_the_sale(tmp_path: Path) -> None:
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    at = _minimal(sess, tmp_path).run()
+    assert not at.exception
+    nom = next(sb for sb in at.selectbox if "Nominated player" in str(getattr(sb, "label", "")))
+    assert nom.value is None  # nothing staged until you type
+    nom.set_value(nom.options[0]).run()
+    assert not at.exception
+    assert any("🔨 $" in str(getattr(md, "value", "")) for md in at.markdown)
+
+    _winner_box_named(at, "Won by").set_value(1).run()
+    at.number_input[0].set_value(23).run()
+    next(b for b in at.button if "→" in str(getattr(b, "label", ""))).click().run()
+    assert not at.exception
+    got = at.session_state["session"].purchases
+    assert [(p.seat, p.price) for p in got] == [(1, 23)]
+
+
+def test_minimal_mode_hides_what_yahoo_already_shows(tmp_path: Path) -> None:
+    """The point of the mode: no sold log, no budget table, no 40-row bid board."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    sess.record_purchase(_IDS[0], 2, 30)
+    at = _minimal(sess, tmp_path).run()
+    assert not at.exception
+    rendered = " ".join(str(getattr(m, "value", "")) for m in at.markdown)
+    assert "Sold" not in rendered
+    assert "Budgets" not in rendered
+    assert "Bid board" not in rendered
+    assert not any("Position" in str(getattr(sb, "label", "")) for sb in at.selectbox)
