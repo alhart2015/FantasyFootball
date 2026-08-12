@@ -46,12 +46,15 @@ from projections.draft.assistant.league_projection import (
     SeatProjection,
     project_completed_league,
 )
-from projections.draft.assistant.live import attach_names, build_player_names
+from projections.draft.assistant.live import (
+    attach_names,
+    build_player_names,
+    build_roster_rows,
+)
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.auction import build_market_dollars
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import (
-    allocate_roster_slots,
     bot_eligible,
     bot_position_bounds,
 )
@@ -647,39 +650,12 @@ class LiveAuctionSession:
     def my_roster_view(self) -> AuctionRosterView:
         prices = {str(p.gsis_id): p.price for p in self.purchases if p.seat == self.my_seat}
         mine = self.roster_ids(self.my_seat)
-        placements, open_, _ = allocate_roster_slots(
-            ((g, self._position_by_id[g]) for g in mine), self.league.roster_slots
+        filled, open_slots = build_roster_rows(
+            [(g, self._position_by_id[g]) for g in mine],
+            self.league.roster_slots,
+            self.name,
+            prices=prices,
         )
-        rows = [
-            {
-                "slot": slot.value,
-                "gsis_id": gid,
-                "full_name": self.name(gid),
-                "position": pos.value,
-                "price": prices[gid],
-            }
-            for gid, pos, slot in placements
-        ]
-        # `allocate_roster_slots` omits a player with no open slot, but `record_purchase`
-        # deliberately does not enforce positional eligibility — it records what the room
-        # actually did. So a third QB in a thin-bench league is on the roster and counted in
-        # `spent`, yet has no placement. Show him rather than losing him silently.
-        placed = {gid for gid, _, _ in placements}
-        rows += [
-            {
-                "slot": _NO_SLOT,
-                "gsis_id": gid,
-                "full_name": self.name(gid),
-                "position": self._position_by_id[gid].value,
-                "price": prices[gid],
-            }
-            for gid in mine
-            if gid not in placed
-        ]
-        filled = pd.DataFrame(rows, columns=["slot", "gsis_id", "full_name", "position", "price"])
-        open_slots: dict[RosterSlot, int] = {
-            s: c for s, c in open_.items() if c > 0 and s != RosterSlot.BENCH
-        }
         return AuctionRosterView(
             filled=filled, open_slots=open_slots, spent=self.spent(self.my_seat)
         )

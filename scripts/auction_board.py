@@ -199,8 +199,11 @@ def _selectable(named: pd.DataFrame, cols: list[str], key: str) -> None:
     """Render a single-row-selectable table; selecting a row stages `pending_player`.
 
     `named` must carry `gsis_id` with a clean 0..n-1 index (selection rows are positional).
-    Mirrors scripts/draft_board.py's helper — the two boards are separate Streamlit apps and
-    neither imports the other, so the ~15 lines are duplicated rather than cross-imported.
+    Mirrors scripts/draft_board.py's helper. NOTE: the original reason given here — "the two
+    boards are separate Streamlit apps and neither imports the other" — is not a real
+    constraint; `tests/test_scripts/` already imports scripts as `scripts.X`, so a shared
+    `scripts/_board_ui.py` would work. This and seven sibling helpers stay duplicated as a
+    deliberate open question, not a technical limit. See issue #138.
     """
     show = [c for c in cols if c in named.columns]
 

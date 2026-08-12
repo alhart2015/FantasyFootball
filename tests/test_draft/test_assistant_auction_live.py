@@ -587,3 +587,39 @@ def test_want_and_uncontested_verdicts_live_on_the_advice() -> None:
     # an ineligible player is never wanted and never uncontested
     ineligible = dataclasses.replace(a, eligible=False, max_bid=0)
     assert not ineligible.i_want and not ineligible.uncontested
+
+
+def test_snake_roster_view_also_keeps_an_overflow_player() -> None:
+    """The extraction fixed the same silent drop on the snake board: `allocate_roster_slots`
+    omits a player with no open slot there too, and nothing put him back."""
+    from projections.draft.assistant.live import NO_SLOT, build_roster_rows
+
+    ids = [f"00-000{i:04d}" for i in range(1, 7)]
+    filled, _ = build_roster_rows(
+        [(g, Position.QB) for g in ids],
+        {RosterSlot.QB: 1, RosterSlot.BENCH: 2},
+        lambda g: f"Name {g}",
+    )
+    assert set(filled["gsis_id"]) == set(ids), "an overflow player was dropped"
+    assert (filled["slot"] == NO_SLOT).sum() == 3  # QB1 + 2 bench placed, 3 overflow
+    assert "price" not in filled.columns  # a snake draft has no per-player cost
+
+
+def test_roster_view_keeps_the_price_column_before_any_purchase() -> None:
+    """`prices={}` is a seat that has bought nothing yet, not a roster without prices.
+
+    The first cut of the shared builder gated the column on truthiness, so an empty mapping
+    dropped `price` and the auction board's roster table raised
+    `KeyError: ['price'] not in index` on every render before the first sale.
+    """
+    from projections.draft.assistant.live import build_roster_rows
+
+    filled, _ = build_roster_rows([], {RosterSlot.QB: 1}, lambda g: g, prices={})
+    assert "price" in filled.columns
+    assert list(_session().my_roster_view().filled.columns) == [
+        "slot",
+        "gsis_id",
+        "full_name",
+        "position",
+        "price",
+    ]

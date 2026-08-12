@@ -7,7 +7,7 @@ decision to existing engine functions. scripts/draft_board.py is a thin view ove
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -139,6 +139,53 @@ class RosterView:
 
     filled: pd.DataFrame  # columns: slot, gsis_id, full_name, position
     open_slots: dict[RosterSlot, int]
+
+
+# Slot label for a rostered player who has no allocatable slot. Reachable on both boards:
+# `allocate_roster_slots` omits an overflow player, and neither session forbids buying/drafting
+# one, so he must be shown rather than silently dropped from the roster table.
+NO_SLOT = "(no slot)"
+
+
+def build_roster_rows(
+    ids_with_positions: Sequence[tuple[str, Position]],
+    roster_slots: Mapping[RosterSlot, int],
+    name_of: Callable[[str], str],
+    *,
+    prices: Mapping[str, int] | None = None,
+) -> tuple[pd.DataFrame, dict[RosterSlot, int]]:
+    """A roster table and its remaining open STARTING slots, shared by both live boards.
+
+    `allocate_roster_slots` documents that it omits a player with no open slot. Both sessions
+    used to let that player vanish from the roster table while still counting him elsewhere
+    (the auction's `spent` included his price), so overflow players are appended here under
+    `NO_SLOT` instead. `prices` adds a `price` column; omit it for a snake draft, which has no
+    per-player cost.
+    """
+    placements, open_, _ = allocate_roster_slots(ids_with_positions, roster_slots)
+    # `is not None`, not truthiness: an empty mapping is a seat that has bought nothing yet,
+    # which still needs the column. Dropping it made the auction roster table raise KeyError.
+    cols = ["slot", "gsis_id", "full_name", "position"] + (["price"] if prices is not None else [])
+
+    def _row(gid: str, pos: Position, slot: str) -> dict[str, object]:
+        row: dict[str, object] = {
+            "slot": slot,
+            "gsis_id": gid,
+            "full_name": name_of(gid),
+            "position": pos.value,
+        }
+        if prices is not None:
+            row["price"] = prices[gid]
+        return row
+
+    rows = [_row(gid, pos, slot.value) for gid, pos, slot in placements]
+    placed = {gid for gid, _, _ in placements}
+    rows += [_row(gid, pos, NO_SLOT) for gid, pos in ids_with_positions if gid not in placed]
+    filled = pd.DataFrame(rows, columns=cols)
+    open_slots: dict[RosterSlot, int] = {
+        s: c for s, c in open_.items() if c > 0 and s != RosterSlot.BENCH
+    }
+    return filled, open_slots
 
 
 def build_player_names(id_map: pd.DataFrame, pool: pd.DataFrame) -> dict[str, str]:
@@ -300,22 +347,11 @@ class LiveDraftSession:
 
     def my_roster_view(self) -> RosterView:
         state = self.state()
-        placements, open_, _ = allocate_roster_slots(
-            zip(state.my_pick_ids, state.my_roster, strict=False), self.league.roster_slots
+        filled, open_slots = build_roster_rows(
+            list(zip(state.my_pick_ids, state.my_roster, strict=False)),
+            self.league.roster_slots,
+            self.name,
         )
-        rows = [
-            {
-                "slot": slot.value,
-                "gsis_id": gid,
-                "full_name": self.name(gid),
-                "position": pos.value,
-            }
-            for gid, pos, slot in placements
-        ]
-        filled = pd.DataFrame(rows, columns=["slot", "gsis_id", "full_name", "position"])
-        open_slots: dict[RosterSlot, int] = {
-            s: c for s, c in open_.items() if c > 0 and s != RosterSlot.BENCH
-        }
         return RosterView(filled=filled, open_slots=open_slots)
 
     def best_available_by_position(self, top: int) -> dict[Position, pd.DataFrame]:
