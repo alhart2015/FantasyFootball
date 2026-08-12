@@ -4,6 +4,7 @@ prices a staged player, records a sale through the confirm flow, and undoes one.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -91,6 +92,11 @@ def _app(sess=None, tmp_path: Path | None = None, pending: str | None = None):  
     return at
 
 
+def _winner_box(at: Any) -> Any:
+    """The 'Winning team' selectbox, found by label so the test does not pin the widget key."""
+    return next(sb for sb in at.selectbox if "Winning team" in str(getattr(sb, "label", "")))
+
+
 def test_auction_board_loads_without_session() -> None:
     pytest.importorskip("streamlit")
     at = _app().run()
@@ -111,13 +117,56 @@ def test_staged_player_shows_a_max_bid_and_records_the_sale(tmp_path: Path) -> N
     at = _app(_smoke_session(), tmp_path, pending=_IDS[0]).run()
     assert not at.exception
     assert any("Bid up to $" in str(getattr(md, "value", "")) for md in at.markdown)
-    at.number_input(key="price_0").set_value(37).run()
-    at.button(key="confirm_purchase").click().run()
+    # The winner is no longer pre-selected, so recording a sale now takes an explicit choice.
+    _winner_box(at).set_value(1).run()
+    at.number_input[0].set_value(37).run()
+    next(b for b in at.button if "→" in str(getattr(b, "label", ""))).click().run()
     assert not at.exception
     sess = at.session_state["session"]
     assert [(str(p.gsis_id), p.seat, p.price) for p in sess.purchases] == [(_IDS[0], 1, 37)]
     assert at.session_state["pending_player"] is None
     assert (tmp_path / "auto.json").exists()  # autosaved
+
+
+def test_price_does_not_carry_over_to_a_newly_staged_player(tmp_path: Path) -> None:
+    """A price typed for one player must not survive into the next player staged for the
+    same lot. The widget key was the lot number alone, so Streamlit retained the value and
+    the confirm button offered to record a different, cheaper player at the old price."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    at = _app(sess, tmp_path, pending=_IDS[0]).run()
+    assert not at.exception
+    _winner_box(at).set_value(1).run()
+    at.number_input[0].set_value(52).run()
+    assert int(at.number_input[0].value) == 52
+
+    at.session_state["pending_player"] = _IDS[3]  # a different, cheaper player, same lot
+    at.run()
+    assert not at.exception
+    _winner_box(at).set_value(1).run()
+    advice = sess.advise(_IDS[3])
+    expected = max(sess.league.min_bid, min(advice.market_value, sess.feasible_max(1)))
+    assert int(at.number_input[0].value) == expected
+    assert not any("$52" in str(getattr(b, "label", "")) for b in at.button)
+
+
+def test_winner_must_be_chosen_and_full_teams_are_not_offered(tmp_path: Path) -> None:
+    """No seat is pre-selected (in a 12-team room the hero wins ~1 lot in 12, so any default
+    is wrong most of the time and confirm is one click), and a seat with no open roster slot
+    is not offerable at all -- record_purchase would reject it."""
+    pytest.importorskip("streamlit")
+    at = _app(_smoke_session(), tmp_path, pending=_IDS[0]).run()
+    assert not at.exception
+    assert _winner_box(at).value is None
+    assert not any("→" in str(getattr(b, "label", "")) for b in at.button)
+
+    full = _smoke_session()
+    gids = iter(_IDS)
+    while full.open_slots(2) > 0:
+        full.record_purchase(next(gids), 2, 1)
+    at2 = _app(full, tmp_path, pending=_IDS[-1]).run()
+    assert not at2.exception
+    assert len(_winner_box(at2).options) == full.league.n_teams - 1
 
 
 def test_board_undo_removes_the_last_sale(tmp_path: Path) -> None:
