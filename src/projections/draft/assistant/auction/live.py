@@ -25,7 +25,6 @@ from functools import cached_property
 from pathlib import Path
 from typing import Literal
 
-import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.auction.bid_strategy import (
@@ -43,10 +42,12 @@ from projections.draft.assistant.auction.nomination import (
 from projections.draft.assistant.auction.registry import ALL_BID_MODELS
 from projections.draft.assistant.auction.simulation import validate_auction_inputs
 from projections.draft.assistant.availability import PlayerAvailability
-from projections.draft.assistant.league_projection import SeatProjection, project_draft
+from projections.draft.assistant.league_projection import (
+    SeatProjection,
+    project_completed_league,
+)
 from projections.draft.assistant.live import attach_names, build_player_names
 from projections.draft.assistant.performance_variance import VarianceParams
-from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.auction import build_market_dollars
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import (
@@ -745,22 +746,16 @@ class LiveAuctionSession:
         """
         if not self.is_complete:
             raise ValueError("auction must be complete to project league outcomes")
-        pool = attach_is_rookie(self.pool, season=self.season, data_root=data_root)
-        if availability is None:
-            from projections.draft.assistant.availability_loader import load_store_availability
-
-            availability = load_store_availability(pool, season=self.season, data_root=data_root)
-        if params is None:
-            params = VarianceParams.load()
-        rosters = {seat: self.roster_ids(seat) for seat in self.seats}
-        return project_draft(
-            rosters=rosters,
-            pool=pool,
+        return project_completed_league(
+            {seat: self.roster_ids(seat) for seat in self.seats},
+            self.pool,
+            self.league,
+            season=self.season,
+            n_sims=n_sims,
+            seed=seed,
             availability=availability,
             params=params,
-            league_config=self.league,
-            n_sims=n_sims,
-            rng=np.random.default_rng(seed),
+            data_root=data_root,
         )
 
     # ------------------------------------------------------------------ persistence

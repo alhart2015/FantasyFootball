@@ -17,11 +17,13 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
-from projections.draft.assistant.league_projection import SeatProjection, project_draft
+from projections.draft.assistant.league_projection import (
+    SeatProjection,
+    project_completed_league,
+)
 from projections.draft.assistant.opponent import bot_pick
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.pick_timing import my_next_pick, slot_for
-from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.assistant.roster_score import optimal_lineup_points
 from projections.draft.assistant.state import DraftState, build_draft_state
 from projections.draft.assistant.strategy import (
@@ -383,26 +385,21 @@ class LiveDraftSession:
         """
         if not self.is_complete:
             raise ValueError("draft must be complete to project league outcomes")
-        pool = attach_is_rookie(self.pool, season=self.season, data_root=data_root)
-        if availability is None:
-            from projections.draft.assistant.availability_loader import load_store_availability
-
-            availability = load_store_availability(pool, season=self.season, data_root=data_root)
-        if params is None:
-            params = VarianceParams.load()
         n_teams = self.league.n_teams
         rosters = {
             slot: [str(p) for i, p in enumerate(self.picks) if slot_for(i + 1, n_teams) == slot]
             for slot in range(1, n_teams + 1)
         }
-        return project_draft(
-            rosters=rosters,
-            pool=pool,
+        return project_completed_league(
+            rosters,
+            self.pool,
+            self.league,
+            season=self.season,
+            n_sims=n_sims,
+            seed=seed,
             availability=availability,
             params=params,
-            league_config=self.league,
-            n_sims=n_sims,
-            rng=np.random.default_rng(seed),
+            data_root=data_root,
         )
 
     def to_state_dict(self) -> dict[str, object]:

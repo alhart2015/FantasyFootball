@@ -13,12 +13,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.performance_variance import VarianceParams, sample_weekly_points
+from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.assistant.season_value import (
     _availability_mask,
     _bye_indices,
@@ -268,3 +270,41 @@ def project_draft(
             mean_points=float(res.points_for[:, col].mean()),
         )
     return out
+
+
+def project_completed_league(
+    rosters: Mapping[int, list[str]],
+    pool: pd.DataFrame,
+    league_config: LeagueConfig,
+    *,
+    season: int,
+    n_sims: int = 2000,
+    seed: int = 0,
+    availability: PlayerAvailability | None = None,
+    params: VarianceParams | None = None,
+    data_root: Path = Path("data"),
+) -> dict[int, SeatProjection]:
+    """The shared tail of both live boards' end-of-draft eval.
+
+    Rookie flags, store availability, fitted variance params, then `project_draft`. A caller
+    supplies only its own `rosters` mapping -- the one step a snake draft (reconstruct from
+    pick order) and an auction (group the purchase log by seat) genuinely do differently.
+    `availability`/`params` default to the store and the fitted config; tests inject them to
+    stay hermetic.
+    """
+    pool = attach_is_rookie(pool, season=season, data_root=data_root)
+    if availability is None:
+        from projections.draft.assistant.availability_loader import load_store_availability
+
+        availability = load_store_availability(pool, season=season, data_root=data_root)
+    if params is None:
+        params = VarianceParams.load()
+    return project_draft(
+        rosters=dict(rosters),
+        pool=pool,
+        availability=availability,
+        params=params,
+        league_config=league_config,
+        n_sims=n_sims,
+        rng=np.random.default_rng(seed),
+    )
