@@ -510,18 +510,23 @@ def _team_names_gate(s: LiveAuctionSession) -> bool:
     return False
 
 
-def _available_options(s: LiveAuctionSession) -> dict[str, str]:
-    """`{"Name (POS)": gsis_id}` for every available player — the autocomplete's options.
+def _available_ids(s: LiveAuctionSession) -> list[str]:
+    """Available players as gsis_ids, most valuable first — the autocomplete's options.
 
-    Labelled with the position so two players sharing a surname stay distinguishable, and
-    built from the same resolved names the rest of the board displays.
+    **Ids, not labels.** Keying a dict on the rendered label collapsed any two players sharing
+    one: `attach_names` fills an unresolved name with "—", so every unnamed player at a
+    position shared the key "— (RB)", and `options[picked]` then returned whichever came last.
+    That records a purchase for a player nobody nominated and leaves the other permanently
+    un-nominatable. Streamlit filters a selectbox on the *rendered* text, so `format_func`
+    gives the same type-ahead with no ambiguity.
     """
     pool = filter_named_pool(s.available_pool(), s.player_names)
-    return {
-        f"{row.full_name} ({row.position})": str(row.gsis_id)
-        for row in pool.itertuples()
-        if isinstance(getattr(row, "full_name", None), str)
-    }
+    return [str(g) for g in pool["gsis_id"]]
+
+
+def _option_label(s: LiveAuctionSession, gsis_id: str) -> str:
+    """`Name (POS)` — the position disambiguates two players sharing a name."""
+    return f"{s.name(gsis_id)} ({s.position_of(gsis_id).value})"
 
 
 def _minimal_record(s: LiveAuctionSession, advice: BidAdvice) -> None:
@@ -578,41 +583,56 @@ def _minimal_view(s: LiveAuctionSession) -> None:
         st.caption("Switch to **Full board** in the sidebar for the projected-season eval.")
         return
 
-    options = _available_options(s)
     st.subheader("② Who was nominated?")
+    # Keyed on the session token as well as the lot: without it a restart or resume can be
+    # handed back a retained label from the previous draft, silently pre-staging a player.
+    nom_key = f"m_nom_{st.session_state.get('session_token', '')}_{len(s.purchases)}"
     picked = st.selectbox(
         "Nominated player",
-        list(options),
+        _available_ids(s),
         index=None,
         placeholder="Type a player name…",
+        format_func=lambda g: _option_label(s, g),
         label_visibility="collapsed",
-        key=f"m_nom_{len(s.purchases)}",
+        key=nom_key,
     )
-    if picked is not None:
-        st.session_state["pending_player"] = options[picked]
+    # Track the box both ways. Writing only on a non-None pick left a cleared box still
+    # showing the previous player priced, with a live confirm button one stray click from
+    # recording a sale that never happened.
+    if picked != st.session_state.get("m_nom_last"):
+        st.session_state["m_nom_last"] = picked
+        st.session_state["pending_player"] = picked
     pending = st.session_state.get("pending_player")
 
-    if pending and str(pending) in set(options.values()):
+    if pending:
         try:
             advice = s.advise(str(pending))
         except ValueError as exc:
+            # Say so rather than rendering nothing: a blank screen mid-draft is indisting-
+            # uishable from a hung app. The full board surfaces the same message.
             st.warning(str(exc))
             st.session_state["pending_player"] = None
         else:
             st.divider()
+            # The name goes above both branches: on a PASS it is the only confirmation that
+            # the label typed into the box resolved to the intended player.
+            st.markdown(f"### {advice.full_name} · {advice.position}")
             if not advice.eligible:
                 st.error(f"PASS — the plan is done buying {advice.position}.")
             else:
-                st.markdown(f"# 🔨 ${advice.max_bid}")
-                st.caption(f"**{advice.full_name}** · {advice.position} — bid up to this")
+                st.markdown(f"# 🔨 BID UP TO ${advice.max_bid}")
                 if advice.uncontested:
                     st.success("You should win this one — your ceiling clears every likely rival.")
-                elif not advice.i_want:
+                elif advice.i_want:
+                    st.info("Worth buying, but expect a fight — the room can reach him too.")
+                else:
                     st.warning("Room is anchored above your ceiling — let it go.")
-            st.caption(
-                f"worth to us ${advice.fair_value} · room pays ${advice.market_value} · "
-                f"best rival ${advice.room_ceiling}"
-            )
+            # Single-$ per number: two `$` in one markdown string pair into inline LaTeX and
+            # Streamlit renders the middle as italic math instead of dollar figures.
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Worth to us", f"${advice.fair_value}")
+            c2.metric("Room pays", f"${advice.market_value}")
+            c3.metric("Best rival", f"${advice.room_ceiling}")
             st.divider()
             _minimal_record(s, advice)
 
@@ -635,6 +655,7 @@ def _minimal_view(s: LiveAuctionSession) -> None:
     if s.purchases and undo.button("↶ Undo", key="m_undo"):
         s.undo()
         st.session_state["pending_player"] = None
+        st.session_state["m_nom_last"] = None
         _autosave(s)
         st.rerun()
 

@@ -229,6 +229,10 @@ class LiveAuctionSession:
     def name(self, gsis_id: str) -> str:
         return self.player_names.get(str(gsis_id), "—")
 
+    def position_of(self, gsis_id: str) -> Position:
+        """The pool position for a player. Public because views label rows with it."""
+        return self._position_by_id[str(gsis_id)]
+
     @cached_property
     def _position_by_id(self) -> dict[str, Position]:
         return {

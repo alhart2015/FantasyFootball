@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
+from scripts.auction_board import _available_ids, _option_label
 
 _N = 96
 _IDS = [f"00-000{i:04d}" for i in range(1, _N + 1)]
@@ -278,16 +279,40 @@ def test_minimal_mode_prices_a_nominee_and_records_the_sale(tmp_path: Path) -> N
     assert not at.exception
     nom = next(sb for sb in at.selectbox if "Nominated player" in str(getattr(sb, "label", "")))
     assert nom.value is None  # nothing staged until you type
-    nom.set_value(nom.options[0]).run()
+    # AppTest reports the *formatted* option, so map back through the same helpers the view
+    # uses rather than assuming options are ids.
+    staged = _available_ids(sess)[0]
+    nom.set_value(_option_label(sess, staged)).run()
     assert not at.exception
-    assert any("🔨 $" in str(getattr(md, "value", "")) for md in at.markdown)
+    assert any("BID UP TO $" in str(getattr(md, "value", "")) for md in at.markdown)
+    # the resolved name is on screen: the only cross-check that the box picked the right man
+    assert any(sess.name(staged) in str(getattr(md, "value", "")) for md in at.markdown)
 
     _winner_box_named(at, "Won by").set_value(1).run()
     at.number_input[0].set_value(23).run()
     next(b for b in at.button if "→" in str(getattr(b, "label", ""))).click().run()
     assert not at.exception
     got = at.session_state["session"].purchases
-    assert [(p.seat, p.price) for p in got] == [(1, 23)]
+    # gsis_id included: the label->id resolution is the only logic minimal mode adds, so a
+    # (seat, price)-only assertion would pass even if the wrong player were recorded.
+    assert [(str(p.gsis_id), p.seat, p.price) for p in got] == [(staged, 1, 23)]
+
+
+def test_available_ids_keeps_players_whose_labels_collide() -> None:
+    """Two available players rendering the same label must both stay pickable.
+
+    The options were a dict keyed on the rendered label, so a collision silently dropped one
+    player and made the survivor answer for both -- recording a purchase for someone nobody
+    nominated, and leaving the other permanently un-nominatable from this view. `attach_names`
+    fills an unresolved name with "—", so every unnamed player at a position collided.
+    """
+    sess = _smoke_session()
+    twin_a, twin_b = _IDS[0], _IDS[4]
+    assert sess.position_of(twin_a) is sess.position_of(twin_b)
+    sess.player_names = dict(sess.player_names) | {twin_a: "Same Name", twin_b: "Same Name"}
+    assert _option_label(sess, twin_a) == _option_label(sess, twin_b)  # labels do collide
+    ids = _available_ids(sess)
+    assert twin_a in ids and twin_b in ids  # ...and both players survive regardless
 
 
 def test_minimal_mode_hides_what_yahoo_already_shows(tmp_path: Path) -> None:
@@ -302,3 +327,7 @@ def test_minimal_mode_hides_what_yahoo_already_shows(tmp_path: Path) -> None:
     assert "Budgets" not in rendered
     assert "Bid board" not in rendered
     assert not any("Position" in str(getattr(sb, "label", "")) for sb in at.selectbox)
+    # Structural, not substring: the headings above were the only thing the string checks
+    # caught, so a re-added dataframe or metric row would have slipped straight through.
+    assert len(at.dataframe) == 1, "only the nomination shortlist renders a table"
+    assert len(at.metric) == 0, "no status-bar metrics before a player is staged"
