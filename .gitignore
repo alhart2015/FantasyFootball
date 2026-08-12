@@ -245,3 +245,19 @@ reports/*.stderr
 # hero-vs-bots eval (resumable per-cell checkpoints + derived results)
 _hero_*/
 data/backtest/hero_eval/
+
+# --- Local scratch and regenerable artifacts -------------------------------
+# Research checkpoints, sweep outputs and generated preset tables. All are
+# reproducible from scripts; none belong in history. Patterns are deliberately
+# narrow so they do not shadow the tracked inputs that live alongside them --
+# data/vorp_2026/will_half12.parquet and data/processed/consensus_projections/.
+.superpowers/
+_crashdump/
+_h2h_ckpt_*/
+data/_vorp_*.parquet
+data/consensus_vorp_*.parquet
+data/processed/espn_weekly_projections/
+data/vorp_*/*team.parquet
+data/vorp_*/*team.league.json
+reports/_*/
+reports/*.png
