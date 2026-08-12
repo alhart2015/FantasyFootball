@@ -59,7 +59,13 @@ from projections.draft.roster_eligibility import (
     bot_eligible,
     bot_position_bounds,
 )
-from projections.schemas import GsisId, Position, RosterSlot, validate_gsis_id
+from projections.schemas import (
+    _PYARROW_STR,
+    GsisId,
+    Position,
+    RosterSlot,
+    validate_gsis_id,
+)
 
 # The board's bid-model menu — the tournament roster plus the validated opt-ins.
 BOARD_BID_MODELS: Mapping[str, AuctionBidStrategy] = ALL_BID_MODELS
@@ -540,7 +546,13 @@ class LiveAuctionSession:
                     "gsis_id": a.gsis_id,
                 }
             )
-        out = pd.DataFrame(rows).merge(
+        # `rows` carries plain `str` ids (object dtype); `named` carries them as
+        # `pd.StringDtype("pyarrow")`. Merging on mismatched key dtypes can raise, or silently
+        # produce all-null right-hand columns — a bid board with blank vorp/adp on every row
+        # that no length-or-order assertion would catch. Align the key before joining.
+        left = pd.DataFrame(rows)
+        left["gsis_id"] = left["gsis_id"].astype(_PYARROW_STR)
+        out = left.merge(
             named[[c for c in ("gsis_id", "vorp", "consensus_adp") if c in named.columns]],
             on="gsis_id",
             how="left",
@@ -817,7 +829,13 @@ class LiveAuctionSession:
         name = str(data["strategy_name"])
         if name not in BOARD_BID_MODELS:
             raise ValueError(f"unknown bid model {name!r}; expected one of {BOARD_BID_MODEL_NAMES}")
+        # Validate rather than coerce. `"espn" if x == "espn" else "model"` turned a corrupted
+        # or hand-edited `"market"` into a model-priced room with no error, silently repricing
+        # every market_value, every `edge`, `i_want`, and both nomination poison rules on our own
+        # values instead of ESPN's. `build_market_dollars` raises on the same input; match it.
         saved_market = str(data.get("market", "espn"))
+        if saved_market not in ("espn", "model"):
+            raise ValueError(f"saved market must be 'espn' or 'model'; got {saved_market!r}")
         market: Literal["espn", "model"] = "espn" if saved_market == "espn" else "model"
         sess = cls(
             league=league,

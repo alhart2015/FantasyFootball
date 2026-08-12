@@ -534,3 +534,38 @@ def test_live_view_matches_the_engine_view_field_for_field() -> None:
         "budgets_by_seat",
         "baseline_dollars",
     }
+
+
+def test_bid_board_joins_vorp_and_adp_without_dropping_them() -> None:
+    """The board builds its rows with plain `str` ids and joins them against the pool's
+    pyarrow-string ids. On mismatched key dtypes the merge can silently yield all-null
+    right-hand columns -- a bid board with blank vorp/adp on every row, which the existing
+    length/sort/edge assertions would not catch."""
+    s = _session()
+    board = s.bid_board(top=10)
+    assert len(board) == 10
+    assert board["vorp"].notna().all(), "vorp came back null: the merge key dtypes diverged"
+    assert board["adp"].notna().all(), "adp came back null: the merge key dtypes diverged"
+
+
+def test_load_rejects_an_unknown_saved_market(tmp_path: Path) -> None:
+    """A corrupted or hand-edited `market` used to coerce to 'model', silently repricing the
+    whole room on our own values instead of ESPN's. `build_market_dollars` raises on the same
+    input; the load path must too."""
+    import json
+
+    cfg = tmp_path / "league.json"
+    cfg.write_text(_league().model_dump_json())
+    s = _session(league_config_path=cfg)
+    s.record_purchase(_IDS[0], 2, 30)
+    path = tmp_path / "auto.json"
+    s.save(path)
+
+    # a clean round-trip first, so the failure below is about the market and nothing else
+    assert LiveAuctionSession.load(path, id_map=_id_map(), pool=_pool()).purchases == s.purchases
+
+    blob = json.loads(path.read_text())
+    blob["market"] = "esbn"  # a plausible typo
+    path.write_text(json.dumps(blob))
+    with pytest.raises(ValueError, match="saved market must be"):
+        LiveAuctionSession.load(path, id_map=_id_map(), pool=_pool())

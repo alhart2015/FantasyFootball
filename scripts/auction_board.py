@@ -30,6 +30,7 @@ from projections.draft.assistant.auction.live import (
     NOMINATION_NOTES,
     LiveAuctionSession,
 )
+from projections.draft.assistant.league_projection import N_BYES, PLAYOFF_SIZE
 from projections.draft.assistant.presets import (
     DEFAULT_SCORING,
     DEFAULT_TEAMS,
@@ -422,8 +423,10 @@ def _results_section(s: LiveAuctionSession) -> None:
     me = res[s.my_seat]
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Reg-season win%", f"{me['reg_win_pct']:.1%}", "vs 50%")
-    c2.metric("Make playoffs", f"{me['make_playoffs_pct']:.1%}", f"vs {6 / n:.1%}")
-    c3.metric("First-round bye", f"{me['bye_pct']:.1%}", f"vs {2 / n:.1%}")
+    # PLAYOFF_SIZE / N_BYES rather than 6 / 2: the bracket the projection actually simulates,
+    # so these baselines cannot drift away from it.
+    c2.metric("Make playoffs", f"{me['make_playoffs_pct']:.1%}", f"vs {PLAYOFF_SIZE / n:.1%}")
+    c3.metric("First-round bye", f"{me['bye_pct']:.1%}", f"vs {N_BYES / n:.1%}")
     c4.metric("Championship %", f"{me['champ_pct']:.1%}", f"vs {1 / n:.1%}")
     st.dataframe(
         pd.DataFrame(
