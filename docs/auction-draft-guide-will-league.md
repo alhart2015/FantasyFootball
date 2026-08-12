@@ -113,13 +113,28 @@ is for people who'd rather have the numbers update themselves as the room spends
 streamlit run scripts/auction_board.py
 ```
 
-Set it up in the sidebar (scoring, teams, your seat, bid model — pick `overbid_noramp` to
-follow this guide, or leave the default `balanced`), click **Start / restart auction**, and:
+**Point it at this league, not the built-in preset.** The sidebar's presets are generic
+(WR3/FLEX1, bench 9, 4-pt passing TDs); this league is WR2/FLEX2, bench 5, **5-pt passing
+TDs**. Different roster shape and different scoring means different VORP, so a preset-loaded
+board would quietly disagree with the printed sheet above. In the sidebar open **Advanced**
+and set both overrides to the same files the cheat sheet was generated from:
 
-- **Bid board** — every available player with the maximum to bid on him. Click a row.
+- **LeagueConfig JSON (overrides preset)** → `configs/will_half12_pass5.league.json`
+- **VORP parquet (overrides preset)** → `data/vorp_2026/will_half12.parquet`
+
+Then set your seat, pick the bid model — **`overbid_noramp`** is this guide's plan and what
+the sheet's numbers assume; `balanced` is the repo-wide default and a different plan, so
+switching to it means the sheet and the board no longer agree — and click **Start / restart
+auction**.
+
+- **Bid board** — the top 40 available players by our own values, each with the maximum to
+  bid on him. The search box filters the whole pool, so anyone not in the top 40 is still
+  reachable by name. Click a row.
 - The clicked player shows a big **Bid up to $X**, plus what he's worth to us, what the room
-  is expected to pay, and the most any rival team can still bid. If your number clears the
-  rival ceiling, the board says so — the lot is yours if you want it.
+  is expected to pay, and the most any rival team can still bid. If your number clears that
+  ceiling the board says so — but read it as "you should win this one", not a guarantee. The
+  ceiling only counts rivals our roster-discipline model thinks would still buy the position;
+  a real manager with money can bid on anything.
 - **Record the sale** — pick the winning team, type the price, click. Budgets, rosters, and
   every recommendation update off it. There's an undo.
 - **Who to nominate** — a shortlist, marked with whether you actually want each player.

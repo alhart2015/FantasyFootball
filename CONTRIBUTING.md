@@ -77,7 +77,8 @@ to your turn; the draft ends with an optimal-lineup scorecard. Sessions autosave
 streamlit run scripts/auction_board.py
 ```
 
-Prices every available player through a registered bid model (`auction.registry`), clamped
+Prices the top 40 available players (search filters the whole pool) through a registered bid
+model (`auction.registry`), clamped
 to the same `[min_bid, feasible_max]` window the simulation engine applies, and shows it
 against what the room is anchored on (ESPN-anchored when the table carries ESPN values) and
 the richest rival ceiling for that position. Also suggests who to nominate, and records each

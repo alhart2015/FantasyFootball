@@ -234,7 +234,15 @@ def _bid_panel(s: LiveAuctionSession) -> None:
 
     st.markdown(f"### {advice.full_name} · {advice.position}")
     if not advice.eligible:
-        st.error("PASS — your roster can no longer take this position.")
+        # Deliberately "the plan says pass", not "you may not": bot_position_bounds is the
+        # engine's roster-discipline heuristic (min + a share of the bench), not a league
+        # rule. The league will happily let you roster another one, and record_purchase will
+        # record it -- this is the measured strategy declining, and it can be overridden by
+        # simply recording the sale to yourself.
+        st.error(
+            f"PASS — the plan is done buying {advice.position}. It caps you at what the "
+            "model will start or bench; the league itself allows more."
+        )
     else:
         st.markdown(f"# 🔨 Bid up to ${advice.max_bid}")
         if advice.max_bid < advice.desired:
@@ -244,7 +252,12 @@ def _bid_panel(s: LiveAuctionSession) -> None:
     c2.metric("Room's price", f"${advice.market_value}")
     c3.metric("Best rival can bid", f"${advice.room_ceiling}")
     if advice.eligible and advice.max_bid > advice.room_ceiling:
-        st.success("No rival can outbid you — this lot is yours if you want it.")
+        # "should", not "cannot": room_ceiling counts only rivals our roster-discipline model
+        # says would still buy this position. A real manager with money can bid on anything.
+        st.success(
+            "You should win this one — your ceiling clears every rival the model expects "
+            "to bid here. (A rival who ignores roster discipline still can.)"
+        )
     elif advice.eligible and advice.max_bid < advice.market_value:
         st.warning("The room is anchored above your ceiling — expect to lose this one. Let it go.")
 
