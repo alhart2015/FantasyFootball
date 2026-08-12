@@ -350,8 +350,9 @@ def _bid_board_panel(s: LiveAuctionSession) -> None:
         "Position", ["All", "QB", "RB", "WR", "TE"], key=f"bb_pos_{len(s.purchases)}"
     )
     query = st.text_input("Search player", key=f"bb_query_{len(s.purchases)}", placeholder="name…")
-    position = None if pos_label == "All" else Position(pos_label)
-    board = s.bid_board(position=position, query=query, top=40)
+    board = _cached_bid_board(
+        st.session_state.get("session_token", ""), s.state_key, pos_label, query
+    )
     if board.empty:
         st.caption("No matching available players.")
         return
@@ -388,6 +389,24 @@ def _log_col(s: LiveAuctionSession) -> None:
         st.session_state["pending_player"] = None
         _autosave(s)
         st.rerun()
+
+
+@st.cache_data(show_spinner=False)
+def _cached_bid_board(
+    session_token: str, purchases: tuple[tuple[str, int, int], ...], pos_label: str, query: str
+) -> pd.DataFrame:
+    """Cache the priced bid board on everything that changes it.
+
+    `bid_board` calls `strategy.max_bid` once per player for up to 40 players, and Streamlit
+    reruns the whole script on every widget interaction -- so without this, typing one letter
+    in the search box re-priced the board, and for `marginal` (a lineup solve per call) that is
+    40 lineup solves per keystroke, live, mid-draft. Keyed like `_cached_projection`: the
+    session token plus `state_key`, the (player, seat, price) triples that are the only mutable
+    state, plus the two filters that shape the result.
+    """
+    s: LiveAuctionSession = st.session_state["session"]
+    position = None if pos_label == "All" else Position(pos_label)
+    return s.bid_board(position=position, query=query, top=40)
 
 
 @st.cache_data(show_spinner=False)
