@@ -41,6 +41,7 @@ from projections.draft.assistant.auction.nomination import (
     drain_off_position,
 )
 from projections.draft.assistant.auction.registry import ALL_BID_MODELS
+from projections.draft.assistant.auction.simulation import validate_auction_inputs
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.league_projection import SeatProjection, project_draft
 from projections.draft.assistant.live import attach_names, build_player_names
@@ -214,6 +215,11 @@ class LiveAuctionSession:
             raise ValueError(
                 f"unknown nomination_mode {self.nomination_mode!r}; expected {NOMINATION_MODES}"
             )
+        # The same preconditions `run_auction_tournament` and every simulation entry point
+        # apply (spec §3.1): enough players to fill the room, and a budget that can afford
+        # min_bid for every slot. Skipping them let a short pool start a live draft that could
+        # never reach `is_complete` — it dead-ends mid-room with no error.
+        validate_auction_inputs(self.pool, self.league)
 
     # ------------------------------------------------------------------ market data
 
@@ -451,7 +457,10 @@ class LiveAuctionSession:
         bd = self.engine_dollars
         fair = int(bd.loc[gid, "auction_dollars"]) if gid in bd.index else 0
         market = int(bd.loc[gid, "bot_dollars"]) if gid in bd.index else 0
-        eligible = pos in self.eligible_positions(self.my_seat)
+        # On a forced lot the engine drops the positional gate for every seat (`elig =
+        # all_positions if forced`), so the hero is ungated too — otherwise the board tells you
+        # to PASS on a lot the room is about to sell you.
+        eligible = self.is_forced_lot or pos in self.eligible_positions(self.my_seat)
         ceiling = self.feasible_max(self.my_seat)
         desired = 0
         clamped = 0
@@ -554,24 +563,48 @@ class LiveAuctionSession:
 
     # ------------------------------------------------------------------ nomination
 
-    def _nomination_candidates(self) -> list[str]:
-        """Undrafted players SOME open seat can still roster, most valuable first — the engine's
-        own candidate rule (`simulation._simulate_to_state`), including its union-of-eligible gate.
+    def _undrafted_in_value_order(self) -> list[str]:
+        """Every undrafted pool player, most valuable first — the engine's `nominate_order`."""
+        order = self.engine_dollars.sort_values("auction_dollars", ascending=False).index
+        drafted = self.drafted_ids
+        return [str(g) for g in order if str(g) not in drafted and str(g) in self._position_by_id]
+
+    @property
+    def is_forced_lot(self) -> bool:
+        """True when no open seat can roster any remaining position, but lots remain.
+
+        The engine's pool-thin branch (`simulation._simulate_to_state`): rather than dead-end,
+        it forces the top undrafted player and lets every seat bid **ungated**. Late in a real
+        draft this is reachable — every open seat holding only unmet-TE deficits with no TEs
+        left — and the engine emits a UserWarning for it.
+
+        False once the auction is complete: the pool still holds undrafted players then, but
+        there is nothing left to nominate and no seat that could bid.
         """
+        if self.is_complete:
+            return False
+        return not self._gated_candidates() and bool(self._undrafted_in_value_order())
+
+    def _gated_candidates(self) -> list[str]:
+        """Undrafted players SOME open seat can still roster — the engine's union gate."""
         union: set[Position] = set()
         for seat in self.seats:
             if self.open_slots(seat) > 0:
                 union |= self.eligible_positions(seat)
-        bd = self.engine_dollars
-        order = bd.sort_values("auction_dollars", ascending=False).index
-        drafted = self.drafted_ids
-        return [
-            str(g)
-            for g in order
-            if str(g) not in drafted
-            and str(g) in self._position_by_id
-            and self._position_by_id[str(g)] in union
-        ]
+        return [g for g in self._undrafted_in_value_order() if self._position_by_id[g] in union]
+
+    def _nomination_candidates(self) -> list[str]:
+        """Undrafted players SOME open seat can still roster, most valuable first — the engine's
+        own candidate rule (`simulation._simulate_to_state`), including its union-of-eligible gate.
+
+        When that gate empties while lots remain, fall back the way the engine does: a single
+        forced nominee, ungated. Without it the board reported "Nothing left to nominate" and a
+        $0 max bid on every player while the room was still selling lots you had to bid on.
+        """
+        gated = self._gated_candidates()
+        if gated:
+            return gated
+        return self._undrafted_in_value_order()[:1] if self.is_forced_lot else []
 
     def suggested_nomination(self) -> str | None:
         """Who to put up, under `nomination_mode`. None once nothing is nominable."""

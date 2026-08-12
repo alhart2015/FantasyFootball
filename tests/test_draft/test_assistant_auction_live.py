@@ -454,3 +454,29 @@ def test_load_rejects_an_unknown_bid_model(tmp_path: Path) -> None:
     s.save(path)
     with pytest.raises(ValueError, match="unknown bid model"):
         LiveAuctionSession.load(path, id_map=_id_map(), pool=_pool())
+
+
+def test_forced_lot_mirrors_the_engine_when_the_pool_goes_thin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When no open seat can roster any remaining position, the engine forces the top
+    undrafted player and lets every seat bid ungated rather than dead-ending
+    (`simulation._simulate_to_state`, the `forced` branch). The board must do the same: it
+    reported "nothing to nominate" and a $0 max bid while the room was still selling lots.
+
+    The gate is closed directly. Reaching it through a realistic draft needs a pathological
+    pool, and the behaviour under test is what happens *once* it is closed.
+    """
+    s = _session()
+    monkeypatch.setattr(type(s), "eligible_positions", lambda self, seat: frozenset())
+    assert s._gated_candidates() == []
+    assert s.is_forced_lot
+
+    nom = s.suggested_nomination()
+    assert nom is not None, "a forced lot must still name a nominee"
+    assert nom == s._undrafted_in_value_order()[0], "the engine forces the top undrafted player"
+    assert len(s._nomination_candidates()) == 1, "exactly one forced nominee, as in the engine"
+
+    advice = s.advise(nom)
+    assert advice.eligible, "the hero is ungated on a forced lot, as every seat is in the engine"
+    assert advice.max_bid >= s.league.min_bid
