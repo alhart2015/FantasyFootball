@@ -73,12 +73,16 @@ def _smoke_session(my_seat: int = 1, n_teams: int = 8):  # type: ignore[no-untyp
 # priced board; under `pytest -n auto` the CPU contention alone blows it. Generous, not slow:
 # the run finishes in well under a second when it has a core to itself.
 _TIMEOUT = 60
+# AppTest resolves a relative script path against the *caller's* directory, not the repo
+# root, so a bare "scripts/auction_board.py" looks for tests/test_scripts/scripts/... and
+# raises FileNotFoundError. Spell the path out from this file.
+_BOARD = str(Path(__file__).resolve().parents[2] / "scripts" / "auction_board.py")
 
 
 def _app(sess=None, tmp_path: Path | None = None, pending: str | None = None):  # type: ignore[no-untyped-def]
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("scripts/auction_board.py", default_timeout=_TIMEOUT)
+    at = AppTest.from_file(_BOARD, default_timeout=_TIMEOUT)
     if sess is not None:
         at.session_state["session"] = sess
         at.session_state["session_token"] = "tok"
