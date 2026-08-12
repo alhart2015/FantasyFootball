@@ -236,7 +236,6 @@ def _record_sale(
     s: LiveAuctionSession,
     advice: BidAdvice,
     *,
-    prefix: str,
     winner_label: str = "Winning team",
     price_label: str = "Price paid ($)",
 ) -> tuple[int | None, int]:
@@ -256,7 +255,11 @@ def _record_sale(
     - **Seats with no open slot are not offered.** `record_purchase` rejects them, and
       `feasible_max` is meaningless there.
     """
-    lot_key = f"{prefix}{len(s.purchases)}_{advice.gsis_id}"
+    # Deliberately NOT prefixed per view. The two views never render in the same run (main
+    # returns after the minimal branch), so they cannot collide -- and sharing the keys means
+    # a winner and price typed in one view survive a flip to the other, which per-view
+    # prefixes silently dropped mid-lot.
+    lot_key = f"{len(s.purchases)}_{advice.gsis_id}"
     seats = [seat for seat in s.seats if s.open_slots(seat) > 0]
     if not seats:
         st.warning("No team has an open roster slot.")
@@ -267,7 +270,7 @@ def _record_sale(
         index=None,
         placeholder="Select the winning team…",
         format_func=s.team_label,
-        key=f"{prefix}winner_{lot_key}",
+        key=f"winner_{lot_key}",
     )
     if winner is None:
         return None, s.league.min_bid
@@ -278,7 +281,7 @@ def _record_sale(
         max_value=cap,
         value=max(s.league.min_bid, min(advice.market_value, cap)),
         step=1,
-        key=f"{prefix}price_{lot_key}_{winner}",
+        key=f"price_{lot_key}_{winner}",
     )
     return int(winner), int(price)
 
@@ -345,7 +348,7 @@ def _bid_panel(s: LiveAuctionSession) -> None:
     # Widget keys carry the staged player, and the price also carries the chosen winner.
     # Keyed on the lot number alone, Streamlit retains the widget's value when a different
     # player is staged for the same lot: a price typed for a $46 stud survived onto a $3
-    winner, price = _record_sale(s, advice, prefix="")
+    winner, price = _record_sale(s, advice)
     confirm, clear = st.columns([4, 1])
     if winner is None:
         confirm.button(
@@ -579,7 +582,7 @@ def _option_label(s: LiveAuctionSession, gsis_id: str) -> str:
 
 def _minimal_record(s: LiveAuctionSession, advice: BidAdvice) -> None:
     """The same record widgets the full board uses, with terser labels."""
-    winner, price = _record_sale(s, advice, prefix="m_", winner_label="Won by", price_label="Price")
+    winner, price = _record_sale(s, advice, winner_label="Won by", price_label="Price")
     if winner is None:
         st.button("Pick the winning team", disabled=True, key=f"m_confirm_{len(s.purchases)}")
         return
@@ -635,9 +638,11 @@ def _minimal_view(s: LiveAuctionSession) -> None:
         label_visibility="collapsed",
         key=nom_key,
     )
-    # Track the box both ways. Writing only on a non-None pick left a cleared box still
-    # showing the previous player priced, with a live confirm button one stray click from
-    # recording a sale that never happened.
+    # Track the box both ways, and write only on a CHANGE. Writing unconditionally would
+    # clobber a player staged from the full board's bid board on the flip back, since the
+    # minimal box still holds its old value. Writing only on a non-None pick left a cleared
+    # box still showing the previous player priced, with a live confirm button one stray
+    # click from recording a sale that never happened.
     if picked != st.session_state.get("m_nom_last"):
         st.session_state["m_nom_last"] = picked
         st.session_state["pending_player"] = picked

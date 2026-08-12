@@ -6,6 +6,26 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft Hub — auction board MINIMAL live-draft mode — shipped (2026-08-12, branch `feat/auction-minimal-mode`, PR #140)
+
+**Status:** the auction board now has two views over one `LiveAuctionSession`, switched by a sidebar radio. **Full board** is the unchanged analyst surface (sold log, 40-row bid board, roster + budget tables, projected eval). **Minimal (live draft)** is for actually running an auction: name the teams once, type the nominated player into a single type-ahead box, read one large number, record winner + price. Everything the Yahoo draft UI already shows is deliberately absent.
+
+**Why:** the full board takes four interactions to answer "someone just nominated Bijan" (position filter → search → scan 40 rows → click), and renders seats as `Team 6`, so recording a sale means translating a name to a seat number under time pressure — the moment a mis-record happens, and a mis-recorded winner corrupts the purchase log every later number derives from.
+
+**Design:** `docs/superpowers/specs/2026-08-12-auction-minimal-mode-design.md`. Both views share `_record_sale` / `_confirm_sale` / `_nomination_panel`, so the widget-keying safety cannot drift between them. The session gained one public accessor (`position_of`); nothing else moved into it.
+
+**Review pass (loop-review).** Three reviewers over the branch diff: 46 findings → 35 after merging duplicate framings, **29 fixed, 6 recorded below threshold**. The ones worth remembering:
+
+- **Autocomplete options must be ids, not labels.** The first cut keyed a dict on `f"{name} ({pos})"`. `attach_names` fills an unresolved name with `"—"`, so every unnamed player at a position collided, `options[picked]` returned whichever came last, and the board would record a purchase for a player nobody nominated while making the other permanently un-nominatable. `format_func` gives the same type-ahead with no ambiguity.
+- **`st.title` renders at the same h1 size as a markdown `#`.** The decorative banner sat level with, and directly above, the bid number the mode exists to make prominent. Minimal mode drops it.
+- **Two `$` in one markdown string pair into inline LaTeX.** `worth to us $37 · room pays $52 · best rival $41` rendered the middle as italic math. Now three `st.metric`s. Worth knowing for any future Streamlit copy in this repo.
+- **A "safe" escape hatch made things worse.** The naming gate's skip wrote `Team 1…N` — truthy, so the gate's own re-entry test never fired again, and there is no rename affordance in that mode. It also overwrote the hero's `"You"` label in *both* views and in the autosave. Now a session-state flag with a reopen button.
+- **Widget state is shared across views on purpose.** Both views write `pending_player`; the minimal box writes only on a *change*, so a player staged on the full board is not clobbered on the flip back. The record widgets deliberately share keys (the views never render in one run), so a winner and price survive a mid-lot flip.
+
+**Gates:** see the PR. Two pre-existing failures remain deselected (`test_backtest_smoke_one_cell` [#40], `test_generate_preset_vorp_tables` [#126]).
+
+---
+
 ## Draft Hub — Live AUCTION board (co-pilot; snake board keeps mock mode) — shipped (2026-08-12, branch `feat/auction-live-board`, PR #136)
 
 **Status:** the live-draft UI now covers **both** formats. `streamlit run scripts/auction_board.py` is the auction companion to `scripts/draft_board.py`: it says how much to bid on each player, who to nominate, and records who bought whom for how much. The `docs/auction-draft-guide-will-league.md` section that said "there is no auction draft tracker in this repo" is now wrong and has been rewritten.

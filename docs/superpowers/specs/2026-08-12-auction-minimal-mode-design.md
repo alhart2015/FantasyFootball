@@ -51,15 +51,20 @@ and flip back without losing anything.
 ### Step 1: team names
 
 On entering minimal mode with no names set, the board shows a naming form before anything
-else: one text input per seat, prefilled `Team N`, the operator's own seat marked. Saving
-writes `session.team_names` and autosaves.
+else: one text input per seat, prefilled from `team_label` (so the operator's own seat reads
+`You`). Saving writes `session.team_names` and autosaves; a blank entry falls back to the same
+default rather than overwriting it.
 
 This is a gate rather than an optional setting because it is cheap once and expensive never:
 every later confirm button reads `Player → <name> for $N`, and that sentence is the only
 thing standing between a misheard winner and a corrupted log. A resumed session already has
 names, so the gate does not reappear.
 
-An explicit "use Team 1…N" escape exists so the gate can never strand a session.
+An explicit skip exists so the gate can never strand a session. It sets a session-state flag
+rather than writing `Team 1…N`: those are truthy, so they would satisfy the gate's own
+re-entry test and disable it permanently — with no rename affordance anywhere in this mode,
+leaving the operator in exactly the state the gate exists to prevent. Skipping keeps
+`team_label`'s defaults and leaves a button to reopen the form.
 
 ### Step 2: the lot
 
@@ -67,9 +72,13 @@ An explicit "use Team 1…N" escape exists so the gate can never strand a sessio
   placeholder `Type a player name…`. Streamlit's selectbox filters as you type, which is the
   autocomplete; options are labelled `Name (POS)` so two players sharing a surname are
   distinguishable. No position filter, no separate search box.
-- **The number** — `# 🔨 BID UP TO $X` as the largest thing on screen, with the verdict
-  underneath (`i_want` / `uncontested` from `BidAdvice`, already shared with the full board).
-  One caption line carries worth-to-us, room price, and best rival ceiling.
+- **The number** — `# 🔨 BID UP TO $X` as the largest thing on screen (minimal mode drops
+  the `st.title` banner, which renders at the same h1 size), with the verdict
+  underneath (`i_want` / `uncontested` from `BidAdvice`, already shared with the full board) —
+  including the modal "affordable but contested" case, which must not render as silence.
+  Worth-to-us, room price and best rival ceiling go in three `st.metric`s rather than one
+  caption: two `$` in a single markdown string pair into inline LaTeX and Streamlit renders
+  the middle as italic math.
 - **Record the sale** — winner selectbox (real names, no default, seats with no open slot
   excluded) and price input, then a confirm button spelling out the whole sentence. Same
   safety properties the review put on the full board: widgets keyed to the staged player and
@@ -88,10 +97,15 @@ One line: money left, open slots, lots sold. Enough context for the bid; not a b
 
 ## What this does not change
 
-`LiveAuctionSession` needs no new behaviour — `team_names` is already a persisted field, and
-`advise` / `nomination_board` / `record_purchase` / `undo` already expose everything the view
-needs. The only session-layer addition is a helper for the autocomplete option list, which is
-a view concern expressed over `available_pool()`.
+`LiveAuctionSession` gains one public accessor, `position_of` — views label rows with the
+position and were otherwise reaching into the private `_position_by_id` memo. Everything else
+it needs already exists: `team_names` is a persisted field, and `advise` /
+`nomination_board` / `record_purchase` / `undo` expose the rest. The autocomplete's option
+list is a view-layer helper over `available_pool()`, not a session addition.
+
+The **options are gsis_ids** with `format_func` rendering the label. Keying them by label
+collapses any two players who render the same — and `attach_names` fills an unresolved name
+with `"—"`, so that is not a rare case.
 
 ## Testing
 
@@ -99,7 +113,15 @@ AppTest smokes, in the same file as the existing board smokes (which, as of PR #
 run):
 
 - the naming gate appears with no names, and not after they are set;
-- saving names changes what `team_label` returns;
+- saving names changes what `team_label` returns, and a blank entry restores the default
+  (including `"You"` for the operator's own seat);
+- the skip escape is reversible and does not overwrite the `"You"` marker;
+- a completed auction skips the gate entirely and can still undo;
 - selecting a player renders a bid number;
-- recording a sale through the minimal flow lands in `purchases` with the right seat;
-- the sold log / budget table / bid board are *absent* in minimal mode (the point of it).
+- recording a sale lands in `purchases` with the right **player**, seat and price — the
+  label→id resolution is the only logic this mode adds, so a (seat, price) assertion would
+  pass even when the wrong player was recorded;
+- two players whose labels collide both stay pickable;
+- a player staged on the full board survives a flip to minimal;
+- the sold log / budget table / bid board are *absent* — asserted by element counts, not by
+  grepping markdown for headings, which would pass even if the tables rendered.

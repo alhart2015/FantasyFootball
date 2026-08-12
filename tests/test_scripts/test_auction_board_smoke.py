@@ -402,3 +402,18 @@ def test_minimal_mode_makes_the_bid_number_the_largest_thing_on_screen(tmp_path:
 
     full = _app(_smoke_session(), tmp_path).run()
     assert full.title, "the full board should still have its title"
+
+
+def test_a_player_staged_in_the_full_board_survives_a_flip_to_minimal(tmp_path: Path) -> None:
+    """Both views write `pending_player`. The minimal box must not clobber a selection made
+    on the full board just because its own widget still holds an older value."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    sess.team_names = tuple(f"Squad {seat}" for seat in sess.seats)
+    at = _app(sess, tmp_path, pending=_IDS[3]).run()  # staged on the full board
+    assert not at.exception
+    at.session_state["view_mode"] = MINIMAL_MODE
+    at.run()
+    assert not at.exception
+    assert at.session_state["pending_player"] == _IDS[3], "the minimal box overwrote the pick"
+    assert any(sess.name(_IDS[3]) in str(getattr(md, "value", "")) for md in at.markdown)
