@@ -6,6 +6,7 @@ say who to nominate, and record awards without ever letting the room go insolven
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -480,3 +481,43 @@ def test_forced_lot_mirrors_the_engine_when_the_pool_goes_thin(
     advice = s.advise(nom)
     assert advice.eligible, "the hero is ungated on a forced lot, as every seat is in the engine"
     assert advice.max_bid >= s.league.min_bid
+
+
+def test_live_view_matches_the_engine_view_field_for_field() -> None:
+    """The board's whole premise is that it scores the strategy against *the same*
+    `AuctionView` the simulation builds. The two are constructed independently
+    (`live._view` vs `simulation._build_view`), so pin them together: a divergence here means
+    the board's number stops being the number the measured strategy would have bid."""
+    from projections.draft.assistant.auction.simulation import AuctionState, _build_view
+
+    s = _session()
+    awards = [(_IDS[0], 1, 40), (_IDS[1], 2, 30), (_IDS[5], 1, 12), (_IDS[9], 3, 7)]
+    for gid, seat, price in awards:
+        s.record_purchase(gid, seat, price)
+
+    # The engine's equivalent state for the same awards (0-based seats).
+    state = AuctionState.initial(s.league)
+    for gid, seat, price in awards:
+        state.budgets[seat - 1] -= price
+        state.rosters[seat - 1].append((gid, s._position_by_id[gid].value, price))
+        state.drafted.add(gid)
+
+    mine = _build_view(state, s.my_seat - 1, s.pool, s.engine_dollars, s.league)
+    theirs = s._view()
+    assert theirs.my_budget == mine.my_budget
+    assert theirs.my_open_slots == mine.my_open_slots
+    assert theirs.my_positions == mine.my_positions
+    assert theirs.drafted == mine.drafted
+    assert theirs.budgets_by_seat == mine.budgets_by_seat
+    assert list(theirs.my_roster["gsis_id"]) == list(mine.my_roster["gsis_id"])
+    assert theirs.baseline_dollars.equals(mine.baseline_dollars)
+    # Every field is covered above -- fail loudly if someone adds one.
+    assert {f.name for f in dataclasses.fields(AuctionView)} == {
+        "my_budget",
+        "my_open_slots",
+        "my_positions",
+        "my_roster",
+        "drafted",
+        "budgets_by_seat",
+        "baseline_dollars",
+    }
