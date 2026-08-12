@@ -19,22 +19,38 @@ for a dollar.
 Yardage bonuses (300/350/400 passing, 100/150/200 rushing/receiving) are **not** in the
 model. They're worth a few points a season to boom players and don't reorder the board.
 
-## The strategy: `static`
+## The strategy: `overbid_noramp`
 
-Out of 14 bidding strategies tested across all 12 seats and 2 market models, `static` won.
-It is one rule:
+Out of 15 bidding strategies tested across all 12 seats, `overbid_noramp` won. It beat every
+other strategy by a margin that clears statistical noise, on every metric.
 
-> **Bid up to a player's max bid. Never a dollar more. Then move to the next name.**
+It is two rules:
 
-That's the whole thing. No budget math during the draft, no adjusting for who's spent what.
-The discipline is the strategy.
+> **1. For a stud (marked `*` on the sheet), bid up to 1.3x what he's worth.**
+> **2. For everyone else, bid up to exactly what he's worth.**
+> **Never a dollar more, at any point in the draft.**
 
-Two things it beats decisively, both of which are tempting in a room full of overbidders:
+The sheet already does the 1.3x multiplication for you. The MAX BID column is the number to
+stop at — don't add anything on top of it.
 
-- **Don't sit back and wait for bargains.** The "patient" strategy finished at a 50% win
-  rate — a coin flip, and the worst result in the study.
-- **Don't go all-in on 3 studs and punt the rest.** Pure stars-and-scrubs finished below
-  `static` on every metric.
+Two things it beats decisively, both tempting in a room full of overbidders:
+
+- **Don't sit back and wait for bargains.** The "patient" strategy finished at a 54% win rate,
+  dead last. Sitting out the early market is the single worst plan against this room.
+- **Don't spread your money evenly.** Trying to buy a balanced roster of mid-priced players
+  ("balanced", .597) lost significantly to buying a few studs.
+
+### The counter-intuitive part
+
+**Spend everything, early, and don't save any.** A typical draft: about $180 of your $200 goes
+to three running backs, and nine or ten roster spots cost $1 each.
+
+That looks wrong. It isn't. Every team in this room ends at $0 — the money always gets spent,
+so the only question is whether you spent it on the best available players or on leftovers.
+There is nothing worth saving for.
+
+We tested holding money back for a late-draft push (the "ramp"), and it made things **worse**
+(−0.012 win rate, CI excludes zero). Bid the number, stop at the number, move on.
 
 ## Use it (no software)
 
@@ -48,7 +64,9 @@ Columns:
 
 | column | meaning |
 |---|---|
-| **MAX BID** | your ceiling. This is the number that matters. |
+| **MAX BID** | your ceiling, stud premium already included. The only number that matters. |
+| `*` | marks a stud — the top 36 players. His MAX BID is 1.3x his worth. |
+| worth | what he's actually worth to us, before the stud premium |
 | ESPN | what the market thinks he costs. Much lower than MAX BID = a bargain the room may not contest. |
 | proj | projected fantasy points for the season |
 | adp | roughly when he'll be nominated |
@@ -93,48 +111,45 @@ That rewrites both the `.csv` and the `.txt`.
 `streamlit run scripts/draft_board.py` launches a live board, but it is built for **snake
 drafts only** — it tracks pick order and draft slots, has no concept of a budget or a
 bid, and its strategy menu contains snake strategies (`season_value`, `now_or_never`, …).
-`static` is an auction bid model and does not appear there. Running it for this league
-would give you advice for the wrong format.
+`overbid_noramp` is an auction bid model and does not appear there. Running it for this
+league would give you advice for the wrong format.
 
 For this auction, the printed sheet *is* the tool. Track budgets on paper or in the
 league site's own auction room.
 
 ## Draft day
 
-**Pacing.** $200 over 13 spots is ~$15 a spot on average. You will not spend evenly — see
-below — but if you have 8 spots left and under $10, you've lost the plot.
+**Pacing.** Don't. There is no pacing in this plan — you are trying to land three of the best
+players on the board and then fill out with dollar guys. If you're eight spots in with $150
+still in your pocket, you are losing.
 
-**What a typical `static` draft looks like** (average of 60 simulated drafts):
+**What a typical draft looks like** (average of 60 simulated drafts):
 
-- Top 3 buys: about **$55 / $53 / $49** — three genuine anchors, ~$157 of your $200
-- One more player around **$26**
-- The remaining nine spots at **$1–5**
-- Ends at $0 with 13 players
+- Top three buys around **$80 / $63 / $40** — almost all running backs
+- Nine or ten players at **$1**
+- Ends at **$0** with 13 players
 
-So in practice this is a top-heavy build. The rule keeps you honest about *which* studs
-(only the ones still under their max bid) rather than making you spread the money evenly.
+**Positional reality.** The plan spends about **$189 of $200 on running backs** and lands ~6 RB
+/ ~4 WR. That's because 23 of the top 30 players by value are running backs.
 
-**Positional reality.** The model spends about **$167 of $200 on running backs** and only
-~$23 on receivers, and lands ~6 RB / ~4 WR. That's because 23 of the top 30 players by
-value are running backs.
+**Read this before you commit to that:** the RB tilt comes from the projections, not the bidding
+rule. Replacement level sits at 92 points for RB vs 135 for WR, which is what makes backs look
+so much more valuable. If you don't believe that gap is real, the strategy is still sound but
+it's pointing at the wrong players. Your receivers will be waiver-wire types either way — that
+is what the plan trades away.
 
-**Read this before you commit to that:** that RB tilt comes from the projections, not the
-bidding strategy. Replacement level sits at 92 points for RB vs 135 for WR, which is what
-makes backs look so much more valuable. If you don't believe that gap is real, the
-strategy is still sound but it's pointing you at the wrong players — take the max bids as
-a discipline device and apply your own judgment about the RB/WR split.
+**Where you'll be bidding against the room.** Where our MAX BID is well above the ESPN column,
+the room is likely to stop before you do: Derrick Henry ($66 vs $35), Breece Hall ($55 vs $27),
+Javonte Williams ($52 vs $24), Kenneth Walker ($58 vs $29).
 
-**Bargains to watch.** Where MAX BID is well above the ESPN column, the room is likely to
-let him go cheap: Derrick Henry ($51 vs $35), Breece Hall ($42 vs $27), Javonte Williams
-($40 vs $24), D'Andre Swift ($32 vs $9).
+**Where to walk away.** Where ESPN is close to or above our MAX BID, you'll be in a real fight
+and the player isn't worth it to you: Puka Nacua, Ja'Marr Chase, Jaxon Smith-Njigba. Let them go.
 
-**Where to be disciplined.** Where ESPN is above MAX BID, the room will overpay and you
-should let it: Puka Nacua ($46 vs $60), Ja'Marr Chase ($43 vs $59), Jaxon Smith-Njigba
-($37 vs $55). These are good players — they're just going to cost more than they're worth.
-
-**Quarterbacks are cheap and that's correct.** Even with 5-point passing TDs, twelve
-starting QBs means the twelfth is nearly as good as the third. Max bids top out around
-$12. Don't pay $30 for Josh Allen because the scoring "looks QB-friendly."
+**Quarterbacks: exactly one is worth paying for.** Josh Allen is a stud on this board (382
+projected points, MAX BID **$36**). After him it falls off a cliff — Lamar Jackson and Drake Maye
+are $15, and everyone else is $12 or less, because twelve QBs start and the twelfth is nearly as
+good as the third. So either win Allen at $36 or take a $12 quarterback and spend nowhere in
+between. Tight end works the same way: Trey McBride $31, Brock Bowers $23, then single digits.
 
 ## What this is and isn't
 
@@ -143,8 +158,11 @@ Honest limits, so you can weigh the advice:
 - Simulated against a modeled opponent field (9 aggressive overbidders + 2 patient
   bidders), not against your actual league-mates.
 - One season's projections (2026), one set of rankings.
-- `static` beat the next three strategies by a margin that clears statistical noise on
-  championship rate, but on regular-season wins they were within noise of each other. The
-  finding is "pay market price for talent," more than "this exact model."
+- `overbid_noramp` beat every other strategy on every metric with confidence intervals that
+  exclude zero. But the opponent model behind that number was rebuilt four times during testing,
+  each time because it contained a flaw that handed some strategy a free win. Treat it as a
+  well-tested opinion, not a guarantee.
+- The rosters it drafts look thin at receiver, by design. That is worth an eye-test before you
+  commit to it.
 - Over a 13-game season, luck outweighs roster quality. In testing, the roster with the
   *highest* title odds missed the playoffs and one with lower odds won it all.

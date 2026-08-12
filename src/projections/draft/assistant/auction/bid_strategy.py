@@ -175,10 +175,21 @@ class AnchorBudgetBid:
 
 @dataclass(frozen=True)
 class OverbidValueBid:
-    """Pay up for studs (top-VORP), plain value for others; engine clamp handles broke (spec §B)."""
+    """Pay up for studs (top-VORP), plain value for others; engine clamp handles broke (spec §B).
+
+    `use_urgency=False` drops the `_budget_urgency` ramp. The ramp escalates a bid up to 4x as the
+    roster fills while cash remains, which reliably COSTS win rate — late in a draft the cash is
+    left over precisely because the players worth buying are gone, so the ramp just overpays for
+    leftovers. Measured under the jittered-cap over-bidding market (12 seats, CRN-paired): dropping
+    it is worth +0.0118 reg-win% and +0.0124 champ%, both CIs excluding zero; the same A/B on
+    `StaticDollarBid` costs it 0.0172 reg-win%. It is also the only part of this policy a human
+    working from a printed sheet cannot execute, so the no-ramp variant is both stronger and
+    reproducible by hand. Default stays True so prior runs reproduce bit-for-bit.
+    """
 
     k: float = 1.3
     stud_count: int | None = None
+    use_urgency: bool = True
 
     def max_bid(
         self, view: AuctionView, player: pd.Series, pool: pd.DataFrame, config: LeagueConfig
@@ -187,7 +198,8 @@ class OverbidValueBid:
         threshold = _vorp_threshold(pool, stud_count)
         value = int(view.baseline_dollars.loc[player["gsis_id"], "auction_dollars"])
         base = value * self.k if float(player["vorp"]) >= threshold else float(value)
-        return round(base * _budget_urgency(view, config))
+        ramp = _budget_urgency(view, config) if self.use_urgency else 1.0
+        return round(base * ramp)
 
 
 @dataclass(frozen=True)

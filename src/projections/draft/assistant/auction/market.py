@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -207,10 +207,27 @@ class BalancedBot:
     single player). A room of those drains ~85% of its money in the first quarter of the draft and
     fills the rest at $1, forcing stars-and-scrubs on everyone. A paced over-bidder overpays AND
     still rosters a full team, which is what a real aggressive manager does.
+
+    `pace_basis` picks what the cap is a multiple OF:
+
+    - "running" (default): `budget / open_slots`, recomputed each bid. The cap SHRINKS as the bot
+      spends, so a seat that lands one stud can never afford a second — the room ends up with one
+      big buy per seat and no manager who goes star-heavy early and cheap late.
+    - "opening": the constant `config.budget / config.roster_size`, so the ceiling never moves. A
+      bot can chase two or three expensive players and then be forced down to $1 filler by the
+      engine's solvency clamp, which is how aggressive managers actually bust.
+
+    "opening" is the realistic shape; "running" is retained as the default so every prior run
+    reproduces bit-for-bit.
     """
 
     pace: float = 2.0
     overbid: float = 0.0
+    pace_basis: Literal["running", "opening"] = "running"
+
+    def __post_init__(self) -> None:
+        if self.pace_basis not in ("running", "opening"):
+            raise ValueError(f"pace_basis must be 'running' or 'opening'; got {self.pace_basis!r}")
 
     def max_bid(
         self,
@@ -227,7 +244,12 @@ class BalancedBot:
             return 0
         value = float(baseline_dollars.loc[player["gsis_id"], "bot_dollars"])
         wtp = value * (1.0 + self.overbid) * (1.0 + rng.normal(0.0, price_jitter))
-        cap = self.pace * (seat_view.budget / seat_view.open_slots)
+        per_slot = (
+            config.budget / config.roster_size
+            if self.pace_basis == "opening"
+            else seat_view.budget / seat_view.open_slots
+        )
+        cap = self.pace * per_slot
         return round(max(float(config.min_bid), min(wtp, cap)))
 
 
