@@ -87,6 +87,10 @@ that log. Undo, autosave to `data/auction_sessions/`, sidebar resume, and an end
 projected-season eval. Logic:
 `projections.draft.assistant.auction.live.LiveAuctionSession`.
 
+The auction board is **co-pilot only** — there is no mock-auction mode yet, so it has no
+analogue of the snake board's auto-drafting field or "Advance to my pick". Tracked in
+[#137](https://github.com/alhart2015/FantasyFootball/issues/137).
+
 ## Workflow
 
 This project uses the superpowers spec → plan → execute discipline.
