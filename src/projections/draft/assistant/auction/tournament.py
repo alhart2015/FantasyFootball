@@ -17,6 +17,7 @@ import pandas as pd
 from projections.draft.assistant._compare import Interval, bootstrap_mean
 from projections.draft.assistant.auction.bid_strategy import AuctionBidStrategy
 from projections.draft.assistant.auction.market import BotArchetype
+from projections.draft.assistant.auction.nomination import HeroNominator
 from projections.draft.assistant.auction.simulation import simulate_auction, validate_auction_inputs
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.league_projection import project_draft
@@ -87,7 +88,17 @@ def run_auction_tournament(
     bot_prices: Literal["espn", "model"] = "espn",
     unranked_discount: float | None = None,
     market_adp_jitter: float | None = None,
+    hero_nominators: Mapping[str, HeroNominator | None] | None = None,
 ) -> AuctionTournamentResult:
+    """Race `strategies` under common random numbers; see the module docstring.
+
+    `hero_nominators` optionally gives a contestant its own hero nomination policy, keyed by the
+    same names as `strategies`. A name absent from the mapping (or mapped to None) keeps the
+    engine's default nomination, so racing NOMINATORS at one fixed bid is the same shape as racing
+    bids: pass the identical strategy under several names and vary only the nominator. The CRN
+    pairing that makes such a probe readable is already here — every contestant plays the identical
+    auction and season draw per seed, and `paired_diffs` cancels the shared-world variance.
+    """
     if season_base_seed is None:
         season_base_seed = base_seed + 1_000_000
     validate_auction_inputs(pool, config)
@@ -96,6 +107,10 @@ def run_auction_tournament(
     # itself with the live board so a simulated room and a live one cannot be priced differently.
     if bot_prices not in ("espn", "model"):
         raise ValueError(f"bot_prices must be 'espn' or 'model'; got {bot_prices!r}")
+    if hero_nominators is not None and (unknown := set(hero_nominators) - set(strategies)):
+        # A typo'd contestant name would otherwise be silently dropped, and the probe would compare
+        # the control against an identical control — a null result that reads as a clean no-effect.
+        raise ValueError(f"hero_nominators keys must name a contestant; unknown: {sorted(unknown)}")
     baseline_dollars, bot_dollars = build_market_dollars(
         pool, config, market=bot_prices, unranked_discount=unranked_discount
     )
@@ -118,6 +133,7 @@ def run_auction_tournament(
                 bot_archetypes=bot_archetypes,
                 bot_dollars=bot_dollars,
                 market_adp_jitter=market_adp_jitter,
+                hero_nominator=None if hero_nominators is None else hero_nominators.get(name),
             )
             proj = project_draft(
                 league,

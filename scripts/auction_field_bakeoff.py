@@ -20,10 +20,18 @@ Two differences from `auction_seat_sweep.py` beyond the field knob:
 Crash-safe by construction: one (seat, market) per process, each writing its own chunk JSON (the
 dev box's Raptor Lake fault wants bounded processes — memory `h2h-backtest-native-crash`).
 
+`--nominator-probe BID_MODEL` flips what is being raced: instead of many bid models under one
+nomination policy, it races many NOMINATION policies under one bid model. Same field, same seeds,
+same pairing — see `NOMINATOR_PROBE`.
+
 Run:
     python scripts/auction_field_bakeoff.py run --vorp-table ... --league-config ... \
         --seat 1 --season 2026 --bot-prices espn --field overbidder --out chunk.json
     python scripts/auction_field_bakeoff.py aggregate --chunk-dir DIR [--control balanced]
+
+    # nomination probe (contestants: control / off_pos / gap / gap_off)
+    python scripts/auction_field_bakeoff.py run ... --nominator-probe overbid_noramp --out c.json
+    python scripts/auction_field_bakeoff.py aggregate --chunk-dir DIR --control control
 """
 
 from __future__ import annotations
@@ -42,6 +50,12 @@ from projections.draft.assistant.auction.market import (
     BalancedBot,
     BotArchetype,
     PatientValueBot,
+)
+from projections.draft.assistant.auction.nomination import (
+    HeroNominator,
+    drain_off_position,
+    drain_value_gap,
+    drain_value_gap_off_position,
 )
 from projections.draft.assistant.auction.registry import ALL_BID_MODELS
 from projections.draft.assistant.auction.tournament import METRICS, run_auction_tournament
@@ -88,6 +102,18 @@ _OVERBID_BASIS: Literal["running", "opening"] = "opening"
 # single cliff: there is always some seat still bidding above the hero's next dollar.
 _OVERBID_PACE_JITTER = 0.35
 _PATIENT_EVERY = 5  # every 5th bot seat is a patient bidder (~2 of 11 in a 12-team league)
+
+# --nominator-probe: race NOMINATION policies at ONE fixed bid, instead of racing bid models.
+# `run_auction_tournament` is already CRN-paired per contestant, so passing the identical bid model
+# under four names and varying only `hero_nominators` reuses the whole pairing + aggregation stack.
+# `control` maps to None = the engine's own nomination. See
+# docs/superpowers/specs/2026-08-12-auction-value-gap-nomination-design.md.
+NOMINATOR_PROBE: dict[str, HeroNominator | None] = {
+    "control": None,
+    "off_pos": drain_off_position,  # the Run-O incumbent (price-ranked, off-position)
+    "gap": drain_value_gap,  # rank by the room's overpay vs our board
+    "gap_off": drain_value_gap_off_position,  # both signals composed
+}
 
 
 def _spread_paces(pace: float, jitter: float, n: int) -> list[float]:
@@ -175,8 +201,24 @@ def _run_chunk(args: argparse.Namespace) -> int:
             "bot_prices='espn' but the pool has no usable espn_auction_dollars; the chunk would be "
             "mislabeled model-priced. Use --bot-prices model or a pool with ESPN values."
         )
+    contestants, nominators = CONTESTANTS, None
+    if args.nominator_probe is not None:
+        if args.nominator_probe not in ALL_BID_MODELS:
+            raise SystemExit(
+                f"unknown bid model {args.nominator_probe!r}; choose from {sorted(ALL_BID_MODELS)}"
+            )
+        if market != "espn":
+            # The gap heuristics rank by (room's price - our value), and under model pricing the
+            # room prices off our own numbers, so every gap is 0 and they degenerate to an
+            # arbitrary tie-break. A model-market probe would report a meaningless null.
+            raise SystemExit(
+                "--nominator-probe requires --bot-prices espn: under model pricing the room shares "
+                "our board, so the value-gap signal is identically zero."
+            )
+        nominators = NOMINATOR_PROBE
+        contestants = {name: ALL_BID_MODELS[args.nominator_probe] for name in NOMINATOR_PROBE}
     result = run_auction_tournament(
-        CONTESTANTS,
+        contestants,
         pool,
         config,
         my_seat=args.seat,
@@ -197,10 +239,14 @@ def _run_chunk(args: argparse.Namespace) -> int:
         ),
         bot_prices=market,
         market_adp_jitter=args.market_adp_jitter,
+        hero_nominators=nominators,
     )
     payload = {
         "market": market,
         "seat": args.seat,
+        # None for a bid-model bake-off; the fixed hero bid when racing nominators. Guarded as a
+        # homogeneity key so probe chunks can never be pooled into a bake-off average.
+        "nominator_probe": args.nominator_probe,
         "field": args.field,
         "overbid": args.overbid,
         "overbid_pace": args.overbid_pace,
@@ -356,6 +402,7 @@ def _guard_homogeneous(chunks: Sequence[dict[str, object]]) -> None:
     """Refuse to pool chunks that priced different markets. Mixing nomination models or opponent
     fields into one average yields a winner that matches no real configuration."""
     for key in (
+        "nominator_probe",
         "market_adp_jitter",
         "field",
         "overbid",
@@ -380,6 +427,7 @@ def _aggregate(args: argparse.Namespace) -> int:
     _guard_homogeneous(chunks)
     head = chunks[0]
     print(
+        f"nominator_probe={head.get('nominator_probe')} "
         f"field={head.get('field')} overbid={head.get('overbid')} "
         f"pace={head.get('overbid_pace')}/{head.get('overbid_basis')} "
         f"pace_jitter={head.get('overbid_pace_jitter')} "
@@ -483,6 +531,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=12.0,
         help="Flush seats nominate off a shared noisy-ADP board with this jitter (the realistic "
         "nomination model, Run P). Pass 0 or omit --market-adp-jitter for value-weighted nom.",
+    )
+    r.add_argument(
+        "--nominator-probe",
+        default=None,
+        metavar="BID_MODEL",
+        help="Race NOMINATION policies instead of bid models, with every contestant bidding "
+        "BID_MODEL (e.g. overbid_noramp). Contestants become control/off_pos/gap/gap_off. "
+        "Requires --bot-prices espn.",
     )
     r.add_argument("--data-root", type=Path, default=Path("data"))
     r.add_argument("--out", type=Path, required=True)

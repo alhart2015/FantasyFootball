@@ -1349,3 +1349,35 @@ def test_stackratio_produces_a_legal_full_roster() -> None:
         assert all(len(r) == cfg.roster_size for r in league.values())
         ids = [g for r in league.values() for g in r]
         assert len(ids) == len(set(ids))
+
+
+def test_trace_records_the_nominator_seat_round_robin() -> None:
+    """`nominator_seat` must be the seat that PUT THE LOT UP, not the winner.
+
+    It is the cost side of any poison-nomination measurement (how often a seat buys its own
+    decoy), and it is not recoverable after the fact: the engine advances `state.nominator` at the
+    end of every loop body. With all seats still holding open slots the pointer is a clean
+    round-robin, so the early picks pin the value exactly.
+    """
+    cfg = _config(n_teams=4)
+    pool = _pool(40)
+    bd = _baseline(pool, cfg)
+    trace: list[PickRecord] = []
+    _simulate_to_state(
+        StaticDollarBid(),
+        1,
+        pool,
+        cfg,
+        baseline_dollars=bd,
+        price_jitter=0.1,
+        rng=np.random.default_rng(0),
+        trace=trace,
+    )
+    # Every seat has open slots for at least the first roster_size rounds, so no seat is skipped.
+    first_round = trace[: cfg.n_teams * 2]
+    assert [r.nominator_seat for r in first_round] == [
+        i % cfg.n_teams for i in range(len(first_round))
+    ]
+    assert all(0 <= r.nominator_seat < cfg.n_teams for r in trace)
+    # The nominator is NOT simply the winner — otherwise the field would be measuring nothing.
+    assert any(r.nominator_seat != r.winner_seat for r in trace)

@@ -88,6 +88,10 @@ class PickRecord:
     value: float  # model auction_dollars (fair value)
     price: int  # clearing price paid
     winner_seat: int  # 0-based
+    # Who put the lot up (0-based). `nominator_seat == winner_seat` is a seat buying its own
+    # nomination — the cost side of any poison-nomination strategy, and not otherwise recoverable
+    # from the trace (the state advances the nominator pointer after every award).
+    nominator_seat: int
     room_budget: int  # sum of all seats' budgets after this award
     forced: bool  # the ungated pool-thin fallback nomination (no eligible-position gate)
 
@@ -243,6 +247,9 @@ def _simulate_to_state(
         # state.drafted changes once per pick (after the award); build the frozenset the snake board
         # needs once here rather than per broke seat.
         drafted_fs = frozenset(state.drafted)
+        # Captured before the award, for the trace: `state.nominator` is advanced at the end of the
+        # loop body, and the forced branch never binds `nom`.
+        nom_seat = state.nominator
         if forced:
             nominee_id = next(g for g in nominate_order if g not in state.drafted)
             warnings.warn(
@@ -284,6 +291,7 @@ def _simulate_to_state(
                         value_by_id=bot_by_id,
                         position_by_id=pos_by_id,
                         position_minimums=minimums,
+                        hero_value_by_id=val_by_id,
                     )
                     override = hero_nominator(candidates, ctx)
                     # Hard check (not assert): guards the pluggable hook even under `python -O` — a
@@ -355,6 +363,7 @@ def _simulate_to_state(
                     value=val_by_id[str(nominee_id)],
                     price=price,
                     winner_seat=winner,
+                    nominator_seat=nom_seat,
                     room_budget=sum(state.budgets),
                     forced=forced,
                 )

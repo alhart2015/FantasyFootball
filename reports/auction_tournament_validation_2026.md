@@ -671,6 +671,127 @@ reg_win_pct (seat-avg; **worst** = min over markets):
 
 **No strategy adopted or rejected.** `balanced` p0.0 remains the shipped default. `StackRatioBid` stays a **validated opt-in** (unit-tested, engine-solvent, not in `_MODELS`). In isolation the data now favors **`sr_g0.2_c2`** more firmly than after Run S: its ESPN advantage on reg-win% and champ% is significant under CRN pairing, making it the strongest genuinely-non-circular hero found — but it is one pool, one jitter, one season, and the September call still stands. Remaining probes (unchanged): jitter sweep + multi-year re-run to test robustness of the small edge; the deferred per-slot-ratio and power-law axes; direct unspent-budget measurement. Artifacts: `reports/_stackratio_paired/2026/*.json` (untracked). Live-draft call still September.
 
+**Run U — 2026-08-12 — value-gap nomination probe, WILL'S LEAGUE → NO-GO, and the sign is NEGATIVE: for a stud-buying hero, poison nomination COSTS more than it drains** (`will_half12`, all 12 seats, **ESPN market only**, 20 seeds × 300 sims; byes OFF; ADP nomination `market_adp_jitter=12`; field `overbidder` (`overbid=0.2`, `pace=4.5`, basis `opening`, `pace_jitter=0.35`); branch `feat/auction-value-gap-nomination`; spec `docs/superpowers/specs/2026-08-12-auction-value-gap-nomination-design.md`). Motivated by a challenge to Run O's reading: both of its heuristics ranked by **price**, so neither tested the actual poisoning premise — *nominate the players the room overvalues relative to us*. That also explains Run O's own null on `drain_max` (+0.001): the room already nominates in value/ADP order, so "nominate the priciest" mostly surfaces whoever was coming up next anyway, and the hero adds no information. Run O additionally predates the Run-P ADP realism fix and ran the generic field on `half_12team`, not Will's room.
+
+New heuristics (`nomination.py`): **`gap`** = `argmax(bot_dollars − auction_dollars)` (the room's overpay vs our board, absolute dollars — a ratio would rank a $3 player priced at $9 above a $40 player priced at $55) and **`gap_off`** = the same argmax restricted to positions the hero has already filled, composing the disagreement signal with the one thing Run O found that worked. ESPN-only by construction: under model pricing the room prices off our own numbers, so every gap is identically zero (the runner refuses `--bot-prices model`). Contestants all bid **`overbid_noramp`** — the plan in the committed Will-league guide — so the probe isolates nomination. Raced via the new `run_auction_tournament(hero_nominators=...)` seam, which makes the four contestants CRN-paired for free (identical auction + season draws per seed; `paired_diffs` cancels the shared-world variance).
+
+| contestant | seat-avg reg_win | paired Δ vs control (95% CI) | champ Δ | seats better |
+|---|---|---|---|---|
+| `control` (no hook) | **0.6389** | — | — | — |
+| `gap` | 0.6345 | −0.0044 [−0.0115, +0.0026] | −0.0019 | 3/12 |
+| `off_pos` (Run-O incumbent) | 0.6292 | **−0.0097 [−0.0171, −0.0023]** | −0.0092 | 2/12 |
+| `gap_off` | 0.6248 | **−0.0141 [−0.0213, −0.0070]** | **−0.0155 [−0.0254, −0.0056]** | 1/12 |
+
+**R7 sanity gate PASSES exactly:** `control` reproduces the committed `overbid_noramp` Will-league seat-average (`reports/_noramp_ab/espn.json`) to four decimals — 0.6389 vs 0.6389. The harness is sound and the paired lift is apples-to-apples.
+
+**Verdict — NO-GO, and a stronger result than Run O's.** The pre-registered bar was a positive CI excluding zero; the measured effect is *negative* and CI-separated for both off-position variants. `gap_off` — the variant the hypothesis predicted should win, composing both signals — is the **worst** contestant, worse than control at **11 of 12 seats**, and the only one whose champ% penalty also excludes zero. The pure `gap` heuristic is merely flat (CI spans 0). The ordering is monotone in how aggressively the hero gives up its own nomination turn.
+
+**Mechanism (the reconciliation with Run O).** Run O's hero was `balanced` p0.0 — pace-capped, never bought a stud, ended with ~$69 idle. For that hero a nomination turn was nearly worthless: it was going to lose the top lot regardless, so spending the turn on a decoy was close to free, and `drain_off_position` bought a small (+0.010, model-market-only) edge. `overbid_noramp` is the opposite hero: it pays up to 1.3× for studs and deliberately spends out early (~$180 on three RBs). For *it*, the engine's default value-first nomination (`candidates[0]`) is not a wasted turn — it surfaces the best player available at the moment the hero most wants to buy one. Poisoning trades that away. **The drain the poison buys is real but is money the room would have spent anyway** (every seat ends at $0 in this field); the buying opportunity it forfeits is not recoverable. So the lever's sign depends on the hero: near-free for a hero that cannot buy, actively costly for one whose whole plan is to buy early.
+
+**What this does and does not settle.** It refutes the value-gap hypothesis **for this hero in this room** — the premise "drain the room and the RBs get cheaper" fails because budget is conserved and the drain is untargeted, while the nomination turn given up is a direct cost. It does not establish that nomination is worthless in general; a hero that genuinely cannot compete early (Run O's `balanced`) still showed a small positive. Single market by construction (the gap is undefined in the model market), so the pre-registered bar was a single-market bar and this verdict inherits that weaker footing — though the effect being *negative* at 11/12 seats makes it a robust null for the adopt question either way. Caveats otherwise as Run P onward: 2026 pool, single ADP jitter (12), byes OFF, ESPN signal diluted (241/578 priced), modeled field not Will's actual league-mates.
+
+**Conclusion (data; no default change):** the committed guide's plan — `overbid_noramp` with the engine's default value-first nomination — stands unchanged, and is now positively supported on the nomination axis rather than merely untested. `nomination.py` keeps all four heuristics as tested opt-ins; none is wired into a default. Artifacts: `reports/_gap_nom_probe/will_2026/*.json` (untracked). Live-draft call still September.
+
+> ⚠️ **Run U's generalization is RETRACTED by Run V (below).** The measured numbers above stand — for `overbid_noramp`, `gap` is flat and both off-position variants are harmful. But the *explanation* offered for them ("the lever's sign depends on whether the hero buys early"; "nomination poisoning is closed for stud-buying heroes") is **wrong**. Run V raced the same four nominators across three more heroes and found the value-gap signal **positive and CI-separated for three of the four**, including `static` — a hero that spends 80% of its budget early and ends at $0, i.e. a stud-buyer by any measure, and the cell with the **largest** gain in the whole study. The early-spend axis does not determine the sign. Read Run V for the corrected mechanism; treat the Run U conclusion as one cell of a grid, not a rule.
+
+**Run V — 2026-08-12 — the same probe across FOUR heroes → the value-gap hypothesis is CONFIRMED (3 of 4 heroes, CI-separated); Run U was an `overbid_noramp`-specific null, and the real split is between the two SIGNALS, not between the heroes** (`will_half12`, all 12 seats, ESPN market, 20 seeds × 300 sims, byes OFF, ADP nomination `market_adp_jitter=12`, `overbidder` field at `overbid=0.2 / pace=4.5 / opening / pace_jitter=0.35` — Run U's settings exactly, only the hero varies; branch `feat/auction-value-gap-nomination`). Motivated by Run U's proposed mechanism, which made a falsifiable prediction: if poison nomination is costly *because* it forfeits a buying turn, then heroes that cannot buy early should gain from it.
+
+**The "can it buy early?" axis was measured, not assumed** (engine `PickRecord` trace, 4 seats × 12 seeds per hero, same field):
+
+| hero | mean top buy | early spend (first ¼ of picks) | $30+ buys | end cash |
+|---|---|---|---|---|
+| `overbid_noramp` | $77.1 | $181.1 (**91%** of budget) | 2.71 | $0.0 |
+| `static` | $54.9 | $160.7 (**80%**) | 3.02 | $0.0 |
+| `balanced` | $27.8 | $20.7 (**10%**) | 0.25 | $28.2 |
+| `patient_deep` | $17.9 | $10.1 (**5%**) | 0.00 | $102.2 |
+
+CRN-paired Δ `reg_win_pct` vs each hero's own no-hook control (95% CI; **bold** = excludes 0), with per-seat sign counts:
+
+| hero (early spend) | `gap` | `gap_off` | `off_pos` | control level |
+|---|---|---|---|---|
+| `overbid_noramp` (91%) | −0.0044 [−.0115,+.0026] 3/12 | **−0.0141** [−.0213,−.0070] 1/12 | **−0.0097** [−.0171,−.0023] 2/12 | 0.6389 |
+| `static` (80%) | **+0.0145** [+.0074,+.0216] 10/12 | +0.0013 [−.0065,+.0092] 7/12 | **−0.0077** [−.0152,−.0003] 4/12 | 0.6080 |
+| `balanced` (10%) | **+0.0118** [+.0059,+.0176] 11/12 | **+0.0106** [+.0045,+.0167] 11/12 | **+0.0103** [+.0037,+.0170] 10/12 | 0.5971 |
+| `patient_deep` (5%) | **+0.0057** [+.0004,+.0111] 9/12 | **+0.0064** [+.0010,+.0117] 11/12 | +0.0054 [−.0001,+.0109] 9/12 | 0.5388 |
+
+**Findings (data):**
+
+1. **The value-gap hypothesis is confirmed.** `gap` — nominate `argmax(bot_dollars − auction_dollars)`, i.e. whoever the room most overvalues relative to our board — is **positive and CI-separated for three of the four heroes**, at 9–11 of 12 seats each. This is the original poisoning premise, and it works. Run O never tested it (both its heuristics ranked by price) and Run U tested it on the one hero where it does not fire.
+2. **Run U's mechanism is refuted.** `static` spends 80% of its budget in the first quarter, buys three $30+ players, and ends at $0 — and it posts the **largest gain in the study** (+0.0145). "Buys early" therefore does not predict the sign. Run U's `overbid_noramp` result was real but not generalizable.
+3. **The real split is between the two SIGNALS, and it only shows up for heroes that buy.** For the two heroes that cannot buy (`balanced`, `patient_deep`), all three heuristics are statistically indistinguishable (+0.005 to +0.012) — a hero that is just waiting gains from *any* drain, and the choice of nominee barely matters. For the two heroes that do buy, the choice matters enormously: on `static`, the same hero in the same room on the same seeds swings from **+0.0145 (`gap`) to −0.0077 (`off_pos`) — a 0.022 spread**. **`gap` beats `off_pos` for all four heroes**, without exception.
+4. **The off-position FILTER is the harmful part, not poisoning.** Restricting the nominee to positions the hero has already filled drags the pick toward categories it is done with; for a hero that has spent 80–91% of its budget, that is most of the board, so the filter surfaces cheap leftovers and wastes the turn. The disagreement signal alone keeps surfacing players the room will genuinely pay for. This reverses Run O's reading, where off-position targeting was the one thing that worked — for its pace-capped hero, which had no filled positions to speak of and so mostly hit the fallback path.
+5. **No cell beats the shipped plan.** `overbid_noramp` + no hook (0.6389) is the best of the sixteen hero × nominator cells; the best poisoned cell is `static` + `gap` at 0.6225. Poisoning lifts *weak* heroes toward the strong one without reaching it — consistent with the drain being worth roughly one tier of bidding discipline, not more.
+
+**Caveats:** one room (Will's `overbidder` field), one market (ESPN — the gap is undefined under model pricing), 2026 pool, single ADP jitter (12), byes OFF, ESPN signal diluted (241/578 priced), modeled field not real league-mates. The four heroes are not a random sample of strategy space; `overbid_noramp` remains an unexplained exception (its `gap` CI spans zero, so it is a null, not a demonstrated harm) and no diagnostic here isolates *why* it alone fails to profit — a worthwhile follow-up would trace which players `gap` actually nominates for it versus for `static`.
+
+**Conclusion (data; no default change):** the guide's plan for Will's league — `overbid_noramp` with default value-first nomination — **stands**, now tested across a 4×4 hero × nominator grid rather than a single point, and confirmed as the one hero for which nomination control adds nothing. But the general question is now answered the other way from Run O and Run U: **value-gap nomination is a real, repeatable edge for most heroes**, worth ~+0.01 reg-win, and it is the *disagreement* signal that carries it — the price-ranked heuristics Run O tested were measuring the wrong thing. `nomination.py` keeps all four as tested opt-ins; none is wired into a default. Artifacts: `reports/_gap_nom_probe/will_2026{,_static,_balanced,_patient_deep}/*.json` (untracked). Live-draft call still September.
+
+**Run W — 2026-08-12 — WHY `overbid_noramp` alone doesn't profit → poison nomination and bid aggression are SUBSTITUTES that reach the same ceiling; `k=1.3` is the one bid setting already at it** (`will_half12`, ESPN market, `overbidder` field, ADP nomination, byes OFF; diagnostics at 4 seats × 20 seeds, the confirmatory sweep at all 12 seats × 20 seeds × 150 season sims, CRN-paired; branch `feat/auction-value-gap-nomination`). Run V left one thing unexplained: `drain_value_gap` lifts three heroes but does nothing for `overbid_noramp`. Added `PickRecord.nominator_seat` (diagnostics-only; who put the lot up is otherwise unrecoverable — the engine advances the nominator pointer after every award) to measure it.
+
+**Two hypotheses were formed and both were killed by measurement:**
+
+1. **"The aggressive hero buys its own decoys."** *Refuted.* Under `gap` every hero buys its own nominations **less**, not more (`overbid_noramp` 1.54 → 1.25 lots, own-spend $21.96 → $1.35). The most aggressive bidder is not swallowing the poison.
+2. **"The poison damages opponents' rosters."** *Refuted, and it explains a lot.* The drain is unmistakably real — the room pays **+$68** more on the hero's nominated lots ($23 → $92 of overpay vs our board). But mean opponent roster value moves by −0.04 / −0.02 / +0.39 dollars — i.e. **not at all**. In a fixed pool every player is bought by someone, so total roster value is conserved: **poison moves dollars, not players.** Any gain must come from the hero's own share, not from damage to the field.
+
+**What actually happens.** The hero's roster *does* change substantially — ≈9 of 17 players differ between the control and poisoned drafts for both `static` and `overbid_noramp` — but only one of them converts it into points (paired, 4 seats × 20 seeds): `static` **+16.7 pts / +0.02 win**, `balanced` **+8.8 / +0.01**, `overbid_noramp` **+0.07 / +0.00**. The intervention is the same size for both; the conversion is not. The tell is the control level: `overbid_noramp` starts at **1368 pts**, above where `static` lands *even with* the poison (1349).
+
+**Confirmatory sweep — the stud premium `k` is the aggression knob** (`OverbidValueBid(k, use_urgency=False)`; `k=1.0` pays plain value, `k=1.3` **is** `overbid_noramp`). All 12 seats, paired 95% CI on `reg_win_pct`:
+
+| stud premium `k` | control win | with `gap` | paired Δ (95% CI) | seats + |
+|---|---|---|---|---|
+| 1.00 | 0.6256 | 0.6403 | **+0.0147 [+0.0077, +0.0218]** | 11/12 |
+| 1.10 | 0.6216 | 0.6281 | +0.0065 [−0.0009, +0.0139] | 10/12 |
+| 1.20 | 0.6215 | 0.6389 | **+0.0175 [+0.0093, +0.0256]** | 10/12 |
+| **1.30** (`overbid_noramp`) | **0.6360** | 0.6342 | **−0.0019 [−0.0092, +0.0055]** | **6/12** |
+| 1.50 | 0.6264 | 0.6320 | +0.0057 [−0.0021, +0.0134] | 10/12 |
+
+`k=1.3` is the **only** cell that is not positive (6/12 seats — a coin flip) and simultaneously the **only** cell with a high control level (0.6360 vs ~0.622 for every neighbour). It reproduces the independent Run V probe figure (0.6389 seat-averaged) and the guide's finding that `overbid_noramp` is the strongest hero, so the peak is real, not a seed artifact.
+
+**Findings (data):**
+1. **The two levers are substitutes, not complements.** Every poisoned cell lands at 0.628–0.640; the best *unpoisoned* cell (`k=1.3`) is already at 0.6360. Poison nomination is an alternative route to the same ceiling that correct bid aggression reaches on its own, and at the aggression optimum it adds **nothing** (−0.002, CI spans 0).
+2. **Nothing in the sweep beat the ceiling.** Best combined cell is `k=1.0` + `gap` at 0.6403 vs best control at 0.6360 — a +0.004 difference well inside its CI, i.e. **not a demonstrated improvement**. Consistent with Run V, where no hero × nominator cell beat `overbid_noramp` + no hook.
+3. **This is why Run U looked like a null and Run O looked like a small win.** Both probed heroes sitting at very different points on this axis. Nomination poisoning pays exactly to the extent your bid is leaving value on the table.
+
+**Caveats — the mechanism is supported but not nailed.** The `k` response is **not monotone** (`k=1.1` +0.0065 vs `k=1.2` +0.0175, and `k=1.5` +0.0057 with a CI touching zero), so there is real residual noise and no smooth "more aggression → less poison value" law is claimed; the robust fact is the single peculiar cell at `k=1.3`. The roster-composition and value-decomposition diagnostics ran at 4 seats × 20 seeds and their sub-1% deltas are at the noise floor — they are used here only for the two **refutations** (which are order-of-magnitude clear), not to support the positive claim. Season sims reduced to 150 for the sweep. One room, one market, one pool. **Not** established: why `k=1.3` specifically is the aggression optimum in this field.
+
+**Conclusion (data; no default change):** the question "why isn't `overbid_noramp` better with this?" has an answer — **because it is already collecting the same edge by outbidding, and the two do not stack.** Will's plan is unchanged and now has a mechanism behind it rather than a bare measurement. Artifacts: scratch diagnostics (untracked); `PickRecord.nominator_seat` is committed and tested. Live-draft call still September.
+
+**Run X — 2026-08-13 — the forced-negative-transaction argument is CORRECT; it is SATURATED in Will's room because the field is already broke by Q2, and it pays as predicted in a room that holds money** (`will_half12`, ESPN market, ADP nomination, byes OFF; quarter diagnostics at 4 seats × 20 seeds, the confirmatory probe at all 12 seats × 20 seeds × 300 sims, CRN-paired; branch `feat/auction-value-gap-nomination`). Prompted by a user challenge to Runs U–W: *budget is finite, so every dollar the room overpays on a player we don't want is a dollar it cannot spend on a player we do want; forcing negative-value transactions onto opponents must leave more positive value for us.* Runs V–W had measured the **drain** and the **outcome** but never the thing in between — **prices over the course of the draft**. This run measures it.
+
+**The argument is right, and the mechanism is visible.** But so is its limit. Opponents' **total** cash (of 11 × $200 = $2,200) and the clearing price as a multiple of our value, by draft quarter:
+
+| field | | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|---|
+| `overbidder` (Will's modeled room) | opp cash | $367.6 | **$82.1** | $47.5 | $8.5 |
+| | price / our value | 1.46× | 0.47× | **0.13×** | 0.92× |
+| `balanced_field` (disciplined room) | opp cash | $1,296.7 | $731.6 | $542.9 | $493.8 |
+| | price / our value | 0.79× | 0.89× | **0.65×** | 0.94× |
+
+**In Will's modeled room the field has already spent 83% of its money by the end of Q1 and holds $82 across eleven teams by the end of Q2.** The late-draft bargain the argument predicts *already exists, at maximum magnitude*: Q3 lots clear at **13 cents on the dollar**. Every hero's surplus is earned there (`overbid_noramp` −$27.9 in Q1, +$62.6 in Q2, +$34.6 in Q3). There is no meaningful money left to force out — our ~8% of nominations moves ~$6–8 of opponent cash, against the ~$1,800 the bots spend out on their own. That is why the drain measured **+$68 of extra room overpay** in Run W and still produced no gain: it is a rounding error against a market that has already collapsed.
+
+**Confirmatory test — the argument's own prediction, run in a room that holds money.** If the mechanism is real but saturated, it should pay in a field that does *not* bust early. Same hero (`overbid_noramp` — the one that showed nothing in Run V), same seeds, same pool, only the field changes to `balanced_field`:
+
+| contestant | reg_win | paired Δ (95% CI) | champ Δ | mean_points Δ |
+|---|---|---|---|---|
+| `control` | 0.6396 | — | — | — |
+| `off_pos` | **0.6494** | **+0.0098 [+0.0022, +0.0174]** | **+0.0184 [+0.0076, +0.0292]** | **+13.19 [+5.08, +21.29]** |
+| `gap` | 0.6437 | +0.0041 [−0.0028, +0.0109] | **+0.0117 [+0.0019, +0.0215]** | **+9.36 [+1.98, +16.75]** |
+| `gap_off` | 0.6389 | −0.0007 [−0.0078, +0.0063] | +0.0067 [−0.0032, +0.0167] | +3.26 [−4.52, +11.03] |
+
+**The hero that gained nothing from poison in the overbidder room gains +0.0098 reg-win (and +0.018 champ, +13 points) in the disciplined one, CI-separated.** The lever is not weak; it is *contingent on there being money to take*.
+
+**Findings (data):**
+1. **The forced-negative-transaction argument is confirmed as a mechanism.** Poison nomination pays when opponents still hold cash. Runs U–W's nulls were a property of the *field*, not of the idea.
+2. **Total roster value is genuinely conserved** — 2370.9 vs 2371.1 out of ~2371 across all 12 seats (0.01%), even though which 204 of 578 players get drafted is free to vary. So the gain cannot come from the field acquiring *less* talent in aggregate; it comes from **when** the money leaves and therefore what *we* can buy with ours. This is the correct version of Run W's "poison moves dollars, not players."
+3. **Run W's "substitutes" reading needs narrowing.** Aggression and poison are substitutes *in a room that busts on its own*, because the busted room hands out the late discount for free. In a room that holds money they are **complements**: `overbid_noramp` is already the aggression optimum and still gains ~+0.010.
+4. **The best heuristic is field-dependent.** In `balanced_field` the price-ranked `off_pos` (+0.0098) beats `gap` (+0.0041) — the reverse of Run V's ordering in the overbidder room. Not over-theorized here; recorded as a fact that any adoption decision must respect.
+
+**Practical consequence (the decision-relevant part).** The value of nomination poisoning in Will's league depends entirely on **how disciplined his actual league-mates are**, which is a modeling assumption, not a measurement — bot calibration is a standing open item. If they spend out early like the `overbidder` model assumes, nomination control is worth ~0 and the printed sheet's plan is complete. If they hold money into the middle rounds, it is worth ~+0.01 and the right move is to nominate players we rate below the room. **The eye-test at the actual draft table settles which room he is in**, and it is observable in the first quarter: if lots are clearing well above sheet value and teams are near-broke by pick ~50, it is the overbidder room and nomination doesn't matter.
+
+**Caveats:** quarter diagnostics at 4 seats × 20 seeds (the cash and price curves are order-of-magnitude effects, well clear of that noise floor; the per-quarter hero-surplus splits are not). `balanced_field` is a single alternative field, not a sweep of discipline levels — the natural follow-up is a `pace`/`overbid` sweep to map the lift as a continuous function of how fast the room spends out. One pool, one market, byes off.
+
+**Conclusion (data; no default change):** the user's economic argument stands and is now supported end-to-end — drain → later cash → later prices → hero surplus. Nomination poisoning is a **real edge whose size is set by opponent discipline**, and it is worth ~0 only in the specific busted-market model of Will's room. `overbid_noramp` + default nomination remains the shipped plan for that modeled room; nothing is adopted, and the September call stands. Artifacts: `reports/_gap_nom_probe/will_2026_balancedfield/*.json` (untracked).
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.

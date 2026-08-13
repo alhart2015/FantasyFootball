@@ -6,6 +6,7 @@ from projections.draft.assistant.auction.bid_strategy import (
     BalancedValueBid,
     StaticDollarBid,
 )
+from projections.draft.assistant.auction.nomination import HeroNominator, drain_max
 from projections.draft.assistant.auction.tournament import (
     METRICS,
     AuctionTournamentResult,
@@ -282,3 +283,63 @@ def test_bot_prices_espn_with_column_differs_from_model() -> None:
         espn.summaries["static"]["mean_points"].point
         != model.summaries["static"]["mean_points"].point
     )
+
+
+# --- hero_nominators (Slice 2b: race NOMINATORS at a fixed bid) --------------------------------
+
+
+def _nominator_race(
+    hero_nominators: dict[str, HeroNominator | None] | None,
+) -> AuctionTournamentResult:
+    """Two contestants under the SAME bid model, so any difference is the nominator's alone."""
+    pool = _pool(40)
+    cfg = _config(6)
+    return run_auction_tournament(
+        {"control": StaticDollarBid(), "poison": StaticDollarBid()},
+        pool,
+        cfg,
+        my_seat=1,
+        n_seeds=4,
+        price_jitter=0.1,
+        base_seed=0,
+        n_sims=50,
+        availability=_avail(pool),
+        params=VarianceParams.load(),
+        nomination_temp=1.0,  # the temp>0 path, where a desynced rng draw would show up
+        hero_nominators=hero_nominators,
+    )
+
+
+def test_hero_nominators_none_is_identity() -> None:
+    """Passing the parameter at all must not perturb the default path (Run O's R1)."""
+    without = _nominator_race(None)
+    mapped_to_none = _nominator_race({"control": None, "poison": None})
+    for name in ("control", "poison"):
+        for m in METRICS:
+            assert without.summaries[name][m].point == mapped_to_none.summaries[name][m].point, (
+                f"{name}/{m} moved when hero_nominators was supplied as all-None"
+            )
+
+
+def test_hero_nominators_changes_only_the_mapped_contestant() -> None:
+    """The control keeps the engine's nomination; the poisoned seat diverges from it.
+
+    Also the CRN check that matters: `control` must be bit-identical to the no-hook run, which only
+    holds because the engine draws the central nominee before overriding it (commit f9ccb0e).
+    """
+    baseline = _nominator_race(None)
+    poisoned = _nominator_race({"poison": drain_max})
+    assert (
+        poisoned.summaries["control"]["mean_points"].point
+        == baseline.summaries["control"]["mean_points"].point
+    )
+    assert (
+        poisoned.summaries["poison"]["mean_points"].point
+        != baseline.summaries["poison"]["mean_points"].point
+    )
+
+
+def test_hero_nominators_unknown_contestant_raises() -> None:
+    # A typo'd name silently dropped would leave the probe comparing two identical controls.
+    with pytest.raises(ValueError, match="unknown"):
+        _nominator_race({"typo": drain_max})
