@@ -121,19 +121,83 @@ _SKILL = {
 
 
 def test_bounds_skill_roster_min_and_max() -> None:
+    # UPDATED for issue #143: these assertions were correct about incorrect behaviour. FLEX used to
+    # be anchored to RB (mn RB 3, mx RB 7 / WR 7); a flex slot is not a requirement for any one
+    # position, so it now contributes to CAPS only.
     mn, mx = bot_position_bounds(_SKILL)
-    # FLEX anchored to RB
-    assert mn == {Position.QB: 1, Position.RB: 3, Position.WR: 3, Position.TE: 1}
-    # min + ceil bench share
-    assert mx == {Position.QB: 3, Position.RB: 7, Position.WR: 7, Position.TE: 3}
+    assert mn == {Position.QB: 1, Position.RB: 2, Position.WR: 3, Position.TE: 1}  # dedicated only
+    # min + flex capacity (RB/WR/TE, not QB) + ceil bench share
+    assert mx == {Position.QB: 3, Position.RB: 6, Position.WR: 8, Position.TE: 4}
 
 
-def test_bounds_superflex_anchors_to_qb() -> None:
+def test_bounds_superflex_raises_the_cap_of_every_eligible_position() -> None:
+    # UPDATED for issue #143: previously asserted SUPER_FLEX anchored to QB's MINIMUM (mn QB == 2).
+    # A super-flex slot no more requires a 2nd QB than a FLEX requires a 3rd RB.
     slots = dict(_SKILL)
     del slots[RosterSlot.FLEX]
     slots[RosterSlot.SUPER_FLEX] = 1
-    mn, _ = bot_position_bounds(slots)
-    assert mn[Position.QB] == 2  # 1 strict + 1 super-flex
+    mn, mx = bot_position_bounds(slots)
+    assert mn[Position.QB] == 1  # dedicated QB slots only; nothing forces a 2nd
+    assert mx[Position.QB] == 4  # 1 dedicated + 1 super-flex + 2 bench share
+    assert mx[Position.RB] == 6  # RB is super-flex eligible too, so its cap rises as well
+
+
+def test_bounds_are_symmetric_across_equally_slotted_flex_positions() -> None:
+    """R1 — the regression guard for #143.
+
+    RB and WR carry identical dedicated slots here, so nothing about the league distinguishes them
+    and their bounds must match. The old anchor gave RB min 4 / max 7 against WR's 2 / 4, which is
+    exactly the asymmetry that hard-capped every seat at 4 WR.
+    """
+    slots = {
+        RosterSlot.QB: 1,
+        RosterSlot.RB: 2,
+        RosterSlot.WR: 2,
+        RosterSlot.TE: 1,
+        RosterSlot.FLEX: 2,
+        RosterSlot.BENCH: 5,
+    }  # Will's league
+    mn, mx = bot_position_bounds(slots)
+    assert mn[Position.RB] == mn[Position.WR]
+    assert mx[Position.RB] == mx[Position.WR]
+    assert (mn[Position.RB], mx[Position.RB]) == (2, 6)
+
+
+def test_bounds_flex_eligible_position_without_a_dedicated_slot_is_still_rosterable() -> None:
+    """A TE-less league still has to let a bot take a TE into its FLEX.
+
+    `bot_eligible` draws its eligible set strictly from these keysets, so a missing entry bans the
+    position outright rather than merely not requiring it.
+    """
+    slots = {RosterSlot.QB: 1, RosterSlot.RB: 2, RosterSlot.WR: 2, RosterSlot.FLEX: 1}
+    mn, mx = bot_position_bounds(slots)
+    assert mn[Position.TE] == 0  # nothing forces a TE
+    assert mx[Position.TE] == 1  # ...but one can fill the flex
+    # 6 picks (the full roster) vs Σdeficit 5 -> the cap branch, where TE must be allowed. At
+    # exactly 5 the forced branch correctly excludes it: unmet minimums come first.
+    assert Position.TE in bot_eligible({}, 6, minimums=mn, maximums=mx)
+
+
+def test_bounds_leave_room_to_fill_every_flex_slot() -> None:
+    """R2 — after the minimums are met, the remaining picks must be able to fill the FLEX slots.
+
+    Guards the one way lowering the minimums could break a roster: if the non-flex-eligible caps
+    (QB) could absorb all the leftover picks, a seat could finish unable to field a lineup.
+    """
+    slots = {
+        RosterSlot.QB: 1,
+        RosterSlot.RB: 2,
+        RosterSlot.WR: 2,
+        RosterSlot.TE: 1,
+        RosterSlot.FLEX: 2,
+        RosterSlot.BENCH: 5,
+    }
+    mn, mx = bot_position_bounds(slots)
+    roster_size = sum(slots.values())
+    flex_needed = slots[RosterSlot.FLEX]
+    non_flex_headroom = sum(mx[p] - mn[p] for p in mx if p not in FLEX_ELIGIBLE)
+    spare = roster_size - sum(mn.values())
+    assert spare - non_flex_headroom >= flex_needed
 
 
 def test_bounds_sigma_max_at_least_roster_size() -> None:
