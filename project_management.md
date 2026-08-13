@@ -6,6 +6,22 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction — value-gap nomination probe (Run U) — NO-GO, negative (2026-08-12, branch `feat/auction-value-gap-nomination`)
+
+**Question:** Run O closed nomination poisoning, but both of its heuristics ranked candidates by *price*, so neither tested the premise people actually mean — **nominate the players the room values more than we do**, forcing budget out the door on players we were never buying. That is also why its `drain_max` measured at +0.001: the room already nominates in value/ADP order, so "nominate the priciest" adds no information the room didn't have. Run O further predates the Run-P ADP realism fix and used the generic field on `half_12team`.
+
+**What ran:** Will's league settings exactly as recorded in `reports/_will_bakeoff/jitter_2026/*.json` (`will_half12` + `configs/will_half12_pass5.league.json`, `overbidder` field at `overbid=0.2 / pace=4.5 / opening / pace_jitter=0.35`, ESPN market, `market_adp_jitter=12`, 20 seeds × 300 sims, all 12 seats), hero fixed at **`overbid_noramp`** — the committed guide's plan. Four contestants: `control` / `off_pos` / `gap` / `gap_off`.
+
+**Answer — the hypothesis is refuted, with the sign reversed.** `gap` is flat (−0.004, CI spans 0); `off_pos` (−0.010) and `gap_off` (−0.014) are CI-separated **harmful**, and `gap_off` — the variant the hypothesis predicts should win — is worst, losing at **11 of 12 seats**. R7 sanity gate passes to four decimals (`control` 0.6389 = the committed `overbid_noramp` figure). Full table + mechanism in `reports/auction_tournament_validation_2026.md` (Run U).
+
+**Why (the part worth remembering).** *The lever's sign depends on the hero.* Run O's `balanced` p0.0 was pace-capped and could not buy the top lot regardless, so spending its nomination turn on a decoy was nearly free — hence its small positive. `overbid_noramp` pays 1.3× for studs and spends out early, so the engine's default value-first nomination is not a wasted turn: it surfaces the best available player exactly when this hero wants to buy one. Poisoning trades that away, and the budget it drains is money the room spends anyway (every seat ends at $0 in this field). **Budget is conserved; the nomination turn is not.**
+
+**Decisions:** no default changes — the guide's `overbid_noramp` + default value-first nomination stands, now positively supported on the nomination axis rather than untested. Nomination poisoning is **closed for stud-buying heroes**. Shipped as reusable seams, not strategy: `run_auction_tournament(hero_nominators=...)` (races nomination policies at a fixed bid, CRN-paired for free) and `auction_field_bakeoff --nominator-probe`.
+
+**Gates:** 1956 passed, 18 skipped, 2 failed — both pre-existing on `main` and unrelated (`test_backtest_smoke_one_cell` [#40], and a **newly-found third** pre-existing failure, `test_minimal_mode_prices_a_nominee_and_records_the_sale`, reproduced on a6ec16a and filed as [#141](https://github.com/alhart2015/FantasyFootball/issues/141) — AppTest's selectbox `set_value` takes the option value, not its rendered label; the test passes the label). mypy strict clean (373 files), ruff check + format clean.
+
+---
+
 ## Draft Hub — auction board MINIMAL live-draft mode — shipped (2026-08-12, branch `feat/auction-minimal-mode`, PR #140)
 
 **Status:** the auction board now has two views over one `LiveAuctionSession`, switched by a sidebar radio. **Full board** is the unchanged analyst surface (sold log, 40-row bid board, roster + budget tables, projected eval). **Minimal (live draft)** is for actually running an auction: name the teams once, type the nominated player into a single type-ahead box, read one large number, record winner + price. Everything the Yahoo draft UI already shows is deliberately absent.

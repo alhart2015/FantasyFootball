@@ -25,6 +25,15 @@ hook defaults to None = today's value-weighted-random nomination). This module +
 tested, opt-in extension point for any future ESPN-targeted nomination work, not as an adopted
 strategy. (History: a CRN-desync bug in the hook briefly flipped the interim verdict to a marginal
 GO; the fix + the 80-seed firm-up settled it here. See Run O.)
+
+PROBE VERDICT (Run U, same report) — NO-GO, and NEGATIVE. Under Will's league (`will_half12`,
+`overbidder` field, ESPN market, ADP nomination) with the stud-buying `overbid_noramp` hero, `gap`
+is flat (-0.004, CI spans 0) while `drain_off_position` (-0.010) and `drain_value_gap_off_position`
+(-0.014, worse at 11/12 seats) are CI-separated HARMFUL. The lever's sign depends on the hero:
+Run O's pace-capped `balanced` could not buy the top lot anyway, so spending its nomination turn on
+a decoy was nearly free; a hero that pays 1.3x for studs forfeits a real buying opportunity, and the
+budget it drains is money the room would have spent regardless (every seat ends at $0). Nomination
+poisoning is therefore closed for stud-buying heroes, not merely unproven.
 """
 
 from __future__ import annotations
