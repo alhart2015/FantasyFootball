@@ -1,4 +1,18 @@
-# Auction Draft — Bid-Model Experiment Tracking (2026)
+# Auction strategy tournament — validation log (2026)
+
+> ## ⚠️ Runs A–X ran under a roster-bounds bug ([#143](https://github.com/alhart2015/FantasyFootball/issues/143))
+>
+> `bot_position_bounds` anchored every FLEX slot to **RB**, which capped every seat at **4 WR**
+> (vs 7 RB). That cap bound on **98–99%** of all rosters, so no team in any run below could field a
+> receiver-heavy roster. The **valuation layer was never affected** — `vorp.py` allocates FLEX by
+> actually filling the slots, and had WR absorbing *more* of it than RB (3.14 vs 2.82 starters/team)
+> — so auction dollars, the cheat sheet, and every price in this log are unchanged. What moved is
+> every *simulated outcome*: win%, playoff%, champ%, and the roster shapes behind them.
+>
+> **Run Y (below) re-runs the load-bearing experiments on the fixed engine.** Headline: the hero
+> choice is unchanged (`overbid_noramp` still wins Will's room), but levels shift by ~0.01–0.02 and
+> one of Run V's conclusions is retracted. Treat Runs A–X as directionally informative and their
+> absolute figures as superseded.
 
 **Status:** **Data-gathering.** We are *not* picking a winning bid model now. We run tests through the
 summer and make the call in **September 2026**, close to the real draft. Every entry below records what a
@@ -791,6 +805,48 @@ CRN-paired Δ `reg_win_pct` vs each hero's own no-hook control (95% CI; **bold**
 **Caveats:** quarter diagnostics at 4 seats × 20 seeds (the cash and price curves are order-of-magnitude effects, well clear of that noise floor; the per-quarter hero-surplus splits are not). `balanced_field` is a single alternative field, not a sweep of discipline levels — the natural follow-up is a `pace`/`overbid` sweep to map the lift as a continuous function of how fast the room spends out. One pool, one market, byes off.
 
 **Conclusion (data; no default change):** the user's economic argument stands and is now supported end-to-end — drain → later cash → later prices → hero surplus. Nomination poisoning is a **real edge whose size is set by opponent discipline**, and it is worth ~0 only in the specific busted-market model of Will's room. `overbid_noramp` + default nomination remains the shipped plan for that modeled room; nothing is adopted, and the September call stands. Artifacts: `reports/_gap_nom_probe/will_2026_balancedfield/*.json` (untracked).
+
+**Run Y — 2026-08-13 — POST-FIX re-run on corrected roster bounds ([#143](https://github.com/alhart2015/FantasyFootball/issues/143)) → the hero choice SURVIVES, levels shift ~0.01–0.02, and Run V's "gap beats off_pos for every hero" is RETRACTED as partly a bug artifact** (`will_half12`, ESPN market, ADP nomination `market_adp_jitter=12`, byes OFF, 12 seats × 20 seeds × 300 sims, CRN-paired; branch `fix/auction-flex-position-bounds`; spec `docs/superpowers/specs/2026-08-13-auction-flex-position-bounds-design.md`). Every knob is identical to the runs being superseded — only the engine changed.
+
+**The fix.** `bot_position_bounds` now sets `min` from dedicated starting slots only and gives flex capacity to the **caps** of every flex-eligible position, instead of anchoring FLEX→RB and SUPER_FLEX→QB. Will's league: RB **4/7 → 2/6**, WR **2/4 → 2/6**. Measured effect on drafted rosters — mean WR **3.84 → 4.91**, mean RB **5.80 → 4.23**; the WR cap now binds on 40% of rosters instead of 99% (RB 20%). The roster shape now leans WR, matching what the valuation layer said all along.
+
+**1. Full-field bake-off — the hero is unchanged.** Seat-averaged `reg_win_pct`, Will's `overbidder` room:
+
+| hero | post-fix | pre-fix | rank change |
+|---|---|---|---|
+| **`overbid_noramp`** | **0.6210** | 0.6389 | **#1 → #1** |
+| `overbid` | 0.6146 | 0.6272 | #2 → #2 |
+| `studsdepth` | 0.6082 | 0.6168 | #3 → #3 |
+| `sr_g0.2_c2` | 0.6007 | 0.6029 | #6 → #4 |
+| `static` | 0.5933 | 0.6080 | #5 → #5 |
+| `sr_g0.1_c2` | 0.5905 | 0.6144 | #4 → #6 |
+| `balanced` | 0.5902 | 0.5971 | #8 → #7 |
+| `anchors` | 0.5773 | 0.5975 | #7 → #9 |
+| `patient` / `patient_deep` | 0.5162 | 0.5388 | #11 → #12 |
+| `vorpshare` | 0.5034 | 0.5223 | last → last |
+
+The top three are identical and `overbid_noramp` keeps a clear margin (+0.006 over #2). Middle-of-table cells shuffle by 1–2 places, all within seed noise. **Every** hero's win% drops slightly, which is expected rather than alarming: `reg_win_pct` is near-zero-sum across seats, and the bots benefit from the corrected caps too, so the hero's edge over a now-better-constructed field narrows.
+
+**2. Nomination probe, Will's `overbidder` room, all four heroes** (paired Δ `reg_win_pct` vs each hero's own control; **bold** = 95% CI excludes 0; pre-fix in parentheses):
+
+| hero | `gap` | `gap_off` | `off_pos` |
+|---|---|---|---|
+| `overbid_noramp` | **−0.0074** (−0.0044) | **−0.0219** (−0.0141) | −0.0008 (−0.0097) |
+| `static` | **+0.0098** (+0.0145) | −0.0049 (+0.0013) | −0.0046 (−0.0077) |
+| `balanced` | +0.0024 (+0.0118) | +0.0006 (+0.0106) | +0.0016 (+0.0103) |
+| `patient_deep` | **+0.0062** (+0.0057) | +0.0054 (+0.0064) | +0.0017 (+0.0054) |
+
+**3. Nomination probe, disciplined `balanced_field` room, `overbid_noramp`:** `off_pos` **+0.0114 [+0.0030, +0.0199]**, `gap_off` **+0.0093 [+0.0012, +0.0174]**, `gap` +0.0051 [−0.0029, +0.0131]. All three are now positive (pre-fix `gap_off` was −0.0007), and the two off-position variants are CI-separated.
+
+**Findings (data):**
+1. **The shipped plan survives the fix.** `overbid_noramp` is still the best hero for Will's modeled room, and still by a margin. No default changes.
+2. **Run V's headline is retracted.** "`gap` beats the price-ranked `off_pos` for **every** hero, without exception" was **partly a bug artifact**: with WR "filled" at 2 and RB not until 4, `off_pos` was forced to dump WRs specifically, and WRs were the position the broken cap made worthless to hold. Post-fix `gap` wins for **3 of 4** heroes, not 4 of 4 — `overbid_noramp` now prefers `off_pos` (−0.0008) to `gap` (−0.0074). The *general* claim (the disagreement signal is the stronger one) still holds; the "without exception" does not.
+3. **Run V's effect sizes were inflated.** `balanced`'s gain collapses from +0.0118 (CI-separated) to +0.0024 (not distinguishable from zero), so the count of heroes that measurably gain drops from **3 of 4 to 2 of 4** (`static`, `patient_deep`). The direction of the finding survives; its strength does not.
+4. **Runs U/W/X survive qualitatively.** `overbid_noramp` still gains nothing from poison in the busted room (and `gap`/`gap_off` are now clearly *harmful* there, sharpening Run U); poison still pays in a room that holds money, now more strongly (Run X's +0.0098 → +0.0114). The busted-vs-disciplined contrast — the load-bearing practical conclusion — is unaffected.
+
+**Caveats:** the disciplined-room probe was re-run for `overbid_noramp` only, not all four heroes; the `k`-sweep of Run W was **not** re-run, so its "substitutes" claim rests on pre-fix data and should be treated as unconfirmed on the fixed engine. Everything else as before: one pool, one market, single ADP jitter, byes off.
+
+**Conclusion (data; no default change):** the bug was real and load-bearing on roster *shape*, but it did not change **which strategy to use**. Will's cheat sheet and its MAX BID numbers were never affected (valuation was always correct). `overbid_noramp` + default nomination stands, and the practical nomination advice is unchanged: poison is worth ~0 to slightly negative in a room that busts early, ~+0.01 in a room that holds money. Artifacts: `reports/_will_bakeoff/postfix_2026/`, `reports/_gap_nom_probe/postfix_*/` (untracked). Live-draft call still September.
 
 ## Planned experiments / axes to sweep
 

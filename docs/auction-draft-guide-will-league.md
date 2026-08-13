@@ -35,10 +35,10 @@ stop at — don't add anything on top of it.
 
 Two things it beats decisively, both tempting in a room full of overbidders:
 
-- **Don't sit back and wait for bargains.** The "patient" strategy finished at a 54% win rate,
-  dead last. Sitting out the early market is the single worst plan against this room.
+- **Don't sit back and wait for bargains.** The "patient" strategy finished at a 52% win rate,
+  near the bottom. Sitting out the early market is one of the worst plans against this room.
 - **Don't spread your money evenly.** Trying to buy a balanced roster of mid-priced players
-  ("balanced", .597) lost significantly to buying a few studs.
+  ("balanced", .590) lost significantly to buying a few studs.
 
 ### The counter-intuitive part
 
@@ -188,7 +188,10 @@ Honest limits, so you can weigh the advice:
   exclude zero. But the opponent model behind that number was rebuilt four times during testing,
   each time because it contained a flaw that handed some strategy a free win. Treat it as a
   well-tested opinion, not a guarantee.
-- The rosters it drafts look thin at receiver, by design. That is worth an eye-test before you
-  commit to it.
+- The rosters it drafts used to come out thin at receiver. That was **a bug, now fixed** (the
+  simulator was capping every team at 4 WR because it treated both FLEX slots as running-back
+  slots). Corrected, the plan drafts about 4.9 WR and 4.2 RB. The MAX BID numbers on your sheet
+  were never affected — the pricing was always right — but if you saw an earlier version of this
+  guide that told you to expect a receiver-light roster, ignore that.
 - Over a 13-game season, luck outweighs roster quality. In testing, the roster with the
   *highest* title odds missed the playoffs and one with lower odds won it all.
