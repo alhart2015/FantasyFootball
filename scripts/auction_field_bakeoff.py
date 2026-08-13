@@ -39,7 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -71,7 +71,7 @@ _Z95 = 1.959963984540054
 # overbid variant and the low-gain convex StackRatio variants that Run T resolved as the only
 # heroes to beat `balanced` in the less-circular ESPN market), which are deliberately kept out of
 # the tournament roster. `registry.ALL_BID_MODELS` is exactly that union.
-CONTESTANTS: dict[str, AuctionBidStrategy] = ALL_BID_MODELS
+CONTESTANTS: Mapping[str, AuctionBidStrategy] = ALL_BID_MODELS
 
 # The under-bidder: the library's stock `PatientValueBot` at its defaults — under-bids studs at
 # 0.5x (never wins one), pays a mid-tier premium out of the reserve it saved, $1s the bottom half.
@@ -136,6 +136,7 @@ def build_field(
     *,
     n_bots: int | None = None,
     pace_jitter: float = _OVERBID_PACE_JITTER,
+    n_patient: int | None = None,
 ) -> list[BotArchetype]:
     """Named opponent-field mix, round-robined across the bot seats by the engine.
 
@@ -146,6 +147,11 @@ def build_field(
     When `n_bots` is given and `pace_jitter > 0`, the returned list is exactly `n_bots` long and
     every aggressive seat gets its OWN cap, so the room has no single ceiling. Without `n_bots` the
     5-entry cycle is returned unchanged (identical caps), which is what earlier runs used.
+
+    `n_patient` sets exactly how many bot seats are conservative hoarders, spread as evenly as
+    possible so they are never clustered next to the hero. `None` keeps the historical rule (every
+    `_PATIENT_EVERY`-th seat -> 2 of 11 in a 12-team league), so every prior run reproduces
+    byte-for-byte; pass an int only to sweep the aggressive/conservative mix.
     """
     if name == "realistic":  # the standing cross-run baseline; overbid/pace do not apply
         return list(_REALISTIC_FIELD)
@@ -162,7 +168,19 @@ def build_field(
         ob = BalancedBot(pace=pace, overbid=overbid, pace_basis=basis)
         return [ob, ob, ob, ob, _HOARDER] if with_patient else [ob]
     seats = list(range(n_bots))
-    patient = {i for i in seats if with_patient and i % _PATIENT_EVERY == _PATIENT_EVERY - 1}
+    if not with_patient:
+        patient: set[int] = set()
+    elif n_patient is None:
+        patient = {i for i in seats if i % _PATIENT_EVERY == _PATIENT_EVERY - 1}
+    else:
+        if not 0 <= n_patient <= n_bots:
+            raise ValueError(f"n_patient must be in 0..{n_bots}; got {n_patient}")
+        # Evenly spaced rather than the first/last k: clustering the hoarders would change who the
+        # hero sits next to as well as how many there are, confounding the mix with seat adjacency.
+        # Half-step offset ((2i+1)n / 2k) so the set never starts at seat 0. Consecutive values
+        # differ by n/k >= 1, so this yields exactly `n_patient` distinct seats -- a plain
+        # round(i*n/k) does NOT (it collides once k approaches n, silently returning too few).
+        patient = {(2 * i + 1) * n_bots // (2 * n_patient) for i in range(n_patient)}
     paces = _spread_paces(pace, pace_jitter, n_bots - len(patient))
     out: list[BotArchetype] = []
     agg = 0
@@ -236,6 +254,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
             args.overbid_basis,
             n_bots=config.n_teams - 1,
             pace_jitter=args.overbid_pace_jitter,
+            n_patient=args.n_patient,
         ),
         bot_prices=market,
         market_adp_jitter=args.market_adp_jitter,
@@ -252,6 +271,8 @@ def _run_chunk(args: argparse.Namespace) -> int:
         "overbid_pace": args.overbid_pace,
         "overbid_basis": args.overbid_basis,
         "overbid_pace_jitter": args.overbid_pace_jitter,
+        # None = the historical every-5th rule (2 of 11); an int is a swept mix.
+        "n_patient": args.n_patient,
         "base_seed": args.seed,
         "n_seeds": args.seeds,
         "n_sims": args.n_sims,
@@ -409,6 +430,7 @@ def _guard_homogeneous(chunks: Sequence[dict[str, object]]) -> None:
         "overbid_pace",
         "overbid_basis",
         "overbid_pace_jitter",
+        "n_patient",
         "n_seeds",
         "n_sims",
     ):
@@ -539,6 +561,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Race NOMINATION policies instead of bid models, with every contestant bidding "
         "BID_MODEL (e.g. overbid_noramp). Contestants become control/off_pos/gap/gap_off. "
         "Requires --bot-prices espn.",
+    )
+    r.add_argument(
+        "--n-patient",
+        type=int,
+        default=None,
+        help="How many bot seats are conservative hoarders, spread evenly. Omit for the historical "
+        "every-5th rule (2 of 11 in a 12-team league). Use to sweep the aggressive/conservative "
+        "mix.",
     )
     r.add_argument("--data-root", type=Path, default=Path("data"))
     r.add_argument("--out", type=Path, required=True)
