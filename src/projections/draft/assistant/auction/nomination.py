@@ -26,14 +26,24 @@ tested, opt-in extension point for any future ESPN-targeted nomination work, not
 strategy. (History: a CRN-desync bug in the hook briefly flipped the interim verdict to a marginal
 GO; the fix + the 80-seed firm-up settled it here. See Run O.)
 
-PROBE VERDICT (Run U, same report) — NO-GO, and NEGATIVE. Under Will's league (`will_half12`,
-`overbidder` field, ESPN market, ADP nomination) with the stud-buying `overbid_noramp` hero, `gap`
-is flat (-0.004, CI spans 0) while `drain_off_position` (-0.010) and `drain_value_gap_off_position`
-(-0.014, worse at 11/12 seats) are CI-separated HARMFUL. The lever's sign depends on the hero:
-Run O's pace-capped `balanced` could not buy the top lot anyway, so spending its nomination turn on
-a decoy was nearly free; a hero that pays 1.3x for studs forfeits a real buying opportunity, and the
-budget it drains is money the room would have spent regardless (every seat ends at $0). Nomination
-poisoning is therefore closed for stud-buying heroes, not merely unproven.
+PROBE VERDICT (Runs U + V, same report) — the gap signal WORKS; it is `overbid_noramp` that is the
+exception. Across four heroes in Will's league (`will_half12`, `overbidder` field, ESPN market, ADP
+nomination), `drain_value_gap` is positive and CI-separated for THREE of them (`static` +0.0145,
+`balanced` +0.0118, `patient_deep` +0.0057, at 9-11 of 12 seats each) and flat for the fourth
+(`overbid_noramp`, -0.004, CI spans 0). Two rules of thumb from the grid:
+
+  * `drain_value_gap` beats the price-ranked `drain_off_position` for EVERY hero tested. The
+    disagreement signal is what carries the effect; ranking by price alone mostly re-nominates
+    whoever the room was about to nominate anyway.
+  * The off-position FILTER is the dangerous part. For heroes that cannot buy early it is harmless
+    (all three heuristics tie), but for heroes that spend early it drags the nominee toward
+    positions they are done with -- on `static` the same hero swings +0.0145 (`gap`) to -0.0077
+    (`off_pos`). Prefer the unfiltered gap heuristic unless a specific hero has been measured.
+
+Still nothing wired into a default: no hero x nominator cell beat `overbid_noramp` with the engine's
+own value-first nomination (0.6389), so Will's shipped plan is unchanged. (Run U alone read as a
+flat NO-GO and attributed it to early spending; Run V refuted that attribution -- `static` spends
+80% of its budget early and posts the study's largest gain. See the retraction note in Run U.)
 """
 
 from __future__ import annotations

@@ -14,9 +14,26 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 **Answer — the hypothesis is refuted, with the sign reversed.** `gap` is flat (−0.004, CI spans 0); `off_pos` (−0.010) and `gap_off` (−0.014) are CI-separated **harmful**, and `gap_off` — the variant the hypothesis predicts should win — is worst, losing at **11 of 12 seats**. R7 sanity gate passes to four decimals (`control` 0.6389 = the committed `overbid_noramp` figure). Full table + mechanism in `reports/auction_tournament_validation_2026.md` (Run U).
 
-**Why (the part worth remembering).** *The lever's sign depends on the hero.* Run O's `balanced` p0.0 was pace-capped and could not buy the top lot regardless, so spending its nomination turn on a decoy was nearly free — hence its small positive. `overbid_noramp` pays 1.3× for studs and spends out early, so the engine's default value-first nomination is not a wasted turn: it surfaces the best available player exactly when this hero wants to buy one. Poisoning trades that away, and the budget it drains is money the room spends anyway (every seat ends at $0 in this field). **Budget is conserved; the nomination turn is not.**
+**Follow-up (Run V) overturned the explanation — see below.** The `overbid_noramp` numbers stand, but they are one cell, not a rule.
 
-**Decisions:** no default changes — the guide's `overbid_noramp` + default value-first nomination stands, now positively supported on the nomination axis rather than untested. Nomination poisoning is **closed for stud-buying heroes**. Shipped as reusable seams, not strategy: `run_auction_tournament(hero_nominators=...)` (races nomination policies at a fixed bid, CRN-paired for free) and `auction_field_bakeoff --nominator-probe`.
+**Decisions:** no default changes — the guide's `overbid_noramp` + default value-first nomination stands, now positively supported on the nomination axis rather than untested. Shipped as reusable seams, not strategy: `run_auction_tournament(hero_nominators=...)` (races nomination policies at a fixed bid, CRN-paired for free) and `auction_field_bakeoff --nominator-probe`.
+
+---
+
+## Auction — value-gap nomination across four heroes (Run V) — the hypothesis is CONFIRMED; Run U was one hero's exception (2026-08-12, branch `feat/auction-value-gap-nomination`)
+
+**Question:** Run U's mechanism ("poison costs a buying turn, so it should help heroes that cannot buy") made a falsifiable prediction. Test it by re-running the same four nominators across heroes spanning that axis.
+
+**The axis was measured, not assumed** (engine `PickRecord` trace): early spend as a share of budget — `overbid_noramp` 91% · `static` 80% · `balanced` 10% · `patient_deep` 5% (which ends with $102 unspent and never buys a $30 player).
+
+**Answer — the prediction fails, and the original hypothesis is vindicated.** `drain_value_gap` is positive and CI-separated for **three of four heroes** (`static` +0.0145, `balanced` +0.0118, `patient_deep` +0.0057; 9–11 of 12 seats each), flat for `overbid_noramp`. **`static` spends 80% of its budget early and posts the largest gain in the study** — so "buys early" does not predict the sign, and Run U's generalization is retracted.
+
+**What actually separates the results (the part worth remembering):**
+- **The disagreement signal is the whole effect.** `gap` beats the price-ranked `off_pos` for **all four** heroes. Ranking by price mostly re-nominates whoever the room was about to nominate anyway — which is exactly why Run O's `drain_max` measured +0.001 and why Run O reached the wrong conclusion.
+- **The off-position filter is the dangerous part, not poisoning.** For heroes that can't buy, all three heuristics tie (any drain helps someone who's just waiting). For heroes that do buy, the choice is worth 0.022: on `static`, same room and seeds, `gap` +0.0145 vs `off_pos` −0.0077. The filter drags the nominee toward positions the hero is done with, which for a big early spender is most of the board.
+- **Poisoning lifts weak heroes toward the strong one without reaching it.** Best of all 16 hero × nominator cells is still `overbid_noramp` + no hook (0.6389); best poisoned cell is `static` + `gap` (0.6225).
+
+**Decisions:** Will's plan is unchanged and now rests on a 4×4 grid instead of a single point — `overbid_noramp` is confirmed as the one hero for which nomination control adds nothing. But nomination poisoning is **re-opened in general**, contra Run O and Run U: it is a real ~+0.01 edge for most heroes, carried by the value-gap signal. Open follow-up: no diagnostic yet explains why `overbid_noramp` alone fails to profit — tracing which players `gap` nominates for it vs for `static` is the next probe.
 
 **Gates:** 1956 passed, 18 skipped, 2 failed — both pre-existing on `main` and unrelated (`test_backtest_smoke_one_cell` [#40], and a **newly-found third** pre-existing failure, `test_minimal_mode_prices_a_nominee_and_records_the_sale`, reproduced on a6ec16a and filed as [#141](https://github.com/alhart2015/FantasyFootball/issues/141) — AppTest's selectbox `set_value` takes the option value, not its rendered label; the test passes the label). mypy strict clean (373 files), ruff check + format clean.
 
