@@ -756,6 +756,42 @@ CRN-paired Δ `reg_win_pct` vs each hero's own no-hook control (95% CI; **bold**
 
 **Conclusion (data; no default change):** the question "why isn't `overbid_noramp` better with this?" has an answer — **because it is already collecting the same edge by outbidding, and the two do not stack.** Will's plan is unchanged and now has a mechanism behind it rather than a bare measurement. Artifacts: scratch diagnostics (untracked); `PickRecord.nominator_seat` is committed and tested. Live-draft call still September.
 
+**Run X — 2026-08-13 — the forced-negative-transaction argument is CORRECT; it is SATURATED in Will's room because the field is already broke by Q2, and it pays as predicted in a room that holds money** (`will_half12`, ESPN market, ADP nomination, byes OFF; quarter diagnostics at 4 seats × 20 seeds, the confirmatory probe at all 12 seats × 20 seeds × 300 sims, CRN-paired; branch `feat/auction-value-gap-nomination`). Prompted by a user challenge to Runs U–W: *budget is finite, so every dollar the room overpays on a player we don't want is a dollar it cannot spend on a player we do want; forcing negative-value transactions onto opponents must leave more positive value for us.* Runs V–W had measured the **drain** and the **outcome** but never the thing in between — **prices over the course of the draft**. This run measures it.
+
+**The argument is right, and the mechanism is visible.** But so is its limit. Opponents' **total** cash (of 11 × $200 = $2,200) and the clearing price as a multiple of our value, by draft quarter:
+
+| field | | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|---|
+| `overbidder` (Will's modeled room) | opp cash | $367.6 | **$82.1** | $47.5 | $8.5 |
+| | price / our value | 1.46× | 0.47× | **0.13×** | 0.92× |
+| `balanced_field` (disciplined room) | opp cash | $1,296.7 | $731.6 | $542.9 | $493.8 |
+| | price / our value | 0.79× | 0.89× | **0.65×** | 0.94× |
+
+**In Will's modeled room the field has already spent 83% of its money by the end of Q1 and holds $82 across eleven teams by the end of Q2.** The late-draft bargain the argument predicts *already exists, at maximum magnitude*: Q3 lots clear at **13 cents on the dollar**. Every hero's surplus is earned there (`overbid_noramp` −$27.9 in Q1, +$62.6 in Q2, +$34.6 in Q3). There is no meaningful money left to force out — our ~8% of nominations moves ~$6–8 of opponent cash, against the ~$1,800 the bots spend out on their own. That is why the drain measured **+$68 of extra room overpay** in Run W and still produced no gain: it is a rounding error against a market that has already collapsed.
+
+**Confirmatory test — the argument's own prediction, run in a room that holds money.** If the mechanism is real but saturated, it should pay in a field that does *not* bust early. Same hero (`overbid_noramp` — the one that showed nothing in Run V), same seeds, same pool, only the field changes to `balanced_field`:
+
+| contestant | reg_win | paired Δ (95% CI) | champ Δ | mean_points Δ |
+|---|---|---|---|---|
+| `control` | 0.6396 | — | — | — |
+| `off_pos` | **0.6494** | **+0.0098 [+0.0022, +0.0174]** | **+0.0184 [+0.0076, +0.0292]** | **+13.19 [+5.08, +21.29]** |
+| `gap` | 0.6437 | +0.0041 [−0.0028, +0.0109] | **+0.0117 [+0.0019, +0.0215]** | **+9.36 [+1.98, +16.75]** |
+| `gap_off` | 0.6389 | −0.0007 [−0.0078, +0.0063] | +0.0067 [−0.0032, +0.0167] | +3.26 [−4.52, +11.03] |
+
+**The hero that gained nothing from poison in the overbidder room gains +0.0098 reg-win (and +0.018 champ, +13 points) in the disciplined one, CI-separated.** The lever is not weak; it is *contingent on there being money to take*.
+
+**Findings (data):**
+1. **The forced-negative-transaction argument is confirmed as a mechanism.** Poison nomination pays when opponents still hold cash. Runs U–W's nulls were a property of the *field*, not of the idea.
+2. **Total roster value is genuinely conserved** — 2370.9 vs 2371.1 out of ~2371 across all 12 seats (0.01%), even though which 204 of 578 players get drafted is free to vary. So the gain cannot come from the field acquiring *less* talent in aggregate; it comes from **when** the money leaves and therefore what *we* can buy with ours. This is the correct version of Run W's "poison moves dollars, not players."
+3. **Run W's "substitutes" reading needs narrowing.** Aggression and poison are substitutes *in a room that busts on its own*, because the busted room hands out the late discount for free. In a room that holds money they are **complements**: `overbid_noramp` is already the aggression optimum and still gains ~+0.010.
+4. **The best heuristic is field-dependent.** In `balanced_field` the price-ranked `off_pos` (+0.0098) beats `gap` (+0.0041) — the reverse of Run V's ordering in the overbidder room. Not over-theorized here; recorded as a fact that any adoption decision must respect.
+
+**Practical consequence (the decision-relevant part).** The value of nomination poisoning in Will's league depends entirely on **how disciplined his actual league-mates are**, which is a modeling assumption, not a measurement — bot calibration is a standing open item. If they spend out early like the `overbidder` model assumes, nomination control is worth ~0 and the printed sheet's plan is complete. If they hold money into the middle rounds, it is worth ~+0.01 and the right move is to nominate players we rate below the room. **The eye-test at the actual draft table settles which room he is in**, and it is observable in the first quarter: if lots are clearing well above sheet value and teams are near-broke by pick ~50, it is the overbidder room and nomination doesn't matter.
+
+**Caveats:** quarter diagnostics at 4 seats × 20 seeds (the cash and price curves are order-of-magnitude effects, well clear of that noise floor; the per-quarter hero-surplus splits are not). `balanced_field` is a single alternative field, not a sweep of discipline levels — the natural follow-up is a `pace`/`overbid` sweep to map the lift as a continuous function of how fast the room spends out. One pool, one market, byes off.
+
+**Conclusion (data; no default change):** the user's economic argument stands and is now supported end-to-end — drain → later cash → later prices → hero surplus. Nomination poisoning is a **real edge whose size is set by opponent discipline**, and it is worth ~0 only in the specific busted-market model of Will's room. `overbid_noramp` + default nomination remains the shipped plan for that modeled room; nothing is adopted, and the September call stands. Artifacts: `reports/_gap_nom_probe/will_2026_balancedfield/*.json` (untracked).
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.

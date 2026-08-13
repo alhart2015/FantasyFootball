@@ -50,7 +50,31 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 **Caveat:** the `k` response is *not* monotone (1.1 → +0.0065, 1.2 → +0.0175), so there is residual noise and no smooth law is claimed; the robust fact is the single peculiar cell at `k=1.3`. Why 1.3 is the optimum in this field is unexplained.
 
-**Decisions:** none change. Will's plan (`overbid_noramp`, default nomination) now has a mechanism behind it rather than a bare measurement — and the corollary is practical: **if you ever bid less aggressively than `k≈1.3`, gap nomination is worth ~+0.015 and you should turn it on.**
+**Decisions:** none change. Will's plan (`overbid_noramp`, default nomination) now has a mechanism behind it rather than a bare measurement — and the corollary is practical: **if you ever bid less aggressively than `k≈1.3`, gap nomination is worth ~+0.015 and you should turn it on.** *Run X narrows the "substitutes" reading — see below.*
+
+---
+
+## Auction — poison nomination is real but SATURATED in Will's room (Run X) — the size of the edge is set by opponent discipline (2026-08-13, branch `feat/auction-value-gap-nomination`)
+
+**Prompted by a user challenge to Runs U–W:** budget is finite, so every dollar the room overpays on a player we don't want is a dollar it can't spend on one we do; forcing negative-value transactions on opponents must leave more positive value for us. Runs V–W had measured the drain and the outcome but **never the thing in between — prices over the course of the draft.** This run measures it. **The argument is correct.**
+
+**Why it didn't show up: Will's modeled room is already broke by Q2.** Opponents' total cash (of $2,200) and clearing price as a multiple of our value, by quarter:
+
+| field | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| `overbidder` (Will's room) | $367.6 / 1.46× | **$82.1** / 0.47× | $47.5 / **0.13×** | $8.5 / 0.92× |
+| `balanced_field` (disciplined) | $1,296.7 / 0.79× | $731.6 / 0.89× | $542.9 / **0.65×** | $493.8 / 0.94× |
+
+The field spends **83% of its money in Q1** and holds $82 across eleven teams by the end of Q2. The late-draft bargain the argument predicts **already exists at maximum magnitude** — Q3 lots clear at **13 cents on the dollar**, which is where every hero earns its surplus. Our ~8% of nominations moves ~$6–8 of opponent cash against the ~$1,800 the bots spend out unaided. That is why Run W measured **+$68 of extra room overpay** and still no gain.
+
+**Confirmatory test — the argument's own prediction.** Same hero (`overbid_noramp`, the one that gained nothing), same seeds, only the field changes to one that holds money: **`off_pos` +0.0098 reg-win [+0.0022,+0.0174], +0.0184 champ, +13.2 points — all CI-separated.** The lever is not weak; it is contingent on there being money to take.
+
+**Corrections this forces:**
+- **Run W's "substitutes" reading is too broad.** Aggression and poison substitute *only in a room that busts on its own* (which hands out the late discount for free). In a room that holds money they are **complements** — `overbid_noramp` is already the aggression optimum and still gains ~+0.010.
+- **Total roster value really is conserved** (2370.9 vs 2371.1 of ~2371, 0.01%) even though which 204 of 578 players get drafted is free to vary. The gain is not the field acquiring less talent; it is *when* the money leaves, and therefore what we can buy with ours.
+- **The best heuristic is field-dependent** — `off_pos` beats `gap` in the disciplined room, the reverse of Run V. Recorded, not theorized.
+
+**Practical consequence:** the value of nomination poisoning in Will's league depends on **how disciplined his actual league-mates are** — a modeling assumption, not a measurement (bot calibration is a standing open item). **This is observable at the table in the first quarter:** if lots clear well above sheet value and teams are near-broke by ~pick 50, it's the overbidder room and nomination doesn't matter; if they hold money into the middle rounds, nominate players we rate below the room. Natural follow-up: sweep `pace`/`overbid` to map the lift as a continuous function of how fast the room spends out.
 
 **Gates:** 1956 passed, 18 skipped, 2 failed — both pre-existing on `main` and unrelated (`test_backtest_smoke_one_cell` [#40], and a **newly-found third** pre-existing failure, `test_minimal_mode_prices_a_nominee_and_records_the_sale`, reproduced on a6ec16a and filed as [#141](https://github.com/alhart2015/FantasyFootball/issues/141) — AppTest's selectbox `set_value` takes the option value, not its rendered label; the test passes the label). mypy strict clean (373 files), ruff check + format clean.
 
