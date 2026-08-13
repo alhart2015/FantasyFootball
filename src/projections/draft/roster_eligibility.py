@@ -138,9 +138,21 @@ def bot_position_bounds(
 ) -> tuple[dict[Position, int], dict[Position, int]]:
     """League-driven per-position (minimums, maximums) for a roster-disciplined bot.
 
-    min = strict starting slots + flex anchored (FLEX -> RB, SUPER_FLEX -> QB); the anchor add is
-    unconditional. max = min + bench distributed proportionally to min, rounded up so every cap
-    leaves room for a full roster (Σmax >= roster_size).
+    min = the DEDICATED starting slots only. A flex slot is not a requirement for any one position,
+    so FLEX/SUPER_FLEX add nothing here.
+
+    max = min + flex capacity + bench share. A flex-eligible position could in principle fill every
+    FLEX slot, so its cap carries the full FLEX count (and every super-flex-eligible position the
+    full SUPER_FLEX count); the bench is distributed proportionally to the minimums, rounded up so
+    the caps always permit a full roster (Σmax >= roster_size).
+
+    This previously anchored FLEX to RB and SUPER_FLEX to QB unconditionally, which made RB's
+    minimum 4 (not 2) in a 2RB+2FLEX league AND handed RB a larger share of the bench, capping WR at
+    4. That cap bound on 98-99% of rosters while RB's bound on 3-5%, so every seat was structurally
+    forbidden a 5th WR -- while the valuation layer (`vorp._starter_demand`, which allocates FLEX by
+    actually filling the slots) had WR absorbing MORE of the flex than RB, 3.14 vs 2.82 starters per
+    team on the 2026 table. The two layers disagreed and this one won at draft time. See issue #143
+    and docs/superpowers/specs/2026-08-13-auction-flex-position-bounds-design.md.
     """
     minimums: dict[Position, int] = {}
     for slot in POSITION_SLOTS:
@@ -148,16 +160,22 @@ def bot_position_bounds(
         if count > 0:
             minimums[Position(slot.value)] = count
     flex = roster_slots.get(RosterSlot.FLEX, 0)
-    if flex:
-        minimums[Position.RB] = minimums.get(Position.RB, 0) + flex
     superflex = roster_slots.get(RosterSlot.SUPER_FLEX, 0)
-    if superflex:
-        minimums[Position.QB] = minimums.get(Position.QB, 0) + superflex
+    # A flex-eligible position with no dedicated slot still needs an entry: `bot_eligible` draws its
+    # eligible set strictly from these keysets, so omitting it would ban the position outright.
+    for pos in FLEX_ELIGIBLE if flex else ():
+        minimums.setdefault(pos, 0)
+    for pos in SUPER_FLEX_ELIGIBLE if superflex else ():
+        minimums.setdefault(pos, 0)
 
     sum_min = sum(minimums.values())
     bench = roster_slots.get(RosterSlot.BENCH, 0)
     maximums = {
-        pos: m + (ceil(bench * m / sum_min) if sum_min > 0 else 0) for pos, m in minimums.items()
+        pos: m
+        + (flex if pos in FLEX_ELIGIBLE else 0)
+        + (superflex if pos in SUPER_FLEX_ELIGIBLE else 0)
+        + (ceil(bench * m / sum_min) if sum_min > 0 else 0)
+        for pos, m in minimums.items()
     }
     return minimums, maximums
 

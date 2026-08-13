@@ -6,6 +6,28 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction — FLEX was anchored to RB, capping every team at 4 WR — FIXED + full re-run (Run Y) (2026-08-13, branch `fix/auction-flex-position-bounds`, issue [#143](https://github.com/alhart2015/FantasyFootball/issues/143))
+
+**The bug.** `bot_position_bounds` added every FLEX slot to **RB** unconditionally, and the bench was then distributed proportionally to those inflated minimums — so the anchor applied twice. Will's caps came out **RB 7 / WR 4**, and the WR cap bound on **98–99%** of all 960 measured rosters (RB's on 3–5%). Every seat, hero included, was structurally forbidden a 5th WR.
+
+**The tell that it was a bug and not a modeling choice:** the valuation layer disagreed. `vorp._starter_demand` allocates FLEX by actually filling the slots with whoever projects best, giving **WR 3.14 starters/team vs RB 2.82** — WR absorbing *more* of the flex. The two layers held opposite views of what a FLEX slot is, and the roster-discipline layer won at draft time.
+
+**The fix.** `min` = dedicated starting slots only (a flex slot requires no one position); `max` = min + flex capacity + bench share (any flex-eligible position could fill every FLEX slot). Will's league: RB **4/7 → 2/6**, WR **2/4 → 2/6** — symmetric, as the league itself is. Drafted rosters: **WR 3.84 → 4.91, RB 5.80 → 4.23**.
+
+**What it did and didn't change (Run Y, full re-run at identical knobs):**
+- **The hero choice survives.** `overbid_noramp` is still #1 for Will's room (0.6210 vs 0.6389 pre-fix), still by a clear margin, and the top three are identical. **No default changes.**
+- **The cheat sheet was never affected.** Valuation was always correct, so every MAX BID number stands.
+- **Levels shift ~0.01–0.02 and every hero's win% drops slightly** — expected, since `reg_win_pct` is near-zero-sum and the bots also draft better now.
+- **Run V's headline is retracted.** "`gap` beats `off_pos` for *every* hero" was partly a bug artifact: with WR "filled" at 2 and RB not until 4, `off_pos` was forced to dump WRs — the very position the broken cap made worthless. Post-fix it's **3 of 4**, not 4 of 4.
+- **Run V's effect sizes were inflated.** Heroes that measurably gain from `gap` drops from **3 of 4 to 2 of 4** (`balanced` collapses +0.0118 → +0.0024, ns).
+- **Runs U/W/X survive qualitatively.** Poison is ~0-to-harmful in the busted room and pays in a room that holds money (Run X +0.0098 → **+0.0114**). The busted-vs-disciplined contrast — the practical conclusion — is unaffected.
+
+**Not re-run (stated so nobody assumes otherwise):** Run W's `k`-sweep, so its "aggression and poison are substitutes" claim rests on pre-fix data and is unconfirmed on the fixed engine. The disciplined-room probe covers `overbid_noramp` only.
+
+**Rollout:** `reports/auction_tournament_validation_2026.md` carries a banner marking Runs A–X as superseded in their absolute figures. The Will-league guide's stale win-rate numbers are corrected, and its "rosters look thin at receiver, **by design**" line — which was this bug all along — now says so.
+
+---
+
 ## Auction — value-gap nomination probe (Run U) — NO-GO, negative (2026-08-12, branch `feat/auction-value-gap-nomination`)
 
 **Question:** Run O closed nomination poisoning, but both of its heuristics ranked candidates by *price*, so neither tested the premise people actually mean — **nominate the players the room values more than we do**, forcing budget out the door on players we were never buying. That is also why its `drain_max` measured at +0.001: the room already nominates in value/ADP order, so "nominate the priciest" adds no information the room didn't have. Run O further predates the Run-P ADP realism fix and used the generic field on `half_12team`.
