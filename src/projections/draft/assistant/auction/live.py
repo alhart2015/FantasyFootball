@@ -69,9 +69,16 @@ from projections.schemas import (
 # The board's bid-model menu — the tournament roster plus the validated opt-ins.
 BOARD_BID_MODELS: Mapping[str, AuctionBidStrategy] = ALL_BID_MODELS
 BOARD_BID_MODEL_NAMES: tuple[str, ...] = tuple(BOARD_BID_MODELS)
-# `balanced` (BalancedValueBid, premium 0.0) is the shipped default: the robust win% leader in
-# BOTH the model-priced and ESPN-anchored markets across all 12 seats (PR #95, Run N).
-DEFAULT_BID_MODEL = "balanced"
+# The BOARD's default bid model -- a UI convenience only. It is read by scripts/auction_board.py
+# and the test fixtures; the tournament races `BID_MODELS` and is untouched by it, so changing
+# this does not adopt a winner and does not affect any measured run. Issue #105 still owns the
+# September 2026 strategy decision, and nothing here pre-empts it.
+#
+# `overbid_noramp` because the printed cheat sheet in docs/auction-draft-guide-will-league.md is
+# built from it, and a board that silently disagreed with the sheet beside it would be worse
+# than either alone. `balanced` (the robust seat-symmetric win% leader in both markets, PR #95
+# Run N) remains one dropdown click away.
+DEFAULT_BID_MODEL = "overbid_noramp"
 
 # Slot label for a rostered player who has no allocatable slot. `record_purchase` records what
 # the room did without enforcing positional eligibility, so this state is reachable.

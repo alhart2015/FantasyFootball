@@ -45,6 +45,11 @@ from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, IdMapSchema, Position, VorpTableSchema
 
 _DEFAULT_ID_MAP = "data/raw/id_map.parquet"
+# Prefilled league. These two override the Scoring/Teams preset entirely -- the JSON carries
+# n_teams, roster slots and scoring together -- so the board opens on the league the printed
+# cheat sheet was generated from instead of a generic preset. Clear both to use the preset.
+_DEFAULT_LEAGUE_CONFIG = "configs/will_half12_pass5.league.json"
+_DEFAULT_VORP = "data/vorp_2026/will_half12.parquet"
 _SESSION_DIR = Path("data/auction_sessions")
 _SCORING_LABELS = {"half": "Half-PPR", "ppr": "Full PPR", "std": "Standard"}
 
@@ -90,15 +95,26 @@ def _sidebar() -> None:
     )
     n_teams = st.sidebar.selectbox("Teams", TEAM_SIZES, index=TEAM_SIZES.index(DEFAULT_TEAMS))
     preset = get_preset(scoring, int(n_teams))
-    my_seat = st.sidebar.number_input("My seat", min_value=1, max_value=int(n_teams), value=1)
+    # The league-config override decides how many seats there really are, so read it before the
+    # seat picker. Bounding "My seat" by the preset instead would offer seat 14 in a 12-team
+    # league and fail only on Start, with a message about a box three sections further down.
+    league_override = _read_league_override()
+    seats_in_play = league_override.n_teams if league_override is not None else int(n_teams)
+    my_seat = st.sidebar.number_input("My seat", min_value=1, max_value=int(seats_in_play), value=1)
     strategy_name = st.sidebar.selectbox(
         "Bid model",
         BOARD_BID_MODEL_NAMES,
         index=BOARD_BID_MODEL_NAMES.index(DEFAULT_BID_MODEL),
     )
     st.sidebar.caption(
-        "`balanced` is the robust win% leader across all seats in both markets. "
-        "`overbid_noramp` is the printed cheat sheet's plan."
+        "`overbid_noramp` is the printed cheat sheet's plan and the default here. "
+        "`balanced` is the robust win% leader across all seats in both markets."
+    )
+    st.sidebar.info(
+        "Set up for **Will's league** (12 teams, half-PPR, 5-pt passing TDs) via the two "
+        "override boxes under **Advanced** — so Scoring and Teams above are ignored. "
+        "Clear those boxes to use a generic preset instead.",
+        icon="🏈",
     )
     market = st.sidebar.radio(
         "What the room pays",
@@ -111,16 +127,11 @@ def _sidebar() -> None:
     nomination_mode = st.sidebar.selectbox("Nomination rule", NOMINATION_MODES, index=0)
     st.sidebar.caption(NOMINATION_NOTES[nomination_mode])
     season = st.sidebar.number_input("Season", min_value=2020, max_value=2030, value=2026)
-    with st.sidebar.expander("Advanced"):
-        id_map_path = st.text_input("id_map parquet", _DEFAULT_ID_MAP)
-        custom_vorp = st.text_input("VORP parquet (overrides preset)", "")
-        custom_league = st.text_input("LeagueConfig JSON (overrides preset)", "")
-        team_text = st.text_area(
-            "Team names (one per line, seat 1 first)",
-            "",
-            help="Optional. Blank lines fall back to 'Team N'.",
-        )
-    vorp_path = custom_vorp.strip() or str(preset.table_path)
+    id_map_path = st.session_state.get("adv_id_map", _DEFAULT_ID_MAP)
+    custom_vorp = st.session_state.get("adv_vorp", _DEFAULT_VORP)
+    custom_league = st.session_state.get("adv_league", _DEFAULT_LEAGUE_CONFIG)
+    team_text = st.session_state.get("adv_team_names", "")
+    vorp_path = str(custom_vorp).strip() or str(preset.table_path)
 
     if st.sidebar.button("Start / restart auction", type="primary"):
         try:
@@ -156,7 +167,34 @@ def _sidebar() -> None:
         except Exception as exc:  # surface any other setup failure
             st.sidebar.error(f"Setup failed: {exc}")
 
+    with st.sidebar.expander("Advanced"):
+        st.text_input("id_map parquet", _DEFAULT_ID_MAP, key="adv_id_map")
+        st.text_input("VORP parquet (overrides preset)", _DEFAULT_VORP, key="adv_vorp")
+        st.text_input(
+            "LeagueConfig JSON (overrides preset)", _DEFAULT_LEAGUE_CONFIG, key="adv_league"
+        )
+        st.text_area(
+            "Team names (one per line, seat 1 first)",
+            "",
+            key="adv_team_names",
+            help="Optional. Blank lines fall back to 'Team N'.",
+        )
     _resume_controls()
+
+
+def _read_league_override() -> LeagueConfig | None:
+    """The LeagueConfig named in the Advanced box, or None if unset/unreadable.
+
+    Unreadable is deliberately silent here: this runs on every rerun just to size the seat
+    picker, and Start surfaces the real error with its own message.
+    """
+    raw = str(st.session_state.get("adv_league", _DEFAULT_LEAGUE_CONFIG)).strip()
+    if not raw:
+        return None
+    try:
+        return LeagueConfig.model_validate_json(Path(raw).read_text())
+    except Exception:
+        return None
 
 
 def _resume_controls() -> None:

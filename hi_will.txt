@@ -1,0 +1,364 @@
+================================================================================
+HI WILL — HOW TO RUN THE AUCTION DRAFT BOARD
+================================================================================
+
+This is a tool that tells you how much to bid on each player during your
+auction draft, live, as the room spends money.
+
+You do NOT need to know how to code. You need to copy and paste some commands
+into one app on your Mac. That's it.
+
+Set aside 20 minutes to do the setup ONCE, before draft day. Do not do this for
+the first time five minutes before your draft.
+
+Everything below assumes a Mac.
+
+
+================================================================================
+PART 0 — WHAT YOU'RE ABOUT TO DO (the 10-second version)
+================================================================================
+
+  1. Open an app called Terminal.
+  2. Install two things (Python, and the project).
+  3. Type one command to start the board.
+  4. A web page opens. Use it during your draft.
+
+After the one-time setup, starting the board is ONE command, forever.
+
+
+================================================================================
+PART 1 — OPEN TERMINAL
+================================================================================
+
+Terminal is an app that comes with every Mac. It looks like a plain white or
+black box where you type things.
+
+  1. Press COMMAND + SPACEBAR (this opens Spotlight search).
+  2. Type:  terminal
+  3. Press RETURN.
+
+A window opens with some text and a blinking cursor. This is Terminal. Leave it
+open — you'll use it for everything below.
+
+HOW TO USE IT: you copy a command from this file, paste it into Terminal
+(COMMAND + V), and press RETURN. Then wait until the blinking cursor comes back
+before doing the next one.
+
+IMPORTANT: Terminal often prints a wall of text while it works. That is normal.
+You do not need to read it. You only care about errors, and I tell you below
+what the real ones look like.
+
+
+================================================================================
+PART 2 — INSTALL THE TOOLS (one time only)
+================================================================================
+
+--------------------------------------------------------------------------------
+STEP 2.1 — Install Homebrew
+--------------------------------------------------------------------------------
+
+Homebrew is the thing that installs other things. Copy this ENTIRE line, paste
+into Terminal, press RETURN:
+
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+WHAT WILL HAPPEN:
+  - It says "Press RETURN to continue". Press RETURN.
+  - It asks for your password. Type your Mac login password. YOU WILL SEE
+    NOTHING AS YOU TYPE — no dots, no stars. That is normal and not broken.
+    Type it and press RETURN.
+  - It runs for 2-10 minutes.
+
+WHEN IT FINISHES, it may print a box that says "Next steps" with two commands
+to run. If it does, run them. They will look something like this (your exact
+lines may differ — use the ones YOUR Terminal printed, not mine):
+
+    echo >> /Users/YOURNAME/.zprofile
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+
+Then check it worked. Paste this and press RETURN:
+
+    brew --version
+
+GOOD: it prints something like "Homebrew 4.x.x"
+BAD:  it says "command not found" — close Terminal completely, open it again
+      (Command+Space, "terminal"), and try `brew --version` once more. If it
+      still fails, text Alden.
+
+--------------------------------------------------------------------------------
+STEP 2.2 — Install Python and Git
+--------------------------------------------------------------------------------
+
+Paste this, press RETURN, wait a few minutes:
+
+    brew install python@3.12 git
+
+Check it worked:
+
+    python3.12 --version
+
+GOOD: prints "Python 3.12.something"
+       (3.11 or newer also works, if you already have one.)
+BAD:  "command not found" — see the troubleshooting section at the bottom.
+
+--------------------------------------------------------------------------------
+STEP 2.3 — Download the project
+--------------------------------------------------------------------------------
+
+>>> ALDEN: Will needs access to the repo before this step works. Either add him
+>>> as a collaborator on GitHub, or send him a .zip of the folder (he can then
+>>> skip to the note at the end of this step). Everything else he needs —
+>>> player data, your league config, the cheat sheet — is in the repo already.
+
+Paste these ONE AT A TIME, pressing RETURN after each:
+
+    cd ~/Documents
+
+    git clone https://github.com/alhart2015/FantasyFootball.git
+
+    cd FantasyFootball
+
+The `git clone` line downloads everything. It may ask for your GitHub username
+and password — if it asks for a password, GitHub actually wants a "personal
+access token", not your normal password. If you hit that, text Alden; it's
+easier for him to just send you a zip file.
+
+IF YOU GOT A ZIP FILE INSTEAD: unzip it, drag the folder into your Documents
+folder, then in Terminal type `cd ` (with a space after cd) and then DRAG THE
+FOLDER from Finder into the Terminal window and press RETURN. That moves
+Terminal into the folder.
+
+--------------------------------------------------------------------------------
+STEP 2.4 — Install the project itself
+--------------------------------------------------------------------------------
+
+Paste these ONE AT A TIME. The second one takes several minutes and prints a lot
+of text. That is fine.
+
+    python3.12 -m venv .venv
+
+    source .venv/bin/activate
+
+    pip install -e ".[ui]"
+
+After the second command, your Terminal prompt gets "(.venv)" at the front of
+the line. That is how you know it worked. It should look something like:
+
+    (.venv) will@Wills-MacBook FantasyFootball %
+
+THAT "(.venv)" MATTERS. If you ever open a fresh Terminal and it is missing,
+the board will not start. See Part 3 — it's the first thing you type.
+
+SETUP IS DONE. You never have to do Part 2 again.
+
+
+================================================================================
+PART 3 — STARTING THE BOARD (this is the part you do on draft day)
+================================================================================
+
+Every time you want the board, open Terminal and paste these three lines, one at
+a time:
+
+    cd ~/Documents/FantasyFootball
+
+    source .venv/bin/activate
+
+    streamlit run scripts/auction_board.py
+
+Your web browser opens automatically with the board in it.
+
+If it doesn't open by itself, look in Terminal for a line that says
+
+    Local URL: http://localhost:8501
+
+...and either click it or copy "http://localhost:8501" into your browser.
+
+TO STOP THE BOARD when you're done: click on the Terminal window and press
+CONTROL + C (not Command — CONTROL).
+
+LEAVE TERMINAL OPEN AND RUNNING for the whole draft. If you close Terminal, the
+board dies. You can minimize it; just don't quit it.
+
+
+================================================================================
+PART 4 — SETTING UP THE DRAFT (do this once, at the start of draft night)
+================================================================================
+
+The board is already configured for YOUR league — 12 teams, half-PPR, 5-point
+passing touchdowns, and the bidding plan from the cheat sheet. You do not need
+to touch the settings.
+
+The ONLY thing you must set:
+
+  1. On the left, find "My seat". Set it to your draft position (1-12).
+     If you don't know it yet, you can change it before you start.
+
+  2. On the left, at the top, click "Minimal (live draft)".
+     This gives you the small, simple screen. Use this one during the draft.
+
+  3. Click the red "Start / restart auction" button on the left.
+
+  4. A screen appears: "① Name the teams".
+     Type the actual names of the people in your league — one box per seat, in
+     draft-slot order. Your own seat already says "You"; leave it.
+
+     DO THIS. It takes 60 seconds and it is the single thing that stops you
+     mis-recording a sale at 9pm when someone yells a name across the room.
+     Every button afterward will say "Bijan Robinson -> Marcus for $54" instead
+     of "Bijan Robinson -> Team 7 for $54".
+
+  5. Click "Save names & start".
+
+You're live.
+
+
+================================================================================
+PART 5 — USING IT DURING THE DRAFT
+================================================================================
+
+There are only three things you ever do.
+
+--------------------------------------------------------------------------------
+A) SOMEONE GETS NOMINATED
+--------------------------------------------------------------------------------
+
+Click the box under "② Who was nominated?" and start typing the player's name.
+Type 3-4 letters — "bija" — and pick him from the list that drops down.
+
+--------------------------------------------------------------------------------
+B) READ THE BIG NUMBER
+--------------------------------------------------------------------------------
+
+A big number appears, like:
+
+    🔨 BID UP TO $54
+
+THAT IS YOUR MAXIMUM. Bid up to it. Do not go past it. That number already
+accounts for your remaining budget and the roster spots you still have to fill —
+it will never leave you unable to fill your roster.
+
+Underneath you get one of these:
+
+    "You should win this one"     -> nobody left can outbid you. Go get him.
+    "Worth buying, but expect a
+     fight"                       -> he's worth it, but you'll be pushed.
+    "Room is anchored above your
+     ceiling — let it go"         -> he'll go for more than he's worth to you.
+                                     Let someone else overpay.
+    "PASS — the plan is done
+     buying RB"                   -> you have enough of that position. The
+                                     league would let you draft another; the
+                                     plan says don't.
+
+Three smaller numbers below that:
+
+    Worth to us   what he's actually worth to your team
+    Room pays     what the room is expected to pay for him
+    Best rival    the most any other team is still able to bid on him
+
+--------------------------------------------------------------------------------
+C) RECORD WHO BOUGHT HIM
+--------------------------------------------------------------------------------
+
+When the gavel falls — every player, not just yours:
+
+  1. "Won by" -> pick the team that won him.
+  2. "Price"  -> type what they paid.
+  3. Click the big button that reads back the whole sentence, e.g.
+     "✅ Bijan Robinson -> Marcus for $54". READ THAT SENTENCE BEFORE CLICKING.
+
+RECORD EVERY SALE, NOT JUST YOURS. The whole thing works by tracking how much
+money everyone else has left. If you skip other people's purchases, your numbers
+drift and the advice gets worse as the night goes on.
+
+MADE A MISTAKE? There's an "↶ Undo" button at the bottom. It removes the last
+sale you recorded. Click it, then record it correctly.
+
+--------------------------------------------------------------------------------
+BONUS: WHO SHOULD I NOMINATE?
+--------------------------------------------------------------------------------
+
+Click "🎤 Who to nominate" at the bottom. It suggests a player and shows a short
+list. The "i_want" checkbox means "you actually want this guy". Nominating an
+expensive player you DON'T want is a good move — it drains everyone else's money
+instead of yours.
+
+
+================================================================================
+PART 6 — IF SOMETHING GOES WRONG MID-DRAFT
+================================================================================
+
+DON'T PANIC. The board saves itself after every single sale. Nothing is lost.
+
+BROWSER TAB CLOSED, or you accidentally refreshed:
+  Go back to http://localhost:8501 and click "↩ Resume last auction" on the
+  left. Everything comes back.
+
+TERMINAL GOT CLOSED / LAPTOP RESTARTED:
+  Redo the three commands from Part 3, then click "↩ Resume last auction".
+
+THE PAGE LOOKS FROZEN / SAYS "RUNNING":
+  Give it 5 seconds. It's calculating. If it's still stuck after 30 seconds,
+  refresh the browser tab and click "↩ Resume last auction".
+
+THE BOARD IS JUST WRONG / YOU'RE OUT OF TIME:
+  Stop using it and use the printed cheat sheet. The board and the sheet are
+  built from the same plan, so you're not switching strategies — you're just
+  switching to paper. Do not spend draft-clock time debugging.
+
+
+================================================================================
+PART 7 — TROUBLESHOOTING SETUP (before draft day)
+================================================================================
+
+"command not found: brew"
+    Homebrew didn't finish, or the "Next steps" lines from Step 2.1 weren't run.
+    Quit Terminal completely (Command+Q), reopen it, try again. If still broken,
+    redo Step 2.1.
+
+"command not found: python3.12"
+    Step 2.2 didn't finish. Run `brew install python@3.12` again and watch for
+    errors near the end.
+
+"command not found: streamlit"  or  "No module named streamlit"
+    You forgot `source .venv/bin/activate`. Look at your prompt: does it start
+    with "(.venv)"? If not, run that line and try again. This is the single most
+    common problem.
+
+"No such file or directory"
+    You're in the wrong folder. Run `cd ~/Documents/FantasyFootball` and retry.
+
+"Missing input (...)" in a red box on the left of the board
+    A data file isn't where the board expects. Everything needed ships with the
+    project, so this usually means Terminal is in the wrong folder. Run
+    `cd ~/Documents/FantasyFootball` and try again. If it persists, text Alden —
+    that one is on him, not you.
+
+"Address already in use" / port 8501
+    The board is already running in another Terminal window. Either use that
+    one, or run:
+        streamlit run scripts/auction_board.py --server.port 8502
+    ...and go to http://localhost:8502 instead.
+
+
+================================================================================
+PART 8 — DO A PRACTICE RUN
+================================================================================
+
+Seriously. Do this a few days before the draft, not on draft night.
+
+  1. Start the board (Part 3).
+  2. Switch to "Minimal (live draft)", set your seat, hit Start.
+  3. Name the teams with junk names.
+  4. Nominate a player, look at the number, record a fake sale to someone.
+  5. Record 4-5 more fake sales. Watch the numbers move.
+  6. Hit Undo a couple of times.
+  7. Close the tab, reopen http://localhost:8501, click "Resume last auction",
+     and confirm your fake draft comes back.
+
+When you're ready for the real thing, click "Start / restart auction" to wipe it
+and begin clean.
+
+Ten minutes of practice now is worth an hour of stress on draft night.
+
+Good luck. Go win it.

@@ -113,19 +113,18 @@ is for people who'd rather have the numbers update themselves as the room spends
 streamlit run scripts/auction_board.py
 ```
 
-**Point it at this league, not the built-in preset.** The sidebar's presets are generic
-(WR3/FLEX1, bench 9, 4-pt passing TDs); this league is WR2/FLEX2, bench 5, **5-pt passing
-TDs**. Different roster shape and different scoring means different VORP, so a preset-loaded
-board would quietly disagree with the printed sheet above. In the sidebar open **Advanced**
-and set both overrides to the same files the cheat sheet was generated from:
+**It already points at this league.** The two override boxes under **Advanced** are prefilled
+with `configs/will_half12_pass5.league.json` and `data/vorp_2026/will_half12.parquet` — the
+same files the cheat sheet above is generated from — and the bid model defaults to
+**`overbid_noramp`**, this guide's plan. The Scoring and Teams dropdowns are ignored while
+those overrides are set, since the JSON carries teams, roster and scoring together.
 
-- **LeagueConfig JSON (overrides preset)** → `configs/will_half12_pass5.league.json`
-- **VORP parquet (overrides preset)** → `data/vorp_2026/will_half12.parquet`
+So: set **My seat**, and click **Start / restart auction**.
 
-Then set your seat, pick the bid model — **`overbid_noramp`** is this guide's plan and what
-the sheet's numbers assume; `balanced` is the repo-wide default and a different plan, so
-switching to it means the sheet and the board no longer agree — and click **Start / restart
-auction**.
+Clear both override boxes if you ever want a generic preset instead — but note the presets are
+WR3/FLEX1, bench 9, 4-pt passing TDs where this league is WR2/FLEX2, bench 5, **5-pt passing
+TDs**, so the board's numbers would then disagree with the sheet. Likewise `balanced` is a
+different plan from the one the sheet assumes.
 
 - **Bid board** — the top 40 available players by our own values, each with the maximum to
   bid on him. The search box filters the whole pool, so anyone not in the top 40 is still
