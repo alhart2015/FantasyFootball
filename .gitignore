@@ -213,7 +213,13 @@ __marimo__/
 .worktrees/
 
 # Generated data (do not commit raw or projection parquet)
-data/raw/
+# `data/raw/*`, not `data/raw/`: git cannot re-include a file whose parent DIRECTORY is
+# excluded, so a trailing-slash pattern would make the negation below silently do nothing.
+data/raw/*
+# The id map is the exception: 125K of reference data (gsis_id <-> name/position/team) that
+# both live boards require to start. Without it a fresh clone cannot run them at all, which
+# is the one thing a non-technical user cannot debug.
+!data/raw/id_map.parquet
 data/features/
 data/projections/
 data/backtest/

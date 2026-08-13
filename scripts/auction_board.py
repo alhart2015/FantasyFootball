@@ -28,9 +28,11 @@ from projections.draft.assistant.auction.live import (
     DEFAULT_BID_MODEL,
     NOMINATION_MODES,
     NOMINATION_NOTES,
+    BidAdvice,
     LiveAuctionSession,
 )
 from projections.draft.assistant.league_projection import N_BYES, PLAYOFF_SIZE
+from projections.draft.assistant.live import filter_named_pool
 from projections.draft.assistant.presets import (
     DEFAULT_SCORING,
     DEFAULT_TEAMS,
@@ -43,6 +45,11 @@ from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, IdMapSchema, Position, VorpTableSchema
 
 _DEFAULT_ID_MAP = "data/raw/id_map.parquet"
+# Prefilled league. These two override the Scoring/Teams preset entirely -- the JSON carries
+# n_teams, roster slots and scoring together -- so the board opens on the league the printed
+# cheat sheet was generated from instead of a generic preset. Clear both to use the preset.
+_DEFAULT_LEAGUE_CONFIG = "configs/will_half12_pass5.league.json"
+_DEFAULT_VORP = "data/vorp_2026/will_half12.parquet"
 _SESSION_DIR = Path("data/auction_sessions")
 _SCORING_LABELS = {"half": "Half-PPR", "ppr": "Full PPR", "std": "Standard"}
 
@@ -71,7 +78,14 @@ def _autosave(s: LiveAuctionSession) -> None:
     s.save(Path(path))
 
 
+FULL_MODE = "Full board"
+MINIMAL_MODE = "Minimal (live draft)"
+VIEW_MODES = (FULL_MODE, MINIMAL_MODE)
+
+
 def _sidebar() -> None:
+    st.sidebar.radio("View", VIEW_MODES, key="view_mode")
+    st.sidebar.divider()
     st.sidebar.header("⚙ Setup")
     scoring = st.sidebar.selectbox(
         "Scoring",
@@ -81,15 +95,26 @@ def _sidebar() -> None:
     )
     n_teams = st.sidebar.selectbox("Teams", TEAM_SIZES, index=TEAM_SIZES.index(DEFAULT_TEAMS))
     preset = get_preset(scoring, int(n_teams))
-    my_seat = st.sidebar.number_input("My seat", min_value=1, max_value=int(n_teams), value=1)
+    # The league-config override decides how many seats there really are, so read it before the
+    # seat picker. Bounding "My seat" by the preset instead would offer seat 14 in a 12-team
+    # league and fail only on Start, with a message about a box three sections further down.
+    league_override = _read_league_override()
+    seats_in_play = league_override.n_teams if league_override is not None else int(n_teams)
+    my_seat = st.sidebar.number_input("My seat", min_value=1, max_value=int(seats_in_play), value=1)
     strategy_name = st.sidebar.selectbox(
         "Bid model",
         BOARD_BID_MODEL_NAMES,
         index=BOARD_BID_MODEL_NAMES.index(DEFAULT_BID_MODEL),
     )
     st.sidebar.caption(
-        "`balanced` is the robust win% leader across all seats in both markets. "
-        "`overbid_noramp` is the printed cheat sheet's plan."
+        "`overbid_noramp` is the printed cheat sheet's plan and the default here. "
+        "`balanced` is the robust win% leader across all seats in both markets."
+    )
+    st.sidebar.info(
+        "Set up for **Will's league** (12 teams, half-PPR, 5-pt passing TDs) via the two "
+        "override boxes under **Advanced** — so Scoring and Teams above are ignored. "
+        "Clear those boxes to use a generic preset instead.",
+        icon="🏈",
     )
     market = st.sidebar.radio(
         "What the room pays",
@@ -102,16 +127,11 @@ def _sidebar() -> None:
     nomination_mode = st.sidebar.selectbox("Nomination rule", NOMINATION_MODES, index=0)
     st.sidebar.caption(NOMINATION_NOTES[nomination_mode])
     season = st.sidebar.number_input("Season", min_value=2020, max_value=2030, value=2026)
-    with st.sidebar.expander("Advanced"):
-        id_map_path = st.text_input("id_map parquet", _DEFAULT_ID_MAP)
-        custom_vorp = st.text_input("VORP parquet (overrides preset)", "")
-        custom_league = st.text_input("LeagueConfig JSON (overrides preset)", "")
-        team_text = st.text_area(
-            "Team names (one per line, seat 1 first)",
-            "",
-            help="Optional. Blank lines fall back to 'Team N'.",
-        )
-    vorp_path = custom_vorp.strip() or str(preset.table_path)
+    id_map_path = st.session_state.get("adv_id_map", _DEFAULT_ID_MAP)
+    custom_vorp = st.session_state.get("adv_vorp", _DEFAULT_VORP)
+    custom_league = st.session_state.get("adv_league", _DEFAULT_LEAGUE_CONFIG)
+    team_text = st.session_state.get("adv_team_names", "")
+    vorp_path = str(custom_vorp).strip() or str(preset.table_path)
 
     if st.sidebar.button("Start / restart auction", type="primary"):
         try:
@@ -147,7 +167,34 @@ def _sidebar() -> None:
         except Exception as exc:  # surface any other setup failure
             st.sidebar.error(f"Setup failed: {exc}")
 
+    with st.sidebar.expander("Advanced"):
+        st.text_input("id_map parquet", _DEFAULT_ID_MAP, key="adv_id_map")
+        st.text_input("VORP parquet (overrides preset)", _DEFAULT_VORP, key="adv_vorp")
+        st.text_input(
+            "LeagueConfig JSON (overrides preset)", _DEFAULT_LEAGUE_CONFIG, key="adv_league"
+        )
+        st.text_area(
+            "Team names (one per line, seat 1 first)",
+            "",
+            key="adv_team_names",
+            help="Optional. Blank lines fall back to 'Team N'.",
+        )
     _resume_controls()
+
+
+def _read_league_override() -> LeagueConfig | None:
+    """The LeagueConfig named in the Advanced box, or None if unset/unreadable.
+
+    Unreadable is deliberately silent here: this runs on every rerun just to size the seat
+    picker, and Start surfaces the real error with its own message.
+    """
+    raw = str(st.session_state.get("adv_league", _DEFAULT_LEAGUE_CONFIG)).strip()
+    if not raw:
+        return None
+    try:
+        return LeagueConfig.model_validate_json(Path(raw).read_text())
+    except Exception:
+        return None
 
 
 def _resume_controls() -> None:
@@ -223,6 +270,76 @@ def _selectable(named: pd.DataFrame, cols: list[str], key: str) -> None:
     )
 
 
+def _record_sale(
+    s: LiveAuctionSession,
+    advice: BidAdvice,
+    *,
+    winner_label: str = "Winning team",
+    price_label: str = "Price paid ($)",
+) -> tuple[int | None, int]:
+    """Winner + price widgets. Returns `(winner, price)`; winner is None until one is chosen.
+
+    Shared by both views so the safety properties cannot drift apart -- they were duplicated
+    verbatim while the comments explaining WHY lived only on one copy, which is the copy that
+    would have stayed correct.
+
+    - **Keys carry the staged player and the chosen winner.** Streamlit retains a widget's
+      value once its key exists, so a lot-number-only key let a price typed for a $46 stud
+      survive onto a $3 backup, one click from being recorded. The winner belongs in the price
+      key for the same reason: switching to a poorer seat shrinks `max_value` under a retained
+      value.
+    - **No default winner.** The hero wins roughly one lot in `n_teams`, so a pre-selected
+      seat is wrong for most lots and confirm is a single click away.
+    - **Seats with no open slot are not offered.** `record_purchase` rejects them, and
+      `feasible_max` is meaningless there.
+    """
+    # Deliberately NOT prefixed per view. The two views never render in the same run (main
+    # returns after the minimal branch), so they cannot collide -- and sharing the keys means
+    # a winner and price typed in one view survive a flip to the other, which per-view
+    # prefixes silently dropped mid-lot.
+    lot_key = f"{len(s.purchases)}_{advice.gsis_id}"
+    seats = [seat for seat in s.seats if s.open_slots(seat) > 0]
+    if not seats:
+        st.warning("No team has an open roster slot.")
+        return None, s.league.min_bid
+    winner = st.selectbox(
+        winner_label,
+        seats,
+        index=None,
+        placeholder="Select the winning team…",
+        format_func=s.team_label,
+        key=f"winner_{lot_key}",
+    )
+    if winner is None:
+        return None, s.league.min_bid
+    cap = max(s.league.min_bid, s.feasible_max(int(winner)))
+    price = st.number_input(
+        price_label,
+        min_value=s.league.min_bid,
+        max_value=cap,
+        value=max(s.league.min_bid, min(advice.market_value, cap)),
+        step=1,
+        key=f"price_{lot_key}_{winner}",
+    )
+    return int(winner), int(price)
+
+
+def _confirm_sale(s: LiveAuctionSession, advice: BidAdvice, winner: int, price: int) -> bool:
+    """The confirm button. Spells out the whole sentence, which is the mis-record guard."""
+    label = f"✅ {advice.full_name} → {s.team_label(int(winner))} for ${int(price)}"
+    if not st.button(label, key=f"confirm_{len(s.purchases)}_{advice.gsis_id}", type="primary"):
+        return False
+    try:
+        s.record_purchase(advice.gsis_id, int(winner), int(price))
+    except ValueError as exc:
+        st.warning(str(exc))
+        return False
+    st.session_state["pending_player"] = None
+    st.session_state["m_nom_last"] = None
+    _autosave(s)
+    return True
+
+
 def _bid_panel(s: LiveAuctionSession) -> None:
     """The staged player: what to bid, and the form that records who actually bought him."""
     pending = st.session_state.get("pending_player")
@@ -269,80 +386,46 @@ def _bid_panel(s: LiveAuctionSession) -> None:
     # Widget keys carry the staged player, and the price also carries the chosen winner.
     # Keyed on the lot number alone, Streamlit retains the widget's value when a different
     # player is staged for the same lot: a price typed for a $46 stud survived onto a $3
-    # backup, one click from being recorded. The winner belongs in the price key for the
-    # same reason -- switching to a poorer seat shrinks max_value under a retained value.
-    lot_key = f"{len(s.purchases)}_{advice.gsis_id}"
-    # A seat with no open roster slot cannot take the player: record_purchase rejects it,
-    # and feasible_max is meaningless there (it reads budget + min_bid at zero slots).
-    seats = [seat for seat in s.seats if s.open_slots(seat) > 0]
-    winner: int | None = None
-    price = s.league.min_bid
-    if not seats:
-        st.warning("No team has an open roster slot.")
-    else:
-        winner = st.selectbox(
-            "Winning team",
-            seats,
-            # No default. The hero wins roughly one lot in n_teams, so a pre-selected seat is
-            # the wrong answer for most lots and confirm is a single click away -- exactly the
-            # mis-record the explicit confirm button exists to prevent.
-            index=None,
-            placeholder="Select the winning team…",
-            format_func=s.team_label,
-            key=f"winner_{lot_key}",
-        )
-        if winner is not None:
-            cap = max(s.league.min_bid, s.feasible_max(int(winner)))
-            price = st.number_input(
-                "Price paid ($)",
-                min_value=s.league.min_bid,
-                max_value=cap,
-                value=max(s.league.min_bid, min(advice.market_value, cap)),
-                step=1,
-                key=f"price_{lot_key}_{winner}",
-            )
+    winner, price = _record_sale(s, advice)
     confirm, clear = st.columns([4, 1])
     if winner is None:
         confirm.button(
             "Select the winning team to record this sale",
-            key=f"confirm_{lot_key}",
+            key=f"confirm_{len(s.purchases)}_{advice.gsis_id}",
             disabled=True,
         )
     else:
-        label = f"✅ {advice.full_name} → {s.team_label(int(winner))} for ${int(price)}"
-        if confirm.button(label, key=f"confirm_{lot_key}", type="primary"):
-            try:
-                s.record_purchase(advice.gsis_id, int(winner), int(price))
-            except ValueError as exc:
-                st.warning(str(exc))
-                return
-            st.session_state["pending_player"] = None
-            _autosave(s)
-            st.rerun()
+        with confirm:
+            if _confirm_sale(s, advice, int(winner), int(price)):
+                st.rerun()
     if clear.button("✕ clear", key="clear_pending"):
         st.session_state["pending_player"] = None
+        st.session_state["m_nom_last"] = None
         st.rerun()
 
 
-def _nomination_panel(s: LiveAuctionSession) -> None:
+def _nomination_panel(s: LiveAuctionSession, *, top: int = 12, verbose: bool = True) -> None:
+    """Who to nominate. `top`/`verbose` are the only things the two views disagree on."""
     if s.is_complete:
         return
+    columns = (
+        ["full_name", "position", "value", "market", "max_bid", "room_max", "i_want"]
+        if verbose
+        else ["full_name", "position", "market", "i_want"]
+    )
     with st.expander("🎤 Who to nominate", expanded=s.is_my_nomination):
         sug = s.suggested_nomination()
         if sug is None:
             st.caption("Nothing left to nominate.")
             return
-        st.markdown(f"**Nominate: {s.name(sug)}**")
-        st.caption(NOMINATION_NOTES[s.nomination_mode])
-        board = s.nomination_board(top=12)
-        st.caption(
-            "`i_want` = your roster can take him and your ceiling clears the room's price. "
-            "A high-`market`, `i_want`-False player drains rivals' money, not yours."
-        )
-        st.dataframe(
-            board[["full_name", "position", "value", "market", "max_bid", "room_max", "i_want"]],
-            hide_index=True,
-        )
+        st.markdown(f"**{'Nominate: ' if verbose else ''}{s.name(sug)}**")
+        if verbose:
+            st.caption(NOMINATION_NOTES[s.nomination_mode])
+            st.caption(
+                "`i_want` = your roster can take him and your ceiling clears the room's price. "
+                "A high-`market`, `i_want`-False player drains rivals' money, not yours."
+            )
+        st.dataframe(s.nomination_board(top=top)[columns], hide_index=True)
 
 
 def _bid_board_panel(s: LiveAuctionSession) -> None:
@@ -467,14 +550,195 @@ def _results_section(s: LiveAuctionSession) -> None:
     )
 
 
+# --------------------------------------------------------------------------- minimal mode
+
+
+def _team_names_gate(s: LiveAuctionSession) -> bool:
+    """Name the teams before the draft starts. Returns True once naming is done.
+
+    A gate, not a setting: every confirm button in this mode reads `Player → <name> for $N`,
+    and that sentence is the only thing between a misheard winner and a corrupted purchase
+    log. `Team 6` does not do that job under time pressure. A resumed session already carries
+    names, so this appears once.
+    """
+    if any(n.strip() for n in s.team_names):
+        return True
+    if st.session_state.get("skip_team_names"):
+        if st.button("① Name the teams", key="reopen_naming"):
+            st.session_state["skip_team_names"] = False
+            st.rerun()
+        return True
+    st.subheader("① Name the teams")
+    st.caption("So the confirm button reads a real name instead of “Team 6”. One time only.")
+    with st.form("team_names_form"):
+        names = [
+            st.text_input(
+                f"Seat {seat}" + (" (you)" if seat == s.my_seat else ""),
+                value=s.team_label(seat),
+                key=f"tn_{seat}",
+            )
+            for seat in s.seats
+        ]
+        if st.form_submit_button("Save names & start", type="primary"):
+            # Keyed on `seat`, and blanks fall back through `team_label`, so clearing your own
+            # box restores "You" rather than writing "Team 1" over the hero marker.
+            s.team_names = tuple(
+                n.strip() or s.team_label(seat) for seat, n in zip(s.seats, names, strict=True)
+            )
+            _autosave(s)
+            st.rerun()
+    # An escape so the gate can never strand a session (e.g. resuming to check one number).
+    # `_SKIPPED` rather than "Team N": the latter is truthy, so it would satisfy the re-entry
+    # test above and permanently disable the gate with no rename affordance anywhere in this
+    # mode -- leaving the operator in exactly the state the gate exists to prevent. A blank
+    # marker keeps `team_label`'s own defaults ("You" for your seat) and lets the gate return.
+    if st.button("Skip for now — use default names", key="skip_names"):
+        s.team_names = ()
+        st.session_state["skip_team_names"] = True
+        st.rerun()
+    return False
+
+
+def _available_ids(s: LiveAuctionSession) -> list[str]:
+    """Available players as gsis_ids, most valuable first — the autocomplete's options.
+
+    **Ids, not labels.** Keying a dict on the rendered label collapsed any two players sharing
+    one: `attach_names` fills an unresolved name with "—", so every unnamed player at a
+    position shared the key "— (RB)", and `options[picked]` then returned whichever came last.
+    That records a purchase for a player nobody nominated and leaves the other permanently
+    un-nominatable. Streamlit filters a selectbox on the *rendered* text, so `format_func`
+    gives the same type-ahead with no ambiguity.
+    """
+    pool = filter_named_pool(s.available_pool(), s.player_names)
+    return [str(g) for g in pool["gsis_id"]]
+
+
+def _option_label(s: LiveAuctionSession, gsis_id: str) -> str:
+    """`Name (POS)` — the position disambiguates two players sharing a name."""
+    return f"{s.name(gsis_id)} ({s.position_of(gsis_id).value})"
+
+
+def _minimal_record(s: LiveAuctionSession, advice: BidAdvice) -> None:
+    """The same record widgets the full board uses, with terser labels."""
+    winner, price = _record_sale(s, advice, winner_label="Won by", price_label="Price")
+    if winner is None:
+        st.button("Pick the winning team", disabled=True, key=f"m_confirm_{len(s.purchases)}")
+        return
+    if _confirm_sale(s, advice, winner, price):
+        st.rerun()
+
+
+def _minimal_footer(s: LiveAuctionSession) -> None:
+    """Money left, slots, lots sold — and undo.
+
+    Rendered on the complete branch too: a mis-recorded FINAL lot is the one an operator most
+    needs to fix, and it was previously reachable only by switching views.
+    """
+    foot, undo = st.columns([3, 1])
+    foot.caption(
+        f"${s.budget(s.my_seat)} left · {s.open_slots(s.my_seat)} slots · "
+        f"{len(s.purchases)}/{s.league.total_pool_size} sold"
+    )
+    if s.purchases and undo.button("↶ Undo", key="m_undo"):
+        s.undo()
+        st.session_state["pending_player"] = None
+        st.session_state["m_nom_last"] = None
+        _autosave(s)
+        st.rerun()
+
+
+def _minimal_view(s: LiveAuctionSession) -> None:
+    """The live-draft surface: nominate, read a number, record the sale. Nothing else.
+
+    Deliberately omits the sold log, rosters, budget table, bid board and projected eval --
+    all of which the Yahoo draft UI already shows the operator. See the design doc.
+    """
+    if s.is_complete:
+        # Before the naming gate: a finished auction does not need names, and showing a setup
+        # form for a draft that is over reads as a bug.
+        st.subheader("✅ Auction complete")
+        st.caption("Switch to **Full board** in the sidebar for the projected-season eval.")
+        _minimal_footer(s)
+        return
+    if not _team_names_gate(s):
+        return
+
+    st.subheader("② Who was nominated?")
+    # Keyed on the session token as well as the lot: without it a restart or resume can be
+    # handed back a retained label from the previous draft, silently pre-staging a player.
+    nom_key = f"m_nom_{st.session_state.get('session_token', '')}_{len(s.purchases)}"
+    picked = st.selectbox(
+        "Nominated player",
+        _available_ids(s),
+        index=None,
+        placeholder="Type a player name…",
+        format_func=lambda g: _option_label(s, g),
+        label_visibility="collapsed",
+        key=nom_key,
+    )
+    # Track the box both ways, and write only on a CHANGE. Writing unconditionally would
+    # clobber a player staged from the full board's bid board on the flip back, since the
+    # minimal box still holds its old value. Writing only on a non-None pick left a cleared
+    # box still showing the previous player priced, with a live confirm button one stray
+    # click from recording a sale that never happened.
+    if picked != st.session_state.get("m_nom_last"):
+        st.session_state["m_nom_last"] = picked
+        st.session_state["pending_player"] = picked
+    pending = st.session_state.get("pending_player")
+
+    if pending:
+        try:
+            advice = s.advise(str(pending))
+        except ValueError as exc:
+            # Say so rather than rendering nothing: a blank screen mid-draft is indisting-
+            # uishable from a hung app. The full board surfaces the same message.
+            st.warning(str(exc))
+            st.session_state["pending_player"] = None
+        else:
+            st.divider()
+            # The name goes above both branches: on a PASS it is the only confirmation that
+            # the label typed into the box resolved to the intended player.
+            st.markdown(f"### {advice.full_name} · {advice.position}")
+            if not advice.eligible:
+                st.error(f"PASS — the plan is done buying {advice.position}.")
+            else:
+                st.markdown(f"# 🔨 BID UP TO ${advice.max_bid}")
+                if advice.uncontested:
+                    st.success("You should win this one — your ceiling clears every likely rival.")
+                elif advice.i_want:
+                    st.info("Worth buying, but expect a fight — the room can reach him too.")
+                else:
+                    st.warning("Room is anchored above your ceiling — let it go.")
+            # Single-$ per number: two `$` in one markdown string pair into inline LaTeX and
+            # Streamlit renders the middle as italic math instead of dollar figures.
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Worth to us", f"${advice.fair_value}")
+            c2.metric("Room pays", f"${advice.market_value}")
+            c3.metric("Best rival", f"${advice.room_ceiling}")
+            st.divider()
+            _minimal_record(s, advice)
+
+    _nomination_panel(s, top=5, verbose=False)
+
+    _minimal_footer(s)
+
+
 def main() -> None:
     st.set_page_config(page_title="Auction Board", layout="wide")
-    st.title("💰 Live Auction Board")
+    minimal = st.session_state.get("view_mode") == MINIMAL_MODE
+    # No h1 title in minimal mode. `st.title` renders at the same size as a markdown `#`, so a
+    # decorative banner sat level with the bid number and directly above it -- in a window the
+    # whole mode exists to keep small. The bid number has to be the largest thing on screen.
+    if not minimal:
+        st.title("💰 Live Auction Board")
     _sidebar()
 
     s: LiveAuctionSession | None = st.session_state.get("session")
     if s is None:
         st.info("Configure the auction in the sidebar and click **Start / restart auction**.")
+        return
+    if minimal:
+        _minimal_view(s)
         return
     _status_bar(s)
     left, center, right = st.columns([1.1, 2.4, 1.2])

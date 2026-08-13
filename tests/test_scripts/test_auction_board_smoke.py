@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
+from scripts.auction_board import MINIMAL_MODE, _available_ids, _option_label
 
 _N = 96
 _IDS = [f"00-000{i:04d}" for i in range(1, _N + 1)]
@@ -90,6 +91,11 @@ def _app(sess=None, tmp_path: Path | None = None, pending: str | None = None):  
         at.session_state["autosave_path"] = str(tmp_path / "auto.json") if tmp_path else None
         at.session_state["pending_player"] = pending
     return at
+
+
+def _winner_box_named(at: Any, label: str) -> Any:
+    """A selectbox found by label, so tests do not pin Streamlit widget keys."""
+    return next(sb for sb in at.selectbox if label in str(getattr(sb, "label", "")))
 
 
 def _winner_box(at: Any) -> Any:
@@ -226,3 +232,188 @@ def test_board_results_panel_runs_projected_eval(tmp_path: Path) -> None:
     at.button(key="run_projected_eval").click().run()
     assert not at.exception
     assert any("Championship" in str(getattr(m, "label", "")) for m in at.metric)
+
+
+def _minimal(sess=None, tmp_path: Path | None = None, named: bool = True):  # type: ignore[no-untyped-def]
+    """An app in minimal mode, teams named by default so the gate is out of the way."""
+    if sess is not None and named:
+        sess.team_names = tuple(f"Squad {seat}" for seat in sess.seats)
+    at = _app(sess, tmp_path)
+    at.session_state["view_mode"] = MINIMAL_MODE
+    return at
+
+
+def test_minimal_mode_gates_on_team_names_then_lets_them_through() -> None:
+    """Naming is step one: the confirm sentence has to read a real name, not 'Team 6'."""
+    pytest.importorskip("streamlit")
+    at = _minimal(_smoke_session(), named=False).run()
+    assert not at.exception
+    assert any("Name the teams" in str(getattr(h, "value", "")) for h in at.subheader)
+    # the lot UI is not reachable until naming is done
+    assert not any("Nominated player" in str(getattr(sb, "label", "")) for sb in at.selectbox)
+
+    at2 = _minimal(_smoke_session()).run()
+    assert not at2.exception
+    assert not any("Name the teams" in str(getattr(h, "value", "")) for h in at2.subheader)
+
+
+def test_minimal_mode_names_reach_the_session(tmp_path: Path) -> None:
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    at = _minimal(sess, tmp_path, named=False).run()
+    assert not at.exception
+    at.text_input(key="tn_2").set_value("Will's Team").run()
+    at.text_input(key="tn_3").set_value("   ").run()  # blank falls back, never an empty label
+    at.button(key="FormSubmitter:team_names_form-Save names & start").click().run()
+    assert not at.exception
+    live = at.session_state["session"]
+    assert live.team_label(2) == "Will's Team"
+    assert live.team_label(3) == "Team 3"
+    assert (tmp_path / "auto.json").exists()  # names survive a resume, so the gate stays shut
+
+
+def test_minimal_mode_prices_a_nominee_and_records_the_sale(tmp_path: Path) -> None:
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    at = _minimal(sess, tmp_path).run()
+    assert not at.exception
+    nom = next(sb for sb in at.selectbox if "Nominated player" in str(getattr(sb, "label", "")))
+    assert nom.value is None  # nothing staged until you type
+    # AppTest reports the *formatted* option, so map back through the same helpers the view
+    # uses rather than assuming options are ids.
+    staged = _available_ids(sess)[0]
+    nom.set_value(_option_label(sess, staged)).run()
+    assert not at.exception
+    assert any("BID UP TO $" in str(getattr(md, "value", "")) for md in at.markdown)
+    # the resolved name is on screen: the only cross-check that the box picked the right man
+    assert any(sess.name(staged) in str(getattr(md, "value", "")) for md in at.markdown)
+
+    _winner_box_named(at, "Won by").set_value(1).run()
+    at.number_input[0].set_value(23).run()
+    next(b for b in at.button if "→" in str(getattr(b, "label", ""))).click().run()
+    assert not at.exception
+    got = at.session_state["session"].purchases
+    # gsis_id included: the label->id resolution is the only logic minimal mode adds, so a
+    # (seat, price)-only assertion would pass even if the wrong player were recorded.
+    assert [(str(p.gsis_id), p.seat, p.price) for p in got] == [(staged, 1, 23)]
+
+
+def test_available_ids_keeps_players_whose_labels_collide() -> None:
+    """Two available players rendering the same label must both stay pickable.
+
+    The options were a dict keyed on the rendered label, so a collision silently dropped one
+    player and made the survivor answer for both -- recording a purchase for someone nobody
+    nominated, and leaving the other permanently un-nominatable from this view. `attach_names`
+    fills an unresolved name with "—", so every unnamed player at a position collided.
+    """
+    sess = _smoke_session()
+    twin_a, twin_b = _IDS[0], _IDS[4]
+    assert sess.position_of(twin_a) is sess.position_of(twin_b)
+    sess.player_names = dict(sess.player_names) | {twin_a: "Same Name", twin_b: "Same Name"}
+    assert _option_label(sess, twin_a) == _option_label(sess, twin_b)  # labels do collide
+    ids = _available_ids(sess)
+    assert twin_a in ids and twin_b in ids  # ...and both players survive regardless
+
+
+def test_minimal_mode_hides_what_yahoo_already_shows(tmp_path: Path) -> None:
+    """The point of the mode: no sold log, no budget table, no 40-row bid board."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    sess.record_purchase(_IDS[0], 2, 30)
+    at = _minimal(sess, tmp_path).run()
+    assert not at.exception
+    rendered = " ".join(str(getattr(m, "value", "")) for m in at.markdown)
+    assert "Sold" not in rendered
+    assert "Budgets" not in rendered
+    assert "Bid board" not in rendered
+    assert not any("Position" in str(getattr(sb, "label", "")) for sb in at.selectbox)
+    # Structural, not substring: the headings above were the only thing the string checks
+    # caught, so a re-added dataframe or metric row would have slipped straight through.
+    assert len(at.dataframe) == 1, "only the nomination shortlist renders a table"
+    assert len(at.metric) == 0, "no status-bar metrics before a player is staged"
+
+
+def test_skip_escape_is_reversible_and_keeps_the_you_marker(tmp_path: Path) -> None:
+    """The escape must not become a one-way trip into the state the gate exists to prevent.
+
+    It used to write "Team 1"…"Team N" -- truthy, so the gate's re-entry test never fired
+    again, there is no rename affordance anywhere in minimal mode, and it overwrote the
+    operator's own seat so `team_label` stopped returning "You" in BOTH views and in the
+    persisted autosave.
+    """
+    pytest.importorskip("streamlit")
+    sess = _smoke_session(my_seat=1)
+    at = _minimal(sess, tmp_path, named=False).run()
+    assert not at.exception
+    at.button(key="skip_names").click().run()
+    assert not at.exception
+    live = at.session_state["session"]
+    assert live.team_label(1) == "You", "the escape overwrote the hero marker"
+    assert live.team_label(2) == "Team 2"
+    # the lot UI is reachable...
+    assert any("Nominated player" in str(getattr(sb, "label", "")) for sb in at.selectbox)
+    # ...and naming is still reachable, so the escape is not one-way
+    at.button(key="reopen_naming").click().run()
+    assert not at.exception
+    assert any("Name the teams" in str(getattr(h, "value", "")) for h in at.subheader)
+
+
+def test_blanking_your_own_seat_restores_the_you_marker(tmp_path: Path) -> None:
+    """A blank fell back to `Team {i+1}`, which wrote "Team 1" over the hero's own label."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session(my_seat=1)
+    at = _minimal(sess, tmp_path, named=False).run()
+    at.text_input(key="tn_1").set_value("").run()
+    at.button(key="FormSubmitter:team_names_form-Save names & start").click().run()
+    assert not at.exception
+    assert at.session_state["session"].team_label(1) == "You"
+
+
+def test_completed_auction_skips_the_naming_gate_but_keeps_undo(tmp_path: Path) -> None:
+    """A finished auction should not be asked to name teams, and a mis-recorded FINAL lot is
+    exactly the one that needs undo -- previously reachable only by switching views."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session(n_teams=6)
+    gid = iter(_IDS)
+    seat = 1
+    while not sess.is_complete:
+        if sess.open_slots(seat) == 0:
+            seat += 1
+        sess.record_purchase(next(gid), seat, 1)
+    at = _minimal(sess, tmp_path, named=False).run()  # complete AND unnamed
+    assert not at.exception
+    assert not any("Name the teams" in str(getattr(h, "value", "")) for h in at.subheader)
+    assert any("Auction complete" in str(getattr(h, "value", "")) for h in at.subheader)
+    before = len(at.session_state["session"].purchases)
+    at.button(key="m_undo").click().run()
+    assert not at.exception
+    assert len(at.session_state["session"].purchases) == before - 1
+
+
+def test_minimal_mode_makes_the_bid_number_the_largest_thing_on_screen(tmp_path: Path) -> None:
+    """`st.title` renders as h1, exactly like the markdown `#` the bid number uses, so the
+    decorative banner competed with the number it sits above -- in a deliberately small
+    window. Minimal mode drops the title; the full board keeps it."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    at = _minimal(sess, tmp_path).run()
+    assert not at.exception
+    assert not at.title, "the h1 banner still competes with the bid number"
+
+    full = _app(_smoke_session(), tmp_path).run()
+    assert full.title, "the full board should still have its title"
+
+
+def test_a_player_staged_in_the_full_board_survives_a_flip_to_minimal(tmp_path: Path) -> None:
+    """Both views write `pending_player`. The minimal box must not clobber a selection made
+    on the full board just because its own widget still holds an older value."""
+    pytest.importorskip("streamlit")
+    sess = _smoke_session()
+    sess.team_names = tuple(f"Squad {seat}" for seat in sess.seats)
+    at = _app(sess, tmp_path, pending=_IDS[3]).run()  # staged on the full board
+    assert not at.exception
+    at.session_state["view_mode"] = MINIMAL_MODE
+    at.run()
+    assert not at.exception
+    assert at.session_state["pending_player"] == _IDS[3], "the minimal box overwrote the pick"
+    assert any(sess.name(_IDS[3]) in str(getattr(md, "value", "")) for md in at.markdown)
