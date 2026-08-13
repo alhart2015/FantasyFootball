@@ -607,6 +607,7 @@ class LiveAuctionSession:
             value_by_id={str(g): float(v) for g, v in bd["bot_dollars"].items()},
             position_by_id=self._position_by_id,
             position_minimums=minimums,
+            hero_value_by_id={str(g): float(v) for g, v in bd["auction_dollars"].items()},
         )
         return _POISON_NOMINATORS[self.nomination_mode](candidates, ctx)
 

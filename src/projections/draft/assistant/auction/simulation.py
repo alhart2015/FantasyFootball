@@ -284,6 +284,7 @@ def _simulate_to_state(
                         value_by_id=bot_by_id,
                         position_by_id=pos_by_id,
                         position_minimums=minimums,
+                        hero_value_by_id=val_by_id,
                     )
                     override = hero_nominator(candidates, ctx)
                     # Hard check (not assert): guards the pluggable hook even under `python -O` — a
