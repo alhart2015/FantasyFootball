@@ -33,7 +33,24 @@ Running log of project status, decisions, and next steps. Append new entries at 
 - **The off-position filter is the dangerous part, not poisoning.** For heroes that can't buy, all three heuristics tie (any drain helps someone who's just waiting). For heroes that do buy, the choice is worth 0.022: on `static`, same room and seeds, `gap` +0.0145 vs `off_pos` −0.0077. The filter drags the nominee toward positions the hero is done with, which for a big early spender is most of the board.
 - **Poisoning lifts weak heroes toward the strong one without reaching it.** Best of all 16 hero × nominator cells is still `overbid_noramp` + no hook (0.6389); best poisoned cell is `static` + `gap` (0.6225).
 
-**Decisions:** Will's plan is unchanged and now rests on a 4×4 grid instead of a single point — `overbid_noramp` is confirmed as the one hero for which nomination control adds nothing. But nomination poisoning is **re-opened in general**, contra Run O and Run U: it is a real ~+0.01 edge for most heroes, carried by the value-gap signal. Open follow-up: no diagnostic yet explains why `overbid_noramp` alone fails to profit — tracing which players `gap` nominates for it vs for `static` is the next probe.
+**Decisions:** Will's plan is unchanged and now rests on a 4×4 grid instead of a single point — `overbid_noramp` is confirmed as the one hero for which nomination control adds nothing. But nomination poisoning is **re-opened in general**, contra Run O and Run U: it is a real ~+0.01 edge for most heroes, carried by the value-gap signal. *Why `overbid_noramp` alone fails to profit was then answered by Run W, below.*
+
+---
+
+## Auction — why poison nomination does nothing for `overbid_noramp` (Run W) — the two levers are substitutes (2026-08-12, branch `feat/auction-value-gap-nomination`)
+
+**Two plausible explanations were formed and both were killed by measurement** (added `PickRecord.nominator_seat` to make it measurable — who nominated a lot is otherwise unrecoverable, since the engine advances the nominator pointer after each award):
+
+1. *"The most aggressive bidder buys its own decoys."* **Refuted** — under `gap` every hero buys its own nominations **less** (`overbid_noramp` own-spend $21.96 → $1.35).
+2. *"The poison damages opponents' rosters."* **Refuted, and instructive.** The drain is real and large — the room pays **+$68** more on our lots — but mean opponent roster value moves by **≈$0**. In a fixed pool every player is bought by someone, so total roster value is conserved: **poison moves dollars, not players.** Any gain has to come from your own share.
+
+**The answer.** The hero's roster does change a lot (~9 of 17 players differ) for both `static` and `overbid_noramp` — but only `static` converts it into points (+16.7 vs +0.07). The tell is the starting level: `overbid_noramp` begins at 1368 pts, above where `static` lands *even with* the poison (1349). Confirmed by sweeping the stud premium `k` (the aggression knob; `k=1.3` **is** `overbid_noramp`) across all 12 seats with paired CIs: **`k=1.3` is the only cell where `gap` doesn't help (−0.002, 6/12 seats) and the only cell with a high control level (0.6360 vs ~0.622 elsewhere).** Every poisoned cell lands at 0.628–0.640; the best unpoisoned cell is already 0.6360.
+
+**Poison nomination and bid aggression are substitutes that reach the same ceiling, and they do not stack.** Nomination poisoning pays exactly to the extent your bidding is leaving value on the table — which is why Run O (pace-capped hero) saw a small win, and Run U (aggression optimum) saw nothing.
+
+**Caveat:** the `k` response is *not* monotone (1.1 → +0.0065, 1.2 → +0.0175), so there is residual noise and no smooth law is claimed; the robust fact is the single peculiar cell at `k=1.3`. Why 1.3 is the optimum in this field is unexplained.
+
+**Decisions:** none change. Will's plan (`overbid_noramp`, default nomination) now has a mechanism behind it rather than a bare measurement — and the corollary is practical: **if you ever bid less aggressively than `k≈1.3`, gap nomination is worth ~+0.015 and you should turn it on.**
 
 **Gates:** 1956 passed, 18 skipped, 2 failed — both pre-existing on `main` and unrelated (`test_backtest_smoke_one_cell` [#40], and a **newly-found third** pre-existing failure, `test_minimal_mode_prices_a_nominee_and_records_the_sale`, reproduced on a6ec16a and filed as [#141](https://github.com/alhart2015/FantasyFootball/issues/141) — AppTest's selectbox `set_value` takes the option value, not its rendered label; the test passes the label). mypy strict clean (373 files), ruff check + format clean.
 

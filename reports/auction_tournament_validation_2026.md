@@ -726,6 +726,36 @@ CRN-paired Δ `reg_win_pct` vs each hero's own no-hook control (95% CI; **bold**
 
 **Conclusion (data; no default change):** the guide's plan for Will's league — `overbid_noramp` with default value-first nomination — **stands**, now tested across a 4×4 hero × nominator grid rather than a single point, and confirmed as the one hero for which nomination control adds nothing. But the general question is now answered the other way from Run O and Run U: **value-gap nomination is a real, repeatable edge for most heroes**, worth ~+0.01 reg-win, and it is the *disagreement* signal that carries it — the price-ranked heuristics Run O tested were measuring the wrong thing. `nomination.py` keeps all four as tested opt-ins; none is wired into a default. Artifacts: `reports/_gap_nom_probe/will_2026{,_static,_balanced,_patient_deep}/*.json` (untracked). Live-draft call still September.
 
+**Run W — 2026-08-12 — WHY `overbid_noramp` alone doesn't profit → poison nomination and bid aggression are SUBSTITUTES that reach the same ceiling; `k=1.3` is the one bid setting already at it** (`will_half12`, ESPN market, `overbidder` field, ADP nomination, byes OFF; diagnostics at 4 seats × 20 seeds, the confirmatory sweep at all 12 seats × 20 seeds × 150 season sims, CRN-paired; branch `feat/auction-value-gap-nomination`). Run V left one thing unexplained: `drain_value_gap` lifts three heroes but does nothing for `overbid_noramp`. Added `PickRecord.nominator_seat` (diagnostics-only; who put the lot up is otherwise unrecoverable — the engine advances the nominator pointer after every award) to measure it.
+
+**Two hypotheses were formed and both were killed by measurement:**
+
+1. **"The aggressive hero buys its own decoys."** *Refuted.* Under `gap` every hero buys its own nominations **less**, not more (`overbid_noramp` 1.54 → 1.25 lots, own-spend $21.96 → $1.35). The most aggressive bidder is not swallowing the poison.
+2. **"The poison damages opponents' rosters."** *Refuted, and it explains a lot.* The drain is unmistakably real — the room pays **+$68** more on the hero's nominated lots ($23 → $92 of overpay vs our board). But mean opponent roster value moves by −0.04 / −0.02 / +0.39 dollars — i.e. **not at all**. In a fixed pool every player is bought by someone, so total roster value is conserved: **poison moves dollars, not players.** Any gain must come from the hero's own share, not from damage to the field.
+
+**What actually happens.** The hero's roster *does* change substantially — ≈9 of 17 players differ between the control and poisoned drafts for both `static` and `overbid_noramp` — but only one of them converts it into points (paired, 4 seats × 20 seeds): `static` **+16.7 pts / +0.02 win**, `balanced` **+8.8 / +0.01**, `overbid_noramp` **+0.07 / +0.00**. The intervention is the same size for both; the conversion is not. The tell is the control level: `overbid_noramp` starts at **1368 pts**, above where `static` lands *even with* the poison (1349).
+
+**Confirmatory sweep — the stud premium `k` is the aggression knob** (`OverbidValueBid(k, use_urgency=False)`; `k=1.0` pays plain value, `k=1.3` **is** `overbid_noramp`). All 12 seats, paired 95% CI on `reg_win_pct`:
+
+| stud premium `k` | control win | with `gap` | paired Δ (95% CI) | seats + |
+|---|---|---|---|---|
+| 1.00 | 0.6256 | 0.6403 | **+0.0147 [+0.0077, +0.0218]** | 11/12 |
+| 1.10 | 0.6216 | 0.6281 | +0.0065 [−0.0009, +0.0139] | 10/12 |
+| 1.20 | 0.6215 | 0.6389 | **+0.0175 [+0.0093, +0.0256]** | 10/12 |
+| **1.30** (`overbid_noramp`) | **0.6360** | 0.6342 | **−0.0019 [−0.0092, +0.0055]** | **6/12** |
+| 1.50 | 0.6264 | 0.6320 | +0.0057 [−0.0021, +0.0134] | 10/12 |
+
+`k=1.3` is the **only** cell that is not positive (6/12 seats — a coin flip) and simultaneously the **only** cell with a high control level (0.6360 vs ~0.622 for every neighbour). It reproduces the independent Run V probe figure (0.6389 seat-averaged) and the guide's finding that `overbid_noramp` is the strongest hero, so the peak is real, not a seed artifact.
+
+**Findings (data):**
+1. **The two levers are substitutes, not complements.** Every poisoned cell lands at 0.628–0.640; the best *unpoisoned* cell (`k=1.3`) is already at 0.6360. Poison nomination is an alternative route to the same ceiling that correct bid aggression reaches on its own, and at the aggression optimum it adds **nothing** (−0.002, CI spans 0).
+2. **Nothing in the sweep beat the ceiling.** Best combined cell is `k=1.0` + `gap` at 0.6403 vs best control at 0.6360 — a +0.004 difference well inside its CI, i.e. **not a demonstrated improvement**. Consistent with Run V, where no hero × nominator cell beat `overbid_noramp` + no hook.
+3. **This is why Run U looked like a null and Run O looked like a small win.** Both probed heroes sitting at very different points on this axis. Nomination poisoning pays exactly to the extent your bid is leaving value on the table.
+
+**Caveats — the mechanism is supported but not nailed.** The `k` response is **not monotone** (`k=1.1` +0.0065 vs `k=1.2` +0.0175, and `k=1.5` +0.0057 with a CI touching zero), so there is real residual noise and no smooth "more aggression → less poison value" law is claimed; the robust fact is the single peculiar cell at `k=1.3`. The roster-composition and value-decomposition diagnostics ran at 4 seats × 20 seeds and their sub-1% deltas are at the noise floor — they are used here only for the two **refutations** (which are order-of-magnitude clear), not to support the positive claim. Season sims reduced to 150 for the sweep. One room, one market, one pool. **Not** established: why `k=1.3` specifically is the aggression optimum in this field.
+
+**Conclusion (data; no default change):** the question "why isn't `overbid_noramp` better with this?" has an answer — **because it is already collecting the same edge by outbidding, and the two do not stack.** Will's plan is unchanged and now has a mechanism behind it rather than a bare measurement. Artifacts: scratch diagnostics (untracked); `PickRecord.nominator_seat` is committed and tested. Live-draft call still September.
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.
