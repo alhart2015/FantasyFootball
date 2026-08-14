@@ -44,12 +44,46 @@ def test_build_field_n_patient_spreads_rather_than_clusters() -> None:
     assert max(gaps) - min(gaps) <= 1  # evenly spaced
 
 
-def test_build_field_n_patient_out_of_range_raises() -> None:
+@pytest.mark.parametrize("n_patient", [12, -1, -5])
+def test_build_field_n_patient_out_of_range_raises(n_patient: int) -> None:
     with pytest.raises(ValueError, match="n_patient"):
-        build_field("overbidder", 0.2, n_bots=11, n_patient=12)
+        build_field("overbidder", 0.2, n_bots=11, n_patient=n_patient)
 
 
-def test_build_field_n_patient_ignored_for_fields_without_hoarders() -> None:
-    """`overbidder_only` has no conservative seats by definition; the knob must not sneak any in."""
-    field = build_field("overbidder_only", 0.2, n_bots=11, n_patient=5)
+# --- the knob must be honored or refused, never silently dropped ---------------------------------
+# `_run_chunk` writes n_patient into the chunk payload unconditionally and `_guard_homogeneous`
+# treats it as a config key, so a path that accepts the knob without acting on it produces an
+# artifact labelled with a room that was never simulated -- the exact "plausible table for a room
+# nobody ran" failure this file exists to prevent. Every such path must raise instead.
+
+
+@pytest.mark.parametrize("name", ["realistic", "overbidder_unpaced", "balanced_field"])
+def test_build_field_rejects_n_patient_for_fields_that_cannot_honor_it(name: str) -> None:
+    with pytest.raises(ValueError, match="n_patient"):
+        build_field(name, 0.2, n_bots=11, n_patient=5)
+
+
+def test_build_field_rejects_n_patient_when_the_uniform_cap_path_would_discard_it() -> None:
+    """`pace_jitter <= 0` (and `n_bots is None`) short-circuit to the fixed 5-entry cycle."""
+    with pytest.raises(ValueError, match="n_patient"):
+        build_field("overbidder", 0.2, n_bots=11, pace_jitter=0.0, n_patient=8)
+    with pytest.raises(ValueError, match="n_patient"):
+        build_field("overbidder", 0.2, n_bots=None, n_patient=8)
+
+
+def test_build_field_rejects_a_nonzero_n_patient_for_overbidder_only() -> None:
+    """`overbidder_only` has no conservative seats by definition, so asking for some is an error.
+
+    Replaces a test that asserted the request was silently ignored: that pinned the mislabel rather
+    than the intent. Zero is still accepted, since it agrees with what the field does.
+    """
+    with pytest.raises(ValueError, match="n_patient"):
+        build_field("overbidder_only", 0.2, n_bots=11, n_patient=5)
+    field = build_field("overbidder_only", 0.2, n_bots=11, n_patient=0)
     assert not any(isinstance(b, PatientValueBot) for b in field)
+
+
+@pytest.mark.parametrize("name", ["realistic", "overbidder_unpaced", "balanced_field"])
+def test_build_field_leaves_every_field_unchanged_when_n_patient_is_none(name: str) -> None:
+    """The refusal must not disturb the paths themselves -- only the mislabelling request."""
+    assert build_field(name, 0.2, n_bots=11) is not None

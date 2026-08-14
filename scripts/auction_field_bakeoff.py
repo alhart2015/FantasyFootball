@@ -128,6 +128,36 @@ def _spread_paces(pace: float, jitter: float, n: int) -> list[float]:
     return [lo + (hi - lo) * i / (n - 1) for i in range(n)]
 
 
+def _reject_unhonorable_n_patient(
+    name: str, n_bots: int | None, pace_jitter: float, n_patient: int
+) -> None:
+    """Raise unless this configuration will actually place `n_patient` hoarders.
+
+    Only the jittered `overbidder` path reads the knob. Every other path returns a fixed archetype
+    mix, so accepting the value there would put a number in the chunk payload that describes a room
+    the simulation never built -- and `_guard_homogeneous` would then happily pool it.
+    """
+    if n_patient < 0:
+        raise ValueError(f"n_patient must be >= 0; got {n_patient}")
+    if n_bots is not None and n_patient > n_bots:
+        raise ValueError(f"n_patient must be in 0..{n_bots}; got {n_patient}")
+    if name not in ("overbidder", "overbidder_only"):
+        raise ValueError(
+            f"field {name!r} has a fixed archetype mix, so n_patient={n_patient} cannot be "
+            "honored; omit it rather than recording a mix that will not be run"
+        )
+    if n_bots is None or pace_jitter <= 0.0:
+        raise ValueError(
+            f"n_patient={n_patient} needs the per-seat path (n_bots set and pace_jitter > 0); "
+            f"got n_bots={n_bots}, pace_jitter={pace_jitter}, which returns the fixed 5-entry cycle"
+        )
+    if name == "overbidder_only" and n_patient:
+        raise ValueError(
+            "field 'overbidder_only' has no conservative seats by definition; n_patient must "
+            f"be 0, got {n_patient}"
+        )
+
+
 def build_field(
     name: str,
     overbid: float,
@@ -149,10 +179,16 @@ def build_field(
     5-entry cycle is returned unchanged (identical caps), which is what earlier runs used.
 
     `n_patient` sets exactly how many bot seats are conservative hoarders, spread as evenly as
-    possible so they are never clustered next to the hero. `None` keeps the historical rule (every
-    `_PATIENT_EVERY`-th seat -> 2 of 11 in a 12-team league), so every prior run reproduces
-    byte-for-byte; pass an int only to sweep the aggressive/conservative mix.
+    possible rather than clustered at one end. `None` keeps the historical rule (every
+    `_PATIENT_EVERY`-th seat -> 2 of 11 in a 12-team league), so every prior run re-simulates
+    identically; pass an int only to sweep the aggressive/conservative mix.
+
+    A non-None `n_patient` that this configuration cannot honor RAISES rather than being ignored:
+    `_run_chunk` records the value in the chunk payload and `_guard_homogeneous` treats it as a
+    config key, so silently dropping it would label an artifact with a room that never ran.
     """
+    if n_patient is not None:
+        _reject_unhonorable_n_patient(name, n_bots, pace_jitter, n_patient)
     if name == "realistic":  # the standing cross-run baseline; overbid/pace do not apply
         return list(_REALISTIC_FIELD)
     if name == "overbidder_unpaced":  # the no-pace-cap caricature, kept reproducible
@@ -173,13 +209,12 @@ def build_field(
     elif n_patient is None:
         patient = {i for i in seats if i % _PATIENT_EVERY == _PATIENT_EVERY - 1}
     else:
-        if not 0 <= n_patient <= n_bots:
-            raise ValueError(f"n_patient must be in 0..{n_bots}; got {n_patient}")
-        # Evenly spaced rather than the first/last k: clustering the hoarders would change who the
-        # hero sits next to as well as how many there are, confounding the mix with seat adjacency.
-        # Half-step offset ((2i+1)n / 2k) so the set never starts at seat 0. Consecutive values
-        # differ by n/k >= 1, so this yields exactly `n_patient` distinct seats -- a plain
-        # round(i*n/k) does NOT (it collides once k approaches n, silently returning too few).
+        # Evenly spaced rather than the first/last k: clustering the hoarders at one end would
+        # change WHERE they sit as well as how many there are, confounding the mix with seat
+        # adjacency. Half-step offset ((2i+1)n / 2k); consecutive values differ by n/k >= 1, so
+        # this yields exactly `n_patient` distinct seats (see the parametrized test for why the
+        # half-step form is required). Note seat 0 IS included once 2k > n -- at those densities
+        # every seat is nearly a hoarder, so there is no spread left to give.
         patient = {(2 * i + 1) * n_bots // (2 * n_patient) for i in range(n_patient)}
     paces = _spread_paces(pace, pace_jitter, n_bots - len(patient))
     out: list[BotArchetype] = []
@@ -450,7 +485,10 @@ def _aggregate(args: argparse.Namespace) -> int:
     head = chunks[0]
     print(
         f"nominator_probe={head.get('nominator_probe')} "
-        f"field={head.get('field')} overbid={head.get('overbid')} "
+        # n_patient is what distinguishes two field-mix cells; without it the provenance line for
+        # p2 and p8 is byte-identical and an operator transcribing cells can mis-attribute a row.
+        f"field={head.get('field')} n_patient={head.get('n_patient')} "
+        f"overbid={head.get('overbid')} "
         f"pace={head.get('overbid_pace')}/{head.get('overbid_basis')} "
         f"pace_jitter={head.get('overbid_pace_jitter')} "
         f"adp_jitter={head.get('market_adp_jitter')} seeds={head.get('n_seeds')} "
