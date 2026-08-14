@@ -12,10 +12,11 @@ import pytest
 from scripts.auction_field_bakeoff import build_field
 
 from projections.draft.assistant.auction.market import PatientValueBot
+from projections.draft.assistant.auction.tournament_cli import _REALISTIC_FIELD
 
 
 def test_build_field_n_patient_none_reproduces_the_historical_mix() -> None:
-    """The default path must stay byte-identical: every prior run used the every-5th rule."""
+    """The default path must re-simulate identically: every prior run used the every-5th rule."""
     field = build_field("overbidder", 0.2, n_bots=11)
     hoarders = [i for i, b in enumerate(field) if isinstance(b, PatientValueBot)]
     assert hoarders == [4, 9]  # 9 aggressive / 2 conservative
@@ -83,7 +84,37 @@ def test_build_field_rejects_a_nonzero_n_patient_for_overbidder_only() -> None:
     assert not any(isinstance(b, PatientValueBot) for b in field)
 
 
-@pytest.mark.parametrize("name", ["realistic", "overbidder_unpaced", "balanced_field"])
-def test_build_field_leaves_every_field_unchanged_when_n_patient_is_none(name: str) -> None:
-    """The refusal must not disturb the paths themselves -- only the mislabelling request."""
-    assert build_field(name, 0.2, n_bots=11) is not None
+def test_build_field_leaves_every_field_unchanged_when_n_patient_is_none() -> None:
+    """The refusal must not disturb the paths themselves -- only the mislabelling request.
+
+    Compares actual composition. An earlier version of this test asserted `is not None`, which no
+    behaviour change short of returning None could fail -- it would have passed if `realistic`
+    started returning an empty list or the wrong archetypes.
+    """
+    assert build_field("realistic", 0.2, n_bots=11) == list(_REALISTIC_FIELD)
+
+    unpaced = build_field("overbidder_unpaced", 0.2, n_bots=11)
+    assert [type(b).__name__ for b in unpaced] == ["AggressiveBot"] * 4 + ["PatientValueBot"]
+
+    balanced = build_field("balanced_field", 0.2, n_bots=11)
+    assert [type(b).__name__ for b in balanced] == ["BalancedBot"]
+
+    # the historical per-seat path: 11 seats, hoarders at 4 and 9, everything else aggressive
+    hist = build_field("overbidder", 0.2, n_bots=11)
+    assert [i for i, b in enumerate(hist) if isinstance(b, PatientValueBot)] == [4, 9]
+    assert len(hist) == 11
+
+    only = build_field("overbidder_only", 0.2, n_bots=11)
+    assert len(only) == 11 and not any(isinstance(b, PatientValueBot) for b in only)
+
+
+def test_build_field_unknown_name_says_so_even_with_n_patient() -> None:
+    """The honorability guard must not shadow the unknown-field diagnosis.
+
+    `choices=FIELDS` shields the CLIs, but all six scripts import build_field as a library
+    function, and a typo there was being reported as 'has a fixed archetype mix'.
+    """
+    with pytest.raises(ValueError, match="unknown field"):
+        build_field("overbiddr", 0.2, n_bots=11, n_patient=3)
+    with pytest.raises(ValueError, match="unknown field"):
+        build_field("overbiddr", 0.2, n_bots=11)

@@ -128,20 +128,42 @@ def _spread_paces(pace: float, jitter: float, n: int) -> list[float]:
     return [lo + (hi - lo) * i / (n - 1) for i in range(n)]
 
 
+# The only fields whose seat composition `n_patient` can set. `build_field`'s own dispatch reads
+# this same tuple, so the guard cannot drift from what the function actually does -- two hardcoded
+# copies would let a newly mix-tunable field be silently rejected.
+_MIX_TUNABLE_FIELDS: tuple[str, ...] = ("overbidder", "overbidder_only")
+
+# One wording for the six parsers that expose this flag. Six copies shipped with two different
+# texts on the commit that created them; a shared constant is what stops that recurring.
+N_PATIENT_HELP = (
+    "How many bot seats are conservative hoarders, spread evenly. Omit for the historical "
+    "every-5th rule (2 of 11 in a 12-team league). Set it to sweep the aggressive/conservative "
+    "mix, or to make a diagnostic describe the same room as a swept field-mix cell."
+)
+
+
 def _reject_unhonorable_n_patient(
     name: str, n_bots: int | None, pace_jitter: float, n_patient: int
 ) -> None:
     """Raise unless this configuration will actually place `n_patient` hoarders.
 
-    Only the jittered `overbidder` path reads the knob. Every other path returns a fixed archetype
-    mix, so accepting the value there would put a number in the chunk payload that describes a room
-    the simulation never built -- and `_guard_homogeneous` would then happily pool it.
+    Only the jittered `_MIX_TUNABLE_FIELDS` path reads the knob. Every other path returns a fixed
+    archetype mix, so accepting the value there would put a number in the chunk payload that
+    describes a room the simulation never built -- and `_guard_homogeneous` would then pool it.
+
+    `n_patient=0` is refused off that path too, even where the fixed mix happens to contain no
+    hoarders (`balanced_field`). Accepting it would still record a mix-sweep parameter against a run
+    that never consulted the mechanism, and the caller means "omit the flag".
     """
+    if (
+        name not in FIELDS
+    ):  # before the honorability test, or a typo is diagnosed as the wrong thing
+        raise ValueError(f"unknown field {name!r}")
     if n_patient < 0:
         raise ValueError(f"n_patient must be >= 0; got {n_patient}")
     if n_bots is not None and n_patient > n_bots:
         raise ValueError(f"n_patient must be in 0..{n_bots}; got {n_patient}")
-    if name not in ("overbidder", "overbidder_only"):
+    if name not in _MIX_TUNABLE_FIELDS:
         raise ValueError(
             f"field {name!r} has a fixed archetype mix, so n_patient={n_patient} cannot be "
             "honored; omit it rather than recording a mix that will not be run"
@@ -196,7 +218,7 @@ def build_field(
         return [ob_u, ob_u, ob_u, ob_u, _HOARDER]
     if name == "balanced_field":  # sensitivity: a disciplined room that pays fair value
         return [BalancedBot()]
-    if name not in ("overbidder", "overbidder_only"):
+    if name not in _MIX_TUNABLE_FIELDS:  # the fixed-mix names all returned above
         raise ValueError(f"unknown field {name!r}")
 
     with_patient = name == "overbidder"
@@ -213,8 +235,8 @@ def build_field(
         # change WHERE they sit as well as how many there are, confounding the mix with seat
         # adjacency. Half-step offset ((2i+1)n / 2k); consecutive values differ by n/k >= 1, so
         # this yields exactly `n_patient` distinct seats (see the parametrized test for why the
-        # half-step form is required). Note seat 0 IS included once 2k > n -- at those densities
-        # every seat is nearly a hoarder, so there is no spread left to give.
+        # half-step form is required). Seat 0 IS in the set once 2k > n (first swept case: 6 of 11),
+        # because at that density the even spacing has no room left to skip it.
         patient = {(2 * i + 1) * n_bots // (2 * n_patient) for i in range(n_patient)}
     paces = _spread_paces(pace, pace_jitter, n_bots - len(patient))
     out: list[BotArchetype] = []
@@ -604,9 +626,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--n-patient",
         type=int,
         default=None,
-        help="How many bot seats are conservative hoarders, spread evenly. Omit for the historical "
-        "every-5th rule (2 of 11 in a 12-team league). Use to sweep the aggressive/conservative "
-        "mix.",
+        help=N_PATIENT_HELP,
     )
     r.add_argument("--data-root", type=Path, default=Path("data"))
     r.add_argument("--out", type=Path, required=True)

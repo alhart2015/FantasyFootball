@@ -41,7 +41,7 @@ from projections.draft.auction import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script import
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, build_field
+from auction_field_bakeoff import CONTESTANTS, FIELDS, N_PATIENT_HELP, build_field
 
 _N_GAMES = len(REG_WEEKS)
 
@@ -62,9 +62,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--n-patient",
         type=int,
         default=None,
-        help="Conservative hoarder seats, spread evenly (matches auction_field_bakeoff). "
-        "Omit for the historical every-5th rule. Set it to make this diagnostic describe the "
-        "same room as a swept field-mix cell.",
+        help=N_PATIENT_HELP,
     )
     p.add_argument("--overbid", type=float, default=0.20)
     p.add_argument("--market-adp-jitter", type=float, default=12.0)

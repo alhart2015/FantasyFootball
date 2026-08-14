@@ -40,7 +40,7 @@ from projections.draft.auction import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script import
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, build_field
+from auction_field_bakeoff import CONTESTANTS, FIELDS, N_PATIENT_HELP, build_field
 
 _SNAKE_SUBSTREAM = 20260619  # must match tournament.py, or the bot field is not the same draw
 
@@ -70,9 +70,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--n-patient",
         type=int,
         default=None,
-        help="Conservative hoarder seats, spread evenly (matches auction_field_bakeoff). "
-        "Omit for the historical every-5th rule. Set it to make this diagnostic describe the "
-        "same room as a swept field-mix cell.",
+        help=N_PATIENT_HELP,
     )
     p.add_argument("--overbid", type=float, default=0.20)
     p.add_argument("--overbid-pace", type=float, default=4.5)
@@ -146,7 +144,8 @@ def main(argv: list[str] | None = None) -> int:
                     acc[label][m].append(float(getattr(proj[seat0 + 1], m)))
 
     print(
-        f"hero={args.strategy} field={args.field} overbid={args.overbid} pace={args.overbid_pace} "
+        f"hero={args.strategy} field={args.field} n_patient={args.n_patient} "
+        f"overbid={args.overbid} pace={args.overbid_pace} "
         f"market={args.bot_prices} | seats {seats[0]}-{seats[-1]}, {args.seeds} seeds x "
         f"{args.n_sims} sims"
     )

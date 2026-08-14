@@ -47,7 +47,7 @@ from projections.draft.league_config import LeagueConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script imports
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, build_field
+from auction_field_bakeoff import CONTESTANTS, FIELDS, N_PATIENT_HELP, build_field
 from inspect_auction_drafts import _lineup, _RosterItem, _slot_plan
 
 # One sample per bucket, in the order they are printed.
@@ -81,9 +81,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--n-patient",
         type=int,
         default=None,
-        help="Conservative hoarder seats, spread evenly (matches auction_field_bakeoff). "
-        "Omit for the historical every-5th rule. Set it to make this diagnostic describe the "
-        "same room as a swept field-mix cell.",
+        help=N_PATIENT_HELP,
     )
     p.add_argument("--overbid", type=float, default=0.20)
     p.add_argument("--market-adp-jitter", type=float, default=12.0)
@@ -183,7 +181,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"strategy={args.strategy} league={config.name} seat={hero}/{config.n_teams} "
-        f"budget=${config.budget} | field={args.field} overbid={args.overbid} "
+        f"budget=${config.budget} | field={args.field} n_patient={args.n_patient} "
+        f"overbid={args.overbid} "
         f"market={args.bot_prices}"
     )
     col = None

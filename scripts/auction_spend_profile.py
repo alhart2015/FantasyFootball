@@ -43,7 +43,7 @@ from projections.schemas import Position
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script import
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, build_field
+from auction_field_bakeoff import CONTESTANTS, FIELDS, N_PATIENT_HELP, build_field
 
 _BANDS: tuple[tuple[str, int, int], ...] = (
     ("$40+", 40, 10**9),
@@ -73,9 +73,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--n-patient",
         type=int,
         default=None,
-        help="Conservative hoarder seats, spread evenly (matches auction_field_bakeoff). "
-        "Omit for the historical every-5th rule. Set it to make this diagnostic describe the "
-        "same room as a swept field-mix cell.",
+        help=N_PATIENT_HELP,
     )
     p.add_argument("--overbid", type=float, default=0.20)
     p.add_argument("--market-adp-jitter", type=float, default=12.0)
@@ -113,7 +111,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"league={config.name} seat={args.seat}/{config.n_teams} budget=${config.budget} "
-        f"roster={config.roster_size} | field={args.field} overbid={args.overbid} "
+        f"roster={config.roster_size} | field={args.field} n_patient={args.n_patient} "
+        f"overbid={args.overbid} "
         f"market={args.bot_prices} | {args.drafts} drafts"
     )
     for name in names:
