@@ -61,8 +61,11 @@ Two of its refusals are non-obvious and worth knowing before reading the code: t
 short-circuit (`n_bots is None or pace_jitter <= 0`) and `overbidder_only` with a non-zero value.
 
 `FIELDS` is derived as `_FIXED_MIX_FIELDS + tuple(_MIX_TUNABLE_FIELDS)`, and `build_field` reads
-the tunable mapping's *value* for `with_patient` rather than re-testing the name — so a field added
-to one of those tuples cannot silently acquire the wrong hoarder behaviour.
+the tunable *mapping's value* for `with_patient` rather than re-testing the name — so a name added
+to `_MIX_TUNABLE_FIELDS` (a `dict`, not a tuple) cannot silently acquire the wrong hoarder
+behaviour. **This linkage covers the tunable half only:** `_FIXED_MIX_FIELDS` members still need a
+matching early return in `build_field`, and a name added without one reaches the `unknown field`
+raise despite being an advertised `--field` choice.
 
 The aggregate provenance header prints `n_patient` for the same reason: without it, the `p2` and
 `p8` chunk directories produce byte-identical header lines and an operator transcribing seven cells

@@ -9,7 +9,13 @@ from __future__ import annotations
 from itertools import pairwise
 
 import pytest
-from scripts.auction_field_bakeoff import build_field
+from scripts.auction_field_bakeoff import (
+    _FIXED_MIX_FIELDS,
+    _MIX_TUNABLE_FIELDS,
+    FIELDS,
+    build_field,
+    format_n_patient,
+)
 
 from projections.draft.assistant.auction.market import (
     AggressiveBot,
@@ -119,3 +125,40 @@ def test_build_field_unknown_name_says_so_even_with_n_patient() -> None:
         build_field("overbiddr", 0.2, n_bots=11, n_patient=3)
     with pytest.raises(ValueError, match="unknown field"):
         build_field("overbiddr", 0.2, n_bots=11)
+
+
+# --- the provenance label and the FIELDS derivation ------------------------------------------
+# These pin the SITES half of the mix work. `None` (the historical every-5th rule, 2 hoarders of
+# 11) and `0` (no hoarders) are the two ends of the swept range, so a label that collapses them
+# mislabels one cell as the other -- e.g. `str(n or "every-5th")` would render 0 as every-5th and
+# leave the suite green.
+
+
+def test_format_n_patient_distinguishes_none_from_zero() -> None:
+    assert format_n_patient(None) == "every-5th"
+    assert format_n_patient(0) == "0"
+    assert format_n_patient(8) == "8"
+
+
+def test_fields_is_the_partition_of_fixed_and_tunable() -> None:
+    """`FIELDS` is derived, so a name can never be advertised without a home in one half."""
+    assert set(FIELDS) == set(_FIXED_MIX_FIELDS) | set(_MIX_TUNABLE_FIELDS)
+    assert not set(_FIXED_MIX_FIELDS) & set(_MIX_TUNABLE_FIELDS)  # genuinely a partition
+    assert len(FIELDS) == len(set(FIELDS))  # the derivation cannot duplicate
+
+
+@pytest.mark.parametrize("name", ["realistic", "overbidder_unpaced", "balanced_field"])
+def test_every_fixed_mix_field_has_a_build_field_branch(name: str) -> None:
+    """A `_FIXED_MIX_FIELDS` member without an early return reaches the `unknown field` raise.
+
+    That is the one drift path the tunable mapping's value-lookup does NOT close, so it is pinned
+    here rather than left to a comment.
+    """
+    assert build_field(name, 0.2, n_bots=11)  # non-empty, and did not raise
+
+
+@pytest.mark.parametrize("name", list(_MIX_TUNABLE_FIELDS))
+def test_every_tunable_field_declares_whether_it_has_hoarders(name: str) -> None:
+    field = build_field(name, 0.2, n_bots=11)
+    has_hoarders = any(isinstance(b, PatientValueBot) for b in field)
+    assert has_hoarders == _MIX_TUNABLE_FIELDS[name]

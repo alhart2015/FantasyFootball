@@ -12,7 +12,7 @@ Reports two things:
    attempted explanation, and it covers the `balanced` pair ONLY; the `patient`/`scrub_frac` half
    remains an unverified hypothesis.
 
-Run:
+Run FROM THE REPO ROOT (the shared loader reads `configs/` relative to the cwd):
     python scripts/_diag_identical_contestants.py
 """
 
@@ -30,10 +30,11 @@ from projections.draft.assistant.auction.simulation import _simulate_to_state
 from projections.draft.assistant.auction.tournament_cli import _load_tournament_inputs
 from projections.draft.auction import build_market_dollars
 
+_ROOT = Path(__file__).resolve().parent.parent
 _PAIRS = (("balanced", "balanced_flat"), ("patient", "patient_deep"))
+# Every field-mix cell, not a sample: the report claims the agreement is exact across ALL of them.
 _CHUNK_DIRS = (
-    "reports/_field_mix/p2",
-    "reports/_field_mix/p8",
+    *(f"reports/_field_mix/p{k}" for k in (0, 2, 3, 5, 6, 8, 11)),
     "reports/_will_bakeoff/postfix_2026",
     "reports/_will_bakeoff/jitter_2026",
 )
@@ -44,7 +45,7 @@ _SEEDS = 3
 def _artifact_agreement() -> None:
     print("1. artifact agreement (max abs per-seat diff across every metric)")
     for d in _CHUNK_DIRS:
-        files = sorted(glob.glob(f"{d}/*.json"))
+        files = sorted(glob.glob(str(_ROOT / d / "*.json")))
         if not files:
             print(f"   {d}: (absent)")
             continue
@@ -53,7 +54,9 @@ def _artifact_agreement() -> None:
             for f in files:
                 m = json.loads(Path(f).read_text())["all_metrics"]
                 if a in m and b in m:
-                    diffs.append(max(abs(m[a][k] - m[b][k]) for k in m[a]))
+                    shared = set(m[a]) & set(m[b])
+                    if shared:  # a partial block must not abort the rest of the diagnostic
+                        diffs.append(max(abs(m[a][k] - m[b][k]) for k in shared))
             if diffs:
                 print(f"   {d}  {a} vs {b}: {max(diffs):.6g}  (n={len(diffs)} seats)")
 
@@ -62,18 +65,27 @@ def _bid_divergence() -> None:
     """The `balanced` pair only -- `PatientValueBid`'s scrub_frac is not instrumented here."""
     import sys
 
-    sys.path.insert(0, str(Path("scripts").resolve()))
+    sys.path.insert(0, str(_ROOT / "scripts"))
     from auction_field_bakeoff import build_field
 
     pool, config, _avail, _params = _load_tournament_inputs(
-        Path("data/vorp_2026/will_half12.parquet"),
-        Path("configs/will_half12_pass5.league.json"),
+        _ROOT / "data/vorp_2026/will_half12.parquet",
+        _ROOT / "configs/will_half12_pass5.league.json",
         season=2026,
-        data_root=Path("data"),
+        data_root=_ROOT / "data",
     )
     baseline, bot_dollars = build_market_dollars(pool, config, market="espn")
+    # n_patient=2 reproduces the Run-Z 9/2 cell (hoarders evenly spread to seats 2 and 8). Omitting
+    # it would take the historical every-5th rule (seats 4 and 9) -- the Run-Y room, which the
+    # report itself measures as ~0.004 reg_win_pct away and explicitly says is not interchangeable.
     field = build_field(
-        "overbidder", 0.2, 4.5, "opening", n_bots=config.n_teams - 1, pace_jitter=0.35
+        "overbidder",
+        0.2,
+        4.5,
+        "opening",
+        n_bots=config.n_teams - 1,
+        pace_jitter=0.35,
+        n_patient=2,
     )
     calls = differing = 0
 
@@ -116,5 +128,9 @@ def _bid_divergence() -> None:
 
 
 if __name__ == "__main__":
+    # `VarianceParams.load()` inside the shared loader reads `configs/` relative to the cwd, so a
+    # run from elsewhere dies deep in pathlib with nothing tying it back to that. Say so instead.
+    if not (Path.cwd() / "configs").is_dir():
+        raise SystemExit(f"run this from the repo root ({_ROOT}); cwd is {Path.cwd()}")
     _artifact_agreement()
     _bid_divergence()

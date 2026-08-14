@@ -873,7 +873,7 @@ Seat-averaged `reg_win_pct` by mix (aggressive/conservative of 11 bots), **all 1
 > **`balanced`/`balanced_flat` and `patient`/`patient_deep` post bit-identical figures — and they
 > are NOT the same policy.** `registry.py` builds them with different constructor arguments
 > (`non_increasing_cap=True`, `scrub_frac=0.0`) and the bid layer reads both. Instrumenting
-> `BalancedValueBid.max_bid` over six full drafts here: 355 bid calls, **5** where the two configs
+> `BalancedValueBid.max_bid` over six full drafts of the **9/2 cell**: 354 bid calls, **2** where the two configs
 > return different bids, and **6 of 6 identical hero rosters** — the clamp fires but never changes
 > an outcome in those drafts, because the hero's bid is fair-value-limited rather than cap-limited on
 > the players it actually wins. **That instrumentation covers the `balanced` pair only**; the
@@ -904,7 +904,7 @@ Point estimates alone would read as four different winners. The CRN-paired test 
 
 † **Multiplicity caveat.** Each row selects the best of 14 challenger *names* — only **12 of which are distinct policies**, see the note under the table — and then applies an uncorrected 95% CI, so the CIs are anti-conservative for exactly the comparison being made. For the
 **tied** rows this cuts the safe way — a selected maximum that still fails to separate is stronger
-evidence of a tie, not weaker. It bites only on 8/3, whose bound is **−0.0001**: a two-sided Bonferroni threshold is z≈2.91 at 14 challenger names (2.87 at the 12 distinct ones) and that row is z≈−1.99, so it does **not** survive correction. Its verdict cell therefore reads *tied* — as do 11/0, 9/2, 5/6 and 0/11, whose intervals all include zero outright. **No row in this table demonstrates separation**, which is the finding. Any correction for selection widens it across zero. The 3/8 loss (+0.0507, bound +0.0401) is far outside any plausible correction and is unaffected.
+evidence of a tie, not weaker. It bites only on 8/3, whose bound is **−0.0001**: a two-sided Bonferroni threshold is z≈2.91 at 14 challenger names (2.87 at the 12 distinct ones) and that row is z≈−1.99, so it does **not** survive correction. Its verdict cell therefore reads *tied* — as do 11/0, 9/2, 6/5, 5/6 and 0/11, whose intervals all include zero outright. **No row demonstrates separation in the hero's favour**, which is the finding. (The 3/8 row does separate, decisively, in the hero's *disfavour* — that is the other half of the finding.) Any correction for selection widens it across zero. The 3/8 loss (+0.0507, bound +0.0401) is far outside any plausible correction and is unaffected.
 
 **Findings (data):**
 1. **The answer to "when does it stop being best" is: 3 aggressive / 8 conservative.** From 11/0 through 5/6 **no** contestant — not merely the best challenger — beats `overbid_noramp` with a CI that excludes zero; it is the leader or statistically tied for it across that whole range. At **3/8** it is beaten decisively by `inflation` (**+0.051**), and also by `static` (+0.025\*) and `anchors` (+0.023\*). The crossover sits between **5/6 and 3/8**, i.e. once roughly three-quarters of the room is conservative.

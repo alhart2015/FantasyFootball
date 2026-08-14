@@ -131,14 +131,14 @@ def _spread_paces(pace: float, jitter: float, n: int) -> list[float]:
 # Fields whose archetype mix is fixed: they ignore n_patient entirely and return early.
 _FIXED_MIX_FIELDS: tuple[str, ...] = ("realistic", "overbidder_unpaced", "balanced_field")
 # Fields that reach the per-seat path, mapped to whether they carry hoarder seats at all.
-# `build_field` reads the VALUE (instead of re-testing `name == "overbidder"`) so a name added here
-# without a decision about its hoarders is a loud KeyError, not a silent all-aggressive room.
+# `build_field` reads the VALUE (instead of re-testing `name == "overbidder"`), so adding a name
+# here forces a hoarder decision at authoring time rather than defaulting it to all-aggressive.
+# NOTE this links the guard to the dispatch for TUNABLE names only: `_FIXED_MIX_FIELDS` members
+# still need a matching early return in `build_field`, or they reach the `unknown field` raise.
 # Note `overbidder_only` is False: it accepts `n_patient=0` and refuses anything else.
 _MIX_TUNABLE_FIELDS: dict[str, bool] = {"overbidder": True, "overbidder_only": False}
 
 
-# One wording for the six parsers that expose this flag. Six copies shipped with two different
-# texts on the commit that created them; a shared constant is what stops that recurring.
 def format_n_patient(n_patient: int | None) -> str:
     """Render `n_patient` for a provenance header.
 
@@ -149,6 +149,8 @@ def format_n_patient(n_patient: int | None) -> str:
     return "every-5th" if n_patient is None else str(n_patient)
 
 
+# One wording for the six parsers that expose this flag. Six copies shipped with two different
+# texts on the commit that created them; a shared constant is what stops that recurring.
 N_PATIENT_HELP = (
     "How many bot seats are conservative hoarders, spread evenly. Omit for the historical "
     "every-5th rule (2 of 11 in a 12-team league). Set it to sweep the aggressive/conservative "
@@ -355,7 +357,8 @@ def _run_chunk(args: argparse.Namespace) -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2))
     print(
-        f"wrote {args.out} (field={args.field} overbid={args.overbid} market={market} "
+        f"wrote {args.out} (field={args.field} "
+        f"n_patient={format_n_patient(args.n_patient)} overbid={args.overbid} market={market} "
         f"seat={args.seat}, {args.seeds} seeds)"
     )
     return 0
