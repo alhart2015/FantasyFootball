@@ -40,7 +40,13 @@ from projections.draft.auction import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script import
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, N_PATIENT_HELP, build_field
+from auction_field_bakeoff import (
+    CONTESTANTS,
+    FIELDS,
+    N_PATIENT_HELP,
+    build_field,
+    format_n_patient,
+)
 
 _SNAKE_SUBSTREAM = 20260619  # must match tournament.py, or the bot field is not the same draw
 
@@ -144,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
                     acc[label][m].append(float(getattr(proj[seat0 + 1], m)))
 
     print(
-        f"hero={args.strategy} field={args.field} n_patient={args.n_patient} "
+        f"hero={args.strategy} field={args.field} n_patient={format_n_patient(args.n_patient)} "
         f"overbid={args.overbid} pace={args.overbid_pace} "
         f"market={args.bot_prices} | seats {seats[0]}-{seats[-1]}, {args.seeds} seeds x "
         f"{args.n_sims} sims"

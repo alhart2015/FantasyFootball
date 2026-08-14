@@ -128,13 +128,27 @@ def _spread_paces(pace: float, jitter: float, n: int) -> list[float]:
     return [lo + (hi - lo) * i / (n - 1) for i in range(n)]
 
 
-# The only fields whose seat composition `n_patient` can set. `build_field`'s own dispatch reads
-# this same tuple, so the guard cannot drift from what the function actually does -- two hardcoded
-# copies would let a newly mix-tunable field be silently rejected.
-_MIX_TUNABLE_FIELDS: tuple[str, ...] = ("overbidder", "overbidder_only")
+# Fields whose archetype mix is fixed: they ignore n_patient entirely and return early.
+_FIXED_MIX_FIELDS: tuple[str, ...] = ("realistic", "overbidder_unpaced", "balanced_field")
+# Fields that reach the per-seat path, mapped to whether they carry hoarder seats at all.
+# `build_field` reads the VALUE (instead of re-testing `name == "overbidder"`) so a name added here
+# without a decision about its hoarders is a loud KeyError, not a silent all-aggressive room.
+# Note `overbidder_only` is False: it accepts `n_patient=0` and refuses anything else.
+_MIX_TUNABLE_FIELDS: dict[str, bool] = {"overbidder": True, "overbidder_only": False}
+
 
 # One wording for the six parsers that expose this flag. Six copies shipped with two different
 # texts on the commit that created them; a shared constant is what stops that recurring.
+def format_n_patient(n_patient: int | None) -> str:
+    """Render `n_patient` for a provenance header.
+
+    `None` prints as `every-5th`, not `None`: omitting the flag runs the historical every-5th rule
+    (2 hoarders of 11), which is a different room from `--n-patient 0` (zero hoarders) and sits at
+    the opposite end of the swept range. A bare `None` reads as the latter.
+    """
+    return "every-5th" if n_patient is None else str(n_patient)
+
+
 N_PATIENT_HELP = (
     "How many bot seats are conservative hoarders, spread evenly. Omit for the historical "
     "every-5th rule (2 of 11 in a 12-team league). Set it to sweep the aggressive/conservative "
@@ -155,9 +169,8 @@ def _reject_unhonorable_n_patient(
     hoarders (`balanced_field`). Accepting it would still record a mix-sweep parameter against a run
     that never consulted the mechanism, and the caller means "omit the flag".
     """
-    if (
-        name not in FIELDS
-    ):  # before the honorability test, or a typo is diagnosed as the wrong thing
+    # Before the honorability test, or a typo is diagnosed as the wrong thing.
+    if name not in FIELDS:
         raise ValueError(f"unknown field {name!r}")
     if n_patient < 0:
         raise ValueError(f"n_patient must be >= 0; got {n_patient}")
@@ -221,7 +234,7 @@ def build_field(
     if name not in _MIX_TUNABLE_FIELDS:  # the fixed-mix names all returned above
         raise ValueError(f"unknown field {name!r}")
 
-    with_patient = name == "overbidder"
+    with_patient = _MIX_TUNABLE_FIELDS[name]
     if n_bots is None or pace_jitter <= 0.0:  # uniform-cap cycle (pre-jitter behaviour)
         ob = BalancedBot(pace=pace, overbid=overbid, pace_basis=basis)
         return [ob, ob, ob, ob, _HOARDER] if with_patient else [ob]
@@ -250,13 +263,7 @@ def build_field(
     return out
 
 
-FIELDS: tuple[str, ...] = (
-    "realistic",
-    "overbidder",
-    "overbidder_unpaced",
-    "overbidder_only",
-    "balanced_field",
-)
+FIELDS: tuple[str, ...] = _FIXED_MIX_FIELDS + tuple(_MIX_TUNABLE_FIELDS)
 
 
 # ---------------------------------------------------------------------------
@@ -505,11 +512,15 @@ def _aggregate(args: argparse.Namespace) -> int:
         raise SystemExit(f"no readable chunk JSONs in {args.chunk_dir}")
     _guard_homogeneous(chunks)
     head = chunks[0]
+    # chunks are dict[str, object]; narrow before the typed formatter (a chunk written
+    # before this key existed has no entry, which is the same "historical rule" case).
+    head_n_patient = head.get("n_patient")
+    n_patient_label = format_n_patient(head_n_patient if isinstance(head_n_patient, int) else None)
     print(
         f"nominator_probe={head.get('nominator_probe')} "
         # n_patient is what distinguishes two field-mix cells; without it the provenance line for
         # p2 and p8 is byte-identical and an operator transcribing cells can mis-attribute a row.
-        f"field={head.get('field')} n_patient={head.get('n_patient')} "
+        f"field={head.get('field')} n_patient={n_patient_label} "
         f"overbid={head.get('overbid')} "
         f"pace={head.get('overbid_pace')}/{head.get('overbid_basis')} "
         f"pace_jitter={head.get('overbid_pace_jitter')} "

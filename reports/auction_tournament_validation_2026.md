@@ -875,23 +875,27 @@ Seat-averaged `reg_win_pct` by mix (aggressive/conservative of 11 bots), **all 1
 > (`non_increasing_cap=True`, `scrub_frac=0.0`) and the bid layer reads both. Instrumenting
 > `BalancedValueBid.max_bid` over six full drafts here: 355 bid calls, **5** where the two configs
 > return different bids, and **6 of 6 identical hero rosters** — the clamp fires but never changes
-> an outcome in this room, because the hero's bid is fair-value-limited rather than cap-limited on
-> the players it actually wins. This **contradicts Run L**, which measured them as clearly different
-> (0.554/0.495 vs 0.522/0.487). Filed as
+> an outcome in those drafts, because the hero's bid is fair-value-limited rather than cap-limited on
+> the players it actually wins. **That instrumentation covers the `balanced` pair only**; the
+> `patient`/`scrub_frac` half is an unverified hypothesis (see #146), and neither explains why the
+> agreement is exact to full float precision across every cell rather than merely close — a harness
+> effect is not ruled out. Reproduce with `scripts/_diag_identical_contestants.py`. Run L measured them as clearly different (0.554/0.495 vs 0.522/0.487), but that is **not a clean
+> contradiction**: `BalancedValueBid.premium` was retuned 1.0 → 0.0 between the two runs (Run N),
+> and at premium 1.0 the bid is cap-bound where at 0.0 it is fair-value-bound — which is exactly the
+> mechanism above. Run L also used a different league, nomination model and a pre-#143 engine. Filed as
 > [#146](https://github.com/alhart2015/FantasyFootball/issues/146); **treat this field as 13
 > distinct policies, not 15**, and do not read the duplicate rows as two independent measurements.
 > (An earlier draft of this note asserted they were "identical policies under two registry names",
 > which is false and closed the question instead of opening it.)
 
-(An earlier draft of the table printed 11 of the 15 and described itself as the full field — the
-omitted `sr_g0.1_c2` outranks the printed `balanced` at 8/3, so the abridgement was not a top-N.)
+(An earlier draft of the table printed 11 of the 15 and described itself as the full field — the omitted `sr_g0.1_c2` outranks the printed `balanced` at 8/3, so the abridgement was not a top-N.)
 
 Point estimates alone would read as four different winners. The CRN-paired test says otherwise — best challenger to `overbid_noramp` per mix (positive = beats it; `*` = 95% CI excludes 0):
 
 | mix | best challenger | paired Δ | 95% CI | verdict |
 |---|---|---|---|---|
 | 11/0 | `overbid` | +0.0063 | [−0.0002, +0.0127] | **tied** (CI touches 0) |
-| **9/2** | `overbid` | −0.0059 | [−0.0123, +0.0004] | **`overbid_noramp` leads** |
+| **9/2** | `overbid` | −0.0059 | [−0.0123, +0.0004] | **tied** |
 | 8/3 | `overbid` | −0.0079 | [−0.0156, −0.0001]\*† | **tied** after correction (see †) |
 | 6/5 | `anchors` | +0.0042 | [−0.0039, +0.0124] | **tied** |
 | 5/6 | `static` | +0.0097 | [−0.0007, +0.0200] | **tied** (lower bound −0.0007) |
@@ -900,9 +904,7 @@ Point estimates alone would read as four different winners. The CRN-paired test 
 
 † **Multiplicity caveat.** Each row selects the best of 14 challenger *names* — only **12 of which are distinct policies**, see the note under the table — and then applies an uncorrected 95% CI, so the CIs are anti-conservative for exactly the comparison being made. For the
 **tied** rows this cuts the safe way — a selected maximum that still fails to separate is stronger
-evidence of a tie, not weaker. It bites only on 8/3, whose bound is **−0.0001**: a Bonferroni threshold at 14 tests is z≈2.98 and that row is z≈−1.99, so it does **not** survive correction. Its verdict cell therefore reads *tied*, matching 11/0 and 5/6, whose intervals are equally non-separated. Any correction for
-selection widens it across zero. The 3/8 loss (+0.0507, bound +0.0401) is far outside any plausible
-correction and is unaffected.
+evidence of a tie, not weaker. It bites only on 8/3, whose bound is **−0.0001**: a two-sided Bonferroni threshold is z≈2.91 at 14 challenger names (2.87 at the 12 distinct ones) and that row is z≈−1.99, so it does **not** survive correction. Its verdict cell therefore reads *tied* — as do 11/0, 9/2, 5/6 and 0/11, whose intervals all include zero outright. **No row in this table demonstrates separation**, which is the finding. Any correction for selection widens it across zero. The 3/8 loss (+0.0507, bound +0.0401) is far outside any plausible correction and is unaffected.
 
 **Findings (data):**
 1. **The answer to "when does it stop being best" is: 3 aggressive / 8 conservative.** From 11/0 through 5/6 **no** contestant — not merely the best challenger — beats `overbid_noramp` with a CI that excludes zero; it is the leader or statistically tied for it across that whole range. At **3/8** it is beaten decisively by `inflation` (**+0.051**), and also by `static` (+0.025\*) and `anchors` (+0.023\*). The crossover sits between **5/6 and 3/8**, i.e. once roughly three-quarters of the room is conservative.

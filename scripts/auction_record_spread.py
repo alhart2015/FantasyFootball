@@ -41,7 +41,13 @@ from projections.draft.auction import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script import
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, N_PATIENT_HELP, build_field
+from auction_field_bakeoff import (
+    CONTESTANTS,
+    FIELDS,
+    N_PATIENT_HELP,
+    build_field,
+    format_n_patient,
+)
 
 _N_GAMES = len(REG_WEEKS)
 
@@ -114,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"{config.n_teams}-team, seat {args.seat}, {_N_GAMES}-game regular season | "
+        f"field={args.field} n_patient={format_n_patient(args.n_patient)} | "
         f"{args.drafts} drafts x {args.seasons_per_draft} seasons = "
         f"{args.drafts * args.seasons_per_draft} seasons per strategy"
     )

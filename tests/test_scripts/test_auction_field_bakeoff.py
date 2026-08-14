@@ -11,8 +11,11 @@ from itertools import pairwise
 import pytest
 from scripts.auction_field_bakeoff import build_field
 
-from projections.draft.assistant.auction.market import PatientValueBot
-from projections.draft.assistant.auction.tournament_cli import _REALISTIC_FIELD
+from projections.draft.assistant.auction.market import (
+    AggressiveBot,
+    BalancedBot,
+    PatientValueBot,
+)
 
 
 def test_build_field_n_patient_none_reproduces_the_historical_mix() -> None:
@@ -45,7 +48,7 @@ def test_build_field_n_patient_spreads_rather_than_clusters() -> None:
     assert max(gaps) - min(gaps) <= 1  # evenly spaced
 
 
-@pytest.mark.parametrize("n_patient", [12, -1, -5])
+@pytest.mark.parametrize("n_patient", [12, -1])
 def test_build_field_n_patient_out_of_range_raises(n_patient: int) -> None:
     with pytest.raises(ValueError, match="n_patient"):
         build_field("overbidder", 0.2, n_bots=11, n_patient=n_patient)
@@ -84,35 +87,33 @@ def test_build_field_rejects_a_nonzero_n_patient_for_overbidder_only() -> None:
     assert not any(isinstance(b, PatientValueBot) for b in field)
 
 
-def test_build_field_leaves_every_field_unchanged_when_n_patient_is_none() -> None:
-    """The refusal must not disturb the paths themselves -- only the mislabelling request.
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # `realistic` pins the concrete archetypes rather than `== list(_REALISTIC_FIELD)`, which
+        # would hold for any contents of that constant and so would follow it silently if the
+        # shared baseline itself drifted.
+        ("realistic", [AggressiveBot, PatientValueBot, BalancedBot]),
+        ("overbidder_unpaced", [AggressiveBot] * 4 + [PatientValueBot]),
+        ("balanced_field", [BalancedBot]),
+    ],
+)
+def test_build_field_fixed_mix_composition(name: str, expected: list[type]) -> None:
+    """The refusal must not disturb the fixed-mix paths -- only the mislabelling request."""
+    assert [type(b) for b in build_field(name, 0.2, n_bots=11)] == expected
 
-    Compares actual composition. An earlier version of this test asserted `is not None`, which no
-    behaviour change short of returning None could fail -- it would have passed if `realistic`
-    started returning an empty list or the wrong archetypes.
-    """
-    assert build_field("realistic", 0.2, n_bots=11) == list(_REALISTIC_FIELD)
 
-    unpaced = build_field("overbidder_unpaced", 0.2, n_bots=11)
-    assert [type(b).__name__ for b in unpaced] == ["AggressiveBot"] * 4 + ["PatientValueBot"]
-
-    balanced = build_field("balanced_field", 0.2, n_bots=11)
-    assert [type(b).__name__ for b in balanced] == ["BalancedBot"]
-
-    # the historical per-seat path: 11 seats, hoarders at 4 and 9, everything else aggressive
-    hist = build_field("overbidder", 0.2, n_bots=11)
-    assert [i for i, b in enumerate(hist) if isinstance(b, PatientValueBot)] == [4, 9]
-    assert len(hist) == 11
-
-    only = build_field("overbidder_only", 0.2, n_bots=11)
-    assert len(only) == 11 and not any(isinstance(b, PatientValueBot) for b in only)
+def test_build_field_overbidder_only_has_no_hoarders() -> None:
+    field = build_field("overbidder_only", 0.2, n_bots=11)
+    assert len(field) == 11
+    assert not any(isinstance(b, PatientValueBot) for b in field)
 
 
 def test_build_field_unknown_name_says_so_even_with_n_patient() -> None:
     """The honorability guard must not shadow the unknown-field diagnosis.
 
-    `choices=FIELDS` shields the CLIs, but all six scripts import build_field as a library
-    function, and a typo there was being reported as 'has a fixed archetype mix'.
+    `choices=FIELDS` shields every CLI, so this is reachable only from a REPL or a test -- but a
+    typo there was being reported as "has a fixed archetype mix", pointing at the wrong knob.
     """
     with pytest.raises(ValueError, match="unknown field"):
         build_field("overbiddr", 0.2, n_bots=11, n_patient=3)

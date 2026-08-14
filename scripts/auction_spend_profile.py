@@ -43,7 +43,13 @@ from projections.schemas import Position
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script import
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, N_PATIENT_HELP, build_field
+from auction_field_bakeoff import (
+    CONTESTANTS,
+    FIELDS,
+    N_PATIENT_HELP,
+    build_field,
+    format_n_patient,
+)
 
 _BANDS: tuple[tuple[str, int, int], ...] = (
     ("$40+", 40, 10**9),
@@ -111,7 +117,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"league={config.name} seat={args.seat}/{config.n_teams} budget=${config.budget} "
-        f"roster={config.roster_size} | field={args.field} n_patient={args.n_patient} "
+        f"roster={config.roster_size} | field={args.field} "
+        f"n_patient={format_n_patient(args.n_patient)} "
         f"overbid={args.overbid} "
         f"market={args.bot_prices} | {args.drafts} drafts"
     )

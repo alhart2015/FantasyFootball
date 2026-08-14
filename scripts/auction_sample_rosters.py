@@ -47,7 +47,13 @@ from projections.draft.league_config import LeagueConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script imports
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, N_PATIENT_HELP, build_field
+from auction_field_bakeoff import (
+    CONTESTANTS,
+    FIELDS,
+    N_PATIENT_HELP,
+    build_field,
+    format_n_patient,
+)
 from inspect_auction_drafts import _lineup, _RosterItem, _slot_plan
 
 # One sample per bucket, in the order they are printed.
@@ -181,7 +187,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"strategy={args.strategy} league={config.name} seat={hero}/{config.n_teams} "
-        f"budget=${config.budget} | field={args.field} n_patient={args.n_patient} "
+        f"budget=${config.budget} | field={args.field} "
+        f"n_patient={format_n_patient(args.n_patient)} "
         f"overbid={args.overbid} "
         f"market={args.bot_prices}"
     )

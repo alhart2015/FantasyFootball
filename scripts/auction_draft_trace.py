@@ -39,7 +39,13 @@ from projections.draft.league_config import LeagueConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script import
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, N_PATIENT_HELP, build_field
+from auction_field_bakeoff import (
+    CONTESTANTS,
+    FIELDS,
+    N_PATIENT_HELP,
+    build_field,
+    format_n_patient,
+)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -118,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"hero={args.strategy} seat {args.seat}/{config.n_teams} draft #{args.draft} | "
-        f"field={args.field} n_patient={args.n_patient} "
+        f"field={args.field} n_patient={format_n_patient(args.n_patient)} "
         f"overbid={args.overbid} pace={args.overbid_pace} "
         f"market={args.bot_prices}"
     )
