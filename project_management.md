@@ -6,6 +6,34 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction — field-mix sweep (Run Z): `overbid_noramp` holds from 11/0 down to 5/6, loses only at 3/8 (2026-08-13, branch `exp/auction-field-mix-sweep`)
+
+**Question:** every prior run modelled Will's room as **9 aggressive / 2 conservative** of 11 bots — a hard-coded assumption (`_PATIENT_EVERY`), never a measurement. How wrong can that be before the hero recommendation changes? `build_field` gains `n_patient` so the mix is sweepable; full 15-hero field × 7 mixes × 12 seats × 20 seeds × 300 sims, CRN-paired, post-#143 engine.
+
+**Answer — the crossover is between 5/6 and 3/8.** Best challenger to `overbid_noramp` per mix (paired, `*` = CI excludes 0):
+
+| mix | best challenger | Δ | verdict |
+|---|---|---|---|
+| 11/0 | `overbid` +0.0063 | [−0.0002,+0.0127] | tied |
+| **9/2** | `overbid` −0.0059 | [−0.0123,+0.0004] | **hero leads** |
+| 8/3 | `overbid` −0.0079 | [−0.0156,−0.0001]\* | **hero leads (separated)** |
+| 6/5 | `anchors` +0.0042 | [−0.0039,+0.0124] | tied |
+| 5/6 | `static` +0.0097 | [−0.0007,+0.0200] | tied |
+| **3/8** | **`inflation` +0.0507** | **[+0.0401,+0.0614]\*** | **hero LOSES** |
+| 0/11 | `anchors` −0.0012 | [−0.0096,+0.0073] | tied |
+
+**Why it matters:** the shipped plan survives being wrong about the room's composition all the way from all-aggressive down to **5 aggressive of 11**. It takes ~75% cash-hoarders before the recommendation is actually wrong. Point estimates alone would have suggested four different winners across the range; only the paired CIs show the lead is never actually surrendered until 3/8.
+
+**Worth remembering:**
+- **`inflation` is the specialist for a hoarding room** — near-worst in aggressive rooms (0.5473 at 9/2), clear winner at 3/8 (0.6349). If the real room turns out cash-rich, that is where to look, not the shipped hero.
+- **The response is non-monotone.** `overbid_noramp` is *worst* at 3/8 (0.5842) and *best* at 0/11 (0.6744). Hypothesis, unverified: 3/8 is worst-of-both-worlds (studs still bid up, plus a cash-rich rump that outbids you late); at 0/11 nobody contests studs at all.
+- **Hoarder placement is worth ~0.004 by itself.** The 9/2 cell reads 0.6167 here vs the Run-Y bake-off's 0.6210 — same mix, but evenly-spread hoarders land at seats [2,8] where the historical rule used [4,9]. Same order as several effects chased earlier in this log. **Run Y stays the reference for the 9/2 room**; Run Z is internally consistent across its own cells.
+- **A rounding bug was caught before the sweep ran**, not after: `round((i+0.5)*n/k)` collides as k approaches n and placed 6 hoarders when asked for 11. The parametrized test now checks every (seats, hoarders) pair for n in 1..15.
+
+**Decisions:** none. `overbid_noramp` + default nomination stands, now with a measured robustness envelope instead of an unexamined assumption. Sweeps *how many* bots are aggressive, not *how* aggressive — the `overbid`/`pace` knobs of the archetype are held fixed and remain unswept.
+
+---
+
 ## Auction — FLEX was anchored to RB, capping every team at 4 WR — FIXED + full re-run (Run Y) (2026-08-13, branch `fix/auction-flex-position-bounds`, issue [#143](https://github.com/alhart2015/FantasyFootball/issues/143))
 
 **The bug.** `bot_position_bounds` added every FLEX slot to **RB** unconditionally, and the bench was then distributed proportionally to those inflated minimums — so the anchor applied twice. Will's caps came out **RB 7 / WR 4**, and the WR cap bound on **98–99%** of all 960 measured rosters (RB's on 3–5%). Every seat, hero included, was structurally forbidden a 5th WR.
