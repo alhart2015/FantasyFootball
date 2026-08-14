@@ -16,7 +16,7 @@ Running log of project status, decisions, and next steps. Append new entries at 
 |---|---|---|---|
 | 11/0 | `overbid` +0.0063 | [−0.0002,+0.0127] | tied |
 | **9/2** | `overbid` −0.0059 | [−0.0123,+0.0004] | **hero leads** |
-| 8/3 | `overbid` −0.0079 | [−0.0156,−0.0001]\* | **hero leads (separated)** |
+| 8/3 | `overbid` −0.0079 | [−0.0156,−0.0001]† | **hero leads** (multiplicity, see below) |
 | 6/5 | `anchors` +0.0042 | [−0.0039,+0.0124] | tied |
 | 5/6 | `static` +0.0097 | [−0.0007,+0.0200] | tied |
 | **3/8** | **`inflation` +0.0507** | **[+0.0401,+0.0614]\*** | **hero LOSES** |
@@ -27,7 +27,9 @@ Running log of project status, decisions, and next steps. Append new entries at 
 **Worth remembering:**
 - **`inflation` is the specialist for a hoarding room** — near-worst in aggressive rooms (0.5473 at 9/2), clear winner at 3/8 (0.6349). If the real room turns out cash-rich, that is where to look, not the shipped hero.
 - **The response is non-monotone.** `overbid_noramp` is *worst* at 3/8 (0.5842) and *best* at 0/11 (0.6744). Hypothesis, unverified: 3/8 is worst-of-both-worlds (studs still bid up, plus a cash-rich rump that outbids you late); at 0/11 nobody contests studs at all.
-- **Hoarder placement is worth ~0.004 by itself.** The 9/2 cell reads 0.6167 here vs the Run-Y bake-off's 0.6210 — same mix, but evenly-spread hoarders land at seats [2,8] where the historical rule used [4,9]. Same order as several effects chased earlier in this log. **Run Y stays the reference for the 9/2 room**; Run Z is internally consistent across its own cells.
+- **Moving the hoarders is worth ~0.004 even at a fixed 9/2 count.** The 9/2 cell reads 0.6167 here vs the Run-Y bake-off's 0.6210 — same count, but evenly-spread hoarders land at seats [2,8] where the historical rule used [4,9]. **This is placement *and* pace reassignment, not placement alone** — `_spread_paces` hands its jittered caps to non-hoarder seats in seat order, so moving a hoarder changes which aggressive seat draws which cap for every seat after it; this run does not separate the two. Same order as several effects chased earlier in this log. **Run Y stays the reference for the 9/2 room**; Run Z is internally consistent across its own cells.
+- **† The paired CIs are multiplicity-uncorrected.** Each row picks the best of 14 challengers then applies an uncorrected 95% CI. For the *tied* rows that cuts the safe way. It bites only on 8/3, bound **−0.0001**, which should read "no challenger demonstrably beat the hero" rather than a demonstrated lead. The 3/8 loss (+0.0507) is unaffected.
+- **The grid is coarse and uneven.** Swept `n_patient` = 0, 2, 3, 5, 6, 8, 11 — steps of 2, 1, 2, 1, 2, 3 seats (9–27 points, not a uniform 9). **4/7 was never run and sits inside the claimed crossover bracket**, so the crossover is bracketed by cells nine points apart, no tighter.
 - **A rounding bug was caught before the sweep ran**, not after: `round((i+0.5)*n/k)` collides as k approaches n and placed 6 hoarders when asked for 11. The parametrized test now checks every (seats, hoarders) pair for n in 1..15.
 
 **Decisions:** none. `overbid_noramp` + default nomination stands, now with a measured robustness envelope instead of an unexamined assumption. Sweeps *how many* bots are aggressive, not *how* aggressive — the `overbid`/`pace` knobs of the archetype are held fixed and remain unswept.
