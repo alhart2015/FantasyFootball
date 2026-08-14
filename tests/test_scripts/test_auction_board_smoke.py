@@ -279,10 +279,13 @@ def test_minimal_mode_prices_a_nominee_and_records_the_sale(tmp_path: Path) -> N
     assert not at.exception
     nom = next(sb for sb in at.selectbox if "Nominated player" in str(getattr(sb, "label", "")))
     assert nom.value is None  # nothing staged until you type
-    # AppTest reports the *formatted* option, so map back through the same helpers the view
-    # uses rather than assuming options are ids.
+    # AppTest's `Selectbox.set_value` sets the selection BY VALUE ("Set the selection by value" in
+    # streamlit.testing.v1.element_tree), i.e. the option itself -- here a gsis_id -- and applies
+    # `format_func` itself when rendering. This previously passed the rendered label, which
+    # `_option_label` then tried to look up as an id, raising KeyError: 'Player 1 (RB)'. The sibling
+    # `_winner_box(...).set_value(1)` calls in this file already pass raw option values.
     staged = _available_ids(sess)[0]
-    nom.set_value(_option_label(sess, staged)).run()
+    nom.set_value(staged).run()
     assert not at.exception
     assert any("BID UP TO $" in str(getattr(md, "value", "")) for md in at.markdown)
     # the resolved name is on screen: the only cross-check that the box picked the right man
