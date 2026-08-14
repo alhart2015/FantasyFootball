@@ -35,10 +35,10 @@ before the hero recommendation changes?" could not be asked at all.
 Evenly spaced rather than the first or last `k`, because clustering the hoarders at one end changes
 *where* they sit as well as how many there are, confounding the mix with seat adjacency to the hero.
 
-The half-step offset keeps the set off seat 0 at low densities. **It does not once `2k > n`** — at
-those densities nearly every seat is a hoarder and there is no spread left to give; the swept 5/6,
-3/8 and 0/11 cells all include seat 0. The code comment says so rather than claiming an invariant
-it does not hold.
+The half-step offset keeps the set off seat 0 at low densities. **It does not once `2k > n`** —
+first triggering at 6 of 11 (55%), not only at extreme densities — because the even spacing has no
+room left to skip it. The swept 5/6, 3/8 and 0/11 cells all include seat 0. The code comment says
+so rather than claiming an invariant it does not hold.
 
 The arithmetic matters: consecutive exact values differ by `n/k ≥ 1`, so the floors are strictly
 increasing and the set has exactly `k` members. A plain `round((i + 0.5)·n / k)` does **not** — it
@@ -54,11 +54,11 @@ Accepting the knob on a path that ignores it therefore produces **an artifact la
 that was never simulated** — the same class of failure the script already fails loudly on for ESPN
 prices.
 
-So a non-`None` `n_patient` that cannot be honored **raises**
-(`_reject_unhonorable_n_patient`): negative, above `n_bots`, a field with a fixed archetype mix
-(`realistic`, `overbidder_unpaced`, `balanced_field`), the uniform-cap short-circuit
-(`n_bots is None or pace_jitter <= 0`), or a non-zero request against `overbidder_only`, which has
-no conservative seats by definition.
+So the rule is: **a request this configuration cannot honor raises, rather than being dropped.**
+The enumeration of what that covers lives in `_reject_unhonorable_n_patient` and its docstring —
+deliberately not restated here, because a second copy goes stale the first time the guard changes.
+The set of fields the knob can touch is `_MIX_TUNABLE_FIELDS`, read by both the guard and
+`build_field`'s own dispatch so the two cannot drift.
 
 The aggregate provenance header prints `n_patient` for the same reason: without it, the `p2` and
 `p8` chunk directories produce byte-identical header lines and an operator transcribing seven cells
@@ -81,6 +81,10 @@ Run-Z cell would silently describe the historical 9/2 room — which Run Z itsel
   which cap. The two effects are confounded by construction and Run Z does not separate them.
 - **Cover the grid evenly.** Swept values are 0, 2, 3, 5, 6, 8, 11 — steps of 1 to 3 seats. `4/7`
   was never run and sits inside the crossover bracket Run Z reports.
+
+- **Race 15 distinct policies.** It races 15 registry *names*, of which only 13 are distinct in this
+  configuration: `balanced`/`balanced_flat` and `patient`/`patient_deep` come out bit-identical.
+  See [#146](https://github.com/alhart2015/FantasyFootball/issues/146).
 
 ## Follow-ups, in rough priority
 
