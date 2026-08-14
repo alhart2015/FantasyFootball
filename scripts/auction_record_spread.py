@@ -41,7 +41,13 @@ from projections.draft.auction import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script import
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, build_field
+from auction_field_bakeoff import (
+    CONTESTANTS,
+    FIELDS,
+    N_PATIENT_HELP,
+    build_field,
+    format_n_patient,
+)
 
 _N_GAMES = len(REG_WEEKS)
 
@@ -58,6 +64,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--base-seed", type=int, default=0)
     p.add_argument("--bot-prices", choices=("espn", "model"), default="espn")
     p.add_argument("--field", choices=FIELDS, default="overbidder")
+    p.add_argument(
+        "--n-patient",
+        type=int,
+        default=None,
+        help=N_PATIENT_HELP,
+    )
     p.add_argument("--overbid", type=float, default=0.20)
     p.add_argument("--market-adp-jitter", type=float, default=12.0)
     p.add_argument("--data-root", type=Path, default=Path("data"))
@@ -98,7 +110,9 @@ def main(argv: list[str] | None = None) -> int:
     bot_dollars: pd.Series | None = None
     if args.bot_prices == "espn" and has_usable_espn_prices(pool):
         bot_dollars = espn_anchored_bot_prices(pool, config, model_values=baseline)
-    field = build_field(args.field, args.overbid, n_bots=config.n_teams - 1)
+    field = build_field(
+        args.field, args.overbid, n_bots=config.n_teams - 1, n_patient=args.n_patient
+    )
     names = [s.strip() for s in args.strategies.split(",") if s.strip()]
     unknown = [n for n in names if n not in CONTESTANTS]
     if unknown:
@@ -106,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"{config.n_teams}-team, seat {args.seat}, {_N_GAMES}-game regular season | "
+        f"field={args.field} n_patient={format_n_patient(args.n_patient)} | "
         f"{args.drafts} drafts x {args.seasons_per_draft} seasons = "
         f"{args.drafts * args.seasons_per_draft} seasons per strategy"
     )

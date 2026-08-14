@@ -848,6 +848,75 @@ The top three are identical and `overbid_noramp` keeps a clear margin (+0.006 ov
 
 **Conclusion (data; no default change):** the bug was real and load-bearing on roster *shape*, but it did not change **which strategy to use**. Will's cheat sheet and its MAX BID numbers were never affected (valuation was always correct). `overbid_noramp` + default nomination stands, and the practical nomination advice is unchanged: poison is worth ~0 to slightly negative in a room that busts early, ~+0.01 in a room that holds money. Artifacts: `reports/_will_bakeoff/postfix_2026/`, `reports/_gap_nom_probe/postfix_*/` (untracked). Live-draft call still September.
 
+**Run Z — 2026-08-13 — AGGRESSIVE/CONSERVATIVE field-mix sweep → `overbid_noramp` is the best or statistically tied-for-best across the whole range from 11/0 down to 5/6, and only clearly loses at 3/8** (`will_half12`, ESPN market, ADP nomination `market_adp_jitter=12`, byes OFF, `overbidder` field at `overbid=0.2/pace=4.5/opening/jitter=0.35`, full 15-hero field × 12 seats × 20 seeds × 300 sims per mix, CRN-paired; post-#143 engine; branch `exp/auction-field-mix-sweep`; design note `docs/superpowers/specs/2026-08-13-auction-field-mix-sweep-design.md`, written retroactively -- the branch did not follow the spec-first rule and that is recorded there). Motivated by the obvious unswept axis: every prior run modelled Will's room as **9 aggressive / 2 conservative** of 11 bots, and that ratio was a hard-coded assumption (`_PATIENT_EVERY`), never a measurement. `build_field` gains `n_patient` (exactly that many hoarder seats, spread evenly) so the mix can be swept.
+
+Seat-averaged `reg_win_pct` by mix (aggressive/conservative of 11 bots), **all 15 contestants**, ordered by the 9/2 column:
+
+| hero | 11/0 | **9/2** | 8/3 | 6/5 | 5/6 | 3/8 | 0/11 |
+|---|---|---|---|---|---|---|---|
+| **`overbid_noramp`** | 0.6080 | **0.6167** | **0.6107** | 0.6003 | 0.5992 | 0.5842 | **0.6744** |
+| `overbid` | **0.6143** | 0.6108 | 0.6029 | 0.5927 | 0.5973 | 0.5864 | 0.6634 |
+| `studsdepth` | 0.6007 | 0.6054 | 0.5987 | 0.5897 | 0.5774 | 0.5848 | 0.6634 |
+| `static` | 0.6004 | 0.5965 | 0.5871 | 0.6002 | **0.6089** | 0.6091 | 0.6695 |
+| `balanced` | 0.6010 | 0.5875 | 0.5803 | 0.5884 | 0.5524 | 0.5383 | 0.5391 |
+| `balanced_flat` | 0.6010 | 0.5875 | 0.5803 | 0.5884 | 0.5524 | 0.5383 | 0.5391 |
+| `anchors` | 0.6000 | 0.5846 | 0.5930 | **0.6045** | 0.6075 | 0.6068 | 0.6732 |
+| `sr_g0.2_c2` | 0.5746 | 0.5833 | 0.5726 | 0.5711 | 0.5733 | 0.5628 | 0.5609 |
+| `sr_g0.1_c2` | 0.5865 | 0.5794 | 0.5842 | 0.5743 | 0.5691 | 0.5651 | 0.5485 |
+| `sr_g0.3_c2` | 0.5811 | 0.5781 | 0.5779 | 0.5872 | 0.5857 | 0.5734 | 0.5556 |
+| `inflation` | 0.5421 | 0.5473 | 0.5300 | 0.5851 | 0.5846 | **0.6349** | 0.6722 |
+| `patient` | 0.5196 | 0.5238 | 0.5088 | 0.4997 | 0.5017 | 0.4685 | 0.4754 |
+| `patient_deep` | 0.5196 | 0.5238 | 0.5088 | 0.4997 | 0.5017 | 0.4685 | 0.4754 |
+| `vorpshare` | 0.5111 | 0.5113 | 0.5127 | 0.5263 | 0.5354 | 0.5186 | 0.5012 |
+| `marginal` | 0.5105 | 0.5076 | 0.5088 | 0.5216 | 0.5210 | 0.5016 | 0.4789 |
+
+> **`balanced`/`balanced_flat` and `patient`/`patient_deep` post bit-identical figures — and they
+> are NOT the same policy.** `registry.py` builds them with different constructor arguments
+> (`non_increasing_cap=True`, `scrub_frac=0.0`) and the bid layer reads both. Instrumenting
+> `BalancedValueBid.max_bid` over six full drafts of the **9/2 cell**: 354 bid calls, **2** where the two configs
+> return different bids, and **6 of 6 identical hero rosters** — the clamp fires but never changes
+> an outcome in those drafts, because the hero's bid is fair-value-limited rather than cap-limited on
+> the players it actually wins. **That instrumentation covers the `balanced` pair only**; the
+> `patient`/`scrub_frac` half is an unverified hypothesis (see #146), and neither explains why the
+> agreement is exact to full float precision across every cell rather than merely close — a harness
+> effect is not ruled out. Reproduce with `scripts/_diag_identical_contestants.py`. Run L measured them as clearly different (0.554/0.495 vs 0.522/0.487), but that is **not a clean
+> contradiction**: `BalancedValueBid.premium` was retuned 1.0 → 0.0 between the two runs (Run N),
+> and at premium 1.0 the bid is cap-bound where at 0.0 it is fair-value-bound — which is exactly the
+> mechanism above. Run L also used a different league, nomination model and a pre-#143 engine. Filed as
+> [#146](https://github.com/alhart2015/FantasyFootball/issues/146); **treat this field as 13
+> distinct policies, not 15**, and do not read the duplicate rows as two independent measurements.
+> (An earlier draft of this note asserted they were "identical policies under two registry names",
+> which is false and closed the question instead of opening it.)
+
+(An earlier draft of the table printed 11 of the 15 and described itself as the full field — the omitted `sr_g0.1_c2` outranks the printed `balanced` at 8/3, so the abridgement was not a top-N.)
+
+Point estimates alone would read as four different winners. The CRN-paired test says otherwise — best challenger to `overbid_noramp` per mix (positive = beats it; `*` = 95% CI excludes 0):
+
+| mix | best challenger | paired Δ | 95% CI | verdict |
+|---|---|---|---|---|
+| 11/0 | `overbid` | +0.0063 | [−0.0002, +0.0127] | **tied** (CI touches 0) |
+| **9/2** | `overbid` | −0.0059 | [−0.0123, +0.0004] | **tied** |
+| 8/3 | `overbid` | −0.0079 | [−0.0156, −0.0001]\*† | **tied** after correction (see †) |
+| 6/5 | `anchors` | +0.0042 | [−0.0039, +0.0124] | **tied** |
+| 5/6 | `static` | +0.0097 | [−0.0007, +0.0200] | **tied** (lower bound −0.0007) |
+| **3/8** | **`inflation`** | **+0.0507** | **[+0.0401, +0.0614]\*** | **`overbid_noramp` LOSES** |
+| 0/11 | `anchors` | −0.0012 | [−0.0096, +0.0073] | **tied** |
+
+† **Multiplicity caveat.** Each row selects the best of 14 challenger *names* — only **12 of which are distinct policies**, see the note under the table — and then applies an uncorrected 95% CI, so the CIs are anti-conservative for exactly the comparison being made. For the
+**tied** rows this cuts the safe way — a selected maximum that still fails to separate is stronger
+evidence of a tie, not weaker. It bites only on 8/3, whose bound is **−0.0001**: a two-sided Bonferroni threshold is z≈2.91 at 14 challenger names (2.87 at the 12 distinct ones) and that row is z≈−1.99, so it does **not** survive correction. Its verdict cell therefore reads *tied* — as do 11/0, 9/2, 6/5, 5/6 and 0/11, whose intervals all include zero outright. **No row demonstrates separation in the hero's favour**, which is the finding. (The 3/8 row does separate, decisively, in the hero's *disfavour* — that is the other half of the finding.) Any correction for selection widens it across zero. The 3/8 loss (+0.0507, bound +0.0401) is far outside any plausible correction and is unaffected.
+
+**Findings (data):**
+1. **The answer to "when does it stop being best" is: 3 aggressive / 8 conservative.** From 11/0 through 5/6 **no** contestant — not merely the best challenger — beats `overbid_noramp` with a CI that excludes zero; it is the leader or statistically tied for it across that whole range. At **3/8** it is beaten decisively by `inflation` (**+0.051**), and also by `static` (+0.025\*) and `anchors` (+0.023\*). The crossover sits between **5/6 and 3/8**, i.e. once roughly three-quarters of the room is conservative.
+2. **This is a strong robustness result for Will's plan.** The modelled room is 9/2. The hero survives being wrong about the mix by a wide margin — all the way to 5 aggressive of 11 — before the recommendation would even be in question, and it takes 3/8 before it is actually wrong.
+3. **The response is non-monotone, and the worst cell is the middle-conservative one (3/8), not the all-conservative one (0/11).** At 3/8 `overbid_noramp` posts its lowest figure (0.5842) and at 0/11 its highest (0.6744). A plausible reading — *offered as a hypothesis, not a measurement*: 3/8 is the worst of both worlds, with enough aggressive bots to bid the studs up *and* a cash-rich rump that can still outbid you late; at 0/11 nobody contests the studs at all, so a stud-buyer simply takes them. Not verified here.
+4. **`inflation` is the specialist to remember.** It is near-worst in aggressive rooms (0.5421 at 11/0, 0.5473 at 9/2) and the clear winner at 3/8 (0.6349). Nothing is adopted on that basis, but if the real room turns out to be cash-hoarding, the shipped hero is the wrong one and `inflation` is where to look.
+5. **Moving the hoarders is worth ~0.004 even at a fixed 9/2 mix.** The 9/2 cell here reads 0.6167 against the post-fix bake-off's 0.6210 — same *count*, but `--n-patient 2` puts the hoarders at seats [2, 8] where the historical `_PATIENT_EVERY` rule put them at [4, 9]. **This is placement *and* pace reassignment, not placement alone:** `_spread_paces` hands its jittered caps to the non-hoarder seats in seat order, so moving a hoarder shifts which aggressive seat draws which cap for every seat after it. The two configurations differ in both respects at once and this run does not separate them. The operational conclusion is unaffected — they are not interchangeable, and the gap is the same order as several effects chased earlier in this log. **The Run-Y bake-off remains the reference for the 9/2 room**; this sweep is internally consistent across its own seven cells, which is what the comparison needs.
+
+**Caveats:** one pool, one market, one seat-count, byes off; `overbid`/`pace`/`jitter` of the aggressive archetype held fixed, so this sweeps *how many* are aggressive and not *how* aggressive. The conservative archetype is the stock `PatientValueBot` throughout. **The grid is coarse and uneven:** the swept `n_patient` values are 0, 2, 3, 5, 6, 8, 11 — steps of 2, 1, 2, 1, 2 and 3 seats, i.e. 9 to 27 percentage points, not a uniform 9. **`n_patient=7` (4/7) was never run, and it sits inside the claimed 5/6→3/8 crossover bracket**, so the crossover is bracketed by two cells **eighteen** points apart (two seats) and is not located more precisely than that — nine points is the distance from each bound to the un-run midpoint, not the bracket width. Filling 4/7 (and 9/2-with-historical-placement) is the cheap follow-up if the crossover location ever matters.
+
+**Conclusion (data; no default change):** `overbid_noramp` is robust to the field-mix assumption across the plausible range and only fails in a room that is ~75% cash-hoarders — which is not the room Will is modelled to be in, and is observable at the table (Run X: if lots clear above sheet value and teams are near-broke by ~pick 50, it is an aggressive room). Artifacts: `reports/_field_mix/p{0,2,3,5,6,8,11}/*.json` (untracked). Live-draft call still September.
+
 ## Planned experiments / axes to sweep
 
 - **Seat sweep (NEW, Run K priority)** — sweep all 12 seats to quantify the ~0.10 seat effect and test whether seat 1 is structurally bad vs seat-6 easy-schedule luck; the goal metric (`reg_win_pct` in a random-seat league) should be the seat-averaged value.

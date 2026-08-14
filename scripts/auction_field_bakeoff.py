@@ -39,7 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -71,7 +71,7 @@ _Z95 = 1.959963984540054
 # overbid variant and the low-gain convex StackRatio variants that Run T resolved as the only
 # heroes to beat `balanced` in the less-circular ESPN market), which are deliberately kept out of
 # the tournament roster. `registry.ALL_BID_MODELS` is exactly that union.
-CONTESTANTS: dict[str, AuctionBidStrategy] = ALL_BID_MODELS
+CONTESTANTS: Mapping[str, AuctionBidStrategy] = ALL_BID_MODELS
 
 # The under-bidder: the library's stock `PatientValueBot` at its defaults — under-bids studs at
 # 0.5x (never wins one), pays a mid-tier premium out of the reserve it saved, $1s the bottom half.
@@ -128,6 +128,73 @@ def _spread_paces(pace: float, jitter: float, n: int) -> list[float]:
     return [lo + (hi - lo) * i / (n - 1) for i in range(n)]
 
 
+# Fields whose archetype mix is fixed: they ignore n_patient entirely and return early.
+_FIXED_MIX_FIELDS: tuple[str, ...] = ("realistic", "overbidder_unpaced", "balanced_field")
+# Fields that reach the per-seat path, mapped to whether they carry hoarder seats at all.
+# `build_field` reads the VALUE (instead of re-testing `name == "overbidder"`), so adding a name
+# here forces a hoarder decision at authoring time rather than defaulting it to all-aggressive.
+# NOTE this links the guard to the dispatch for TUNABLE names only: `_FIXED_MIX_FIELDS` members
+# still need a matching early return in `build_field`, or they reach the `unknown field` raise.
+# Note `overbidder_only` is False: it accepts `n_patient=0` and refuses anything else.
+_MIX_TUNABLE_FIELDS: dict[str, bool] = {"overbidder": True, "overbidder_only": False}
+
+
+def format_n_patient(n_patient: int | None) -> str:
+    """Render `n_patient` for a provenance header.
+
+    `None` prints as `every-5th`, not `None`: omitting the flag runs the historical every-5th rule
+    (2 hoarders of 11), which is a different room from `--n-patient 0` (zero hoarders) and sits at
+    the opposite end of the swept range. A bare `None` reads as the latter.
+    """
+    return "every-5th" if n_patient is None else str(n_patient)
+
+
+# One wording for the six parsers that expose this flag. Six copies shipped with two different
+# texts on the commit that created them; a shared constant is what stops that recurring.
+N_PATIENT_HELP = (
+    "How many bot seats are conservative hoarders, spread evenly. Omit for the historical "
+    "every-5th rule (2 of 11 in a 12-team league). Set it to sweep the aggressive/conservative "
+    "mix, or to make a diagnostic describe the same room as a swept field-mix cell."
+)
+
+
+def _reject_unhonorable_n_patient(
+    name: str, n_bots: int | None, pace_jitter: float, n_patient: int
+) -> None:
+    """Raise unless this configuration will actually place `n_patient` hoarders.
+
+    Only the jittered `_MIX_TUNABLE_FIELDS` path reads the knob. Every other path returns a fixed
+    archetype mix, so accepting the value there would put a number in the chunk payload that
+    describes a room the simulation never built -- and `_guard_homogeneous` would then pool it.
+
+    `n_patient=0` is refused off that path too, even where the fixed mix happens to contain no
+    hoarders (`balanced_field`). Accepting it would still record a mix-sweep parameter against a run
+    that never consulted the mechanism, and the caller means "omit the flag".
+    """
+    # Before the honorability test, or a typo is diagnosed as the wrong thing.
+    if name not in FIELDS:
+        raise ValueError(f"unknown field {name!r}")
+    if n_patient < 0:
+        raise ValueError(f"n_patient must be >= 0; got {n_patient}")
+    if n_bots is not None and n_patient > n_bots:
+        raise ValueError(f"n_patient must be in 0..{n_bots}; got {n_patient}")
+    if name not in _MIX_TUNABLE_FIELDS:
+        raise ValueError(
+            f"field {name!r} has a fixed archetype mix, so n_patient={n_patient} cannot be "
+            "honored; omit it rather than recording a mix that will not be run"
+        )
+    if n_bots is None or pace_jitter <= 0.0:
+        raise ValueError(
+            f"n_patient={n_patient} needs the per-seat path (n_bots set and pace_jitter > 0); "
+            f"got n_bots={n_bots}, pace_jitter={pace_jitter}, which returns the fixed 5-entry cycle"
+        )
+    if name == "overbidder_only" and n_patient:
+        raise ValueError(
+            "field 'overbidder_only' has no conservative seats by definition; n_patient must "
+            f"be 0, got {n_patient}"
+        )
+
+
 def build_field(
     name: str,
     overbid: float,
@@ -136,6 +203,7 @@ def build_field(
     *,
     n_bots: int | None = None,
     pace_jitter: float = _OVERBID_PACE_JITTER,
+    n_patient: int | None = None,
 ) -> list[BotArchetype]:
     """Named opponent-field mix, round-robined across the bot seats by the engine.
 
@@ -146,7 +214,18 @@ def build_field(
     When `n_bots` is given and `pace_jitter > 0`, the returned list is exactly `n_bots` long and
     every aggressive seat gets its OWN cap, so the room has no single ceiling. Without `n_bots` the
     5-entry cycle is returned unchanged (identical caps), which is what earlier runs used.
+
+    `n_patient` sets exactly how many bot seats are conservative hoarders, spread as evenly as
+    possible rather than clustered at one end. `None` keeps the historical rule (every
+    `_PATIENT_EVERY`-th seat -> 2 of 11 in a 12-team league), so every prior run re-simulates
+    identically; pass an int only to sweep the aggressive/conservative mix.
+
+    A non-None `n_patient` that this configuration cannot honor RAISES rather than being ignored:
+    `_run_chunk` records the value in the chunk payload and `_guard_homogeneous` treats it as a
+    config key, so silently dropping it would label an artifact with a room that never ran.
     """
+    if n_patient is not None:
+        _reject_unhonorable_n_patient(name, n_bots, pace_jitter, n_patient)
     if name == "realistic":  # the standing cross-run baseline; overbid/pace do not apply
         return list(_REALISTIC_FIELD)
     if name == "overbidder_unpaced":  # the no-pace-cap caricature, kept reproducible
@@ -154,15 +233,26 @@ def build_field(
         return [ob_u, ob_u, ob_u, ob_u, _HOARDER]
     if name == "balanced_field":  # sensitivity: a disciplined room that pays fair value
         return [BalancedBot()]
-    if name not in ("overbidder", "overbidder_only"):
+    if name not in _MIX_TUNABLE_FIELDS:  # the fixed-mix names all returned above
         raise ValueError(f"unknown field {name!r}")
 
-    with_patient = name == "overbidder"
+    with_patient = _MIX_TUNABLE_FIELDS[name]
     if n_bots is None or pace_jitter <= 0.0:  # uniform-cap cycle (pre-jitter behaviour)
         ob = BalancedBot(pace=pace, overbid=overbid, pace_basis=basis)
         return [ob, ob, ob, ob, _HOARDER] if with_patient else [ob]
     seats = list(range(n_bots))
-    patient = {i for i in seats if with_patient and i % _PATIENT_EVERY == _PATIENT_EVERY - 1}
+    if not with_patient:
+        patient: set[int] = set()
+    elif n_patient is None:
+        patient = {i for i in seats if i % _PATIENT_EVERY == _PATIENT_EVERY - 1}
+    else:
+        # Evenly spaced rather than the first/last k: clustering the hoarders at one end would
+        # change WHERE they sit as well as how many there are, confounding the mix with seat
+        # adjacency. Half-step offset ((2i+1)n / 2k); consecutive values differ by n/k >= 1, so
+        # this yields exactly `n_patient` distinct seats (see the parametrized test for why the
+        # half-step form is required). Seat 0 IS in the set once 2k > n (first swept case: 6 of 11),
+        # because at that density the even spacing has no room left to skip it.
+        patient = {(2 * i + 1) * n_bots // (2 * n_patient) for i in range(n_patient)}
     paces = _spread_paces(pace, pace_jitter, n_bots - len(patient))
     out: list[BotArchetype] = []
     agg = 0
@@ -175,13 +265,7 @@ def build_field(
     return out
 
 
-FIELDS: tuple[str, ...] = (
-    "realistic",
-    "overbidder",
-    "overbidder_unpaced",
-    "overbidder_only",
-    "balanced_field",
-)
+FIELDS: tuple[str, ...] = _FIXED_MIX_FIELDS + tuple(_MIX_TUNABLE_FIELDS)
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +320,7 @@ def _run_chunk(args: argparse.Namespace) -> int:
             args.overbid_basis,
             n_bots=config.n_teams - 1,
             pace_jitter=args.overbid_pace_jitter,
+            n_patient=args.n_patient,
         ),
         bot_prices=market,
         market_adp_jitter=args.market_adp_jitter,
@@ -252,6 +337,8 @@ def _run_chunk(args: argparse.Namespace) -> int:
         "overbid_pace": args.overbid_pace,
         "overbid_basis": args.overbid_basis,
         "overbid_pace_jitter": args.overbid_pace_jitter,
+        # None = the historical every-5th rule (2 of 11); an int is a swept mix.
+        "n_patient": args.n_patient,
         "base_seed": args.seed,
         "n_seeds": args.seeds,
         "n_sims": args.n_sims,
@@ -270,7 +357,8 @@ def _run_chunk(args: argparse.Namespace) -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2))
     print(
-        f"wrote {args.out} (field={args.field} overbid={args.overbid} market={market} "
+        f"wrote {args.out} (field={args.field} "
+        f"n_patient={format_n_patient(args.n_patient)} overbid={args.overbid} market={market} "
         f"seat={args.seat}, {args.seeds} seeds)"
     )
     return 0
@@ -409,6 +497,7 @@ def _guard_homogeneous(chunks: Sequence[dict[str, object]]) -> None:
         "overbid_pace",
         "overbid_basis",
         "overbid_pace_jitter",
+        "n_patient",
         "n_seeds",
         "n_sims",
     ):
@@ -426,9 +515,16 @@ def _aggregate(args: argparse.Namespace) -> int:
         raise SystemExit(f"no readable chunk JSONs in {args.chunk_dir}")
     _guard_homogeneous(chunks)
     head = chunks[0]
+    # chunks are dict[str, object]; narrow before the typed formatter (a chunk written
+    # before this key existed has no entry, which is the same "historical rule" case).
+    head_n_patient = head.get("n_patient")
+    n_patient_label = format_n_patient(head_n_patient if isinstance(head_n_patient, int) else None)
     print(
         f"nominator_probe={head.get('nominator_probe')} "
-        f"field={head.get('field')} overbid={head.get('overbid')} "
+        # n_patient is what distinguishes two field-mix cells; without it the provenance line for
+        # p2 and p8 is byte-identical and an operator transcribing cells can mis-attribute a row.
+        f"field={head.get('field')} n_patient={n_patient_label} "
+        f"overbid={head.get('overbid')} "
         f"pace={head.get('overbid_pace')}/{head.get('overbid_basis')} "
         f"pace_jitter={head.get('overbid_pace_jitter')} "
         f"adp_jitter={head.get('market_adp_jitter')} seeds={head.get('n_seeds')} "
@@ -539,6 +635,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Race NOMINATION policies instead of bid models, with every contestant bidding "
         "BID_MODEL (e.g. overbid_noramp). Contestants become control/off_pos/gap/gap_off. "
         "Requires --bot-prices espn.",
+    )
+    r.add_argument(
+        "--n-patient",
+        type=int,
+        default=None,
+        help=N_PATIENT_HELP,
     )
     r.add_argument("--data-root", type=Path, default=Path("data"))
     r.add_argument("--out", type=Path, required=True)

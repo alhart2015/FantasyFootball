@@ -47,7 +47,13 @@ from projections.draft.league_config import LeagueConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script imports
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, build_field
+from auction_field_bakeoff import (
+    CONTESTANTS,
+    FIELDS,
+    N_PATIENT_HELP,
+    build_field,
+    format_n_patient,
+)
 from inspect_auction_drafts import _lineup, _RosterItem, _slot_plan
 
 # One sample per bucket, in the order they are printed.
@@ -77,6 +83,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--base-seed", type=int, default=0)
     p.add_argument("--bot-prices", choices=("espn", "model"), default="espn")
     p.add_argument("--field", choices=FIELDS, default="overbidder")
+    p.add_argument(
+        "--n-patient",
+        type=int,
+        default=None,
+        help=N_PATIENT_HELP,
+    )
     p.add_argument("--overbid", type=float, default=0.20)
     p.add_argument("--market-adp-jitter", type=float, default=12.0)
     p.add_argument("--data-root", type=Path, default=Path("data"))
@@ -122,7 +134,9 @@ def main(argv: list[str] | None = None) -> int:
     bot_dollars: pd.Series | None = None
     if args.bot_prices == "espn" and has_usable_espn_prices(pool):
         bot_dollars = espn_anchored_bot_prices(pool, config, model_values=baseline)
-    field = build_field(args.field, args.overbid, n_bots=config.n_teams - 1)
+    field = build_field(
+        args.field, args.overbid, n_bots=config.n_teams - 1, n_patient=args.n_patient
+    )
     name_by_id = dict(zip(pool["gsis_id"].astype(str), pool["full_name"], strict=True))
     pts_by_id = dict(zip(pool["gsis_id"].astype(str), pool["season_mean_fpts"], strict=True))
     fair_by_id = dict(
@@ -173,7 +187,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"strategy={args.strategy} league={config.name} seat={hero}/{config.n_teams} "
-        f"budget=${config.budget} | field={args.field} overbid={args.overbid} "
+        f"budget=${config.budget} | field={args.field} "
+        f"n_patient={format_n_patient(args.n_patient)} "
+        f"overbid={args.overbid} "
         f"market={args.bot_prices}"
     )
     col = None

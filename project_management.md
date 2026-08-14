@@ -6,6 +6,36 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Auction — field-mix sweep (Run Z): `overbid_noramp` holds from 11/0 down to 5/6, loses only at 3/8 (2026-08-13, branch `exp/auction-field-mix-sweep`)
+
+**Question:** every prior run modelled Will's room as **9 aggressive / 2 conservative** of 11 bots — a hard-coded assumption (`_PATIENT_EVERY`), never a measurement. How wrong can that be before the hero recommendation changes? Design note (written **retroactively** -- the branch skipped the spec-first rule and says so): `docs/superpowers/specs/2026-08-13-auction-field-mix-sweep-design.md`. `build_field` gains `n_patient` so the mix is sweepable; full 15-name hero field × 7 mixes × 12 seats × 20 seeds × 300 sims, CRN-paired, post-#143 engine. **Only 13 of the 15 names are distinct policies** — `balanced`/`balanced_flat` and `patient`/`patient_deep` come out identical in this configuration ([#146](https://github.com/alhart2015/FantasyFootball/issues/146)); do not read the duplicate rows as independent measurements.
+
+**Answer — the crossover is between 5/6 and 3/8.** Best challenger to `overbid_noramp` per mix (paired, `*` = CI excludes 0):
+
+| mix | best challenger + Δ | 95% CI | verdict |
+|---|---|---|---|
+| 11/0 | `overbid` +0.0063 | [−0.0002,+0.0127] | tied |
+| **9/2** | `overbid` −0.0059 | [−0.0123,+0.0004] | **tied** |
+| 8/3 | `overbid` −0.0079 | [−0.0156,−0.0001]\*† | **tied** after correction (see †) |
+| 6/5 | `anchors` +0.0042 | [−0.0039,+0.0124] | tied |
+| 5/6 | `static` +0.0097 | [−0.0007,+0.0200] | tied |
+| **3/8** | **`inflation` +0.0507** | **[+0.0401,+0.0614]\*** | **hero LOSES** |
+| 0/11 | `anchors` −0.0012 | [−0.0096,+0.0073] | tied |
+
+**Why it matters:** the shipped plan survives being wrong about the room's composition all the way from all-aggressive down to **5 aggressive of 11**. It takes ~75% cash-hoarders before the recommendation is actually wrong. Point estimates alone would have suggested four different winners across the range; only the paired CIs show that none of those apparent leads is demonstrated, and that the hero is not beaten until 3/8.
+
+**Worth remembering:**
+- **`inflation` is the specialist for a hoarding room** — near-worst in aggressive rooms (0.5473 at 9/2), clear winner at 3/8 (0.6349). If the real room turns out cash-rich, that is where to look, not the shipped hero.
+- **The response is non-monotone.** `overbid_noramp` is *worst* at 3/8 (0.5842) and *best* at 0/11 (0.6744). Hypothesis, unverified: 3/8 is worst-of-both-worlds (studs still bid up, plus a cash-rich rump that outbids you late); at 0/11 nobody contests studs at all.
+- **Moving the hoarders is worth ~0.004 even at a fixed 9/2 count.** The 9/2 cell reads 0.6167 here vs the Run-Y bake-off's 0.6210 — same count, but evenly-spread hoarders land at seats [2,8] where the historical rule used [4,9]. **This is placement *and* pace reassignment, not placement alone** — `_spread_paces` hands its jittered caps to non-hoarder seats in seat order, so moving a hoarder changes which aggressive seat draws which cap for every seat after it; this run does not separate the two. Same order as several effects chased earlier in this log. **Run Y stays the reference for the 9/2 room**; Run Z is internally consistent across its own cells.
+- **† The paired CIs are multiplicity-uncorrected.** Each row picks the best of 14 challengers then applies an uncorrected 95% CI. For the *tied* rows that cuts the safe way. It bites only on 8/3, bound **−0.0001**: two-sided Bonferroni needs z≈2.91 at 14 challenger names (2.87 at the 12 distinct) and that row is z≈−1.99, so it fails correction and reads *tied*. **No row demonstrates separation in the hero's favour** — 11/0, 9/2, 6/5, 5/6 and 0/11 all include zero outright, and 3/8 separates in the hero's *disfavour*. The 3/8 loss (+0.0507) is unaffected.
+- **The grid is coarse and uneven.** Swept `n_patient` = 0, 2, 3, 5, 6, 8, 11 — steps of 2, 1, 2, 1, 2, 3 seats (9–27 points, not a uniform 9). **4/7 was never run and sits inside the claimed crossover bracket**, so the crossover is bracketed by cells **eighteen** points apart (two seats), no tighter — nine points is the distance to the un-run midpoint, not the bracket width.
+- **A rounding bug was caught before the sweep ran**, not after: `round((i+0.5)*n/k)` collides as k approaches n and placed 6 hoarders when asked for 11. The parametrized test now checks every (seats, hoarders) pair for n in 1..15.
+
+**Decisions:** none. `overbid_noramp` + default nomination stands, now with a measured robustness envelope instead of an unexamined assumption. Sweeps *how many* bots are aggressive, not *how* aggressive — the `overbid`/`pace` knobs of the archetype are held fixed and remain unswept.
+
+---
+
 ## Auction — FLEX was anchored to RB, capping every team at 4 WR — FIXED + full re-run (Run Y) (2026-08-13, branch `fix/auction-flex-position-bounds`, issue [#143](https://github.com/alhart2015/FantasyFootball/issues/143))
 
 **The bug.** `bot_position_bounds` added every FLEX slot to **RB** unconditionally, and the bench was then distributed proportionally to those inflated minimums — so the anchor applied twice. Will's caps came out **RB 7 / WR 4**, and the WR cap bound on **98–99%** of all 960 measured rosters (RB's on 3–5%). Every seat, hero included, was structurally forbidden a 5th WR.

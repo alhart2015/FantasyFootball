@@ -43,7 +43,13 @@ from projections.schemas import Position
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script import
 
-from auction_field_bakeoff import CONTESTANTS, FIELDS, build_field
+from auction_field_bakeoff import (
+    CONTESTANTS,
+    FIELDS,
+    N_PATIENT_HELP,
+    build_field,
+    format_n_patient,
+)
 
 _BANDS: tuple[tuple[str, int, int], ...] = (
     ("$40+", 40, 10**9),
@@ -69,6 +75,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--base-seed", type=int, default=0)
     p.add_argument("--bot-prices", choices=("espn", "model"), default="espn")
     p.add_argument("--field", choices=FIELDS, default="overbidder")
+    p.add_argument(
+        "--n-patient",
+        type=int,
+        default=None,
+        help=N_PATIENT_HELP,
+    )
     p.add_argument("--overbid", type=float, default=0.20)
     p.add_argument("--market-adp-jitter", type=float, default=12.0)
     p.add_argument("--top-names", type=int, default=12, help="most-bought players to list.")
@@ -88,7 +100,9 @@ def main(argv: list[str] | None = None) -> int:
     bot_dollars: pd.Series | None = None
     if args.bot_prices == "espn" and has_usable_espn_prices(pool):
         bot_dollars = espn_anchored_bot_prices(pool, config, model_values=baseline)
-    field = build_field(args.field, args.overbid, n_bots=config.n_teams - 1)
+    field = build_field(
+        args.field, args.overbid, n_bots=config.n_teams - 1, n_patient=args.n_patient
+    )
     name_by_id = dict(zip(pool["gsis_id"].astype(str), pool["full_name"], strict=True))
     # generate_auction_values returns a reset-index frame; key fair value by gsis_id the way the
     # engine does (simulation.py sets the same index) or every lookup silently misses and reads $0.
@@ -103,7 +117,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"league={config.name} seat={args.seat}/{config.n_teams} budget=${config.budget} "
-        f"roster={config.roster_size} | field={args.field} overbid={args.overbid} "
+        f"roster={config.roster_size} | field={args.field} "
+        f"n_patient={format_n_patient(args.n_patient)} "
+        f"overbid={args.overbid} "
         f"market={args.bot_prices} | {args.drafts} drafts"
     )
     for name in names:
