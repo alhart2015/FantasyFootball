@@ -66,6 +66,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0, help="Base RNG seed (matches the bake-off).")
     p.add_argument("--bot-prices", choices=("espn", "model"), default="espn")
     p.add_argument("--field", choices=FIELDS, default="overbidder")
+    p.add_argument(
+        "--n-patient",
+        type=int,
+        default=None,
+        help="Conservative hoarder seats, spread evenly (matches auction_field_bakeoff). "
+        "Omit for the historical every-5th rule. Set it to make this diagnostic describe the "
+        "same room as a swept field-mix cell.",
+    )
     p.add_argument("--overbid", type=float, default=0.20)
     p.add_argument("--overbid-pace", type=float, default=4.5)
     p.add_argument("--market-adp-jitter", type=float, default=12.0)
@@ -84,7 +92,13 @@ def main(argv: list[str] | None = None) -> int:
     bot_dollars: pd.Series | None = None
     if args.bot_prices == "espn" and has_usable_espn_prices(pool):
         bot_dollars = espn_anchored_bot_prices(pool, config, model_values=baseline)
-    field = build_field(args.field, args.overbid, args.overbid_pace, n_bots=config.n_teams - 1)
+    field = build_field(
+        args.field,
+        args.overbid,
+        args.overbid_pace,
+        n_bots=config.n_teams - 1,
+        n_patient=args.n_patient,
+    )
     hero_strategy = CONTESTANTS[args.strategy]
     seats = _parse_seats(args.seats, config.n_teams)
     season_base_seed = args.seed + 1_000_000  # tournament.py's default derivation
