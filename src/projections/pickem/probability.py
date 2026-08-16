@@ -57,12 +57,19 @@ def devig_pair(home_odds: int, away_odds: int) -> tuple[float, float]:
 
 
 def _implied_array(odds: np.ndarray) -> np.ndarray:
-    """Vectorized `american_to_implied`. Callers must reject zeros first —
-    `np.where` evaluates both branches, so a 0 would silently yield 1.0.
+    """Vectorized `american_to_implied`. Callers must reject zeros first.
+
+    Each branch is evaluated only on its own subset rather than via `np.where`.
+    `np.where` computes both sides for every element, and at even money (a
+    moneyline of exactly +100 or -100, a common price) the discarded branch
+    divides by zero — harmless in the result but it raises a RuntimeWarning and
+    builds an inf on the way through.
     """
-    negative = -odds / (-odds + 100.0)
-    positive = 100.0 / (odds + 100.0)
-    return np.where(odds < 0, negative, positive)
+    out = np.empty(odds.shape, dtype="float64")
+    favorite = odds < 0
+    out[favorite] = -odds[favorite] / (-odds[favorite] + 100.0)
+    out[~favorite] = 100.0 / (odds[~favorite] + 100.0)
+    return out
 
 
 def add_win_probs(schedules: pd.DataFrame) -> pd.DataFrame:

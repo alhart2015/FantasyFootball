@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -137,3 +138,22 @@ def test_add_win_probs_matches_devig_pair_row_by_row() -> None:
         expected_home, expected_away = devig_pair(h, a)
         assert df.loc[i, "home_win_prob"] == pytest.approx(expected_home)
         assert df.loc[i, "away_win_prob"] == pytest.approx(expected_away)
+
+
+def test_even_money_odds_do_not_warn_or_produce_inf() -> None:
+    """A moneyline of exactly +100/-100 is a common price. Computing both
+    branches of the favorite/underdog formula for every row divides by zero on
+    the discarded side — silently correct, but it raises a RuntimeWarning and
+    builds an inf on the way through. Regression test for that.
+    """
+    import warnings
+
+    df = _schedules(home_moneyline=[100, -100, 105], away_moneyline=[-120, 100, -125])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        out = add_win_probs(df)
+
+    assert np.isfinite(out["home_win_prob"]).all()
+    assert np.isfinite(out["away_win_prob"]).all()
+    # -100 and +100 are the same price, so an all-even market is a coin flip.
+    assert out.loc[1, "home_win_prob"] == pytest.approx(0.5)
