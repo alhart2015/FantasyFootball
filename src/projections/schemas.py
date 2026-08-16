@@ -1432,3 +1432,92 @@ class WeeklyActualSchema(pa.DataFrameModel):
     class Config:
         strict = "filter"
         coerce = True
+
+
+# --------------------------------------------------------------------------
+# Pick'em Hub
+#
+# Straight-up NFL pick'em with a minimum-underdogs-per-week constraint. The
+# governing invariant across all three schemas: the ORGANIZER'S sheet decides
+# who counts as the underdog (`sheet_*` columns), and the CONSENSUS market
+# decides who is likely to win (`*_win_prob` columns). They come from different
+# sources and must never be conflated.
+#
+# Spread sign convention here is the standard betting one — favorite negative,
+# dog positive, from the named team's perspective. Note this is the NEGATION of
+# nflreadpy's `spread_line` (positive = home favored); the conversion happens in
+# `pickem.slate` and nowhere else.
+# --------------------------------------------------------------------------
+
+
+class PickemSheetSchema(pa.DataFrameModel):
+    """The organizer's weekly sheet — what `pickem.sheet.read_sheet` produces."""
+
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    home_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    away_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    # Standard convention: negative means the home team is favored. Exactly 0.0
+    # is a true pick'em and yields no eligible underdog for that game.
+    home_spread: Series[float]
+
+    class Config:
+        strict = "filter"
+
+
+class PickemSlateSchema(pa.DataFrameModel):
+    """Organizer sheet joined to consensus lines — what `pickem.slate` produces."""
+
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    game_id: Series[str]
+    home_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    away_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    sheet_home_spread: Series[float]
+    consensus_home_spread: Series[float] = pa.Field(nullable=True)
+    home_win_prob: Series[float] = pa.Field(ge=0, le=1)
+    away_win_prob: Series[float] = pa.Field(ge=0, le=1)
+    # NA when `sheet_home_spread` is exactly 0 — a pick'em has neither side.
+    sheet_favorite: Series[str] = pa.Field(isin=_TEAM_VALUES, nullable=True)
+    sheet_dog: Series[str] = pa.Field(isin=_TEAM_VALUES, nullable=True)
+    # Consensus probability that the SHEET's underdog wins outright.
+    dog_win_prob: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    # Sheet's dog spread minus that same team's consensus spread. Positive means
+    # the market rates the dog HIGHER than the sheet does — the line moved our
+    # way since Tuesday.
+    dog_line_move: Series[float] = pa.Field(nullable=True)
+    # The sheet calls this team a dog but the market now favors it: satisfies
+    # the underdog constraint at zero cost.
+    free_dog: Series[bool]
+
+    class Config:
+        strict = "filter"
+
+
+class PickemPicksSchema(pa.DataFrameModel):
+    """Our picks for a week, graded in place — what `pickem.optimize` produces.
+
+    `winner` / `correct` start NA and are filled by `pickem.grade.grade_picks`,
+    so one row carries a pick from entry through result.
+    """
+
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    game_id: Series[str]
+    home_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    away_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    pick: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    pick_win_prob: Series[float] = pa.Field(ge=0, le=1)
+    is_dog_pick: Series[bool]
+    # True only when the underdog constraint forced this pick; a dog that was
+    # already the higher-probability side is NOT forced.
+    forced: Series[bool]
+    # Probability surrendered versus the unconstrained best pick. 0.0 unless forced.
+    switch_cost: Series[float] = pa.Field(ge=0, le=1)
+    # NA if the game is unplayed OR ended in a tie.
+    winner: Series[str] = pa.Field(isin=_TEAM_VALUES, nullable=True)
+    # NA only if unplayed. A tie is False — the team we picked did not win.
+    correct: Series[pd.BooleanDtype] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
