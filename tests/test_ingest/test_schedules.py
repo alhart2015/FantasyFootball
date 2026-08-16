@@ -152,3 +152,62 @@ def test_refresh_schedules_allows_nullable_lines(
     df = read_partition(tmp_path / "raw", "schedules", season=2024)
     SchedulesSchema.validate(df)
     assert pd.isna(df.iloc[0]["spread_line"])
+
+
+def test_refresh_schedules_keeps_scores_and_game_type(
+    tmp_path: Path,
+    fake_schedules_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scores and game_type survive the round-trip as nullable Int64 / string.
+
+    Unplayed games (PHI@TB in the fixture) carry NA scores rather than NaN
+    floats — `result` is deliberately not stored, so downstream code derives the
+    margin from these two columns and needs them integral.
+    """
+    monkeypatch.setattr(
+        "projections.ingest.schedules._fetch_raw_schedules",
+        lambda seasons: fake_schedules_df,
+    )
+    refresh_schedules(tmp_path, seasons=[2024])
+    df = read_partition(tmp_path / "raw", "schedules", season=2024)
+    SchedulesSchema.validate(df)
+
+    assert df["home_score"].dtype == pd.Int64Dtype()
+    assert df["away_score"].dtype == pd.Int64Dtype()
+    assert set(df["game_type"]) == {"REG"}
+
+    kc_atl = df[df["game_id"] == "2024_03_KC_ATL"].iloc[0]
+    assert kc_atl["home_score"] == 17
+    assert kc_atl["away_score"] == 22
+    # Margin is derived, never stored.
+    assert kc_atl["home_score"] - kc_atl["away_score"] == -5
+
+    unplayed = df[df["game_id"] == "2024_03_PHI_TB"].iloc[0]
+    assert pd.isna(unplayed["home_score"])
+    assert pd.isna(unplayed["away_score"])
+
+
+def test_refresh_schedules_moneylines_agree_with_spread_sign(
+    tmp_path: Path,
+    fake_schedules_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`spread_line > 0` means the home team is favored, so the home moneyline
+    must be the shorter (more negative) price. Guards the fixture against
+    drifting back to the contradictory values it once held."""
+    monkeypatch.setattr(
+        "projections.ingest.schedules._fetch_raw_schedules",
+        lambda seasons: fake_schedules_df,
+    )
+    refresh_schedules(tmp_path, seasons=[2024])
+    df = read_partition(tmp_path / "raw", "schedules", season=2024)
+
+    for row in df.itertuples():
+        if pd.isna(row.spread_line) or row.spread_line == 0:
+            continue
+        home_favored = row.spread_line > 0
+        assert (row.home_moneyline < row.away_moneyline) == home_favored, (
+            f"{row.game_id}: spread_line={row.spread_line} disagrees with "
+            f"moneylines {row.home_moneyline}/{row.away_moneyline}"
+        )

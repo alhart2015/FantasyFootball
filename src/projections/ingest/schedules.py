@@ -36,6 +36,9 @@ _KEEP = [
     "roof",
     "temp",
     "wind",
+    "game_type",
+    "home_score",
+    "away_score",
 ]
 
 
@@ -76,6 +79,8 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
     df["home_team"] = df["home_team"].map(_normalize_team).astype(_PYARROW_STR)
     df["away_team"] = df["away_team"].map(_normalize_team).astype(_PYARROW_STR)
     df["game_id"] = df["game_id"].astype(_PYARROW_STR)
+    if "game_type" in df.columns:
+        df["game_type"] = df["game_type"].astype(_PYARROW_STR)
 
     # nflreadpy publishes empty strings ('') for unknown surface/roof values
     # on some pre-2018 / future-week rows; treat them as missing so the
@@ -93,7 +98,16 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
         if int64_col in df.columns:
             df[int64_col] = df[int64_col].astype("int64")
 
-    for int_col in ("home_moneyline", "away_moneyline", "temp", "wind"):
+    # Scores arrive as float64 with NaN for unplayed games (nflreadpy nullable
+    # ints round-trip through float); Int64 keeps them integral and NA-aware.
+    for int_col in (
+        "home_moneyline",
+        "away_moneyline",
+        "temp",
+        "wind",
+        "home_score",
+        "away_score",
+    ):
         if int_col in df.columns:
             df[int_col] = df[int_col].astype(pd.Int64Dtype())
 

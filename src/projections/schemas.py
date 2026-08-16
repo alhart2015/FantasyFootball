@@ -364,6 +364,23 @@ class SchedulesSchema(pa.DataFrameModel):
     roof: Series[str] = pa.Field(nullable=True)
     temp: Series[int] = pa.Field(nullable=True)
     wind: Series[int] = pa.Field(nullable=True)
+    # `required=False` is a migration affordance, not a statement that the
+    # ingest may omit these — `refresh_schedules` always writes all three now.
+    # Partitions written before they existed do not have them, and a hard
+    # requirement would break every read of already-ingested data (including
+    # the depth-charts path, which loads schedules from disk) until every
+    # season was re-ingested. Consumers that genuinely need them must check;
+    # `pickem.schedules_with_scores` is the sanctioned guard and raises a
+    # message naming the refresh command.
+    #
+    # `nullable=True` is separate and permanent: upcoming games have no score.
+    #
+    # `result` is deliberately not stored — it equals home_score - away_score in
+    # all 4,175 regular-season games checked (2010-2025), and keeping a derived
+    # column beside its inputs is a drift hazard.
+    game_type: Series[str] | None = pa.Field(nullable=True)
+    home_score: Series[int] | None = pa.Field(nullable=True)
+    away_score: Series[int] | None = pa.Field(nullable=True)
 
     class Config:
         strict = "filter"
