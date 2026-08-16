@@ -17,7 +17,12 @@ from projections.store import read_partition
 
 # weekly_stats coverage for the availability model. Bump the upper bound each season
 # once the new year's weekly_stats partition is ingested.
-_HISTORY_SEASONS = range(2018, 2025)
+#
+# 2025 added 2026-08-16. It had been ingested (weeks 1-22, 5,557 rows) but was not being
+# read, so every availability probability was computed from a history one full season
+# stale. The effect was not neutral — it made the model systematically pessimistic, e.g.
+# De'Von Achane 0.844 -> 0.876 and Jahmyr Gibbs 0.941 -> 0.961.
+_HISTORY_SEASONS = range(2018, 2026)
 
 
 def load_store_availability(
