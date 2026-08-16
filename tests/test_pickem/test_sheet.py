@@ -22,10 +22,10 @@ def _schedules() -> pd.DataFrame:
             "season": [2026, 2026, 2026, 2025],
             "week": [1, 1, 1, 1],
             "game_id": pd.array(
-                ["2026_01_NE_SEA", "2026_01_CHI_CAR", "2026_01_SF_LA", "2025_01_AA_BB"],
+                ["2026_01_NE_SEA", "2026_01_CHI_CAR", "2026_01_SF_LAR", "2025_01_AA_BB"],
                 dtype=_PYARROW_STR,
             ),
-            "home_team": pd.array(["SEA", "CAR", "LA", "KC"], dtype=_PYARROW_STR),
+            "home_team": pd.array(["SEA", "CAR", "LAR", "KC"], dtype=_PYARROW_STR),
             "away_team": pd.array(["NE", "CHI", "SF", "BUF"], dtype=_PYARROW_STR),
             "kickoff": pd.to_datetime(
                 [
@@ -127,7 +127,7 @@ def test_write_template_has_one_row_per_game_that_week(tmp_path: Path) -> None:
 def test_write_template_orders_by_kickoff(tmp_path: Path) -> None:
     path = write_template(tmp_path / "t.csv", _schedules(), season=2026, week=1)
     written = pd.read_csv(path)
-    assert list(written["home_team"]) == ["LA", "CAR", "SEA"]
+    assert list(written["home_team"]) == ["LAR", "CAR", "SEA"]
 
 
 def test_write_template_leaves_the_spread_column_blank(tmp_path: Path) -> None:
