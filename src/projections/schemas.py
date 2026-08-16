@@ -370,7 +370,7 @@ class SchedulesSchema(pa.DataFrameModel):
     # requirement would break every read of already-ingested data (including
     # the depth-charts path, which loads schedules from disk) until every
     # season was re-ingested. Consumers that genuinely need them must check;
-    # `pickem.schedules_with_scores` is the sanctioned guard and raises a
+    # `pickem.require_schedule_columns` is the sanctioned guard and raises a
     # message naming the refresh command.
     #
     # `nullable=True` is separate and permanent: upcoming games have no score.
