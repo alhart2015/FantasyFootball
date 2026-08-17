@@ -2,54 +2,74 @@
 
 Reads historical weekly_stats + the target-season schedules + id_map under
 `<data_root>/raw`, then builds a `PlayerAvailability` for `pool`. A missing
-weekly_stats history is a hard error (fail loud — spec §6); a missing
+weekly_stats history is a hard error (fail loud - spec §6); a missing
 target-season schedule degrades to no byes (build_availability warns).
+
+Which seasons count as history is DERIVED, not configured. See `_usable_history`.
 """
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability, build_availability
+from projections.season_calendar import last_regular_week
 from projections.store import read_partition
 
-# Upper bound of the weekly_stats span the availability model may read. Bump it each
-# season once the new year's partition is ingested AND complete.
-#
-# 2025 added 2026-08-16. It had been ingested (weeks 1-22, 5,557 rows) but was not being
-# read, so every availability probability came from a history one full season stale. The
-# effect was not neutral - it made the model systematically pessimistic, e.g. De'Von
-# Achane 0.844 -> 0.876 and Jahmyr Gibbs 0.941 -> 0.961.
-#
-# The bound is a ceiling, not a target: `load_store_availability` additionally drops every
-# season at or after the one being built for. See `_history_for`.
-_HISTORY_SEASONS = range(2018, 2026)
+# Earliest ingested weekly_stats season. A floor, not a ceiling: there is deliberately
+# no upper bound to hand-maintain, because that is exactly how the 2025 bug happened -
+# the partition was ingested, the constant still said 2024, and `read_partition`'s
+# skip-if-missing behaviour made the too-narrow range indistinguishable from a correct
+# one at runtime. The upper bound is now the target season itself.
+_HISTORY_FLOOR = 2018
 
 
-def _history_for(season: int, history_seasons: range) -> list[int]:
-    """Seasons strictly before `season`, within `history_seasons`.
+def _usable_history(
+    raw: Path, season: int, candidates: range | None = None
+) -> tuple[list[pd.DataFrame], list[int]]:
+    """Read every COMPLETED weekly_stats season strictly before `season`.
 
-    Two distinct problems, one rule.
+    Returns `(frames, skipped_incomplete)`. Two rules, both enforced here rather than
+    by a constant a human has to remember to update:
 
-    **Lookahead.** `draft.backtest.inputs` builds availability with `season=` the season
-    being simulated. Reading that season's weekly_stats makes the drafting agent's ex-ante
-    injury prior depend on the outcomes it is about to be graded on: a player who missed
-    half of 2025 is pre-marked risky in the 2025 draft, flattering any strategy that gates
-    on availability.
+    **Strictly before `season`** - reading the target season's own weekly_stats is
+    lookahead. `draft.backtest.inputs` builds availability with `season=` the season
+    being simulated, so without this the drafting agent's ex-ante injury prior depends
+    on the outcomes it is about to be graded on: a player who missed half of 2025 is
+    pre-marked risky in the 2025 draft, flattering any strategy that gates on
+    availability.
 
-    **Partial seasons.** `build_availability` divides games played by the FULL scheduled
-    span (`regular_season_games(season) - first_week + 1`), not by the weeks present on
-    disk. An in-progress partition — which any in-season `refresh` writes — therefore
-    scores every player at `weeks_so_far / 17`. Three weeks into 2026 that is 0.18, and
-    since `p_raw` is an unweighted mean across seasons it would drag a durable back from
-    ~0.96 to ~0.76 and slam much of the pool into the `lo` clamp.
-
-    Excluding the target season and everything after it removes both at once, and makes
-    the model safe to run mid-season.
+    **Completed only** - `build_availability` divides games played by the FULL
+    scheduled span (`regular_season_games(season) - first_week + 1`), not by the weeks
+    present on disk. Any in-season `refresh` writes a partial partition, and reading
+    one scores every player in it at `weeks_so_far / 17`. Ten weeks into a season that
+    is 0.59, and since `p_raw` is an unweighted mean across seasons it would drag a
+    durable back from ~0.96 toward the `lo` clamp. Completeness is checked against
+    `last_regular_week`, so a partial season is skipped whether or not it is the
+    target - the target-season rule alone would not catch a stale partial partition
+    from an earlier year.
     """
-    return [yr for yr in history_seasons if yr < season]
+    frames: list[pd.DataFrame] = []
+    skipped: list[int] = []
+    span = range(_HISTORY_FLOOR, season) if candidates is None else candidates
+    for yr in span:
+        if yr >= season:
+            continue
+        try:
+            df = read_partition(raw, "weekly_stats", season=yr)
+        except FileNotFoundError:
+            continue
+        if df.empty:
+            skipped.append(yr)
+            continue
+        if int(df["week"].max()) < last_regular_week(yr):
+            skipped.append(yr)
+            continue
+        frames.append(df)
+    return frames, skipped
 
 
 def load_store_availability(
@@ -57,28 +77,36 @@ def load_store_availability(
     *,
     season: int,
     data_root: Path,
-    history_seasons: range = _HISTORY_SEASONS,
+    history_seasons: range | None = None,
 ) -> PlayerAvailability:
     """Build `PlayerAvailability` for `pool` from store partitions under `data_root`.
 
-    `history_seasons` is the weekly_stats ceiling for the injury model (default the full
-    ingested range); overridable so tests can stub a single season. Seasons at or after
-    `season` are dropped regardless — see `_history_for`.
+    History is derived: every completed weekly_stats season strictly before `season`.
+    `history_seasons` narrows the candidate span (tests stub a single season); it can
+    never widen past `season`, and never admits an incomplete partition.
     """
     raw = data_root / "raw"
-    usable = _history_for(season, history_seasons)
-    frames: list[pd.DataFrame] = []
-    for yr in usable:
-        try:
-            frames.append(read_partition(raw, "weekly_stats", season=yr))
-        except FileNotFoundError:
-            continue
+    frames, skipped = _usable_history(raw, season, history_seasons)
+
+    if skipped:
+        warnings.warn(
+            f"weekly_stats season(s) {skipped} are on disk but incomplete (they do not run "
+            f"through the end of the regular season) and were EXCLUDED from the availability "
+            f"model. Reading a partial season would score every player in it at "
+            f"weeks-so-far / full-season. Re-ingest once the season finishes.",
+            stacklevel=2,
+        )
+
     if not frames:
-        span = f"{usable[0]}-{usable[-1]}" if usable else "(none before target season)"
+        if season <= _HISTORY_FLOOR:
+            raise FileNotFoundError(
+                f"no weekly_stats history available before season {season}: the ingested "
+                f"span starts at {_HISTORY_FLOOR}, so there is nothing earlier to learn "
+                "availability from. This is a season-range problem, not a data-root problem."
+            )
         raise FileNotFoundError(
-            f"no weekly_stats partitions under {raw} for seasons {span} "
-            f"(history capped at {history_seasons.stop - 1}, target season {season}); "
-            "check --data-root"
+            f"no complete weekly_stats partitions under {raw} for seasons "
+            f"{_HISTORY_FLOOR}-{season - 1}; check --data-root"
         )
     weekly_stats = pd.concat(frames, ignore_index=True)
     try:
