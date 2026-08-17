@@ -161,7 +161,14 @@ def fake_schedules_df() -> pd.DataFrame:
     into a UTC `kickoff` timestamp.
 
     A PHI@TB game is included so the smoke test's RB builder (Barkley) has a
-    real schedule row for the game-environment join.
+    real schedule row for the game-environment join. It is also left unplayed
+    (null scores) so the nullable-score path is exercised.
+
+    Sign convention: `spread_line` is positive when the HOME team is favored
+    (`2024_03_KC_ATL` → ATL home, +3.5 → ATL favored by 3.5). The moneylines
+    below agree with it — they previously did not, having been written under
+    the opposite convention. Nothing asserted on them, so the contradiction sat
+    unnoticed; the pick'em win-probability code reads both, so they now match.
     """
     return pd.DataFrame(
         {
@@ -172,10 +179,14 @@ def fake_schedules_df() -> pd.DataFrame:
             "away_team": ["KC", "MIN", "PHI"],
             "gameday": ["2024-09-22", "2024-09-22", "2024-09-22"],
             "gametime": ["20:20", "13:00", "13:00"],
+            "game_type": ["REG", "REG", "REG"],
             "spread_line": [3.5, -2.5, 3.5],
             "total_line": [48.5, 44.0, 45.5],
-            "home_moneyline": [155, -125, 150],
-            "away_moneyline": [-180, 105, -175],
+            # ATL -3.5 favored; MIN -2.5 favored on the road; TB -3.5 favored.
+            "home_moneyline": [-190, 125, -190],
+            "away_moneyline": [160, -145, 160],
+            "home_score": [17.0, 7.0, float("nan")],
+            "away_score": [22.0, 34.0, float("nan")],
             "surface": ["fieldturf", "matrixturf", "grass"],
             "roof": ["dome", "dome", "outdoors"],
             "temp": [72, 72, 85],

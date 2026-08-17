@@ -364,6 +364,23 @@ class SchedulesSchema(pa.DataFrameModel):
     roof: Series[str] = pa.Field(nullable=True)
     temp: Series[int] = pa.Field(nullable=True)
     wind: Series[int] = pa.Field(nullable=True)
+    # `required=False` is a migration affordance, not a statement that the
+    # ingest may omit these — `refresh_schedules` always writes all three now.
+    # Partitions written before they existed do not have them, and a hard
+    # requirement would break every read of already-ingested data (including
+    # the depth-charts path, which loads schedules from disk) until every
+    # season was re-ingested. Consumers that genuinely need them must check;
+    # `pickem.require_schedule_columns` is the sanctioned guard and raises a
+    # message naming the refresh command.
+    #
+    # `nullable=True` is separate and permanent: upcoming games have no score.
+    #
+    # `result` is deliberately not stored — it equals home_score - away_score in
+    # all 4,175 regular-season games checked (2010-2025), and keeping a derived
+    # column beside its inputs is a drift hazard.
+    game_type: Series[str] | None = pa.Field(nullable=True)
+    home_score: Series[int] | None = pa.Field(nullable=True)
+    away_score: Series[int] | None = pa.Field(nullable=True)
 
     class Config:
         strict = "filter"
@@ -1415,3 +1432,92 @@ class WeeklyActualSchema(pa.DataFrameModel):
     class Config:
         strict = "filter"
         coerce = True
+
+
+# --------------------------------------------------------------------------
+# Pick'em Hub
+#
+# Straight-up NFL pick'em with a minimum-underdogs-per-week constraint. The
+# governing invariant across all three schemas: the ORGANIZER'S sheet decides
+# who counts as the underdog (`sheet_*` columns), and the CONSENSUS market
+# decides who is likely to win (`*_win_prob` columns). They come from different
+# sources and must never be conflated.
+#
+# Spread sign convention here is the standard betting one — favorite negative,
+# dog positive, from the named team's perspective. Note this is the NEGATION of
+# nflreadpy's `spread_line` (positive = home favored); the conversion happens in
+# `pickem.slate` and nowhere else.
+# --------------------------------------------------------------------------
+
+
+class PickemSheetSchema(pa.DataFrameModel):
+    """The organizer's weekly sheet — what `pickem.sheet.read_sheet` produces."""
+
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    home_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    away_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    # Standard convention: negative means the home team is favored. Exactly 0.0
+    # is a true pick'em and yields no eligible underdog for that game.
+    home_spread: Series[float]
+
+    class Config:
+        strict = "filter"
+
+
+class PickemSlateSchema(pa.DataFrameModel):
+    """Organizer sheet joined to consensus lines — what `pickem.slate` produces."""
+
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    game_id: Series[str]
+    home_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    away_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    sheet_home_spread: Series[float]
+    consensus_home_spread: Series[float] = pa.Field(nullable=True)
+    home_win_prob: Series[float] = pa.Field(ge=0, le=1)
+    away_win_prob: Series[float] = pa.Field(ge=0, le=1)
+    # NA when `sheet_home_spread` is exactly 0 — a pick'em has neither side.
+    sheet_favorite: Series[str] = pa.Field(isin=_TEAM_VALUES, nullable=True)
+    sheet_dog: Series[str] = pa.Field(isin=_TEAM_VALUES, nullable=True)
+    # Consensus probability that the SHEET's underdog wins outright.
+    dog_win_prob: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    # Sheet's dog spread minus that same team's consensus spread. Positive means
+    # the market rates the dog HIGHER than the sheet does — the line moved our
+    # way since Tuesday.
+    dog_line_move: Series[float] = pa.Field(nullable=True)
+    # The sheet calls this team a dog but the market now favors it: satisfies
+    # the underdog constraint at zero cost.
+    free_dog: Series[bool]
+
+    class Config:
+        strict = "filter"
+
+
+class PickemPicksSchema(pa.DataFrameModel):
+    """Our picks for a week, graded in place — what `pickem.optimize` produces.
+
+    `winner` / `correct` start NA and are filled by `pickem.grade.grade_picks`,
+    so one row carries a pick from entry through result.
+    """
+
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    game_id: Series[str]
+    home_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    away_team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    pick: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    pick_win_prob: Series[float] = pa.Field(ge=0, le=1)
+    is_dog_pick: Series[bool]
+    # True only when the underdog constraint forced this pick; a dog that was
+    # already the higher-probability side is NOT forced.
+    forced: Series[bool]
+    # Probability surrendered versus the unconstrained best pick. 0.0 unless forced.
+    switch_cost: Series[float] = pa.Field(ge=0, le=1)
+    # NA if the game is unplayed OR ended in a tie.
+    winner: Series[str] = pa.Field(isin=_TEAM_VALUES, nullable=True)
+    # NA only if unplayed. A tie is False — the team we picked did not win.
+    correct: Series[pd.BooleanDtype] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
