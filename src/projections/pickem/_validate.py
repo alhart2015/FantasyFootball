@@ -6,12 +6,16 @@ from collections.abc import Sequence
 
 import pandas as pd
 
+# Single quotes INSIDE the -c string: the whole command is wrapped in double
+# quotes, so a nested `Path("data")` terminates it early and the shell hands
+# Python `Path(data)` -> NameError. This message is the entire remediation path
+# for a not-required column, so it has to survive being pasted.
 _REFRESH_HINT = (
     "Schedules partitions written before those columns existed do not carry them. "
-    "Re-ingest the season(s) with:\n"
+    "Re-ingest the season(s) you need with:\n"
     '    python -c "from pathlib import Path; '
     "from projections.ingest import refresh_schedules; "
-    'refresh_schedules(Path("data"), seasons=[2026])"'
+    "refresh_schedules(Path('data'), seasons=[2025, 2026])\""
 )
 
 

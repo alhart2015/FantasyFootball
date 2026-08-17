@@ -30,6 +30,9 @@ from projections.pickem.backtest import (
 from projections.pickem.optimize import DEFAULT_MIN_DOGS
 from projections.store import read_partition
 
+# Columns a partition must carry to contribute any games to the backtest.
+_SCORE_COLUMNS = ("game_type", "home_score", "away_score")
+
 
 def _parse_seasons(spec: str) -> list[int]:
     if "-" in spec:
@@ -121,13 +124,34 @@ def main(argv: list[str] | None = None) -> int:
     seasons = _parse_seasons(args.seasons)
 
     frames = []
+    stale: list[tuple[int, list[str]]] = []
     for season in seasons:
         try:
-            frames.append(read_partition(args.data_root / "raw", "schedules", season=season))
+            frame = read_partition(args.data_root / "raw", "schedules", season=season)
         except FileNotFoundError:
             print(f"  (no schedules partition for {season}, skipping)")
+            continue
+        # Checked PER SEASON, before the concat. `pd.concat` unions columns, so a
+        # single re-ingested season is enough to make `home_score` exist on the
+        # combined frame - `playable_games`' guard then passes and the notna()
+        # filter silently drops every row of the older partitions instead.
+        absent = [c for c in _SCORE_COLUMNS if c not in frame.columns]
+        if absent:
+            stale.append((season, absent))
+        frames.append(frame)
+
     if not frames:
         raise SystemExit("no schedules found; run refresh_schedules first")
+
+    if stale:
+        listed = ", ".join(f"{s} (missing {', '.join(cols)})" for s, cols in stale)
+        print(
+            f"WARNING: {len(stale)} season partition(s) predate the score columns and will "
+            f"contribute NO games: {listed}.\n"
+            f"         Re-ingest them or the backtest silently covers a shorter span than "
+            f"--seasons implies.\n"
+        )
+
     schedules = pd.concat(frames, ignore_index=True)
 
     print(render_calibration(calibration_table(schedules, n_bins=args.bins)))

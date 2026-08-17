@@ -18,7 +18,10 @@ import pandas as pd
 
 from projections.pickem._validate import require_schedule_columns
 
-_MONEYLINE_COLUMNS = ("home_moneyline", "away_moneyline")
+# `game_id` is required, not incidental: both raises below name the offending
+# game_id, so a frame without it would die on a bare KeyError instead of the
+# diagnostic this module exists to give.
+_REQUIRED_COLUMNS = ("game_id", "home_moneyline", "away_moneyline")
 
 
 def american_to_implied(odds: int) -> float:
@@ -79,7 +82,7 @@ def add_win_probs(schedules: pd.DataFrame) -> pd.DataFrame:
     availability audit this should never happen, and a silently wrong pick is
     far worse than a loud failure the morning picks are due.
     """
-    require_schedule_columns(schedules, _MONEYLINE_COLUMNS, needed_for="pick'em win probabilities")
+    require_schedule_columns(schedules, _REQUIRED_COLUMNS, needed_for="pick'em win probabilities")
     out = schedules.copy()
 
     missing = out["home_moneyline"].isna() | out["away_moneyline"].isna()

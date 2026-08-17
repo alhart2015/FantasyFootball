@@ -284,3 +284,112 @@ def test_grade_mode_persists_the_result(data_root: Path, tmp_path: Path) -> None
     stored = read_picks(data_root, season=2026, week=1)
     assert stored["correct"].notna().all()
     assert int(stored["correct"].sum()) == 3
+
+
+# --- --refresh is honoured on every path that reads schedules ---------------
+
+
+def test_refresh_flag_is_honoured_on_the_grade_path(
+    data_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The documented Monday step is `--grade --refresh`. Dispatching to grading
+    before any refresh meant the flag was silently ignored and the week was
+    graded against whatever Thursday's picks run left on disk."""
+    import scripts.pickem_board as board
+
+    sheet = _sheet_csv(tmp_path / "sheet.csv", [-7.0] * 6)
+    main(["--season", "2026", "--week", "1", "--sheet", str(sheet), "--data-root", str(data_root)])
+
+    called: list[list[int]] = []
+
+    def _fake_refresh(root: Path, *, seasons: list[int]) -> None:
+        called.append(list(seasons))
+        write_partition(
+            root / "raw", "schedules", _schedules(scores=[(24, 17)] * 6), season=2026, week=None
+        )
+
+    monkeypatch.setattr(board, "refresh_schedules", _fake_refresh)
+    assert (
+        main(
+            [
+                "--season",
+                "2026",
+                "--week",
+                "1",
+                "--grade",
+                "--refresh",
+                "--data-root",
+                str(data_root),
+            ]
+        )
+        == 0
+    )
+    assert called == [[2026]]
+
+
+def test_refresh_flag_is_honoured_on_the_picks_path(
+    data_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import scripts.pickem_board as board
+
+    called: list[list[int]] = []
+    monkeypatch.setattr(
+        board, "refresh_schedules", lambda root, *, seasons: called.append(list(seasons))
+    )
+    sheet = _sheet_csv(tmp_path / "sheet.csv", [-7.0] * 6)
+    main(
+        [
+            "--season",
+            "2026",
+            "--week",
+            "1",
+            "--sheet",
+            str(sheet),
+            "--refresh",
+            "--data-root",
+            str(data_root),
+            "--no-save",
+        ]
+    )
+    assert called == [[2026]]
+
+
+def test_grading_before_the_games_finish_refuses_rather_than_reporting_zero(
+    data_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The fixture's schedules have no scores. Grading against them marks every
+    game unplayed; reporting `0 of 0 correct` and saving would overwrite a
+    graded week with an all-NA one."""
+    sheet = _sheet_csv(tmp_path / "sheet.csv", [-7.0] * 6)
+    main(["--season", "2026", "--week", "1", "--sheet", str(sheet), "--data-root", str(data_root)])
+    capsys.readouterr()
+
+    assert main(["--season", "2026", "--week", "1", "--grade", "--data-root", str(data_root)]) == 1
+    out = capsys.readouterr().out
+    assert "no completed games" in out
+    assert "--refresh" in out
+    assert "0 of 0 correct" not in out
+
+
+def test_grading_before_the_games_finish_leaves_stored_picks_intact(
+    data_root: Path, tmp_path: Path
+) -> None:
+    """A previously graded week must survive a premature re-grade."""
+    from projections.pickem.store import read_picks
+
+    sheet = _sheet_csv(tmp_path / "sheet.csv", [-7.0] * 6)
+    main(["--season", "2026", "--week", "1", "--sheet", str(sheet), "--data-root", str(data_root)])
+    write_partition(
+        data_root / "raw", "schedules", _schedules(scores=[(24, 17)] * 6), season=2026, week=None
+    )
+    main(["--season", "2026", "--week", "1", "--grade", "--data-root", str(data_root)])
+    graded_before = read_picks(data_root, season=2026, week=1)
+    assert graded_before["correct"].notna().all()
+
+    # Schedules regress to scoreless (e.g. a partition rewritten mid-week).
+    write_partition(data_root / "raw", "schedules", _schedules(), season=2026, week=None)
+    assert main(["--season", "2026", "--week", "1", "--grade", "--data-root", str(data_root)]) == 1
+
+    still = read_picks(data_root, season=2026, week=1)
+    assert still["correct"].notna().all(), "premature grading wiped a graded week"
+    assert int(still["correct"].sum()) == int(graded_before["correct"].sum())

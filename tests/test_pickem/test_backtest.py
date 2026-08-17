@@ -195,3 +195,19 @@ def test_summarize_baseline_headline_numbers() -> None:
 def test_summarize_baseline_rejects_an_empty_frame() -> None:
     with pytest.raises(ValueError, match="no weeks"):
         summarize_baseline(pd.DataFrame())
+
+
+def test_playable_games_requires_game_type_rather_than_skipping_the_filter() -> None:
+    """Filtering only when the column happens to exist would silently admit playoff
+    games, and `baseline_week_scores` would score weeks 19-22 as pool weeks."""
+    games = _games().drop(columns=["game_type"])
+    with pytest.raises(ValueError, match="game_type"):
+        playable_games(games)
+
+
+def test_playable_games_excludes_post_season_game_types() -> None:
+    mixed = pd.concat(
+        [_games(week=1), _games(week=19, game_type="WC"), _games(week=21, game_type="SB")],
+        ignore_index=True,
+    )
+    assert set(playable_games(mixed)["week"]) == {1}

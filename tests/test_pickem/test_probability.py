@@ -157,3 +157,16 @@ def test_even_money_odds_do_not_warn_or_produce_inf() -> None:
     assert np.isfinite(out["away_win_prob"]).all()
     # -100 and +100 are the same price, so an all-even market is a coin flip.
     assert out.loc[1, "home_win_prob"] == pytest.approx(0.5)
+
+
+def test_add_win_probs_requires_game_id_for_its_own_error_messages() -> None:
+    """Both raise paths name the offending game_id, so a frame without it would
+    die on a bare KeyError instead of the diagnostic this module promises."""
+    df = pd.DataFrame(
+        {
+            "home_moneyline": pd.array([-190], dtype=pd.Int64Dtype()),
+            "away_moneyline": pd.array([160], dtype=pd.Int64Dtype()),
+        }
+    )
+    with pytest.raises(ValueError, match="game_id"):
+        add_win_probs(df)

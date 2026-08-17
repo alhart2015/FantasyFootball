@@ -30,6 +30,7 @@ _BACKTEST_COLUMNS = (
     "game_id",
     "home_team",
     "away_team",
+    "game_type",
     "spread_line",
     "home_moneyline",
     "away_moneyline",
@@ -43,11 +44,15 @@ def playable_games(schedules: pd.DataFrame) -> pd.DataFrame:
 
     Playoff games are excluded: the pool runs on the regular season, and their
     scheduling quirks are not what we are measuring.
+
+    `game_type` is required rather than filtered-if-present. Skipping the filter
+    when the column is absent would silently admit playoff games, and
+    `baseline_week_scores` would then score weeks 19-22 as ordinary pool weeks —
+    4-, 2- and 1-game "weeks" that drag `games_per_week` and `hit_rate` down
+    without anything looking wrong.
     """
     require_schedule_columns(schedules, _BACKTEST_COLUMNS, needed_for="the pick'em backtest")
-    df = schedules
-    if "game_type" in df.columns:
-        df = df[df["game_type"] == "REG"]
+    df = schedules[schedules["game_type"] == "REG"]
     return df[
         df["spread_line"].notna()
         & df["home_moneyline"].notna()

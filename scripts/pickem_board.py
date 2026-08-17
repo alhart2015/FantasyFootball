@@ -19,8 +19,8 @@ Weekly workflow:
     # Thursday morning - refresh lines, then pick
     python scripts/pickem_board.py --season 2026 --week 1 --sheet sheet.csv --refresh
 
-    # Monday - grade last week
-    python scripts/pickem_board.py --season 2026 --week 1 --grade
+    # Monday - pull final scores and grade last week
+    python scripts/pickem_board.py --season 2026 --week 1 --grade --refresh
 """
 
 from __future__ import annotations
@@ -61,7 +61,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--refresh",
         action="store_true",
-        help="Re-ingest schedules first, so consensus lines are current. Do this Thursday.",
+        help="Re-ingest schedules first. Needed on Thursday for current lines, and on Monday "
+        "for final scores before --grade.",
     )
     parser.add_argument("--min-dogs", type=int, default=DEFAULT_MIN_DOGS)
     parser.add_argument("--data-root", type=Path, default=Path("data"))
@@ -164,9 +165,23 @@ def _run_template(args: argparse.Namespace) -> int:
 
 
 def _run_grade(args: argparse.Namespace) -> int:
+    _maybe_refresh(args)
     picks = read_picks(args.data_root, season=args.season, week=args.week)
     graded = grade_picks(picks, _load_schedules(args.data_root, args.season))
     correct, played = record(graded)
+
+    # Grading against a schedules partition written before the games finished
+    # scores every row as unplayed. Saving that would overwrite a previously
+    # graded week with an all-NA one, so refuse instead of reporting "0 of 0".
+    if played == 0:
+        print(
+            f"Week {args.week}: no completed games in the schedules partition - nothing to "
+            f"grade, and stored picks were left untouched.\n"
+            f"Re-run once the games have finished, adding --refresh to pull final scores:\n"
+            f"  python scripts/pickem_board.py --season {args.season} --week {args.week} "
+            f"--grade --refresh"
+        )
+        return 1
 
     if not args.no_save:
         write_picks(args.data_root, graded)
@@ -185,10 +200,15 @@ def _run_grade(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_picks(args: argparse.Namespace) -> int:
+def _maybe_refresh(args: argparse.Namespace) -> None:
+    """Honour --refresh on every path that reads schedules, not just picks mode."""
     if args.refresh:
         print(f"Refreshing schedules for {args.season}...")
         refresh_schedules(args.data_root, seasons=[args.season])
+
+
+def _run_picks(args: argparse.Namespace) -> int:
+    _maybe_refresh(args)
 
     schedules = _load_schedules(args.data_root, args.season)
     sheet = read_sheet(args.sheet, season=args.season, week=args.week)
