@@ -161,6 +161,43 @@ git branch -d feat/<short-name>
 
 If `git worktree remove` fails on Windows due to a venv file lock, run `git worktree remove --force` and clean up the leftover directory by hand later.
 
+## Pick'em weekly workflow
+
+Straight-up NFL pick'em where **at least three picks each week must be the underdog per the organizer's spread**. Design: `docs/superpowers/specs/2026-08-16-pickem-hub-design.md`.
+
+**The rule to keep in your head while editing any of this:** the organizer's sheet decides *who counts as the underdog*; consensus market odds decide *who is likely to win*. Two sources, two jobs. `src/projections/pickem/slate.py` is the only place allowed to convert between the two spread conventions.
+
+```bash
+# Tuesday - emit a CSV of the week's real matchups with a blank spread column.
+# Only the numbers get typed by hand; mistyped team codes are the worst failure
+# mode (they either fail to join or join to the wrong game).
+python scripts/pickem_board.py --season 2026 --week 1 --template sheet.csv
+
+# ...fill in home_spread from the organizer's email.
+# Standard betting convention: NEGATIVE means the home team is favored.
+
+# Thursday morning - refresh lines so the market is current, then pick.
+python scripts/pickem_board.py --season 2026 --week 1 --sheet sheet.csv --refresh
+
+# Monday - grade the week against final scores.
+python scripts/pickem_board.py --season 2026 --week 1 --grade
+```
+
+The board flags **free dogs** (the sheet calls them underdogs but the market now favors them - these satisfy the rule at zero cost) and line moves of 2+ points since the sheet was set.
+
+Historical context, any time:
+
+```bash
+python scripts/pickem_backtest.py --seasons 2015-2025
+```
+
+### Gotchas
+
+- **Sign conventions are opposite.** `nflreadpy.spread_line` is positive when the home team is favored. Every column we own uses standard betting convention (favorite negative). `consensus_home_spread = -spread_line`.
+- **`home_score` / `away_score` / `game_type` are not-required on `SchedulesSchema`.** Partitions written before 2026-08-16 lack them. Anything reading them must call `pickem.require_schedule_columns` first, which raises with the refresh command in the message. To backfill: `refresh_schedules(Path("data"), seasons=[...])`.
+- **A sheet spread of exactly `0.0` is a true pick'em** — it has no underdog and can never satisfy the constraint. A *blank* cell is an error and is rejected.
+- **Ties count as incorrect.** `correct` is NA only for unplayed games.
+
 ## Adding a new ingest source
 
 The pattern is established in `src/projections/ingest/weekly_stats.py`. Follow it.

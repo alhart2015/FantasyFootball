@@ -20,6 +20,7 @@ Tests, mypy strict, and ruff are gates, not suggestions. A failing test means th
 - **Draft Hub** (planned) — pre-draft rankings, ADP, VORP, draft assistant; ESPN league API integration.
 - **Mid-season Manager** (planned) — start/sit, waiver-wire valuator, trade analyzer.
 - **DFS Engine** (planned) — slate projections, salary-constrained lineup optimizer.
+- **Pick'em Hub** (`src/projections/pickem/`) — straight-up NFL picks under a minimum-underdogs-per-week constraint. The organizer's sheet decides who counts as the underdog; consensus market odds decide who is likely to win — never conflate them. See `docs/superpowers/specs/2026-08-16-pickem-hub-design.md` and the CONTRIBUTING recipe.
 
 ## Stay in sync
 

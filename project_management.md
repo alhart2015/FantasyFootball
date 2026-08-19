@@ -6,6 +6,33 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Pick'em Hub — new sub-project, market-only v1 shipped (2026-08-16, branch `feat/pickem`)
+
+**The league:** straight-up NFL pick'em (a -13 favorite only has to win, not cover), but **at least three picks each week must be the underdog according to the organizer's spread**. Weekly prize for most correct; much larger season-long prize. 10-15 entrants. The organizer emails a Google Sheet **Tuesday**; picks are due **before Thursday kickoff**. Design: `docs/superpowers/specs/2026-08-16-pickem-hub-design.md`, plan `docs/superpowers/plans/2026-08-16-pickem-hub.md`.
+
+**The central design decision, and the thing most likely to be broken by a careless edit:** the organizer's spread decides **who counts as the underdog** and nothing else; consensus market odds decide **who is likely to win** and nothing else. Two sources, two jobs, never conflated. `pickem.slate` is the only module allowed to convert between the two spread conventions (`nflreadpy.spread_line` is positive when home is favored; every column we own uses standard betting convention, favorite negative).
+
+**Where the edge comes from:** the sheet is set Tuesday and locks Thursday, with Wednesday's first injury report in between. When the sheet calls a team a dog but the market has flipped them to favorite by Thursday, that pick satisfies the underdog rule at **zero cost** — flagged as a `free_dog`.
+
+**Measured on 2015-2025 real data (`scripts/pickem_backtest.py`):**
+- **Devigged moneylines are well calibrated** — 2.0% game-weighted mean absolute error across ten probability bins. Trusting the market as truth is justified; no spread-to-probability model is needed.
+- **Baseline 9.76 correct/week on 15.1 games (64.8%)**, with the model expecting 9.71 — agreement to within 0.05 picks/week is an end-to-end check that the probabilities being maximized match outcomes.
+- **The three-underdog rule costs only 0.26 picks/week in expectation.** This is the headline: the constraint is cheap, so the season is won on the margins a stale sheet gives up, not on the rule.
+- That baseline is a **floor, not a forecast** — it uses closing lines as both sheet and consensus, deliberately modelling the staleness edge away, because nflverse stores only closing lines.
+
+**Decisions:**
+- **Market-only; the projections core is not consulted.** Beating a two-day-stale sheet is nearly free; beating Vegas is a far harder bar. Revisit only once v1 has a measured record.
+- **No game-theoretic / contrarian play.** With 10-15 entrants and the season prize as the larger pot, maximizing expected correct picks is close to optimal; added variance trades away season equity.
+- **Greedy switch selection is provably optimal**, not a heuristic — picks are independent, deviating can only mean taking the dog, so a count constraint met at least cost means the cheapest deviations. Brute-forced in tests against all 256 combinations on 8-game slates across 12 seeds and 6 constraint levels.
+- **Ties count as incorrect** (13 regular-season games since 2010). A push is also defensible; stated explicitly so it is a choice rather than an accident.
+- **`SchedulesSchema` gained `home_score` / `away_score` / `game_type` as not-required** (`Series[X] | None`). Every partition written before today lacks them, and a hard requirement would break reads of already-ingested data — including the depth-charts path. `pickem.require_schedule_columns` is the guard for consumers that need them. **`result` is deliberately not stored**: it equals `home_score - away_score` in all 4,175 regular-season games checked.
+
+**OPEN RISK — verify in week 1.** The consensus feed is `nflreadpy.load_schedules`, which does publish lines for upcoming games (2026 weeks 1-4 were populated on 2026-08-16). **Its intra-week refresh cadence is unknown.** The entire edge is freshness: if it only updates weekly, its lines are as stale as the organizer's and the edge is nil. Mitigation is structural — `slate.build_slate` takes an already-loaded schedules frame, so swapping in a paid odds API is a one-module change. **Action: on the first Tuesday and Thursday of the season, run `refresh_schedules` both days and diff `spread_line`.** If it does not move, switch sources before trusting the board.
+
+**Next action:** run the week-1 freshness check above, then use `scripts/pickem_board.py` for real and let `--grade` accumulate a record.
+
+---
+
 ## Auction — field-mix sweep (Run Z): `overbid_noramp` holds from 11/0 down to 5/6, loses only at 3/8 (2026-08-13, branch `exp/auction-field-mix-sweep`)
 
 **Question:** every prior run modelled Will's room as **9 aggressive / 2 conservative** of 11 bots — a hard-coded assumption (`_PATIENT_EVERY`), never a measurement. How wrong can that be before the hero recommendation changes? Design note (written **retroactively** -- the branch skipped the spec-first rule and says so): `docs/superpowers/specs/2026-08-13-auction-field-mix-sweep-design.md`. `build_field` gains `n_patient` so the mix is sweepable; full 15-name hero field × 7 mixes × 12 seats × 20 seeds × 300 sims, CRN-paired, post-#143 engine. **Only 13 of the 15 names are distinct policies** — `balanced`/`balanced_flat` and `patient`/`patient_deep` come out identical in this configuration ([#146](https://github.com/alhart2015/FantasyFootball/issues/146)); do not read the duplicate rows as independent measurements.

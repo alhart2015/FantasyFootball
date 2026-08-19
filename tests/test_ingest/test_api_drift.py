@@ -200,6 +200,13 @@ def test_schedules_api_columns_and_schema() -> None:
         "roof",
         "temp",
         "wind",
+        # Not-required on SchedulesSchema (older partitions lack them), which means
+        # validation no longer catches an upstream rename of these three: the ingest
+        # would build a frame without them, validate clean, and overwrite a good
+        # partition with a scoreless one. This drift check is the only guard left.
+        "game_type",
+        "home_score",
+        "away_score",
     }
     _assert_columns_present(set(raw.columns), expected, "load_schedules")
     df = _normalize_schedules(raw)
