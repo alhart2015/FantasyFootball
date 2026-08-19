@@ -6,6 +6,42 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Availability model — derived history: 2025 was unread, and every backtest was leaking (2026-08-19, branch `fix/availability-history-2025`, PR [#149](https://github.com/alhart2015/FantasyFootball/pull/149))
+
+**The bug.** `availability_loader._HISTORY_SEASONS` read 2018-2024 while `weekly_stats` for 2025 had been ingested (weeks 1-22, 5,557 rows) and was sitting unread. Every availability probability in the draft / auction / season-value stack was built from a history one full season stale. **It was silent by construction:** `load_store_availability` skips missing partitions by design, so a too-narrow range is indistinguishable at runtime from a correct one. The bias was not neutral — it made the model systematically pessimistic (Gibbs 0.941 → 0.961, Kyren 0.882 → 0.912, Achane 0.844 → 0.876).
+
+**The fix is not "bump the constant."** That leaves the same trap armed for next January. `_usable_history` now DERIVES the span at load time: every **completed** weekly_stats season **strictly before** the target. Only a floor (2018) remains. Three failure modes become structurally impossible rather than merely detectable:
+
+- **Annual drift** — the upper bound is the target season itself, so a newly-ingested season is picked up with no code change.
+- **Lookahead** — see below; this is the load-bearing consequence.
+- **Partial partitions** — `build_availability` divides games played by the FULL scheduled span, not by the weeks on disk, so reading an in-progress partition (which any in-season `refresh` writes) scores every player in it at `weeks_so_far / 17`. Ten weeks in that is 0.59, and `p_raw` averages seasons unweighted. Checked against `last_regular_week` for every season, so a stale partial partition from an *earlier* year is caught too.
+
+Seasons that are incomplete, or missing entirely from between two present ones, are now named in a warning instead of vanishing quietly.
+
+**🚨 EVERY RECORDED BACKTEST NUMBER FOR 2021-2024 IS INVALIDATED.** Previously *every* target season got the full 2018-2024 history — a 2024 H2H run built its ex-ante injury prior partly from 2024's own injury outcomes, and a 2021 run read 2022-2024. Any strategy that gates on availability was flattered. Now:
+
+| backtest season | history before | history now |
+|---|---|---|
+| 2021 | 2018-2024 | 2018-2020 |
+| 2022 | 2018-2024 | 2018-2021 |
+| 2023 | 2018-2024 | 2018-2022 |
+| 2024 | 2018-2024 | 2018-2023 |
+| 2025 | 2018-2024 | 2018-2024 (unchanged) |
+
+`reports/draft_strategy_tests.md` (Tests 8/9/10 especially — the 2024 H2H `sv−nn +5.7 win% / +16 playoff%` figures) and `reports/post_draft_assessment_2021_2025.md` both carry a banner to this effect. **Do not diff a fresh run against those numbers and attribute the gap to a strategy change.** 2021 is now left with three 16-game-era seasons, so more players fall through to the position default — thin, but honest. Live draft-time use (`season=2026`) is unchanged: still 2018-2025.
+
+**Worth remembering:**
+- **The first guard test written for this was worse than none.** It demanded coverage of every *ingested* season, so the first in-season 2026 refresh would have turned it red — and its own failure message said to widen the range, which is exactly the model-poisoning action above. A test whose remediation instructions break the system is a liability.
+- **Its "in-progress season" case was tautological**, asserting `3 < last_regular_week(...)` — a fact about the calendar, not about the guard. It would have passed with the completeness filter deleted.
+- **Fixtures that play every calendar week hide span bugs.** `frac = 18/17` clips to 1.0 and lands `p` on the `hi=0.97` clamp, so a `p > 0.9` assertion passes even if `active = sched - first_week + 1` were badly wrong. Fixtures now have the player miss exactly one game and assert the exact `16/17`.
+- Two CLI fixtures wrote 8- and 10-week partitions as a stand-in for a prior season; all eight real partitions pass the completeness check, so they now write full seasons.
+
+**Decisions:** availability history is derived, never configured. The target season is never part of its own history. Incomplete partitions are never read, whether or not they are the target.
+
+**Next action:** regenerate the 2021-2024 H2H backtests if any of those numbers are to be used as a baseline again. Streamlit callers (`live.py`, `scripts/draft_board.py`, `league_projection.py`) do not surface the new warnings in their UI — worth an issue.
+
+---
+
 ## Pick'em Hub — new sub-project, market-only v1 shipped (2026-08-16, branch `feat/pickem`)
 
 **The league:** straight-up NFL pick'em (a -13 favorite only has to win, not cover), but **at least three picks each week must be the underdog according to the organizer's spread**. Weekly prize for most correct; much larger season-long prize. 10-15 entrants. The organizer emails a Google Sheet **Tuesday**; picks are due **before Thursday kickoff**. Design: `docs/superpowers/specs/2026-08-16-pickem-hub-design.md`, plan `docs/superpowers/plans/2026-08-16-pickem-hub.md`.

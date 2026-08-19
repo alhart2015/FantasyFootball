@@ -4,6 +4,15 @@
 
 **TL;DR.** Among teams drafted by `season_value`, projected PF explains ~26% of win% variance (r ≈ 0.51); across all teams (wider draft-quality spread) ~51% (r ≈ 0.71). A `season_value` draft yields ~1.9× base championship odds and +1.5 wins over a .500 team. The single most useful artifact is the **projected-PF quintile table** (§4): read off champ%/playoff%/expected-wins from your team's projected PF. The per-season bootstrap CIs are too tight — see §5.
 
+> ⚠️ **Availability lookahead — numbers below predate PR #149 (2026-08-19).**
+> Every backtest recorded here was run with an availability model whose injury prior
+> `p` was built from a weekly_stats history that INCLUDED the season being graded (and
+> later ones). A player who missed half of 2024 was pre-marked injury-prone in the 2024
+> draft. `load_store_availability` now reads only completed seasons STRICTLY BEFORE the
+> target, so these figures are **not reproducible** on current code, and any strategy
+> that gates on availability was flattered here. Regenerate before using a number below
+> as a baseline for a code change.
+
 ## Method
 
 - **Backtest:** F1 H2H league sim (`src/projections/draft/backtest/`), 16-team half-PPR, 200 draft seeds per season, `strategy_n_sims=200`, jitter 8. Field = `now_or_never` + `season_value` strategies vs noisy-ADP bots (`seat_layout`: 4 nn / 4 sv / 8 bot per league → 800 sv team-seasons/season, 3,200 all-team/season).

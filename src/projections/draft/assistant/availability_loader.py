@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
+from typing import NamedTuple
 
 import pandas as pd
 
@@ -27,13 +28,20 @@ from projections.store import read_partition
 _HISTORY_FLOOR = 2018
 
 
-def _usable_history(
-    raw: Path, season: int, candidates: range | None = None
-) -> tuple[list[pd.DataFrame], list[int]]:
+class _History(NamedTuple):
+    """What `_usable_history` found, split by why each season is or is not usable."""
+
+    frames: list[pd.DataFrame]
+    incomplete: list[int]
+    gaps: list[int]
+    span: range
+
+
+def _usable_history(raw: Path, season: int, candidates: range | None = None) -> _History:
     """Read every COMPLETED weekly_stats season strictly before `season`.
 
-    Returns `(frames, skipped_incomplete)`. Two rules, both enforced here rather than
-    by a constant a human has to remember to update:
+    Two rules, both enforced here rather than by a constant a human has to remember
+    to update:
 
     **Strictly before `season`** - reading the target season's own weekly_stats is
     lookahead. `draft.backtest.inputs` builds availability with `season=` the season
@@ -51,9 +59,19 @@ def _usable_history(
     `last_regular_week`, so a partial season is skipped whether or not it is the
     target - the target-season rule alone would not catch a stale partial partition
     from an earlier year.
+
+    `gaps` are seasons with no partition at all that sit BETWEEN seasons that do have
+    one. A store that simply starts late is normal and says nothing; a hole in the
+    middle means a partition went missing — `write_partition` unlinks before writing,
+    so an interrupted refresh leaves nothing behind. Without this, a vanished season
+    would narrow the history silently, which is the same failure this module exists to
+    prevent, only from a different cause.
     """
     frames: list[pd.DataFrame] = []
-    skipped: list[int] = []
+    incomplete: list[int] = []
+    absent: list[int] = []
+    seen: list[int] = []
+
     span = range(_HISTORY_FLOOR, season) if candidates is None else candidates
     for yr in span:
         if yr >= season:
@@ -61,15 +79,16 @@ def _usable_history(
         try:
             df = read_partition(raw, "weekly_stats", season=yr)
         except FileNotFoundError:
+            absent.append(yr)
             continue
-        if df.empty:
-            skipped.append(yr)
-            continue
-        if int(df["week"].max()) < last_regular_week(yr):
-            skipped.append(yr)
+        seen.append(yr)
+        if df.empty or int(df["week"].max()) < last_regular_week(yr):
+            incomplete.append(yr)
             continue
         frames.append(df)
-    return frames, skipped
+
+    gaps = [yr for yr in absent if seen and min(seen) < yr < max(seen)]
+    return _History(frames, incomplete, gaps, span)
 
 
 def load_store_availability(
@@ -84,16 +103,31 @@ def load_store_availability(
     History is derived: every completed weekly_stats season strictly before `season`.
     `history_seasons` narrows the candidate span (tests stub a single season); it can
     never widen past `season`, and never admits an incomplete partition.
+
+    A history that is narrower than expected degrades the model rather than failing,
+    and warns. That is softer than the hard error for NO history, deliberately: with
+    some good seasons present the model is usable, just weaker. Note the warning goes
+    to stderr, so the Streamlit callers do not surface it in their UI.
     """
     raw = data_root / "raw"
-    frames, skipped = _usable_history(raw, season, history_seasons)
+    found = _usable_history(raw, season, history_seasons)
+    frames = found.frames
 
-    if skipped:
+    if found.incomplete:
         warnings.warn(
-            f"weekly_stats season(s) {skipped} are on disk but incomplete (they do not run "
-            f"through the end of the regular season) and were EXCLUDED from the availability "
-            f"model. Reading a partial season would score every player in it at "
-            f"weeks-so-far / full-season. Re-ingest once the season finishes.",
+            f"weekly_stats season(s) {found.incomplete} are on disk but incomplete (they do "
+            f"not run through the end of the regular season) and were EXCLUDED from the "
+            f"availability model. Reading a partial season would score every player in it "
+            f"at weeks-so-far / full-season. Re-ingest once the season finishes.",
+            stacklevel=2,
+        )
+
+    if found.gaps:
+        warnings.warn(
+            f"weekly_stats season(s) {found.gaps} have no partition at all, but sit between "
+            f"seasons that do. A missing season narrows the availability history silently "
+            f"(an interrupted refresh leaves nothing behind, since write_partition unlinks "
+            f"before writing). Re-ingest them.",
             stacklevel=2,
         )
 
@@ -104,9 +138,10 @@ def load_store_availability(
                 f"span starts at {_HISTORY_FLOOR}, so there is nothing earlier to learn "
                 "availability from. This is a season-range problem, not a data-root problem."
             )
+        examined = found.span
         raise FileNotFoundError(
             f"no complete weekly_stats partitions under {raw} for seasons "
-            f"{_HISTORY_FLOOR}-{season - 1}; check --data-root"
+            f"{examined.start}-{min(examined.stop, season) - 1}; check --data-root"
         )
     weekly_stats = pd.concat(frames, ignore_index=True)
     try:
