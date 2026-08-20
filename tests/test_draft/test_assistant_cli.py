@@ -97,17 +97,22 @@ def test_run_prints_table(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
 
 
 def _season_store(tmp_path: Path, gsis: list[str]) -> Path:
-    """Write minimal weekly_stats(2022) + schedules(2026) + id_map; return data_root."""
+    """Write a full weekly_stats(2022) + schedules(2026) + id_map; return data_root.
+
+    The 2022 partition runs the whole regular season on purpose. `load_store_availability`
+    reads only COMPLETED prior seasons — a partial partition would be scored as
+    weeks-so-far / full-season, so a truncated fixture is silently dropped and the
+    loader then finds no history at all."""
     data_root = tmp_path / "data"
     raw = data_root / "raw"
     n = len(gsis)
     ws = pd.DataFrame(
         {
-            "gsis_id": pd.array(gsis * 8, dtype=_PYARROW_STR),
-            "season": [2022] * (n * 8),
-            "week": [w for w in range(1, 9) for _ in range(n)],
+            "gsis_id": pd.array(gsis * 18, dtype=_PYARROW_STR),
+            "season": [2022] * (n * 18),
+            "week": [w for w in range(1, 19) for _ in range(n)],
             "position": pd.array(
-                (["RB" if i % 2 else "WR" for i in range(n)]) * 8, dtype=_PYARROW_STR
+                (["RB" if i % 2 else "WR" for i in range(n)]) * 18, dtype=_PYARROW_STR
             ),
         }
     )

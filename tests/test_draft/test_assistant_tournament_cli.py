@@ -186,16 +186,18 @@ def test_compare_with_season_valuer_runs(
     vorp_path, cfg_path = _write_inputs(tmp_path)
     data_root = tmp_path / "data"
     raw = data_root / "raw"
-    # minimal weekly_stats (one prior season) + target-season schedules + id_map
+    # weekly_stats for one COMPLETE prior season + target-season schedules + id_map.
+    # Full regular season on purpose: the loader drops partial partitions, which
+    # would leave no history at all.
     n = 24
     gsis = [f"00-00000{i:02d}" for i in range(1, n + 1)]
     ws = pd.DataFrame(
         {
-            "gsis_id": pd.array(gsis * 10, dtype=_PYARROW_STR),
-            "season": [2022] * (n * 10),
-            "week": [w for w in range(1, 11) for _ in range(n)],
+            "gsis_id": pd.array(gsis * 18, dtype=_PYARROW_STR),
+            "season": [2022] * (n * 18),
+            "week": [w for w in range(1, 19) for _ in range(n)],
             "position": pd.array(
-                (["RB" if i % 2 else "WR" for i in range(n)]) * 10, dtype=_PYARROW_STR
+                (["RB" if i % 2 else "WR" for i in range(n)]) * 18, dtype=_PYARROW_STR
             ),
         }
     )
@@ -257,11 +259,11 @@ def test_compare_includes_season_value_strategy(
     gsis = [f"00-00000{i:02d}" for i in range(1, n + 1)]
     ws = pd.DataFrame(
         {
-            "gsis_id": pd.array(gsis * 10, dtype=_PYARROW_STR),
-            "season": [2022] * (n * 10),
-            "week": [w for w in range(1, 11) for _ in range(n)],
+            "gsis_id": pd.array(gsis * 18, dtype=_PYARROW_STR),
+            "season": [2022] * (n * 18),
+            "week": [w for w in range(1, 19) for _ in range(n)],
             "position": pd.array(
-                (["RB" if i % 2 else "WR" for i in range(n)]) * 10, dtype=_PYARROW_STR
+                (["RB" if i % 2 else "WR" for i in range(n)]) * 18, dtype=_PYARROW_STR
             ),
         }
     )
@@ -324,11 +326,11 @@ def test_season_valuer_degrades_without_target_schedule(
     gsis = [f"00-00000{i:02d}" for i in range(1, n + 1)]
     ws = pd.DataFrame(
         {
-            "gsis_id": pd.array(gsis * 10, dtype=_PYARROW_STR),
-            "season": [2022] * (n * 10),
-            "week": [w for w in range(1, 11) for _ in range(n)],
+            "gsis_id": pd.array(gsis * 18, dtype=_PYARROW_STR),
+            "season": [2022] * (n * 18),
+            "week": [w for w in range(1, 19) for _ in range(n)],
             "position": pd.array(
-                (["RB" if i % 2 else "WR" for i in range(n)]) * 10, dtype=_PYARROW_STR
+                (["RB" if i % 2 else "WR" for i in range(n)]) * 18, dtype=_PYARROW_STR
             ),
         }
     )

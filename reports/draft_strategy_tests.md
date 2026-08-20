@@ -35,6 +35,15 @@
 
 ---
 
+> ⚠️ **Availability lookahead — numbers below predate PR #149 (2026-08-19).**
+> Every backtest recorded here was run with an availability model whose injury prior
+> `p` was built from a weekly_stats history that INCLUDED the season being graded (and
+> later ones). A player who missed half of 2024 was pre-marked injury-prone in the 2024
+> draft. `load_store_availability` now reads only completed seasons STRICTLY BEFORE the
+> target, so these figures are **not reproducible** on current code, and any strategy
+> that gates on availability was flattered here. Regenerate before using a number below
+> as a baseline for a code change.
+
 ## Test log
 
 ### Test 1 — Committed validation (12-team, paired head-to-head)
