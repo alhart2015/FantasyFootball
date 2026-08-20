@@ -38,7 +38,9 @@ Seasons that are incomplete, or missing entirely from between two present ones, 
 
 **Decisions:** availability history is derived, never configured. The target season is never part of its own history. Incomplete partitions are never read, whether or not they are the target.
 
-**Next action:** regenerate the 2021-2024 H2H backtests if any of those numbers are to be used as a baseline again. Streamlit callers (`live.py`, `scripts/draft_board.py`, `league_projection.py`) do not surface the new warnings in their UI — worth an issue.
+**Next action:** regenerate the 2021-2024 H2H backtests if any of those numbers are to be used as a baseline again.
+
+**Decided, not open:** the incomplete/vanished-season warnings go to stderr only. The Streamlit callers (`live.py`, `scripts/draft_board.py`, `league_projection.py`) do not surface them in their UI, so an operator drafting live would not see one. Accepted as-is (user, 2026-08-20) — do not re-raise this as a defect.
 
 ---
 
