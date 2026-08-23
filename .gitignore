@@ -267,3 +267,7 @@ data/vorp_*/*team.parquet
 data/vorp_*/*team.league.json
 reports/_*/
 reports/*.png
+
+# ESPN private-league cookies — never commit
+configs/espn_credentials.json
+data/leagues/*/espn_raw.json
