@@ -27,9 +27,10 @@ from projections.ingest.espn_league import (
     parse_ruleset,
     parse_teams,
     pro_team_code,
+    scoring_family,
     write_league_snapshot,
 )
-from projections.schemas import RosterSlot, Team
+from projections.schemas import _RULESET_NAME_VALUES, RosterSlot, Team
 
 _MY_SWID = "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"
 
@@ -158,9 +159,18 @@ def test_cookie_header_shape() -> None:
     assert creds.cookie_header() == "SWID={ABC}; espn_s2=s2value"
 
 
-def test_blank_credentials_are_rejected() -> None:
-    with pytest.raises(EspnLeagueError, match="non-empty"):
+def test_blank_swid_is_rejected_but_named_as_identity_only() -> None:
+    """ESPN never validates SWID (probed against league 856974, 2026-08-24: espn_s2 plus a
+    wrong, zeroed, or absent SWID all returned 200; the right SWID with no espn_s2 returned
+    401). It is still required, because it is the only thing that identifies which team is
+    the caller's — and the error has to say so, or a wrong SWID reads as a login problem."""
+    with pytest.raises(EspnLeagueError, match="does not authenticate"):
         EspnCredentials(swid="   ", espn_s2="s2")
+
+
+def test_blank_espn_s2_is_rejected_as_the_authenticator() -> None:
+    with pytest.raises(EspnLeagueError, match="what ESPN checks"):
+        EspnCredentials(swid="{ABC}", espn_s2="  ")
 
 
 def test_from_env_requires_both(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -326,6 +336,48 @@ def test_parse_ruleset_notes_missing_categories() -> None:
     assert any("defaults apply" in note for note in notes), notes
 
 
+@pytest.mark.parametrize(
+    ("reception_pts", "expected"),
+    [(1.0, "ESPN_PPR"), (0.5, "ESPN_HALF"), (0.0, "STANDARD")],
+)
+def test_scoring_family_tags_the_standard_values(reception_pts: float, expected: str) -> None:
+    assert scoring_family(reception_pts) == (expected, True)
+
+
+def test_scoring_family_snaps_an_unusual_value_to_the_nearest_family() -> None:
+    family, exact = scoring_family(0.6)
+    assert (family, exact) == ("ESPN_HALF", False)
+
+
+def test_ruleset_name_is_always_a_whitelisted_family() -> None:
+    """`Ruleset.name` is not free text: `_RULESET_NAME_VALUES` whitelists it and
+    `ConsensusProjectionSchema` validates against that list, so a descriptive per-league
+    name (e.g. "Critts 2025_scoring") makes `generate_league_vorp_table.py` fail on the
+    config this module writes. Pinned to the real whitelist so a rename there breaks here.
+    """
+    for reception_pts in (0.0, 0.4, 0.5, 0.75, 1.0, 1.5):
+        payload = _payload()
+        payload["settings"]["scoringSettings"]["scoringItems"] = [
+            {"statId": 53, "points": reception_pts}
+        ]
+        ruleset, _ = parse_ruleset(payload)
+        assert ruleset.name in _RULESET_NAME_VALUES
+
+
+def test_parse_ruleset_reports_a_non_standard_ppr_value() -> None:
+    payload = _payload()
+    payload["settings"]["scoringSettings"]["scoringItems"] = [{"statId": 53, "points": 0.6}]
+    ruleset, notes = parse_ruleset(payload)
+    assert ruleset.reception_pts == pytest.approx(0.6)  # the exact value still scores
+    assert ruleset.name == "ESPN_HALF"  # only the tag is approximate
+    assert any("nearest one" in note for note in notes), notes
+
+
+def test_parse_ruleset_accepts_an_explicit_name_override() -> None:
+    ruleset, _ = parse_ruleset(_payload(), name="DRAFTKINGS")
+    assert ruleset.name == "DRAFTKINGS"
+
+
 def test_parse_draft_settings_converts_epoch_millis() -> None:
     draft = parse_draft_settings(_payload())
     assert draft["type"] == "AUCTION"
@@ -351,8 +403,22 @@ def test_build_league_config_matches_espn_settings() -> None:
     assert config.n_teams == 12
     assert config.budget == 200
     assert config.ruleset.reception_pts == pytest.approx(0.5)
-    # roster_size excludes IR: 1+2+2+1+1+1+5+2 = 15
-    assert config.roster_size == 15
+    # roster_size excludes IR, and K/DST are dropped: QB1+RB2+WR2+TE1+FLEX2+BENCH5 = 13
+    assert config.roster_size == 13
+
+
+def test_build_league_config_drops_k_and_dst_slots() -> None:
+    """The projections core ingests QB/RB/WR/TE only, so a kept D/ST slot makes
+    generate_vorp_table raise "cannot fill 16 DST slots: only 0 eligible players remain"
+    (hit live on league 856974, 2026-08-24). Dropping them is also the correct replacement
+    level: a D/ST pick does not consume a skill player."""
+    config = build_league_config(_payload())
+    assert RosterSlot.K not in config.roster_slots
+    assert RosterSlot.DST not in config.roster_slots
+    # ESPN roster is 15 deep (QB1 RB2 WR2 TE1 FLEX2 K1 DST1 BENCH5); 13 are skill picks.
+    assert config.roster_size == 13
+    # parse_roster_slots still reports ESPN faithfully — only the config filters.
+    assert parse_roster_slots(_payload())[RosterSlot.DST] == 1
 
 
 def test_build_league_config_falls_back_to_team_count() -> None:

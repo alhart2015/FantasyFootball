@@ -21,7 +21,16 @@ Running log of project status, decisions, and next steps. Append new entries at 
 | Roster | 15, K + D/ST | **13, no K slot**, D/ST 1 |
 | Draft | done 2026-08-16 | **2026-08-30 9:00 PM ET** |
 
-**`data/vorp_2026/will_half12.parquet` is the wrong pool for this league** — 16 teams moves replacement level hard in one direction and the single flex moves it back, so neither the RB 96.9 / WR 131.0 replacement levels nor any playoff-odds figure in this log transfers. Notes: `data/leagues/critts_2025_2026/league.md`.
+**`data/vorp_2026/will_half12.parquet` is the wrong pool for this league.** Its own pool is now built: `data/vorp_2026/critts_half16_snake.parquet` (579 players, pool_needed 192). Measured replacement levels against `will_half12`:
+
+| Pos | Critts (16-team) | will_half12 | delta |
+|---|---|---|---|
+| QB | 248.5 | 298.0 | **-49.5** |
+| RB | 85.5 | 96.9 | -11.5 |
+| WR | 116.6 | 131.0 | -14.4 |
+| TE | 104.5 | 123.0 | -18.5 |
+
+**Replacement level is LOWER in points at every position, not higher.** More teams drains further down the pool, so the replacement player is worse — a smaller points number — which means higher VORP for everyone and a wider elite-to-waiver gap. Starter demand is 96 RB/WR/TE starters (16 x (2+2+1+1 flex)) against will_half12's 84 (12 x (2+2+1+2 flex)). **I initially asserted the opposite in this log and in `league.md`** — that a 16-team league makes replacement level "rise sharply". Corrected against the built table. **QB moves most (-49.5):** 16 starting QBs against 12, and Josh Allen prices at 107 VORP here versus 84 in the 12-team pool, so a "wait on QB" instinct carried over from the other league is wrong. Notes: `data/leagues/critts_2025_2026/league.md`.
 
 **Two ESPN API behaviours that would have silently corrupted downstream data:**
 
@@ -30,11 +39,17 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 **Scoring categories `Ruleset` cannot model are reported, not dropped.** Kicking, D/ST and bonus categories (11 of them in this league) have no skill-position equivalent, so `parse_ruleset` returns them as notes. A zero points-per-yard **raises** rather than falling back to a default — inverting it to yards-per-point is impossible and every downstream projection depends on that number.
 
+**`Ruleset.name` is a scoring FAMILY tag, not free text — and this bit the client.** The first version named the ruleset after the league (`"Critts 2025_scoring"`). `schemas._RULESET_NAME_VALUES` whitelists that field to `ESPN_PPR | ESPN_HALF | STANDARD | DRAFTKINGS`, `ConsensusProjectionSchema` validates against it, and `resolve_espn_auction_dollars` keys its ESPN expert-column fallback on it — so `generate_league_vorp_table.py` would have rejected the config this module writes. `parse_ruleset` now derives the family from points-per-reception (nearest family, with a note when the league's value is non-standard like 0.6 PPR); the exact per-stat values still ride on the same object and are what actually score projections. A test pins the output against the real whitelist so a rename there breaks here. **Caught only by reading the consumer, not by any test of this module in isolation.**
+
 **Open — SWID auto-detection does not work for this user.** The browser's `SWID` cookie is not among the league's 18 member ids, while the team is owned by a different SWID (`alhart2015`, abbrev `HART`). `espn_s2` authenticates fine, so reads work, but `--team-id 17` must be passed explicitly. Probably a second ESPN profile in that browser.
 
 **Privacy:** this repo is **public**. `espn_raw.json` carries every member's SWID and is gitignored; `owner_swid` is kept in memory for detection but stripped before `teams.tsv` is written, guarded by a test. `configs/espn_credentials.json` is gitignored.
 
-**Next action:** build a 16-team half-PPR snake VORP pool for this league from `league_config.json`, then a draft-slot-8 plan. Do **not** reuse `will_half12`.
+**K and D/ST slots are dropped from the generated LeagueConfig.** ESPN reports them; the projections core ingests QB/RB/WR/TE only, so keeping a D/ST slot made `generate_vorp_table` raise `cannot fill 16 DST slots: only 0 eligible players remain`. Dropping them matches every hand-written config in `configs/` and is the correct replacement-level math — a D/ST pick does not consume a skill player, so the skill pool is 16 x 12, not 16 x 13. `parse_roster_slots` still reports ESPN faithfully; only `build_league_config` filters, and it logs what it dropped.
+
+**Resolved — the SWID mismatch was a wrong cookie value, not a second profile.** Probed directly: `espn_s2` alone returns 200; `espn_s2` with a wrong SWID, a zeroed SWID, or no SWID all return 200; the correct SWID with no `espn_s2` returns 401. **ESPN never validates SWID** — it is only how `find_my_team_id` works out which team is the caller's, so a wrong value authenticates fine and fails silently at exactly one line of output. The creds file now carries the real SWID from the league payload and auto-detection works with no `--team-id`. Docstrings and the 401 message previously claimed SWID authenticated; corrected, with a test pinning the behaviour.
+
+**Next action:** a draft-slot-8 plan off `critts_half16_snake.parquet`. Draft is 2026-08-30 9:00 PM ET.
 
 ---
 

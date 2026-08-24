@@ -3,8 +3,15 @@ rosters and draft results.
 
 Distinct from `external_projections.py`, which hits ESPN's public `leaguedefaults`
 endpoint for preseason player projections. This module reads one specific league and
-therefore needs the manager's browser cookies (`SWID` + `espn_s2`); ESPN answers 401
+therefore needs the manager's browser cookies; ESPN answers 401
 `AUTH_LEAGUE_NOT_VISIBLE` without them.
+
+**`espn_s2` is the cookie that authenticates. `SWID` is not checked at all** — probed
+against league 856974 on 2026-08-24, a request carrying `espn_s2` plus a wrong SWID, a
+zeroed SWID, or no SWID returned 200 every time, while the correct SWID with no `espn_s2`
+returned 401. SWID is stored anyway because it is the only thing that identifies *which*
+team belongs to the caller (`find_my_team_id`). A wrong SWID therefore fails silently and
+confusingly: the pull succeeds and only the "my team" line comes back empty.
 
 `fetch_league_payload` is the only network call; everything else is a pure parser over
 the returned JSON, so the mapping logic is unit-tested with synthetic payloads.
@@ -63,14 +70,26 @@ class EspnLeagueError(RuntimeError):
 
 @dataclass(frozen=True)
 class EspnCredentials:
-    """The two browser cookies ESPN uses to authorize a private-league read."""
+    """The browser cookies for a private-league read.
+
+    `espn_s2` authorizes the request; `swid` only identifies which team is the caller's
+    (see the module docstring — ESPN does not validate it). Both are still required, so a
+    missing SWID surfaces here rather than as a mysteriously empty "my team".
+    """
 
     swid: str
     espn_s2: str
 
     def __post_init__(self) -> None:
-        if not self.swid.strip() or not self.espn_s2.strip():
-            raise EspnLeagueError("Both SWID and espn_s2 are required and must be non-empty.")
+        if not self.espn_s2.strip():
+            raise EspnLeagueError(
+                "espn_s2 is required and must be non-empty; it is what ESPN checks."
+            )
+        if not self.swid.strip():
+            raise EspnLeagueError(
+                "SWID is required and must be non-empty. It does not authenticate — it is how "
+                "find_my_team_id works out which team is yours."
+            )
 
     @property
     def normalized_swid(self) -> str:
@@ -241,9 +260,10 @@ def fetch_league_payload(
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             raise EspnLeagueError(
-                f"ESPN returned 401 for league {league_id} season {season}: the SWID / espn_s2 "
-                "cookies are missing, expired, or belong to an account that is not in this "
-                "league. Log in at fantasy.espn.com and copy them again."
+                f"ESPN returned 401 for league {league_id} season {season}: the espn_s2 cookie "
+                "is missing, expired, or belongs to an account that is not in this league. "
+                "SWID is not the problem — ESPN does not check it. Log in at fantasy.espn.com "
+                "and copy espn_s2 again."
             ) from exc
         if exc.code == 404:
             raise EspnLeagueError(
@@ -306,9 +326,32 @@ def parse_roster_slots(payload: dict[str, Any]) -> dict[RosterSlot, int]:
     return slots
 
 
-def parse_ruleset(payload: dict[str, Any], name: str) -> tuple[Ruleset, list[str]]:
+#: Scoring FAMILY tags, keyed by points-per-reception. `Ruleset.name` is not free text:
+#: `schemas._RULESET_NAME_VALUES` whitelists it, `ConsensusProjectionSchema` validates
+#: against that list, and `resolve_espn_auction_dollars` keys its ESPN expert-column
+#: fallback on it. A descriptive per-league name would fail validation downstream.
+_SCORING_FAMILIES: dict[float, str] = {1.0: "ESPN_PPR", 0.5: "ESPN_HALF", 0.0: "STANDARD"}
+
+
+def scoring_family(reception_pts: float) -> tuple[str, bool]:
+    """Points-per-reception -> (family tag, is_exact).
+
+    Returns the nearest family plus whether the match was exact, so a league on an unusual
+    value (0.6 PPR, say) is tagged with the closest legal family and the approximation is
+    reported rather than hidden. The custom per-stat values still ride on the same `Ruleset`
+    object and are what actually score projections; the name is only the family tag.
+    """
+    nearest = min(_SCORING_FAMILIES, key=lambda pts: abs(pts - reception_pts))
+    return _SCORING_FAMILIES[nearest], nearest == reception_pts
+
+
+def parse_ruleset(payload: dict[str, Any], name: str | None = None) -> tuple[Ruleset, list[str]]:
     """`settings.scoringSettings.scoringItems` -> `Ruleset`, plus a list of human-readable
     notes about anything that did not map cleanly.
+
+    `name` defaults to the scoring family implied by points-per-reception; pass one only to
+    override. It must stay inside `schemas._RULESET_NAME_VALUES` or downstream pandera
+    validation rejects the table built from it.
 
     Returning the notes rather than swallowing them matters: `Ruleset` models skill-position
     scoring only, so kicker and D/ST categories genuinely have nowhere to go. Reporting them
@@ -373,7 +416,15 @@ def parse_ruleset(payload: dict[str, Any], name: str) -> tuple[Ruleset, list[str
             f"ESPN did not report these categories; Ruleset defaults apply: {', '.join(missing)}."
         )
 
-    return Ruleset(name=name, **fields), notes
+    reception_pts = fields.get("reception_pts", Ruleset().reception_pts)
+    family, exact = scoring_family(reception_pts)
+    if not exact:
+        notes.append(
+            f"This league scores {reception_pts:g} points per reception, which is not a "
+            f"standard family; tagged as the nearest one, {family}. The exact value is still "
+            "what scores projections — only the family tag is approximate."
+        )
+    return Ruleset(name=name or family, **fields), notes
 
 
 def parse_draft_settings(payload: dict[str, Any]) -> dict[str, Any]:
@@ -398,6 +449,14 @@ def parse_draft_settings(payload: dict[str, Any]) -> dict[str, Any]:
 def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> LeagueConfig:
     """Derive a `LeagueConfig` from an ESPN payload.
 
+    **K and D/ST slots are dropped**, matching every hand-written config in `configs/`. This
+    is not cosmetic: the projections core models skill positions only (`external_projections`
+    ingests QB/RB/WR/TE), so a kept D/ST slot makes `generate_vorp_table` raise
+    "cannot fill 16 DST slots: only 0 eligible players remain". Dropping them is also the
+    *correct* replacement-level math — a D/ST pick does not consume a skill player, so the
+    skill pool a 16-team league drains is 16 x 12, not 16 x 13. `parse_roster_slots` still
+    reports what ESPN actually says; only this config-building step filters.
+
     Auction budget comes from `draftSettings.auctionBudget`; a snake league reports 0
     there, in which case `LeagueConfig`'s own default budget is used (the field requires
     a positive value and is meaningless for snake drafts anyway).
@@ -412,14 +471,31 @@ def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> 
         raise EspnLeagueError(f"Could not determine team count for league {payload.get('id')}.")
 
     draft = parse_draft_settings(payload)
-    ruleset, notes = parse_ruleset(payload, name=f"{league_name}_scoring")
+    ruleset, notes = parse_ruleset(payload)
     for note in notes:
         _log.warning("Scoring: %s", note)
+
+    espn_slots = parse_roster_slots(payload)
+    skill_slots = {
+        slot: count
+        for slot, count in espn_slots.items()
+        if slot not in (RosterSlot.K, RosterSlot.DST)
+    }
+    dropped = {slot: espn_slots[slot] for slot in espn_slots if slot not in skill_slots}
+    if dropped:
+        _log.warning(
+            "Roster: dropped %s from the LeagueConfig — the projections core models skill "
+            "positions only, and these slots do not consume a skill player. ESPN's real roster "
+            "is %d deep; this config models the %d skill picks.",
+            ", ".join(f"{slot}x{count}" for slot, count in dropped.items()),
+            sum(c for s, c in espn_slots.items() if s != RosterSlot.IR),
+            sum(c for s, c in skill_slots.items() if s != RosterSlot.IR),
+        )
 
     kwargs: dict[str, Any] = {
         "name": league_name,
         "n_teams": n_teams,
-        "roster_slots": parse_roster_slots(payload),
+        "roster_slots": skill_slots,
         "ruleset": ruleset,
     }
     # ESPN reports auctionBudget: 200 even for snake leagues, where it means nothing.
@@ -467,10 +543,13 @@ def parse_teams(payload: dict[str, Any]) -> pd.DataFrame:
 
 
 def find_my_team_id(payload: dict[str, Any], creds: EspnCredentials) -> int | None:
-    """Identify which franchise belongs to the authenticated user, by SWID.
+    """Identify which franchise belongs to the caller, by SWID.
 
-    Returns None rather than raising: a commissioner or a read-only account can legitimately
-    see a league without owning a team in it.
+    Returns None rather than raising, for two very different reasons that look identical
+    here: a commissioner or read-only account can legitimately see a league without owning a
+    team, *or* the configured SWID is simply the wrong value. The latter is easy to hit —
+    ESPN never validates SWID, so a wrong one authenticates fine and fails only here. The
+    CLI prints the candidate teams so the mismatch is recoverable.
     """
     target = creds.normalized_swid.upper()
     for team in payload.get("teams", []) or []:
@@ -744,11 +823,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     if my_team_id is None:
         print(
-            "\nMy team: NOT FOUND — no team is owned by this SWID. Re-run with --team-id "
-            "<id> using one of:"
+            "\nMy team: NOT FOUND — no team is owned by the configured SWID. The pull itself "
+            "is fine (espn_s2 is what ESPN checks; SWID is never validated), so this almost "
+            "always means the SWID value is wrong rather than the login. Either pass "
+            "--team-id <id>, or put the matching SWID in the creds file. Teams:"
         )
         for row in teams.itertuples():
-            print(f"  {row.team_id:>3}  {row.team_name:<30} {row.owner}")
+            print(f"  {row.team_id:>3}  {row.team_name:<30} {row.owner}  {row.owner_swid}")
     else:
         mine = teams.loc[teams["team_id"] == my_team_id]
         print(f"My team: {mine.iloc[0]['team_name']} (team_id {my_team_id})")
