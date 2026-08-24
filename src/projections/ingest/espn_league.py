@@ -422,7 +422,11 @@ def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> 
         "roster_slots": parse_roster_slots(payload),
         "ruleset": ruleset,
     }
-    if draft["auction_budget"] > 0:
+    # ESPN reports auctionBudget: 200 even for snake leagues, where it means nothing.
+    # Only trust it when the draft is actually an auction; otherwise let LeagueConfig's
+    # own default stand, so a stale budget from a previous format cannot leak into
+    # auction-value math.
+    if draft["type"] == "AUCTION" and draft["auction_budget"] > 0:
         kwargs["budget"] = draft["auction_budget"]
     return LeagueConfig(**kwargs)
 
@@ -524,13 +528,19 @@ def parse_draft_picks(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFr
     """`draftDetail.picks` -> the `pick salary player nfl_team pos fantasy_team` TSV shape
     that `scripts/_will_league_2026_outcomes.py --picks` consumes.
 
+    ESPN pre-creates every pick slot as soon as the draft order is set, months before the
+    draft: a 16-team/13-round league reports 208 picks with `playerId: -1` while
+    `draftDetail.drafted` is still false. Those placeholders are *not* results and are
+    dropped here — see `parse_draft_order` for the slot-by-slot order they do carry.
+
     ESPN's pick log carries ids only, so player names come from the roster view. A player
     traded or dropped since the draft will therefore be missing a name; those rows are kept
-    with a blank name and reported by the caller rather than dropped, so the pick count
-    stays honest.
+    with a blank name rather than dropped, so the pick count stays honest.
     """
     detail = payload.get("draftDetail", {}) or {}
-    picks = detail.get("picks", []) or []
+    picks = [
+        pick for pick in (detail.get("picks", []) or []) if int(pick.get("playerId", 0) or 0) > 0
+    ]
     roster = parse_rosters(payload)
     players_by_id = {
         int(row.player_id): (str(row.player), str(row.pos), str(row.nfl_team))
@@ -573,6 +583,34 @@ def parse_draft_picks(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFr
     return frame.sort_values("pick").reset_index(drop=True)
 
 
+def parse_draft_order(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFrame:
+    """`draftDetail.picks` -> who picks where, independent of whether anyone has picked.
+
+    ESPN publishes the full slot grid once the order is drawn, so this is the pre-draft
+    artifact that actually matters: it answers "which slot am I, and when do I pick again".
+    Auction leagues get a nomination order in the same shape.
+    """
+    picks = (payload.get("draftDetail", {}) or {}).get("picks", []) or []
+    team_names = dict(zip(teams["team_id"], teams["team_name"], strict=True))
+    rows = [
+        {
+            "overall": int(pick.get("overallPickNumber", 0) or 0),
+            "round": int(pick.get("roundId", 0) or 0),
+            "round_pick": int(pick.get("roundPickNumber", 0) or 0),
+            "team_id": int(pick.get("teamId", 0) or 0),
+            "fantasy_team": str(
+                team_names.get(int(pick.get("teamId", 0) or 0), f"Team {pick.get('teamId')}")
+            ),
+        }
+        for pick in picks
+    ]
+    frame = pd.DataFrame(
+        rows, columns=["overall", "round", "round_pick", "team_id", "fantasy_team"]
+    )
+    frame["fantasy_team"] = frame["fantasy_team"].astype(_PYARROW_STR)
+    return frame.sort_values("overall").reset_index(drop=True)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -590,11 +628,16 @@ def write_league_snapshot(
     payload: dict[str, Any],
     out_dir: Path,
     creds: EspnCredentials,
+    *,
+    my_team_id: int | None = None,
 ) -> dict[str, Any]:
     """Write the raw payload plus the derived config / teams / roster / draft files.
 
     The raw JSON is written first and unconditionally: if a parser is wrong, the evidence
     needed to fix it is already on disk.
+
+    `my_team_id` overrides SWID auto-detection, which fails when the browser's SWID cookie
+    belongs to a different ESPN profile than the account that owns the team.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "espn_raw.json").write_text(
@@ -605,7 +648,10 @@ def write_league_snapshot(
     (out_dir / "league_config.json").write_text(config.model_dump_json(indent=2), encoding="utf-8")
 
     teams = parse_teams(payload)
-    teams.to_csv(out_dir / "teams.tsv", sep="\t", index=False)
+    # `owner_swid` stays in memory for find_my_team_id but never reaches disk: a SWID is a
+    # persistent ESPN account identifier for a real person, and this repo is public. The
+    # full raw payload does contain them, which is why espn_raw.json is gitignored.
+    teams.drop(columns=["owner_swid"]).to_csv(out_dir / "teams.tsv", sep="\t", index=False)
 
     rosters = parse_rosters(payload)
     if not rosters.empty:
@@ -615,13 +661,23 @@ def write_league_snapshot(
     if not picks.empty:
         picks.to_csv(out_dir / "draft.tsv", sep="\t", index=False)
 
-    my_team_id = find_my_team_id(payload, creds)
+    order = parse_draft_order(payload, teams)
+    if not order.empty:
+        order.to_csv(out_dir / "draft_order.tsv", sep="\t", index=False)
+
+    if my_team_id is not None and my_team_id not in set(teams["team_id"]):
+        raise EspnLeagueError(
+            f"--team-id {my_team_id} is not a team in this league. Valid ids: "
+            f"{sorted(teams['team_id'])}."
+        )
+    resolved_team_id = my_team_id if my_team_id is not None else find_my_team_id(payload, creds)
     return {
         "config": config,
         "teams": teams,
         "rosters": rosters,
         "picks": picks,
-        "my_team_id": my_team_id,
+        "order": order,
+        "my_team_id": resolved_team_id,
         "draft_settings": parse_draft_settings(payload),
     }
 
@@ -644,6 +700,15 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_CREDS_PATH,
         help="JSON file with 'swid' and 'espn_s2'. Used only if the env vars are unset.",
     )
+    parser.add_argument(
+        "--team-id",
+        type=int,
+        default=None,
+        help=(
+            "Your ESPN team id, overriding SWID auto-detection. Needed when the browser's "
+            "SWID cookie belongs to a different ESPN profile than the team owner."
+        ),
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -654,12 +719,13 @@ def main(argv: list[str] | None = None) -> int:
             str((payload.get("settings", {}) or {}).get("name", f"league_{args.league_id}")),
             args.season,
         )
-        result = write_league_snapshot(payload, out_dir, creds)
+        result = write_league_snapshot(payload, out_dir, creds, my_team_id=args.team_id)
     except EspnLeagueError as exc:
         raise SystemExit(str(exc)) from exc
 
     config: LeagueConfig = result["config"]
     teams: pd.DataFrame = result["teams"]
+    order: pd.DataFrame = result["order"]
     draft = result["draft_settings"]
     my_team_id = result["my_team_id"]
 
@@ -671,16 +737,27 @@ def main(argv: list[str] | None = None) -> int:
         f"{config.ruleset.passing_td_pts} pass TD, "
         f"{config.ruleset.passing_yds_per_pt:g} pass yds/pt"
     )
+    budget = f"  budget ${draft['auction_budget']}" if draft["type"] == "AUCTION" else ""
     print(
-        f"Draft: {draft['type']}  budget ${draft['auction_budget']}  "
-        f"date {draft['date_utc'] or 'not scheduled'}  keepers {draft['keeper_count']}"
+        f"Draft: {draft['type']}{budget}  date {draft['date_utc'] or 'not scheduled'}  "
+        f"keepers {draft['keeper_count']}"
     )
     if my_team_id is None:
-        print("My team: NOT FOUND — the SWID does not own a team in this league.")
+        print(
+            "\nMy team: NOT FOUND — no team is owned by this SWID. Re-run with --team-id "
+            "<id> using one of:"
+        )
+        for row in teams.itertuples():
+            print(f"  {row.team_id:>3}  {row.team_name:<30} {row.owner}")
     else:
-        mine = teams.loc[teams["team_id"] == my_team_id, "team_name"]
-        print(f"My team: {mine.iloc[0]} (team_id {my_team_id})")
-    print(f"Rostered players: {len(result['rosters'])}   Draft picks: {len(result['picks'])}")
+        mine = teams.loc[teams["team_id"] == my_team_id]
+        print(f"My team: {mine.iloc[0]['team_name']} (team_id {my_team_id})")
+        if not order.empty:
+            slots = order.loc[order["team_id"] == my_team_id]
+            first = slots.iloc[0]
+            print(f"Draft slot: {int(first['round_pick'])} of {config.n_teams}")
+            print(f"My picks:   {', '.join(str(int(p)) for p in slots['overall'])}")
+    print(f"Rostered players: {len(result['rosters'])}   Draft picks made: {len(result['picks'])}")
     print(f"\nWrote {out_dir}/")
     return 0
 

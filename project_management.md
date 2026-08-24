@@ -6,6 +6,38 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## ESPN league API client shipped — and the real 2026 league is not the one on disk (2026-08-24, branch `feat/espn-league-api`)
+
+**Shipped:** `src/projections/ingest/espn_league.py` — reads a **private** ESPN league (settings, teams, rosters, draft order, draft picks) with `SWID` + `espn_s2` cookies, and derives a `LeagueConfig` from ESPN's own scoring and roster settings rather than a hand-transcribed guess. Closes the "ESPN league API client" item in `draft_ready_checklist.md` §4a. Stdlib `urllib`, matching `external_projections.py` — no `espn-api` dependency added. 42 unit tests over synthetic payloads; the one network call is not exercised in tests.
+
+**The headline finding is not the client.** League **856974 is "Critts", a 16-team snake league** — it is **not** `goat_steins_2026`, the 12-team auction whose pool and sim results fill this log. Verified live 2026-08-24:
+
+| | goat_steins_2026 | **Critts 2026 (856974)** |
+|---|---|---|
+| Teams | 12 | **16** |
+| Format | Auction $200 | **Snake, slot 8 of 16** |
+| Passing TD | 5 pt | **4 pt** |
+| FLEX | 2 | **1** |
+| Roster | 15, K + D/ST | **13, no K slot**, D/ST 1 |
+| Draft | done 2026-08-16 | **2026-08-30 9:00 PM ET** |
+
+**`data/vorp_2026/will_half12.parquet` is the wrong pool for this league** — 16 teams moves replacement level hard in one direction and the single flex moves it back, so neither the RB 96.9 / WR 131.0 replacement levels nor any playoff-odds figure in this log transfers. Notes: `data/leagues/critts_2025_2026/league.md`.
+
+**Two ESPN API behaviours that would have silently corrupted downstream data:**
+
+- **ESPN pre-creates every draft pick slot when the order is drawn.** The first pull reported 208 "picks" a week before the draft, all with `playerId: -1` and `draftDetail.drafted: false`. Writing those to `draft.tsv` would have handed the sim a full board of blank picks. `parse_draft_picks` now filters on `playerId > 0`; `parse_draft_order` reads the same records for what they actually are — the draft order.
+- **ESPN reports `auctionBudget: 200` for a snake league.** Meaningless there, and actively dangerous if a league ever converts from auction. `build_league_config` reads it only when `draftSettings.type == "AUCTION"`.
+
+**Scoring categories `Ruleset` cannot model are reported, not dropped.** Kicking, D/ST and bonus categories (11 of them in this league) have no skill-position equivalent, so `parse_ruleset` returns them as notes. A zero points-per-yard **raises** rather than falling back to a default — inverting it to yards-per-point is impossible and every downstream projection depends on that number.
+
+**Open — SWID auto-detection does not work for this user.** The browser's `SWID` cookie is not among the league's 18 member ids, while the team is owned by a different SWID (`alhart2015`, abbrev `HART`). `espn_s2` authenticates fine, so reads work, but `--team-id 17` must be passed explicitly. Probably a second ESPN profile in that browser.
+
+**Privacy:** this repo is **public**. `espn_raw.json` carries every member's SWID and is gitignored; `owner_swid` is kept in memory for detection but stripped before `teams.tsv` is written, guarded by a test. `configs/espn_credentials.json` is gitignored.
+
+**Next action:** build a 16-team half-PPR snake VORP pool for this league from `league_config.json`, then a draft-slot-8 plan. Do **not** reuse `will_half12`.
+
+---
+
 ## Availability model — derived history: 2025 was unread, and every backtest was leaking (2026-08-19, branch `fix/availability-history-2025`, PR [#149](https://github.com/alhart2015/FantasyFootball/pull/149))
 
 **The bug.** `availability_loader._HISTORY_SEASONS` read 2018-2024 while `weekly_stats` for 2025 had been ingested (weeks 1-22, 5,557 rows) and was sitting unread. Every availability probability in the draft / auction / season-value stack was built from a history one full season stale. **It was silent by construction:** `load_store_availability` skips missing partitions by design, so a too-narrow range is indistinguishable at runtime from a correct one. The bias was not neutral — it made the model systematically pessimistic (Gibbs 0.941 → 0.961, Kyren 0.882 → 0.912, Achane 0.844 → 0.876).

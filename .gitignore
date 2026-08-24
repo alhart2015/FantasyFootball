@@ -270,4 +270,8 @@ reports/*.png
 
 # ESPN private-league cookies — never commit
 configs/espn_credentials.json
-data/leagues/*/espn_raw.json
+
+# League pulls. This repo is public and these carry real people's names, ESPN display
+# handles and (in espn_raw.json) their SWID account ids. Kept local by decision
+# (user, 2026-08-24). Regenerate with `python -m projections.ingest.espn_league`.
+data/leagues/

@@ -19,6 +19,7 @@ from projections.ingest.espn_league import (
     EspnLeagueError,
     build_league_config,
     find_my_team_id,
+    parse_draft_order,
     parse_draft_picks,
     parse_draft_settings,
     parse_roster_slots,
@@ -26,6 +27,7 @@ from projections.ingest.espn_league import (
     parse_ruleset,
     parse_teams,
     pro_team_code,
+    write_league_snapshot,
 )
 from projections.schemas import RosterSlot, Team
 
@@ -359,10 +361,14 @@ def test_build_league_config_falls_back_to_team_count() -> None:
     assert build_league_config(payload).n_teams == 2  # the two teams in the fixture
 
 
-def test_build_league_config_keeps_default_budget_for_snake() -> None:
+def test_build_league_config_ignores_the_budget_espn_reports_for_snake() -> None:
+    """ESPN reports a non-zero auctionBudget even for snake leagues (verified live on
+    league 856974: SNAKE with auctionBudget 200). Copying it into LeagueConfig would let a
+    meaningless — or stale, if the league used to be an auction — number reach the
+    auction-value math."""
     payload = _payload()
-    payload["settings"]["draftSettings"] = {"type": "SNAKE", "auctionBudget": 0, "date": 0}
-    assert build_league_config(payload).budget == 200  # LeagueConfig default, not ESPN's 0
+    payload["settings"]["draftSettings"] = {"type": "SNAKE", "auctionBudget": 500, "date": 0}
+    assert build_league_config(payload).budget == 200  # LeagueConfig default, not ESPN's 500
 
 
 def test_build_league_config_rejects_an_unsized_league() -> None:
@@ -385,6 +391,18 @@ def test_parse_teams_resolves_names_and_owners() -> None:
     assert teams.loc[0, "owner"] == "alden"
     # location + nickname is the older ESPN shape
     assert teams.loc[1, "team_name"] == "Lemon Party"
+
+
+def test_written_teams_tsv_never_contains_a_swid(tmp_path: Path) -> None:
+    """A SWID is a persistent ESPN account identifier for a real person and this repo is
+    public, so it must not reach a committed file. Guarded by a test because the column is
+    deliberately kept in memory for find_my_team_id."""
+    creds = EspnCredentials(swid="{IRRELEVANT}", espn_s2="s2")
+    write_league_snapshot(_payload(), tmp_path, creds)
+    written = (tmp_path / "teams.tsv").read_text(encoding="utf-8")
+    assert "owner_swid" not in written
+    assert _MY_SWID not in written
+    assert "Two Kids Two Steins" in written  # the useful content survives
 
 
 def test_parse_teams_requires_the_team_view() -> None:
@@ -450,3 +468,81 @@ def test_parse_draft_picks_is_empty_before_the_draft() -> None:
     picks = parse_draft_picks(payload, parse_teams(payload))
     assert picks.empty
     assert "salary" in picks.columns
+
+
+def test_parse_draft_picks_drops_espn_placeholder_slots() -> None:
+    """ESPN pre-creates every pick slot with `playerId: -1` as soon as the draft order is
+    drawn — months before the draft. Verified live on league 856974 (2026-08-23): 208
+    placeholder picks with `drafted: false`. Treating those as results would hand the sim
+    a full board of blank picks.
+    """
+    payload = _payload()
+    payload["draftDetail"] = {
+        "drafted": False,
+        "picks": [
+            {
+                "overallPickNumber": 1,
+                "roundId": 1,
+                "roundPickNumber": 1,
+                "teamId": 2,
+                "playerId": -1,
+            },
+            {
+                "overallPickNumber": 2,
+                "roundId": 1,
+                "roundPickNumber": 2,
+                "teamId": 1,
+                "playerId": -1,
+            },
+        ],
+    }
+    assert parse_draft_picks(payload, parse_teams(payload)).empty
+
+
+def test_parse_draft_order_keeps_placeholder_slots() -> None:
+    """The mirror of the test above: the placeholders carry the draft order, which is the
+    whole point of reading them before the draft."""
+    payload = _payload()
+    payload["draftDetail"] = {
+        "drafted": False,
+        "picks": [
+            {
+                "overallPickNumber": 2,
+                "roundId": 1,
+                "roundPickNumber": 2,
+                "teamId": 1,
+                "playerId": -1,
+            },
+            {
+                "overallPickNumber": 1,
+                "roundId": 1,
+                "roundPickNumber": 1,
+                "teamId": 2,
+                "playerId": -1,
+            },
+            {
+                "overallPickNumber": 3,
+                "roundId": 2,
+                "roundPickNumber": 1,
+                "teamId": 1,
+                "playerId": -1,
+            },
+        ],
+    }
+    order = parse_draft_order(payload, parse_teams(payload))
+    assert list(order["overall"]) == [1, 2, 3]  # sorted, not payload order
+    assert list(order["fantasy_team"]) == [
+        "Lemon Party",
+        "Two Kids Two Steins",
+        "Two Kids Two Steins",
+    ]
+    mine = order[order["team_id"] == 1]
+    assert list(mine["overall"]) == [2, 3]
+
+
+def test_parse_draft_order_is_empty_when_no_order_is_drawn() -> None:
+    payload = _payload()
+    payload["draftDetail"] = {"picks": []}
+    order = parse_draft_order(payload, parse_teams(payload))
+    assert order.empty
+    assert "round_pick" in order.columns
