@@ -264,3 +264,82 @@ def test_cheat_sheet_cli_carries_adp_delta(tmp_path: Path) -> None:
     assert by_gsis.loc["00-1000000", "adp_delta"] == 1
     # 00-1000001 worse VORP (rank 2) but EARLIER ADP (rank 1) -> reach, -1.
     assert by_gsis.loc["00-1000001", "adp_delta"] == -1
+
+
+def test_cli_falls_back_to_pool_names_for_players_missing_from_the_id_map(
+    tmp_path: Path,
+) -> None:
+    """The id_map is keyed on real GSIS ids, so it cannot cover incoming rookies — they
+    carry a synthetic `99-` id until nfl_data_py issues a real one. On the 2026 Critts pool
+    that was 89 of 579 players, 32 inside the 13 drafted rounds, including a top-15 VORP RB
+    at ADP 22, and every one of them rendered as the '—' placeholder. A draft-day cheat
+    sheet that cannot name the player you are about to take is unusable, so the VORP table's
+    own `full_name` fills the gap.
+    """
+    vorp_path = tmp_path / "vorp.parquet"
+    vorp = _write_synthetic_vorp(vorp_path)
+
+    # Name every player in the pool, then hide half of them from the id_map.
+    vorp["full_name"] = pd.Series(
+        [f"Pool Name {gid}" for gid in vorp["gsis_id"]], dtype=_PYARROW_STR
+    )
+    VorpTableSchema.validate(vorp).to_parquet(vorp_path)
+
+    all_ids = list(vorp["gsis_id"])
+    covered, uncovered = all_ids[: len(all_ids) // 2], all_ids[len(all_ids) // 2 :]
+    id_map_path = tmp_path / "id_map.parquet"
+    _write_synthetic_id_map(id_map_path, covered)
+
+    cfg_path = tmp_path / "league.json"
+    _write_league_config(cfg_path)
+    out_path = tmp_path / "sheet.csv"
+
+    result = _run_cli(
+        [
+            "--season", "2026",
+            "--league-config", str(cfg_path),
+            "--vorp-input", str(vorp_path),
+            "--id-map", str(id_map_path),
+            "--out", str(out_path),
+        ]
+    )  # fmt: skip
+    assert result.returncode == 0, result.stderr
+
+    sheet = pd.read_csv(out_path).set_index("gsis_id")
+    assert not (sheet["display_name"] == DISPLAY_NAME_FALLBACK).any()
+    # The id_map wins where it has a row...
+    for gid in covered:
+        assert sheet.loc[gid, "display_name"] == f"Player {gid}"
+    # ...and the pool fills every gap it leaves.
+    for gid in uncovered:
+        assert sheet.loc[gid, "display_name"] == f"Pool Name {gid}"
+
+
+def test_cli_still_uses_the_placeholder_when_no_name_source_has_the_player(
+    tmp_path: Path,
+) -> None:
+    """`full_name` is optional and nullable on VorpTableSchema (it is populated only on the
+    consensus-fed path), so the fallback must degrade rather than assume the column is
+    there. With no id_map row and no pool name, the placeholder is still the right answer —
+    and stderr has to say how many players it applies to, or an unnamed board looks fine.
+    """
+    vorp_path = tmp_path / "vorp.parquet"
+    vorp = _write_synthetic_vorp(vorp_path)  # no full_name column at all
+    cfg_path = tmp_path / "league.json"
+    _write_league_config(cfg_path)
+    out_path = tmp_path / "sheet.csv"
+
+    result = _run_cli(
+        [
+            "--season", "2026",
+            "--league-config", str(cfg_path),
+            "--vorp-input", str(vorp_path),
+            "--id-map", str(tmp_path / "absent.parquet"),
+            "--out", str(out_path),
+        ]
+    )  # fmt: skip
+    assert result.returncode == 0, result.stderr
+
+    sheet = pd.read_csv(out_path)
+    assert (sheet["display_name"] == DISPLAY_NAME_FALLBACK).all()
+    assert str(len(vorp)) in result.stderr, result.stderr
