@@ -20,22 +20,22 @@ import pytest
 
 from projections.backtest.harness import run_backtest
 from projections.schemas import Position
+from tests.feature_cache_guard import feature_cache_skip_reason
 
 _FEATURES_ROOT = Path("data/features")
 _RAW_ROOT = Path("data/raw")
 
 
-def _cache_present() -> bool:
-    return (_FEATURES_ROOT / "wr" / "season=2024").exists() and (
-        _RAW_ROOT / "weekly_stats" / "season=2024"
-    ).exists()
+#: None when this machine's cache is usable, else why to skip. Checks the schema-validated
+#: read the test performs, not just that the directory exists — a cache predating a schema
+#: change passes an existence check and then fails inside pandera. See the helper's docstring.
+_SKIP_REASON = feature_cache_skip_reason(
+    Position.WR, 2024, features_root=_FEATURES_ROOT, raw_root=_RAW_ROOT
+)
 
 
 @pytest.mark.backtest
-@pytest.mark.skipif(
-    not _cache_present(),
-    reason="data/features/wr/season=2024 missing — run scripts/refresh_features.py wr",
-)
+@pytest.mark.skipif(_SKIP_REASON is not None, reason=_SKIP_REASON or "")
 def test_harness_lightgbm_single_cell() -> None:
     """Run one (WR, 2024) fold under Model C and assert per-row metrics
     are all tagged ``lightgbm`` with finite values + the expected core
