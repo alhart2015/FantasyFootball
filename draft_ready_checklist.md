@@ -100,7 +100,8 @@ Everything below decomposes those gaps into actionable items.
 
 ### 4a. League integration (load-bearing for both)
 
-- [ ] **ESPN league API client.** Read roster, free-agent pool, league settings, FAAB balance, transactions. `espn-api` (python package) is the most-used OSS client. Auth via `SWID` + `espn_s2` cookies.
+- [x] **ESPN league API client.** `src/projections/ingest/espn_league.py` (2026-08-24). Reads league settings, teams, rosters, draft order and draft picks from a private league, and derives a `LeagueConfig` from ESPN's own scoring/roster settings. Auth via `SWID` + `espn_s2` cookies, from env vars or the gitignored `configs/espn_credentials.json`. Written against stdlib `urllib` rather than the `espn-api` package, matching `external_projections.py` and adding no dependency.
+  - Still open: free-agent pool, FAAB balance, and the transaction log (needs the `kona_player_info` / `mTransactions2` views).
 
 ### 4b. Waiver
 

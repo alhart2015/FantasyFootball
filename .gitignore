@@ -267,3 +267,11 @@ data/vorp_*/*team.parquet
 data/vorp_*/*team.league.json
 reports/_*/
 reports/*.png
+
+# ESPN private-league cookies — never commit
+configs/espn_credentials.json
+
+# League pulls. This repo is public and these carry real people's names, ESPN display
+# handles and (in espn_raw.json) their SWID account ids. Kept local by decision
+# (user, 2026-08-24). Regenerate with `python -m projections.ingest.espn_league`.
+data/leagues/
