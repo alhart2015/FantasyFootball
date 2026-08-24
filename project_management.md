@@ -6,6 +6,31 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft-plan outcomes measured, and the projection data was 8 days stale (2026-08-24, branch `feat/critts-draft-plan`)
+
+**Season outcomes for the slot-8 plan, over 15 simulated drafts x 400 MC seasons = 6,000 seasons** (`scripts/_critts_slot8_outcomes.py`). It chains the two halves that were previously run apart: simulate the full 16-team draft, reconstruct all 16 rosters, then run `league_projection.simulate_seasons` over them. Both halves are random and have to be sampled together — one draft gives one roster, and its title odds are conditional on that roster.
+
+| Metric | Slot 8 | Field | Multiple |
+|---|---|---|---|
+| Regular-season win % | 58.5% | 50.0% | 1.17x |
+| Make playoffs (top 6) | 56.5% | 37.5% | 1.51x |
+| First-round bye (top 2) | 22.9% | 12.5% | 1.83x |
+| **Championship** | **13.0%** | 6.25% | **2.08x** |
+
+The field column is the no-skill baseline (6 spots / 16 seats = 37.5% and 6.25% *by construction*), so a raw rate means nothing without it.
+
+**A good draft roughly doubles title equity and then stops mattering.** One *fixed* roster across 400 seasons: made playoffs and lost 37.0%, missed playoffs 30.5%, won it all 18.5%, lost the final 14.0%. Sharper still from the sample seasons: the roster that **won the championship** and the roster that **missed the playoffs entirely** both went **8-5** with **+812 roster VORP** — identical record, identical roster strength, opposite endings, separated only by points-scored seeding. The roster that *lost the final* was the weakest of the four (+684) with the best record (10-3). Neither roster VORP nor record predicts the ending.
+
+**Two calendar mismatches, disclosed rather than papered over:** `league_projection` runs 13 regular-season weeks and a two-week championship; ESPN reports `matchupPeriodCount: 14` and `playoffMatchupPeriodLength: 1`. A two-week final favours the better team, so 13.0% is a mild *over*estimate. Playoff size (6) and the seeding rule (record, total points breaking ties) do match ESPN exactly. It is also projected-vs-projected: it measures roster quality under our pool, not whether the pool is right about 2026.
+
+**The projection data was 8 days stale, and it mattered.** `external_projections` and `consensus_projections` were both `asof=2026-08-16`; refreshed to `2026-08-24` and the pool rebuilt. **Ashton Jeanty lost 22.5 VORP (155.8 -> 133.3) while his ADP moved -0.3** — the market has not repriced him, so he now costs the same for meaningfully less value and is a fade rather than the pick-8 target the older snapshot made him. Tank Dell went the other way (+44.4 VORP, ADP -7). Replacement level moved RB -4.5 and WR -6.3. **Champ% fell 15.5% -> 13.0% on the refresh alone**, so the pre-refresh figures in the previous entry were optimistic. The top seven of the board were unchanged in order and Josh Allen's cliff came back at *exactly* 37.4, so the plan itself did not move. **Re-pull the morning of the draft** — the three commands are in `draft_plan.md`.
+
+**Known gap: `data/raw/depth_charts` stops at season 2024** (no 2025, no 2026). It does not touch this plan — the pool is ESPN + Sleeper consensus, which bakes depth charts in externally — but `features/{qb,rb,wr,te}.py`, `preseason/features.py` and `models/baseline.py` all read it, so the in-house projection path is running on two-year-old depth charts.
+
+**Also open: two pre-existing test failures on `main`** — [#151](https://github.com/alhart2015/FantasyFootball/issues/151). Verified against a clean tree, not caused by this branch. One is a missing `preseason_implied_team_total` column in the backtest feature frame, which could skew backtest numbers rather than merely failing a test.
+
+---
+
 ## Critts draft-day plan built — greedy VORP beats market timing from slot 8 (2026-08-24, branch `feat/critts-draft-plan`)
 
 **Draft is 2026-08-30 9:00 PM ET, slot 8 of 16.** The plan lives in `data/leagues/critts_2025_2026/draft_plan.md` — **gitignored, local only**, like the rest of `data/leagues/` (public repo, real people's names and ESPN handles). Regenerate it from the commands in that file.
