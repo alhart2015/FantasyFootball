@@ -20,8 +20,14 @@ from pathlib import Path
 import pandas as pd
 
 from projections.draft.league_config import LeagueConfig
-from projections.draft.snake_cheat_sheet import generate_snake_cheat_sheet
+from projections.draft.snake_cheat_sheet import (
+    DISPLAY_NAME_FALLBACK,
+    generate_snake_cheat_sheet,
+)
 from projections.schemas import _PYARROW_STR, IdMapSchema, Position
+
+#: Column contract for the (gsis_id, display_name) frame the cheat sheet maps names through.
+_NAME_COLUMNS = ["gsis_id", "display_name"]
 
 
 def _parse_args() -> argparse.Namespace:
@@ -51,7 +57,8 @@ def _load_display_names(path: Path) -> pd.DataFrame | None:
         df = pd.read_parquet(path)
     except FileNotFoundError:
         print(
-            f"WARNING: id_map parquet not found at {path}; display names will be '—'",
+            f"WARNING: id_map parquet not found at {path}; falling back to the VORP "
+            "table's own names",
             file=sys.stderr,
         )
         return None
@@ -62,6 +69,37 @@ def _load_display_names(path: Path) -> pd.DataFrame | None:
             "display_name": df["full_name"].astype(_PYARROW_STR),
         }
     )
+
+
+def _resolve_display_names(vorp: pd.DataFrame, id_map_names: pd.DataFrame | None) -> pd.DataFrame:
+    """id_map names, with the VORP table's own `full_name` filling every gap.
+
+    The id_map is keyed on real GSIS ids, so it cannot cover players who do not have one
+    yet — incoming rookies carry a synthetic `99-` id until nfl_data_py issues a real one.
+    On the 2026 Critts pool that was 89 of 579 players, 32 of them inside the 13 drafted
+    rounds, including a top-15 VORP RB at ADP 22. They rendered as the '—' placeholder,
+    which makes a draft-day cheat sheet actively unusable at exactly the picks that matter.
+
+    `full_name` is an optional, nullable column on `VorpTableSchema` (populated on the
+    consensus-fed path only), so this degrades to id_map-only when it is absent or null
+    rather than assuming it is there.
+    """
+    if "full_name" not in vorp.columns:
+        return id_map_names if id_map_names is not None else pd.DataFrame(columns=_NAME_COLUMNS)
+
+    pool_names = pd.DataFrame(
+        {
+            "gsis_id": vorp["gsis_id"].astype(_PYARROW_STR),
+            "display_name": vorp["full_name"].astype(_PYARROW_STR),
+        }
+    ).dropna(subset=["display_name"])
+    if id_map_names is None or id_map_names.empty:
+        return pool_names
+
+    # id_map wins where it has a row; the pool only fills gaps. concat + drop_duplicates
+    # keeps the first occurrence, so ordering encodes the precedence.
+    merged = pd.concat([id_map_names, pool_names], ignore_index=True)
+    return merged.drop_duplicates(subset="gsis_id", keep="first").reset_index(drop=True)
 
 
 def _write_output(df: pd.DataFrame, path: Path) -> None:
@@ -113,7 +151,15 @@ def main() -> int:
     args = _parse_args()
     cfg = LeagueConfig.model_validate_json(args.league_config.read_text())
     vorp = pd.read_parquet(args.vorp_input)
-    display = _load_display_names(args.id_map)
+    display = _resolve_display_names(vorp, _load_display_names(args.id_map))
+    n_unnamed = int((display["display_name"] == DISPLAY_NAME_FALLBACK).sum())
+    missing = len(vorp) - vorp["gsis_id"].astype(_PYARROW_STR).isin(display["gsis_id"]).sum()
+    if missing or n_unnamed:
+        print(
+            f"WARNING: {missing + n_unnamed} of {len(vorp)} players have no resolvable name "
+            f"and will render as '{DISPLAY_NAME_FALLBACK}'.",
+            file=sys.stderr,
+        )
     sheet = generate_snake_cheat_sheet(
         vorp,
         cfg,
