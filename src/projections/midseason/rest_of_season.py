@@ -48,6 +48,10 @@ class RosDiagnostics:
     n_players: int
     n_clamped: int = 0
     n_fallback: int = 0
+    #: Players left with a positive but implausibly small remaining projection. The near-miss
+    #: form of the inverted-assumption failure: nothing clamps, so the clamp counter stays at
+    #: zero while the whole pool is quietly near-zeroed.
+    n_near_zero: int = 0
     clamped_examples: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -62,7 +66,7 @@ class RosDiagnostics:
 
     def warning(self) -> str | None:
         """A human-readable problem report, or None when nothing needed papering over."""
-        if not self.n_clamped and not self.n_fallback:
+        if not self.n_clamped and not self.n_fallback and not self.n_near_zero:
             return None
         parts: list[str] = []
         if self.n_clamped:
@@ -71,12 +75,24 @@ class RosDiagnostics:
                 f"{self.n_clamped} of {self.n_players} players had no projected points left "
                 f"and were clamped to zero ({shown})"
             )
+        if self.n_near_zero:
+            parts.append(
+                f"{self.n_near_zero} of {self.n_players} players project implausibly near "
+                f"zero for the rest of the season (under {_IMPLAUSIBLY_SMALL_ROS:g} points) "
+                "without clamping"
+            )
         if self.n_fallback:
             parts.append(
                 f"{self.n_fallback} had no fresh projection and fell back to a prorated "
                 "preseason number (rookies with synthetic ids, mid-season pickups)"
             )
         message = "; ".join(parts) + "."
+        if self.n_near_zero and self.n_near_zero / max(self.n_players, 1) > 0.33:
+            message += (
+                " A THIRD OF THE POOL PROJECTS TO ALMOST NOTHING. Like a wholesale clamp this "
+                "is the shape of a provider already reporting rest-of-season points, but the "
+                "near-miss form that clamping alone cannot see. Check one player by hand."
+            )
         if self.looks_like_double_counting:
             message += (
                 " MORE THAN A THIRD OF THE POOL CLAMPED — this is the signature of the "
@@ -116,7 +132,13 @@ def rest_of_season_points(
         return max(prorated, 0.0), False, True
     remaining = fresh_season_points - points_to_date
     if remaining <= 0.0:
-        return 0.0, True, False
+        # A clamp means "this player has ALREADY OUTSCORED the projection", which requires
+        # points on the board. A provider projecting a deep-bench player at 0.0 with nothing
+        # scored is not that -- and a full VORP pool holds hundreds of them, enough to trip
+        # the wholesale-clamp alarm on a perfectly healthy ingest. Once that fires spuriously
+        # the signal it carries is worthless, so it is counted as a clamp only when actuals
+        # are what pushed it under.
+        return 0.0, points_to_date > 0.0, False
     return remaining, False, False
 
 
@@ -150,6 +172,7 @@ def rest_of_season_pool(
     ros: list[float] = []
     clamped: list[str] = []
     n_fallback = 0
+    n_near_zero = 0
     for row in out.itertuples():
         gsis = str(row.gsis_id)
         points, was_clamped, used_fallback = rest_of_season_points(
@@ -159,7 +182,14 @@ def rest_of_season_pool(
             weeks_remaining=weeks_remaining,
         )
         if was_clamped:
-            clamped.append(getattr(row, "full_name", gsis) or gsis)
+            name = getattr(row, "full_name", None)
+            # `x or y` evaluates bool(x), and bool(pd.NA) raises. Name columns here are
+            # pyarrow-backed nullable strings, so pd.NA is admissible -- and this is the one
+            # path whose whole purpose is making a failure visible, so it must not be the path
+            # that crashes.
+            clamped.append(gsis if name is None or pd.isna(name) else str(name))
+        elif not used_fallback and 0.0 < points < _IMPLAUSIBLY_SMALL_ROS:
+            n_near_zero += 1
         n_fallback += used_fallback
         # Per-game pace, re-expressed over a full season so the variance model's fixed
         # SEASON_GAMES divisor recovers the pace we meant. See the docstring.
@@ -170,5 +200,6 @@ def rest_of_season_pool(
         n_players=len(out),
         n_clamped=len(clamped),
         n_fallback=n_fallback,
+        n_near_zero=n_near_zero,
         clamped_examples=tuple(str(name) for name in clamped[:5]),
     )

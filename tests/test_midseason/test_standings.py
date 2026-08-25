@@ -25,11 +25,11 @@ from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
 from projections.midseason.standings import (
     SlotMap,
-    rosters_to_slots,
     build_matchup_odds,
     build_standings,
     first_unplayed_week,
     locked_by_slot,
+    rosters_to_slots,
     schedule_to_slots,
 )
 from projections.schemas import (

@@ -154,11 +154,17 @@ class SeasonOutcomes:
     def head_to_head(self, home: int, away: int, week: int) -> float:
         """P(`home` outscores `away`) in `week`, over the simulations already run.
 
-        `>=` matches the regular-season matchup rule, where a tie in the simulator goes to the
-        home side. Real ties are impossible here for the same reason they are impossible in a
-        simulated week: continuous point totals.
+        An exact tie splits half to each side rather than counting for both. `>=` alone
+        returned 1.0 for BOTH directions when the two point vectors were identical, so
+        `P(A beats B) + P(B beats A)` came to 2.0. That is not unreachable despite continuous
+        totals: `sample_weekly_points` returns exactly 0.0 for a non-positive projection, so a
+        zeroed pool -- which a finished regular season produces -- gives deterministic
+        all-zero columns for every team.
         """
-        return float((self.week_points(home, week) >= self.week_points(away, week)).mean())
+        home_pts, away_pts = self.week_points(home, week), self.week_points(away, week)
+        wins = (home_pts > away_pts).mean()
+        draws = (home_pts == away_pts).mean()
+        return float(wins + 0.5 * draws)
 
     def made_playoffs(self, slot: int) -> np.ndarray:
         return self.seed[:, self._col(slot)] <= self.calendar.playoff_size
@@ -187,9 +193,14 @@ class LockedRecord:
     and produces a spread around a record you can simply look up. Seeding then runs on
     (locked + simulated) wins and points-for, which is exactly ESPN's rule.
 
-    `ties` is carried rather than folded into a half-win. Simulated weeks cannot tie -- the
-    matchup loop breaks every game with `>=` -- but real played weeks can, and a tie is
-    neither a win nor a loss for seeding.
+    `wins`, `losses` and `ties` are stored as ESPN reports them -- a tie is its own outcome,
+    not a rounded win -- but **seeding uses `credited_wins`, where a tie is half a win.** That
+    is ESPN's rule: it seeds on winning percentage, so 6-1-1 (.8125) outranks 6-2-0 (.750).
+    Seeding on `wins` alone treats those two records as identical and separates them on
+    points-for instead, which flips playoff berths and byes.
+
+    Simulated weeks cannot tie -- the matchup loop breaks every game with `>=` -- so this only
+    ever comes from real played weeks.
     """
 
     wins: int = 0
@@ -200,6 +211,11 @@ class LockedRecord:
     @property
     def games_played(self) -> int:
         return self.wins + self.losses + self.ties
+
+    @property
+    def credited_wins(self) -> float:
+        """Wins for seeding purposes: a tie counts half, matching ESPN's win percentage."""
+        return self.wins + 0.5 * self.ties
 
 
 #: Shared empty record, so a slot absent from `locked` costs no allocation per lookup.
@@ -310,7 +326,7 @@ def simulate_seasons(
     # on is simulated. Preseason (`locked=None`, `first_unplayed_week=1`) both start at zero,
     # which is the previous behaviour exactly.
     locked = locked or {}
-    wins = {s: np.full(n_sims, float(locked.get(s, _NO_RESULTS).wins)) for s in slots}
+    wins = {s: np.full(n_sims, locked.get(s, _NO_RESULTS).credited_wins) for s in slots}
     pf = {s: np.full(n_sims, locked.get(s, _NO_RESULTS).points_for) for s in slots}
 
     reg_weeks = calendar.reg_week_numbers

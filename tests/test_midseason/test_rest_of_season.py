@@ -273,3 +273,90 @@ def test_a_fresh_projection_with_nothing_scored_is_also_a_pace_no_op() -> None:
         weeks_remaining=SEASON_GAMES,
     )
     assert pool.loc[0, "season_mean_fpts"] == pytest.approx(204.0)
+
+
+# --- guards that actually guard ---------------------------------------------------------
+
+
+def test_a_legitimately_zero_projection_is_not_counted_as_a_clamp() -> None:
+    """The detector must not cry wolf.
+
+    A full VORP pool routinely holds hundreds of deep-bench players a provider projects at
+    0.0. Treating `0.0 - 0.0 <= 0` as a clamp put them all in the count, so a healthy ingest
+    tripped the "MORE THAN A THIRD OF THE POOL CLAMPED" alarm -- and once that fires
+    spuriously, the real signal it exists to carry is worthless.
+
+    A clamp means "this player has ALREADY OUTSCORED the projection", which requires points
+    on the board.
+    """
+    rows = [(f"00-000000{i}", f"P{i}", 180.0) for i in range(1, 7)]
+    _, diag = rest_of_season_pool(
+        _pool(rows),
+        fresh_season_points=dict.fromkeys((f"00-000000{i}" for i in range(1, 7)), 0.0),
+        points_to_date={},
+        weeks_remaining=7,
+    )
+    assert diag.n_clamped == 0
+    assert not diag.looks_like_double_counting
+
+
+def test_outscoring_the_projection_is_still_counted_as_a_clamp() -> None:
+    """The complement: a real overachiever must still register."""
+    _, diag = rest_of_season_pool(
+        _pool([("00-0000001", "Overachiever", 180.0)]),
+        fresh_season_points={"00-0000001": 100.0},
+        points_to_date={"00-0000001": 150.0},
+        weeks_remaining=7,
+    )
+    assert diag.n_clamped == 1
+
+
+def test_a_pool_projected_implausibly_near_zero_is_reported() -> None:
+    """The second guard spec 3.1 required and the code never implemented.
+
+    The inverted-assumption failure has a near-miss form: a provider reporting a tiny but
+    POSITIVE rest-of-season figure. Nothing clamps, so `n_clamped` stays 0,
+    `looks_like_double_counting` stays False, `warning()` returns None -- and the entire pool
+    is silently near-zeroed. `_IMPLAUSIBLY_SMALL_ROS` was defined for exactly this and never
+    referenced.
+    """
+    rows = [(f"00-000000{i}", f"P{i}", 200.0) for i in range(1, 7)]
+    _, diag = rest_of_season_pool(
+        _pool(rows),
+        fresh_season_points=dict.fromkeys((f"00-000000{i}" for i in range(1, 7)), 0.4),
+        points_to_date={},
+        weeks_remaining=7,
+    )
+    assert diag.n_near_zero == 6
+    warning = diag.warning()
+    assert warning is not None
+    assert "implausibly" in warning.lower()
+
+
+def test_a_healthy_pool_reports_no_near_zero_players() -> None:
+    rows = [(f"00-000000{i}", f"P{i}", 200.0) for i in range(1, 7)]
+    _, diag = rest_of_season_pool(
+        _pool(rows),
+        fresh_season_points=dict.fromkeys((f"00-000000{i}" for i in range(1, 7)), 200.0),
+        points_to_date={},
+        weeks_remaining=7,
+    )
+    assert diag.n_near_zero == 0
+    assert diag.warning() is None
+
+
+def test_a_missing_full_name_does_not_crash_the_diagnostics() -> None:
+    """`getattr(row, "full_name", gsis) or gsis` evaluates `bool(pd.NA)`, which raises
+    TypeError. Name columns here are pyarrow-backed nullable strings, so pd.NA is admissible
+    -- and the crash would land in the one code path whose entire purpose is making a failure
+    visible."""
+    frame = _pool([("00-0000001", "Named", 180.0), ("00-0000002", "x", 180.0)])
+    frame.loc[1, "full_name"] = pd.NA
+    _, diag = rest_of_season_pool(
+        frame,
+        fresh_season_points={"00-0000001": 10.0, "00-0000002": 10.0},
+        points_to_date={"00-0000001": 500.0, "00-0000002": 500.0},
+        weeks_remaining=7,
+    )
+    assert diag.n_clamped == 2
+    assert diag.warning() is not None

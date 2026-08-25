@@ -230,3 +230,60 @@ def test_no_locked_records_is_the_preseason_path() -> None:
 
 def test_locked_record_counts_ties_in_games_played() -> None:
     assert LockedRecord(wins=2, losses=1, ties=1).games_played == 4
+
+
+# --- ties ----------------------------------------------------------------------------------
+
+
+def test_a_tie_counts_as_half_a_win_for_seeding() -> None:
+    """ESPN seeds on winning percentage, where a tie is half a win.
+
+    `LockedRecord` carried `ties` into the dataclass, the schema and the printed record, and
+    then seeding used `wins` alone -- so a 6-1-1 team (.8125) and a 6-2-0 team (.750) were
+    treated as identical and separated on points-for instead. That flips playoff berths and
+    byes. The dataclass docstring asserted "a tie is neither a win nor a loss for seeding" as
+    if it were a decision; the spec says the opposite.
+    """
+    locked = {
+        1: LockedRecord(wins=2, losses=0, ties=2, points_for=400.0),  # 3.0 -> ahead
+        2: LockedRecord(wins=3, losses=1, ties=0, points_for=900.0),  # 3.0, more points
+        3: LockedRecord(wins=0, losses=4, points_for=100.0),
+        4: LockedRecord(wins=0, losses=4, points_for=100.0),
+        5: LockedRecord(wins=0, losses=4, points_for=100.0),
+        6: LockedRecord(wins=0, losses=4, points_for=100.0),
+    }
+    res = _run(_EVEN, locked=locked, first_unplayed_week=5)
+    # 2 wins + 2 ties == 3.0 credited wins, the same as 3-1-0, so points-for decides and slot
+    # 2 leads. The point is that the tie counted at all: on `wins` alone slot 1 sat on 2.0.
+    assert res.wins[:, res.slots.index(1)][0] == pytest.approx(3.0)
+    assert res.wins[:, res.slots.index(2)][0] == pytest.approx(3.0)
+
+
+def test_ties_break_ahead_of_a_worse_record_with_more_points() -> None:
+    """The case that actually flips a berth: 1-0-2 (.667) must outrank 1-2-0 (.333) even when
+    the losing team has scored far more."""
+    locked = {
+        1: LockedRecord(wins=1, losses=0, ties=2, points_for=100.0),
+        2: LockedRecord(wins=1, losses=2, ties=0, points_for=9000.0),
+        3: LockedRecord(wins=0, losses=3, points_for=50.0),
+        4: LockedRecord(wins=0, losses=3, points_for=50.0),
+        5: LockedRecord(wins=0, losses=3, points_for=50.0),
+        6: LockedRecord(wins=0, losses=3, points_for=50.0),
+    }
+    res = _run(_EVEN, locked=locked, first_unplayed_week=5)
+    seed_1 = res.seed[:, res.slots.index(1)]
+    seed_2 = res.seed[:, res.slots.index(2)]
+    assert (seed_1 < seed_2).all(), "a tie must outweigh points-for from a worse record"
+
+
+def test_head_to_head_of_two_scoreless_teams_is_not_a_double_win() -> None:
+    """`head_to_head` uses `>=`, so identical point vectors report 1.0 for BOTH sides and
+    P(A beats B) + P(B beats A) = 2.0. The docstring dismissed this as unreachable via
+    continuous totals, but `sample_weekly_points` returns exactly 0.0 for a non-positive
+    projection, and a zeroed pool (a finished regular season) produces deterministic
+    all-zero columns."""
+    zeroed = dict.fromkeys(range(1, _N_TEAMS + 1), 0.0)
+    res = _run(zeroed, n_sims=40)
+    forward = res.head_to_head(1, 2, 1)
+    reverse = res.head_to_head(2, 1, 1)
+    assert forward + reverse == pytest.approx(1.0)
