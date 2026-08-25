@@ -17,7 +17,7 @@ import pandas as pd
 
 from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset
+from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset, VorpTableSchema
 
 #: Non-contiguous and unsorted on purpose: `SlotMap` has to map these onto 1..n.
 TEAM_IDS: list[int] = [17, 3, 11, 5, 9, 1]
@@ -61,7 +61,12 @@ def league_config(n_teams: int = len(TEAM_IDS), *, name: str = "midseason_test")
 
 
 def vorp_pool(team_ids: list[int] | None = None) -> pd.DataFrame:
-    """A real `VorpTableSchema` frame, strongest roster first in `team_ids` order."""
+    """A schema-validated `VorpTableSchema` frame, strongest roster first in `team_ids` order.
+
+    Validated rather than merely shaped like one: an unvalidated fixture keeps every test
+    passing after the schema gains a required column, against a frame the production loader
+    would reject.
+    """
     ids = TEAM_IDS if team_ids is None else team_ids
     rows: list[dict[str, object]] = []
     for rank, team_id in enumerate(ids):
@@ -81,15 +86,13 @@ def vorp_pool(team_ids: list[int] | None = None) -> pd.DataFrame:
     frame = pd.DataFrame(rows)
     frame["gsis_id"] = frame["gsis_id"].astype(_PYARROW_STR)
     frame["position"] = frame["position"].astype(_PYARROW_STR)
-    return frame
+    return VorpTableSchema.validate(frame)
 
 
 def id_map(team_ids: list[int] | None = None) -> pd.DataFrame:
     """The (espn_id, gsis_id) crosswalk `rosters_to_slots` joins on."""
     ids = TEAM_IDS if team_ids is None else team_ids
-    pairs = [
-        (str(espn_player_id(t, i)), gsis_id(t, i)) for t in ids for i in range(len(POSITIONS))
-    ]
+    pairs = [(str(espn_player_id(t, i)), gsis_id(t, i)) for t in ids for i in range(len(POSITIONS))]
     return pd.DataFrame(
         {
             "espn_id": pd.Series([e for e, _ in pairs], dtype=_PYARROW_STR),

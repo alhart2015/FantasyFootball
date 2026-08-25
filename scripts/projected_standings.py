@@ -154,11 +154,23 @@ def _load_pool(path: Path) -> pd.DataFrame:
     return VorpTableSchema.validate(frame)
 
 
+def _has_fractional_wins(standings: pd.DataFrame) -> bool:
+    """Whether `projected_wins` carries a half-win anywhere, from a banked OR simulated tie.
+
+    Keyed off the value rather than off `ties`, because a simulated tie produces a fractional
+    projection with `ties` still zero -- which is exactly the state the footnote exists to
+    explain, and exactly when keying off `ties` would suppress it.
+    """
+    return bool(((standings["projected_wins"] % 1) != 0).any())
+
+
 def _print_standings(standings: pd.DataFrame, *, my_team_id: int | None) -> None:
     print()
     # "PROJ W" is credited wins -- a tie counts half, as ESPN seeds -- so it is not `REC`
-    # plus games still to come. A 6-1-1 team with the season over reads 6-1-1 / 6.5.
-    print(f"{'TEAM':<28}{'REC':>8}{'PROJ W*':>9}{'PLAYOFF':>10}{'BYE':>8}{'TITLE':>8}")
+    # plus games still to come. A 6-1-1 team with the season over reads 6-1-1 / 6.5. The star
+    # is printed only when a tie actually makes the two differ, so it always has a footnote.
+    proj = "PROJ W*" if _has_fractional_wins(standings) else "PROJ W"
+    print(f"{'TEAM':<28}{'REC':>8}{proj:>9}{'PLAYOFF':>10}{'BYE':>8}{'TITLE':>8}")
     for row in standings.itertuples():
         mark = " <-- you" if my_team_id is not None and row.team_id == my_team_id else ""
         record = f"{row.wins}-{row.losses}" + (f"-{row.ties}" if row.ties else "")
@@ -169,8 +181,8 @@ def _print_standings(standings: pd.DataFrame, *, my_team_id: int | None) -> None
 
 
 def _print_ties_footnote(standings: pd.DataFrame) -> None:
-    """Explain the starred column, but only when a tie actually makes it differ."""
-    if standings["ties"].sum():
+    """Explain the starred column. Gated on exactly the same condition as the star itself."""
+    if _has_fractional_wins(standings):
         print()
         print("* PROJ W counts a tie as half a win, which is how ESPN seeds.")
 

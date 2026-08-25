@@ -138,7 +138,11 @@ class SeasonOutcomes:
     #: can print a record that disagrees with the projection beside it, and nothing would
     #: catch it. Empty preseason.
     locked: Mapping[int, LockedRecord]
-    wins: np.ndarray  # (n_sims, n_slots) regular-season wins
+    #: (n_sims, n_slots) regular-season CREDITED wins -- banked plus simulated, a tie counting
+    #: half. **Not integers.** A caller formatting a record from this must not assume they are:
+    #: `int(6.5)` floors and `f"{6.5:.0f}"` banker-rounds, either of which prints a record that
+    #: does not sum to the season.
+    wins: np.ndarray
     points_for: np.ndarray  # (n_sims, n_slots) regular-season points
     seed: np.ndarray  # (n_sims, n_slots) 1-based final seed
     champion: np.ndarray  # (n_sims,) winning slot
@@ -204,8 +208,9 @@ class LockedRecord:
     Seeding on `wins` alone treats those two records as identical and separates them on
     points-for instead, which flips playoff berths and byes.
 
-    Simulated weeks cannot tie -- the matchup loop breaks every game with `>=` -- so this only
-    ever comes from real played weeks.
+    Simulated weeks can tie too -- the matchup loop splits an exact tie half to each side, the
+    same rule -- but continuous point totals make that vanishingly rare, so in a real run these
+    come from played weeks.
     """
 
     wins: int = 0
@@ -285,8 +290,11 @@ def simulate_seasons(
     The regular season runs `calendar.reg_weeks` -> records + points-for; seeding is
     (wins, points_for). The top `calendar.playoff_size` make the playoffs and the top
     `calendar.n_byes` skip the first round; the bracket is single elimination, reseeded each
-    round, with the final spanning `calendar.final_weeks`. Ties (matchup or championship)
-    break to the better seed / lower slot.
+    round, with the final spanning `calendar.final_weeks`.
+
+    An exact **matchup** tie is half a win to each side, matching `head_to_head` and
+    `LockedRecord.credited_wins`. A **championship** tie still breaks to the better seed --
+    a final has to produce one winner.
 
     `calendar` defaults to `DEFAULT_CALENDAR` -- 13 regular weeks, top 6, 2 byes, two-week
     final -- exactly the shape this function hard-coded before it was parameterised, so

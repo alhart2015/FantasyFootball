@@ -894,15 +894,20 @@ def write_league_snapshot(
     # games would read 10-4 in a 13-game league. Empty before kickoff, when no matchup has a
     # winner yet and there is no record to write at all.
     #
-    # Only when ESPN actually reported the week count. `from_espn_settings` falls back to 13
-    # for an absent `scheduleSettings` -- a payload fetched with a custom `views` tuple, or a
-    # saved `espn_raw.json` without it -- and bounding a 14-week league at 13 would silently
-    # DROP week 14's results, making a 10-4 team read 9-4 with a week of points-for missing
-    # from the seeding tiebreak. Unbounded is the lesser error there, and it is visible.
+    # Only when ESPN reported a USABLE week count. `from_espn_settings` silently falls back to
+    # 13 for anything it cannot read, so bounding on a defaulted calendar would drop week 14 of
+    # a 14-week league -- a 10-4 team reading 9-4, with a week of points-for missing from the
+    # seeding tiebreak. Testing key presence is not enough: `matchupPeriodCount: null` is
+    # present and still resolves to the default. Unbounded is the lesser error, and it warns.
+    #
+    # Hard to reach through the sanctioned path -- `build_league_config` above already raises
+    # on a payload missing `rosterSettings` or `scoringSettings`, which arrive from the same
+    # `mSettings` view -- but `write_league_snapshot` also runs against hand-saved payloads.
     schedule_settings = (payload.get("settings", {}) or {}).get("scheduleSettings") or {}
+    raw_weeks = schedule_settings.get("matchupPeriodCount")
     reg_weeks = (
         LeagueCalendar.from_espn_settings(schedule_settings).reg_weeks
-        if "matchupPeriodCount" in schedule_settings
+        if isinstance(raw_weeks, int | float | str) and not isinstance(raw_weeks, bool)
         else None
     )
     if reg_weeks is None and not schedule.empty and schedule["is_played"].any():

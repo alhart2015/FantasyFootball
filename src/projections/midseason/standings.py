@@ -159,9 +159,12 @@ def rosters_to_slots(
     nothing in `espn_league.py` produces a gsis at all -- the crosswalk lives in the id_map.
     Reading a `gsis_id` column straight off an ESPN roster therefore matches nothing, and the
     resulting failure is silent in the worst way: empty rosters make `team_weekly_points`
-    return all zeros, every matchup resolves `0 >= 0` so the HOME team wins every game in
-    every simulation, and the output is a fully populated standings table whose playoff and
-    title percentages come entirely from how many home fixtures each team happens to have.
+    return all zeros, so every matchup is an exact tie, every team banks half a win a week, and
+    seeding falls entirely to `np.argsort` stability -- i.e. slot order. The output is a fully
+    populated standings table whose playoff and title percentages are an artifact of team id
+    ordering. (Before matchup ties were split, the same state handed every game to the home
+    side and the percentages tracked home-fixture counts. Different artifact, equally
+    confident, equally wrong.)
 
     Same inner join on `espn_id` that `draft/backtest/espn_weekly.py` uses.
 
@@ -202,9 +205,9 @@ def rosters_to_slots(
         raise ProjectionInputError(
             f"team(s) {empty} have no projectable players: {len(rosters)} roster rows, "
             f"{len(merged)} matched the id_map, {kept} of those are in the pool. Simulating "
-            "this would score those rosters at zero, losing every week and handing every "
-            "matchup to their opponents. Check that the id_map and the VORP pool cover this "
-            "season."
+            "this would score those rosters at zero, tying every week they play and leaving "
+            "their standing an artifact of slot order. Check that the id_map and the VORP "
+            "pool cover this season."
         )
     return by_slot, len(rosters) - kept
 

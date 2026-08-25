@@ -34,9 +34,7 @@ _TEAM_IDS = TEAM_IDS
 _REG_WEEKS = REG_WEEKS
 
 
-def _run(
-    *, played_weeks: int = 2, with_schedule: bool = True, n_sims: int = 80
-) -> StandingsRun:
+def _run(*, played_weeks: int = 2, with_schedule: bool = True, n_sims: int = 80) -> StandingsRun:
     pool = vorp_pool()
     return project_league_standings(
         espn_payload(played_weeks=played_weeks, with_schedule=with_schedule),

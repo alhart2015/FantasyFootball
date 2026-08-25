@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from projections.ingest.espn_league import (
@@ -793,3 +794,34 @@ def test_team_records_through_week_none_keeps_the_previous_unbounded_behaviour()
     )
     schedule = parse_schedule(payload, parse_teams(payload))
     assert team_records(schedule).equals(team_records(schedule, through_week=None))
+
+
+def test_a_present_but_unusable_week_count_does_not_bound_the_record(tmp_path: Path) -> None:
+    """`from_espn_settings` silently falls back to 13 for anything it cannot read, so testing
+    that `matchupPeriodCount` is merely PRESENT is not enough: `null` is present and still
+    resolves to the default, which would drop week 14 of a 14-week league with no warning --
+    the precise failure the bound was added to prevent."""
+    payload = _payload(
+        schedule=[_matchup(w, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME") for w in (1, 14)]
+    )
+    payload["settings"]["scheduleSettings"] = {"matchupPeriodCount": None}
+    creds = EspnCredentials(swid=_MY_SWID, espn_s2="s2")
+
+    write_league_snapshot(payload, tmp_path, creds, my_team_id=1)
+
+    records = pd.read_csv(tmp_path / "records.tsv", sep="\t").set_index("team_id")
+    # Unbounded: week 14 survives rather than being silently dropped by a defaulted calendar.
+    assert records.loc[1, "wins"] == 2
+
+
+def test_a_real_week_count_still_bounds_the_record(tmp_path: Path) -> None:
+    payload = _payload(
+        schedule=[_matchup(w, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME") for w in (1, 15)]
+    )
+    payload["settings"]["scheduleSettings"] = {"matchupPeriodCount": 14}
+    creds = EspnCredentials(swid=_MY_SWID, espn_s2="s2")
+
+    write_league_snapshot(payload, tmp_path, creds, my_team_id=1)
+
+    records = pd.read_csv(tmp_path / "records.tsv", sep="\t").set_index("team_id")
+    assert records.loc[1, "wins"] == 1, "the week-15 playoff win must not be in the record"
