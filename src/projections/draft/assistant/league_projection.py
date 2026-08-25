@@ -138,9 +138,27 @@ class SeasonOutcomes:
     seed: np.ndarray  # (n_sims, n_slots) 1-based final seed
     champion: np.ndarray  # (n_sims,) winning slot
     runner_up: np.ndarray  # (n_sims,) losing finalist slot
+    #: (n_sims, n_slots, n_weeks) per-slot weekly points, weeks indexed as
+    #: `calendar.all_week_numbers`. Retained so matchup odds -- P(A beats B in week w) -- are a
+    #: read of the same simulations that produced the standings, not a second run that could
+    #: disagree with them.
+    weekly_points: np.ndarray
 
     def _col(self, slot: int) -> int:
         return self.slots.index(slot)
+
+    def week_points(self, slot: int, week: int) -> np.ndarray:
+        """(n_sims,) points for one slot in one absolute week number."""
+        return self.weekly_points[:, self._col(slot), week - 1]
+
+    def head_to_head(self, home: int, away: int, week: int) -> float:
+        """P(`home` outscores `away`) in `week`, over the simulations already run.
+
+        `>=` matches the regular-season matchup rule, where a tie in the simulator goes to the
+        home side. Real ties are impossible here for the same reason they are impossible in a
+        simulated week: continuous point totals.
+        """
+        return float((self.week_points(home, week) >= self.week_points(away, week)).mean())
 
     def made_playoffs(self, slot: int) -> np.ndarray:
         return self.seed[:, self._col(slot)] <= self.calendar.playoff_size
@@ -340,6 +358,7 @@ def simulate_seasons(
     return SeasonOutcomes(
         slots=tuple(slots),
         calendar=calendar,
+        weekly_points=np.stack([weekly[s] for s in slots], axis=1),
         wins=win_mat,
         points_for=pf_mat,
         seed=seed_mat,
