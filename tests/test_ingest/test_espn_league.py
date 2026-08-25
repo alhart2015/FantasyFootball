@@ -814,14 +814,23 @@ def test_a_present_but_unusable_week_count_does_not_bound_the_record(tmp_path: P
     assert records.loc[1, "wins"] == 2
 
 
-def test_a_real_week_count_still_bounds_the_record(tmp_path: Path) -> None:
+def test_the_reported_week_count_is_the_one_used(tmp_path: Path) -> None:
+    """Week 14 must COUNT and week 15 must not.
+
+    Asserting only that week 15 is dropped would pass under a bound of 13 too, so it pins
+    "some bound was applied" rather than "the league's real 14-week calendar was applied" --
+    which is the whole point of plumbing `reg_weeks` through. Week 14 is the discriminating
+    case: it survives a bound of 14 and is dropped by the default 13.
+    """
     payload = _payload(
-        schedule=[_matchup(w, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME") for w in (1, 15)]
+        schedule=[
+            _matchup(w, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME") for w in (1, 14, 15)
+        ]
     )
     payload["settings"]["scheduleSettings"] = {"matchupPeriodCount": 14}
     creds = EspnCredentials(swid=_MY_SWID, espn_s2="s2")
 
     write_league_snapshot(payload, tmp_path, creds, my_team_id=1)
 
-    records = pd.read_csv(tmp_path / "records.tsv", sep="\t").set_index("team_id")
-    assert records.loc[1, "wins"] == 1, "the week-15 playoff win must not be in the record"
+    records = pd.read_csv(tmp_path / "records.tsv", sep="	").set_index("team_id")
+    assert records.loc[1, "wins"] == 2, "week 14 counts; a bound of 13 would drop it"

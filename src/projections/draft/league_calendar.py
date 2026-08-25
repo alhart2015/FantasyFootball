@@ -121,8 +121,7 @@ class LeagueCalendar(BaseModel):
         """
 
         def _int(key: str, default: int) -> int:
-            raw = schedule_settings.get(key, default)
-            return int(raw) if isinstance(raw, int | float | str) else default
+            return usable_int(schedule_settings.get(key)) or default
 
         playoff_size = _int("playoffTeamCount", DEFAULT_PLAYOFF_SIZE)
         return cls(
@@ -131,6 +130,35 @@ class LeagueCalendar(BaseModel):
             n_byes=_byes_for(playoff_size),
             final_weeks=_int("playoffMatchupPeriodLength", DEFAULT_FINAL_WEEKS),
         )
+
+
+def usable_int(raw: object) -> int | None:
+    """A positive int from an ESPN settings value, or None if it cannot be one.
+
+    Split out and made public because "did ESPN actually report this?" is a question two
+    callers need and a type test cannot answer:
+
+    - **`bool` is an `int` in Python.** `matchupPeriodCount: true` would otherwise become
+      `reg_weeks=1` -- a one-week regular season, with every later week discarded from the
+      locked record and playoff odds computed off a single game.
+    - **Passing the type test is not the same as converting.** `int("full")` raises,
+      `int(float("nan"))` raises, `int(float("inf"))` overflows, and `0` or a negative trips
+      `LeagueCalendar`'s own `gt=0` -- any of which would abort a caller mid-write rather
+      than letting it fall back.
+
+    Returning None rather than raising keeps the decision with the caller: `from_espn_settings`
+    substitutes its default, while `write_league_snapshot` leaves its record unbounded and says
+    so.
+    """
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if not isinstance(raw, int | float | str):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if value > 0 else None
 
 
 def _byes_for(playoff_size: int) -> int:

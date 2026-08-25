@@ -39,7 +39,7 @@ from typing import Any
 
 import pandas as pd
 
-from projections.draft.league_calendar import LeagueCalendar
+from projections.draft.league_calendar import usable_int
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset, Team, normalize_team_code
 
@@ -905,16 +905,22 @@ def write_league_snapshot(
     # `mSettings` view -- but `write_league_snapshot` also runs against hand-saved payloads.
     schedule_settings = (payload.get("settings", {}) or {}).get("scheduleSettings") or {}
     raw_weeks = schedule_settings.get("matchupPeriodCount")
-    reg_weeks = (
-        LeagueCalendar.from_espn_settings(schedule_settings).reg_weeks
-        if isinstance(raw_weeks, int | float | str) and not isinstance(raw_weeks, bool)
-        else None
-    )
+    reg_weeks = usable_int(raw_weeks)
     if reg_weeks is None and not schedule.empty and schedule["is_played"].any():
+        # Absent and unreadable are different problems with different remedies, and the
+        # message has to say which: told "no matchupPeriodCount in the payload" about a
+        # `null` sitting right there in espn_raw.json, an operator re-pulls mSettings and
+        # nothing changes, because mSettings was never the problem.
+        detail = (
+            "has no matchupPeriodCount"
+            if raw_weeks is None
+            else f"reports matchupPeriodCount as {raw_weeks!r}, which is not a week count"
+        )
         _log.warning(
-            "Schedule: no matchupPeriodCount in the payload, so records.tsv cannot be bounded "
-            "to the regular season and may include playoff results. Re-pull with the "
-            "mSettings view for a clean regular-season record."
+            "Schedule: the payload %s, so records.tsv cannot be bounded to the regular "
+            "season and may include playoff results. A record built from it is not a "
+            "regular-season record.",
+            detail,
         )
     records = team_records(schedule, through_week=reg_weeks)
     if not records.empty:
