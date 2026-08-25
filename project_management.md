@@ -6,6 +6,32 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Projected standings and matchup odds built (2026-08-25, branch `feat/projected-standings`)
+
+**#104 53b + 53c, spec'd then built in five steps.** Spec: `docs/superpowers/specs/2026-08-25-projected-standings-design.md`. The Monte-Carlo season engine already existed; three things made it wrong for in-season use, and the work was mostly those.
+
+**1. It invented the schedule.** `gauntlet_schedule` is a synthetic round-robin -- right preseason (no fixture list exists, and a synthetic one is strength-of-schedule neutral) and wrong in-season, where who you actually play drives your record. `parse_schedule` now reads the real one from `mMatchup`: verified on league 856974, **112 matchups, 8 per week, weeks 1-14, all 16 teams in exactly 14 games**. The risk with a parameter like this is being accepted and silently ignored, so the test is not a smoke test -- two slots get identical rosters, one draws the two weakest teams every week and one the two strongest, and the projections must diverge by more than a full win.
+
+**2. It had no notion of a week already played.** `locked` + `first_unplayed_week` treat played weeks as facts. Pinned by asserting a fully-played season has **zero variance** in projected wins -- exactly the record, not a tight distribution around it -- and playoff odds collapsing to 0/1. `first_unplayed_week` is derived from results, not a `--week` flag or the wall clock, so a snapshot cannot claim a week is done that ESPN says is not.
+
+**3. It projected from preseason season-totals.** New `src/projections/midseason/` (first module of sub-project #3): `ros = fresh_season_projection - points_to_date`.
+
+**The scaling there was a silent 41% bug waiting to happen.** `sample_weekly_points` divides `season_mean_fpts` by a fixed 17 games. A player with 100 points left over 10 weeks is on a 10/game pace; writing the raw remaining total gives the model 100/17 = 5.9 -- every roster quietly too weak, every number still plausible. The column carries `pace * SEASON_GAMES` and the arithmetic is pinned both directions; `_GAMES` is exported as `SEASON_GAMES` so the two sides cannot drift.
+
+**The unverifiable assumption is detected, not asserted.** The subtraction assumes a provider's in-season "season total" includes games already played. If one reports rest-of-season instead, subtracting double-counts. **This cannot be checked until Week 1** -- before kickoff points-to-date are zero and both readings agree. So `RosDiagnostics.looks_like_double_counting` fires when >1/3 of the pool clamps to zero at once, which is that failure's signature, and says so in the warning text. One overachiever stays quiet; both cases tested.
+
+**Matchup odds are the same run read differently, not a second engine.** `SeasonOutcomes` retains `weekly_points`; `head_to_head` reads P(A beats B in week w) off the simulations that produced the standings. Two runs could disagree with each other; one cannot. Tested that the table equals the accessor exactly and that P(A>B)+P(B>A)=1.
+
+**`SlotMap` is the only place ESPN team ids meet simulator slots.** ESPN ids are arbitrary (Critts runs 1..17 with a gap); the simulator needs contiguous 1..n. A mapping that is plausible-but-wrong yields a standings table with the right numbers on the wrong teams and looks completely fine -- so it is sorted (stable across input order, making this week's snapshot comparable with last week's) and the end-to-end test checks the strongest roster surfaces under the right id and name.
+
+Two new schemas. `ProjectedStandingsSchema` keeps banked and projected figures side by side deliberately -- a reader who cannot see both cannot tell a 2-0 start from a 2-0 projection. Weekly partitions accumulate into the trend line. Playoff odds summing to `playoff_size` and champ odds to 1.0 are pinned as identities, not approximations.
+
+**Verified as far as it can be pre-season.** `scripts/projected_standings.py` run live against 856974 walks the whole chain and stops at "the draft has not happened". `points_to_date` is deliberately wired as an empty mapping with a TODO rather than guessed at: per-player actuals live in the played weeks' `rosterForMatchupPeriod` entries, and every value is zero until a season is under way.
+
+**Next:** after Week 1 -- fill in `points_to_date` from played-week rosters, and settle the season-total assumption by hand-checking one player. Then #104 53a (waiver/FA recommender, needs `kona_player_info` paging) and #154 (trade analyzer).
+
+---
+
 ## League calendar is config, not constants — and it moved the title number (2026-08-25, branch `feat/parameterize-league-calendar`)
 
 **Prerequisite for in-season projected standings (#104), done first on purpose.** `league_projection` hard-coded one league's shape: `REG_WEEKS` 1..13, a wildcard week, a semifinal week, a two-week final at 16+17, top 6 with 2 byes. ESPN reports `matchupPeriodCount` and `playoffMatchupPeriodLength` per league, and **Critts plays 14 regular weeks with one-week playoff rounds**. For draft prep that was a footnote; for standings it is disqualifying, because locking already-played weeks requires the league's real week numbering.
