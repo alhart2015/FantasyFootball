@@ -120,7 +120,6 @@ def main(argv: list[str] | None = None) -> int:
         fresh_season_points={},
         points_to_date={},
         weeks_remaining=weeks_remaining,
-        reg_weeks=calendar.reg_weeks,
     )
     warning = diagnostics.warning()
     if warning:

@@ -93,7 +93,6 @@ def rest_of_season_points(
     *,
     preseason_points: float,
     weeks_remaining: int,
-    reg_weeks: int,
 ) -> tuple[float, bool, bool]:
     """One player's remaining points -> (points, was_clamped, used_fallback).
 
@@ -107,7 +106,13 @@ def rest_of_season_points(
     lineup, and reported.
     """
     if fresh_season_points is None:
-        prorated = preseason_points * (weeks_remaining / reg_weeks) if reg_weeks else 0.0
+        # Prorated over SEASON_GAMES, NOT reg_weeks. `preseason_points` is already a
+        # SEASON_GAMES-game total, and `rest_of_season_pool` re-expresses whatever comes back
+        # here as `points / weeks_remaining * SEASON_GAMES`. Dividing by reg_weeks instead
+        # composed to `preseason * SEASON_GAMES / reg_weeks` -- a silent 1.21x on a 14-week
+        # league and 1.31x on a 13-week one, for a player whose pace should be unchanged.
+        # Two horizons inside one function is exactly what this module exists to prevent.
+        prorated = preseason_points * (weeks_remaining / SEASON_GAMES)
         return max(prorated, 0.0), False, True
     remaining = fresh_season_points - points_to_date
     if remaining <= 0.0:
@@ -121,7 +126,6 @@ def rest_of_season_pool(
     points_to_date: Mapping[str, float],
     *,
     weeks_remaining: int,
-    reg_weeks: int,
 ) -> tuple[pd.DataFrame, RosDiagnostics]:
     """Rewrite a pool's `season_mean_fpts` to a rest-of-season pace. Returns (pool, diagnostics).
 
@@ -153,7 +157,6 @@ def rest_of_season_pool(
             float(points_to_date.get(gsis, 0.0)),
             preseason_points=float(row.season_mean_fpts),
             weeks_remaining=weeks_remaining,
-            reg_weeks=reg_weeks,
         )
         if was_clamped:
             clamped.append(getattr(row, "full_name", gsis) or gsis)
