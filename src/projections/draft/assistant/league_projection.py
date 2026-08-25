@@ -161,6 +161,33 @@ class SeasonOutcomes:
         return out
 
 
+@dataclass(frozen=True)
+class LockedRecord:
+    """One team's ACTUAL results over the weeks already played.
+
+    Mid-season those weeks are facts, not distributions: simulating them discards information
+    and produces a spread around a record you can simply look up. Seeding then runs on
+    (locked + simulated) wins and points-for, which is exactly ESPN's rule.
+
+    `ties` is carried rather than folded into a half-win. Simulated weeks cannot tie -- the
+    matchup loop breaks every game with `>=` -- but real played weeks can, and a tie is
+    neither a win nor a loss for seeding.
+    """
+
+    wins: int = 0
+    losses: int = 0
+    ties: int = 0
+    points_for: float = 0.0
+
+    @property
+    def games_played(self) -> int:
+        return self.wins + self.losses + self.ties
+
+
+#: Shared empty record, so a slot absent from `locked` costs no allocation per lookup.
+_NO_RESULTS = LockedRecord()
+
+
 def resolve_bracket(
     seed_order: Sequence[int],
     week_points: Callable[[int, int], float],
@@ -210,20 +237,35 @@ def simulate_seasons(
     n_sims: int,
     rng: np.random.Generator,
     calendar: LeagueCalendar | None = None,
+    schedule: Sequence[Sequence[tuple[int, int]]] | None = None,
+    locked: Mapping[int, LockedRecord] | None = None,
+    first_unplayed_week: int = 1,
 ) -> SeasonOutcomes:
-    """`n_sims` full projected-vs-projected seasons, returning every sim's realized result.
+    """`n_sims` projected-vs-projected seasons, returning every sim's realized result.
 
-    The regular season runs `calendar.reg_weeks` via the gauntlet schedule -> records +
-    points-for; seeding is (wins, points_for). The top `calendar.playoff_size` make the
-    playoffs and the top `calendar.n_byes` skip the first round; the bracket is single
-    elimination, reseeded each round, with the final spanning `calendar.final_weeks`.
-    Ties (matchup or championship) break to the better seed / lower slot.
+    The regular season runs `calendar.reg_weeks` -> records + points-for; seeding is
+    (wins, points_for). The top `calendar.playoff_size` make the playoffs and the top
+    `calendar.n_byes` skip the first round; the bracket is single elimination, reseeded each
+    round, with the final spanning `calendar.final_weeks`. Ties (matchup or championship)
+    break to the better seed / lower slot.
 
     `calendar` defaults to `DEFAULT_CALENDAR` -- 13 regular weeks, top 6, 2 byes, two-week
-    final -- which is exactly the shape this function hard-coded before it was parameterised,
-    so callers that pass nothing are unaffected. Pass a real one whenever the league's own
+    final -- exactly the shape this function hard-coded before it was parameterised, so
+    callers that pass nothing are unaffected. Pass a real one whenever the league's own
     settings are known: ESPN reports `matchupPeriodCount` and `playoffMatchupPeriodLength`
     per league and they do not always match the defaults.
+
+    **Preseason vs in-season.** With `schedule=None` the fixture list is `gauntlet_schedule`,
+    a synthetic round-robin. That is the right choice before a season: no real fixture list
+    exists yet, and a synthetic one is strength-of-schedule neutral, so no seat is advantaged
+    by a draw that has not happened. It is the wrong choice during a season, where who you
+    actually play drives your record -- pass the league's real fixture list, **in slot space**
+    (the caller maps ESPN team ids to 1..n_teams slots; this function knows only slots).
+
+    `locked` supplies each slot's ACTUAL wins/losses/ties/points-for from the weeks already
+    played, and `first_unplayed_week` says where simulation starts. Weeks before it are not
+    simulated at all -- they are facts. Their points still get drawn (the bracket needs
+    playoff-week points regardless) but contribute nothing to the regular-season tally.
     """
     calendar = calendar or DEFAULT_CALENDAR
     n_teams = league_config.n_teams
@@ -246,11 +288,23 @@ def simulate_seasons(
         for s in slots
     }
 
-    wins = {s: np.zeros(n_sims) for s in slots}
-    pf = {s: np.zeros(n_sims) for s in slots}
+    # Locked weeks seed the tally with real results; everything from `first_unplayed_week`
+    # on is simulated. Preseason (`locked=None`, `first_unplayed_week=1`) both start at zero,
+    # which is the previous behaviour exactly.
+    locked = locked or {}
+    wins = {s: np.full(n_sims, float(locked.get(s, _NO_RESULTS).wins)) for s in slots}
+    pf = {s: np.full(n_sims, locked.get(s, _NO_RESULTS).points_for) for s in slots}
+
     reg_weeks = calendar.reg_week_numbers
-    schedule = gauntlet_schedule(n_teams, len(reg_weeks))
-    for w, matchups in zip(reg_weeks, schedule, strict=True):
+    fixtures = schedule if schedule is not None else gauntlet_schedule(n_teams, len(reg_weeks))
+    if len(fixtures) != len(reg_weeks):
+        raise ValueError(
+            f"schedule covers {len(fixtures)} weeks but the calendar has {len(reg_weeks)} "
+            "regular-season weeks; they must line up week-for-week."
+        )
+    for w, matchups in zip(reg_weeks, fixtures, strict=True):
+        if w < first_unplayed_week:
+            continue  # already played: its result is in `locked`, not simulated
         for a, b in matchups:
             pa, pb = weekly[a][:, w - 1], weekly[b][:, w - 1]
             pf[a] += pa
