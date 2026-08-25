@@ -12,9 +12,41 @@ import pytest
 from generate_preset_vorp_tables import resolve_espn_auction_dollars
 
 from projections.draft.assistant.presets import get_preset
-from projections.schemas import STAT_FIELDS, Ruleset, VorpTableSchema
+from projections.schemas import (
+    _PYARROW_STR,
+    STAT_FIELDS,
+    IdMapSchema,
+    Ruleset,
+    VorpTableSchema,
+)
 
 _STAT_COLS = list(STAT_FIELDS)
+
+
+def _write_id_map(data_root: Path, external: pd.DataFrame) -> Path:
+    """Write the `raw/id_map.parquet` the generator reconciles placeholder gsis ids against.
+
+    The script grew this read in ba68092 (gsis reconciliation) and this test's tmp fixture was
+    never updated, so it failed on a bare FileNotFoundError rather than on anything it meant to
+    assert. Covering every synthetic player keeps reconciliation a no-op, which is what this
+    test wants — it verifies the per-season write path, not the reconciler.
+    """
+    ids = list(external["gsis_id"])
+    frame = pd.DataFrame(
+        {
+            "gsis_id": pd.Series(ids, dtype=_PYARROW_STR),
+            "espn_id": pd.Series([None] * len(ids), dtype=_PYARROW_STR),
+            "sleeper_id": pd.Series([None] * len(ids), dtype=_PYARROW_STR),
+            "pfr_id": pd.Series([None] * len(ids), dtype=_PYARROW_STR),
+            "full_name": external["full_name"].astype(_PYARROW_STR).reset_index(drop=True),
+            "position": external["position"].astype(_PYARROW_STR).reset_index(drop=True),
+            "team": pd.Series([None] * len(ids), dtype=_PYARROW_STR),
+        }
+    )
+    path = data_root / "raw" / "id_map.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    IdMapSchema.validate(frame).to_parquet(path)
+    return path
 
 
 def _espn_row(
@@ -226,6 +258,7 @@ def test_main_writes_per_season_tables_and_configs(
     # path (dir + .league.json) is what this test verifies, not the full 9-preset grid.
     monkeypatch.setattr(gp, "SCORING_KEYS", ("half",))
     monkeypatch.setattr(gp, "TEAM_SIZES", (12,))
+    _write_id_map(tmp_path, external)
 
     rc = gp.main(["--season", "2023", "--data-root", str(tmp_path)])
     assert rc == 0
@@ -234,3 +267,30 @@ def test_main_writes_per_season_tables_and_configs(
     assert tbl.exists() and cfg.exists()
     assert "espn_auction_dollars" in pd.read_parquet(tbl).columns
     assert json.loads(cfg.read_text())["name"] == "half_12team_2023"  # config carries the season
+
+
+def test_main_names_the_missing_id_map_instead_of_raising_filenotfound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reconciliation is not optional on this path: without it the written tables keep
+    placeholder gsis ids that fail to join weekly_stats, and the availability model degrades
+    silently. So a missing id_map must stop the run — but a bare FileNotFoundError names a
+    path and nothing else, which is how this went undiagnosed as a test failure. The message
+    has to say what the file is for and how to build it.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    import generate_preset_vorp_tables as gp
+
+    external = _synthetic_external()
+    external["season"] = 2023
+    external["asof"] = "2023-01-01"
+    monkeypatch.setattr(gp, "read_latest_partition", lambda *a, **k: external)
+    # No _write_id_map call — that is the point.
+
+    with pytest.raises(SystemExit) as excinfo:
+        gp.main(["--season", "2023", "--data-root", str(tmp_path)])
+
+    message = str(excinfo.value)
+    assert "id_map" in message
+    assert "build_id_map" in message, message
+    assert "availability" in message, message

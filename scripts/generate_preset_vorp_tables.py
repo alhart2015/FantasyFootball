@@ -100,7 +100,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     # Reconcile placeholder gsis to real ones so the written tables join to weekly_stats
     # (injury p) and id_map (byes); without this the availability model degrades silently.
-    id_map = pd.read_parquet(args.data_root / "raw" / "id_map.parquet")
+    id_map_path = args.data_root / "raw" / "id_map.parquet"
+    if not id_map_path.exists():
+        # A bare FileNotFoundError here names a path and nothing else. Reconciliation is not
+        # optional on this path -- without it the written tables carry placeholder gsis ids
+        # that silently fail to join weekly_stats and the availability model degrades -- so
+        # this raises rather than degrading, but it says what to run.
+        raise SystemExit(
+            f"No id_map at {id_map_path}. It is required: preset tables are reconciled to real "
+            f"gsis ids so they join weekly_stats (injury p) and byes, and skipping that "
+            f"degrades the availability model silently. Build it with "
+            f"`projections.ingest.id_map.build_id_map(data_root)` (or the whole raw layer with "
+            f"`projections.ingest.refresh.refresh(seasons, data_root=...)`, which runs it first)."
+        )
+    id_map = pd.read_parquet(id_map_path)
     key_map = real_gsis_by_key(id_map)  # build once; reused across all 9 presets
     for scoring_key in SCORING_KEYS:
         for n_teams in TEAM_SIZES:
