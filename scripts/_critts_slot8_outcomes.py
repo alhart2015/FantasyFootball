@@ -30,18 +30,14 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability_loader import load_store_availability
-from projections.draft.assistant.league_projection import (
-    N_BYES,
-    PLAYOFF_SIZE,
-    REG_WEEKS,
-    simulate_seasons,
-)
+from projections.draft.assistant.league_projection import simulate_seasons
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.pick_timing import slot_for
 from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.assistant.simulation import _draft_picks
 from projections.draft.assistant.strategy import RawVorpStrategy
 from projections.draft.assistant.survival import default_sigma
+from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 
@@ -63,6 +59,10 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     config = LeagueConfig.model_validate_json((_LEAGUE / "league_config.json").read_text())
+    # The league's REAL calendar, not the module default. ESPN reports 14 regular weeks and
+    # one-week playoff rounds here; the defaults are 13 and a two-week final, which lowers
+    # variance in the final and so overstates the stronger team's title odds.
+    calendar = LeagueCalendar(reg_weeks=14, playoff_size=6, n_byes=2, final_weeks=1)
     pool = pd.read_parquet(_POOL)
     pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
     validated = VorpTableSchema.validate(pool)
@@ -103,16 +103,17 @@ def main() -> int:
             league_config=config,
             n_sims=args.sims,
             rng=np.random.default_rng(args.seed + 10_000 + d),
+            calendar=calendar,
         )
         col = res.slots.index(args.my_slot)
         seeds = res.seed[:, col]
-        hero_win.append(res.wins[:, col] / len(REG_WEEKS))
+        hero_win.append(res.wins[:, col] / calendar.reg_weeks)
         hero_seed.append(seeds)
-        hero_playoff.append(seeds <= PLAYOFF_SIZE)
-        hero_bye.append(seeds <= N_BYES)
+        hero_playoff.append(seeds <= calendar.playoff_size)
+        hero_bye.append(seeds <= calendar.n_byes)
         hero_champ.append(res.champion == args.my_slot)
-        field_playoff.append(res.seed <= PLAYOFF_SIZE)
-        field_win.append(res.wins / len(REG_WEEKS))
+        field_playoff.append(res.seed <= calendar.playoff_size)
+        field_win.append(res.wins / calendar.reg_weeks)
         field_champ.append(np.stack([res.champion == s for s in res.slots], axis=1))
 
         labels = res.outcome_labels(args.my_slot)
@@ -146,14 +147,14 @@ def main() -> int:
     rows = [
         ("regular-season win %", 100 * hw.mean(), 100 * np.concatenate(field_win).mean()),
         (
-            f"make playoffs % (top {PLAYOFF_SIZE})",
+            f"make playoffs % (top {calendar.playoff_size})",
             100 * np.concatenate(hero_playoff).mean(),
             100 * np.concatenate(field_playoff).mean(),
         ),
         (
-            f"first-round bye % (top {N_BYES})",
+            f"first-round bye % (top {calendar.n_byes})",
             100 * np.concatenate(hero_bye).mean(),
-            100 * N_BYES / n_teams,
+            100 * calendar.n_byes / n_teams,
         ),
         (
             "championship %",
@@ -186,7 +187,7 @@ def main() -> int:
             continue
         d, i, roster, wins, seed, pf = examples[label]
         print(f"\n--- {label.upper()} --- (draft #{d}, season #{i})")
-        record = f"{wins:.0f}-{len(REG_WEEKS) - wins:.0f}"
+        record = f"{wins:.0f}-{calendar.reg_weeks - wins:.0f}"
         print(f"    {record} regular season, seed {seed}, {pf:.0f} pts")
         ranked = sorted(roster, key=lambda g: -vorp.get(g, 0.0))
         # `pid`, not `gid`: the draft loop above already binds `gid` as a GsisId, and reusing
