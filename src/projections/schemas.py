@@ -1549,6 +1549,9 @@ class ProjectedStandingsSchema(pa.DataFrameModel):
     games_played: Series[int] = pa.Field(ge=0)
     # --- projected to season end
     projected_wins: Series[float] = pa.Field(ge=0)
+    #: Season-end points-for (banked + simulated) -- the figure the simulator seeds on, and
+    #: what the standings order by. `points_for` above is banked-only.
+    projected_points_for: Series[float] = pa.Field(ge=0)
     make_playoffs_pct: Series[float] = pa.Field(ge=0, le=1)
     bye_pct: Series[float] = pa.Field(ge=0, le=1)
     champ_pct: Series[float] = pa.Field(ge=0, le=1)
@@ -1568,6 +1571,10 @@ class MatchupOddsSchema(pa.DataFrameModel):
     """
 
     season: Series[int] = pa.Field(ge=1999, le=2100)
+    #: The snapshot this row was produced in -- the partition key. Distinct from `week`, and
+    #: required: two snapshots holding the same future fixture would otherwise concatenate into
+    #: a frame with one key carrying two probabilities and no way to tell which is current.
+    snapshot_week: Series[int] = pa.Field(ge=1, le=23)
     #: The week the matchup is played in, not the week the snapshot was taken.
     week: Series[int] = pa.Field(ge=1, le=23)
     home_team_id: Series[int] = pa.Field(ge=0)

@@ -20,7 +20,11 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from projections.draft.assistant.league_projection import LockedRecord, SeasonOutcomes
+from projections.draft.assistant.league_projection import (
+    _NO_RESULTS,
+    LockedRecord,
+    SeasonOutcomes,
+)
 from projections.draft.league_calendar import LeagueCalendar
 from projections.schemas import _PYARROW_STR, MatchupOddsSchema, ProjectedStandingsSchema
 
@@ -71,8 +75,11 @@ def schedule_to_slots(
 ) -> list[list[tuple[int, int]]]:
     """Real fixture list -> the week-indexed slot pairs `simulate_seasons` consumes.
 
-    Every regular-season week must be present: a missing one would silently shorten the season
-    rather than fail, and each team's record would come out low with no indication why.
+    **Every slot must play exactly once in every regular-season week.** Checking only that a
+    week is non-empty is not that invariant: a duplicated matchup row lets one team bank two
+    games in a week and finish with more wins than the season has games, and a week ESPN
+    returned only half of passes while half the league silently sits out. Both produce a
+    plausible table.
     """
     by_week: dict[int, list[tuple[int, int]]] = {w: [] for w in calendar.reg_week_numbers}
     for row in schedule.itertuples():
@@ -80,12 +87,18 @@ def schedule_to_slots(
         if week not in by_week:
             continue  # playoff weeks: the bracket handles those, not the matchup loop
         by_week[week].append((slots.slot(int(row.home_team_id)), slots.slot(int(row.away_team_id))))
-    missing = [w for w, games in by_week.items() if not games]
-    if missing:
-        raise ValueError(
-            f"schedule has no matchups for regular-season week(s) {missing}; the simulated "
-            "season would silently be shorter than the calendar says."
-        )
+    expected = sorted(range(1, len(slots) + 1))
+    for week_no in calendar.reg_week_numbers:
+        seats = sorted(seat for pair in by_week[week_no] for seat in pair)
+        if seats != expected:
+            missing = sorted(set(expected) - set(seats))
+            doubled = sorted({seat for seat in seats if seats.count(seat) > 1})
+            raise ValueError(
+                f"regular-season week {week_no} does not have every team playing exactly "
+                f"once: {len(by_week[week_no])} matchup(s), "
+                f"missing slots {missing or 'none'}, duplicated slots {doubled or 'none'}. "
+                "Simulating it would give some teams more games than the season has."
+            )
     return [by_week[w] for w in calendar.reg_week_numbers]
 
 
@@ -100,7 +113,6 @@ def locked_by_slot(records: pd.DataFrame, slots: SlotMap) -> dict[int, LockedRec
         )
         for row in records.itertuples()
     }
-
 
 
 def rosters_to_slots(
@@ -157,7 +169,6 @@ def build_standings(
     outcomes: SeasonOutcomes,
     slots: SlotMap,
     team_names: Mapping[int, str],
-    locked: Mapping[int, LockedRecord],
     *,
     season: int,
     snapshot_week: int,
@@ -167,13 +178,12 @@ def build_standings(
     `projected_wins` is banked wins plus the simulated remainder — the simulator already
     returns the total, because it seeds its tally with the locked record.
     """
-    empty = LockedRecord()
     rows: list[dict[str, object]] = []
     for slot in outcomes.slots:
         team_id = slots.team_id(slot)
         col = outcomes.slots.index(slot)
         seeds = outcomes.seed[:, col]
-        record = locked.get(slot, empty)
+        record = outcomes.locked.get(slot, _NO_RESULTS)
         rows.append(
             {
                 "season": season,
@@ -186,6 +196,11 @@ def build_standings(
                 "points_for": record.points_for,
                 "games_played": record.games_played,
                 "projected_wins": float(outcomes.wins[:, col].mean()),
+                # Season-end points-for (banked + simulated) -- what the simulator itself seeds
+                # on. Ordering the display on the banked figure alone made the row order
+                # disagree with the mean_seed printed beside it, and preseason, where every
+                # banked figure is 0.0, made it arbitrary.
+                "projected_points_for": float(outcomes.points_for[:, col].mean()),
                 "make_playoffs_pct": float((seeds <= outcomes.calendar.playoff_size).mean()),
                 "bye_pct": float((seeds <= outcomes.calendar.n_byes).mean()),
                 "champ_pct": float((outcomes.champion == slot).mean()),
@@ -193,7 +208,7 @@ def build_standings(
             }
         )
     frame = pd.DataFrame(rows).sort_values(
-        ["projected_wins", "points_for"], ascending=False, ignore_index=True
+        ["projected_wins", "projected_points_for"], ascending=False, ignore_index=True
     )
     frame["team_name"] = frame["team_name"].astype(_PYARROW_STR)
     return ProjectedStandingsSchema.validate(frame)
@@ -221,6 +236,11 @@ def build_matchup_odds(
         rows.append(
             {
                 "season": season,
+                # The snapshot this row was produced in, distinct from the matchup week below.
+                # Without it two snapshots holding the same future fixture concatenate into a
+                # frame where one (season, week, teams) key carries two different
+                # probabilities and nothing says which is current.
+                "snapshot_week": snapshot_week,
                 "week": week,
                 "home_team_id": int(row.home_team_id),
                 "away_team_id": int(row.away_team_id),
@@ -235,6 +255,7 @@ def build_matchup_odds(
         rows,
         columns=[
             "season",
+            "snapshot_week",
             "week",
             "home_team_id",
             "away_team_id",
@@ -244,7 +265,7 @@ def build_matchup_odds(
             "home_mean_points",
             "away_mean_points",
         ],
-    ).sort_values(["week", "home_team_id"], ignore_index=True)
+    ).sort_values(["snapshot_week", "week", "home_team_id"], ignore_index=True)
     for column in ("home_team", "away_team"):
         frame[column] = frame[column].astype(_PYARROW_STR)
     return MatchupOddsSchema.validate(frame)

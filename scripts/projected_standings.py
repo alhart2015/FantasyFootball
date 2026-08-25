@@ -190,7 +190,6 @@ def main(argv: list[str] | None = None) -> int:
         outcomes,
         slots,
         names,
-        locked_by_slot(records, slots),
         season=args.season,
         snapshot_week=week,
     )

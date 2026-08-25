@@ -133,6 +133,11 @@ class SeasonOutcomes:
     #: result can never be read back against a different bracket than produced it -- `seed <=
     #: playoff_size` means nothing without knowing which playoff_size.
     calendar: LeagueCalendar
+    #: The already-played results these seasons were seeded with, per slot. Carried for the
+    #: same reason as the calendar: a reader that takes its banked record from somewhere else
+    #: can print a record that disagrees with the projection beside it, and nothing would
+    #: catch it. Empty preseason.
+    locked: Mapping[int, LockedRecord]
     wins: np.ndarray  # (n_sims, n_slots) regular-season wins
     points_for: np.ndarray  # (n_sims, n_slots) regular-season points
     seed: np.ndarray  # (n_sims, n_slots) 1-based final seed
@@ -374,6 +379,7 @@ def simulate_seasons(
     return SeasonOutcomes(
         slots=tuple(slots),
         calendar=calendar,
+        locked=dict(locked),
         weekly_points=np.stack([weekly[s] for s in slots], axis=1),
         wins=win_mat,
         points_for=pf_mat,

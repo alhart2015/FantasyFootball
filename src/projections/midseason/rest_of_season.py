@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from projections.draft.assistant.performance_variance import SEASON_GAMES
+from projections.schemas import VorpTableSchema
 
 #: A healthy starter with this many points or fewer left, this early, is far more likely to be
 #: an ingest problem than a real projection. Used only to decide whether to warn.
@@ -103,6 +104,23 @@ class RosDiagnostics:
         return message
 
 
+
+def _validated(pool: pd.DataFrame) -> pd.DataFrame:
+    """`df = SCHEMA.validate(df)` at the module boundary, per the repo convention.
+
+    Reassignment matters: `strict="filter"` returns a NEW frame with extras dropped, so
+    validating without taking the result back leaves them in place. `is_rookie` is not on
+    `VorpTableSchema` but `team_weekly_points` needs it, so it is restored afterwards -- the
+    validate is here to catch a frame that has lost `season_mean_fpts` or `gsis_id`, not to
+    strip the columns the simulator runs on.
+    """
+    extras = {col: pool[col] for col in ("is_rookie",) if col in pool.columns}
+    validated = VorpTableSchema.validate(pool)
+    for col, values in extras.items():
+        validated[col] = values
+    return validated
+
+
 def rest_of_season_points(
     fresh_season_points: float | None,
     points_to_date: float,
@@ -167,7 +185,7 @@ def rest_of_season_pool(
     out = pool.copy()
     if weeks_remaining <= 0:
         out["season_mean_fpts"] = 0.0
-        return out, RosDiagnostics(n_players=len(out))
+        return _validated(out), RosDiagnostics(n_players=len(out))
 
     ros: list[float] = []
     clamped: list[str] = []
@@ -196,7 +214,7 @@ def rest_of_season_pool(
         ros.append(points / weeks_remaining * SEASON_GAMES)
 
     out["season_mean_fpts"] = ros
-    return out, RosDiagnostics(
+    return _validated(out), RosDiagnostics(
         n_players=len(out),
         n_clamped=len(clamped),
         n_fallback=n_fallback,

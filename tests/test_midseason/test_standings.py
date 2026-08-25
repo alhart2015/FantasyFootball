@@ -23,6 +23,7 @@ from projections.draft.assistant.league_projection import (
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
+from projections.ingest.espn_league import team_records
 from projections.midseason.standings import (
     SlotMap,
     build_matchup_odds,
@@ -209,8 +210,8 @@ def _run(
 
 
 def test_standings_validate_and_cover_every_team() -> None:
-    outcomes, _, slots, locked, week, names = _run()
-    frame = build_standings(outcomes, slots, names, locked, season=2026, snapshot_week=week)
+    outcomes, _, slots, _locked, week, names = _run()
+    frame = build_standings(outcomes, slots, names, season=2026, snapshot_week=week)
     assert len(frame) == len(_TEAM_IDS)
     assert set(frame["team_id"]) == set(_TEAM_IDS)
     assert frame["make_playoffs_pct"].between(0, 1).all()
@@ -219,8 +220,8 @@ def test_standings_validate_and_cover_every_team() -> None:
 def test_playoff_odds_sum_to_the_number_of_playoff_spots() -> None:
     """An identity, not an approximation: exactly `playoff_size` teams make it in every
     simulation, so the per-team probabilities must total that."""
-    outcomes, _, slots, locked, week, names = _run()
-    frame = build_standings(outcomes, slots, names, locked, season=2026, snapshot_week=week)
+    outcomes, _, slots, _locked, week, names = _run()
+    frame = build_standings(outcomes, slots, names, season=2026, snapshot_week=week)
     assert frame["make_playoffs_pct"].sum() == pytest.approx(_CAL.playoff_size)
     assert frame["champ_pct"].sum() == pytest.approx(1.0)
 
@@ -228,8 +229,8 @@ def test_playoff_odds_sum_to_the_number_of_playoff_spots() -> None:
 def test_standings_attribute_results_to_the_right_teams() -> None:
     """The translation failure that would otherwise look like a plausible table: slot 1 has
     the strongest roster and maps to the lowest team id (1), so team 1 must lead."""
-    outcomes, _, slots, locked, week, names = _run()
-    frame = build_standings(outcomes, slots, names, locked, season=2026, snapshot_week=week)
+    outcomes, _, slots, _locked, week, names = _run()
+    frame = build_standings(outcomes, slots, names, season=2026, snapshot_week=week)
     best = frame.iloc[0]
     assert best["team_id"] == min(_TEAM_IDS)
     assert best["team_name"] == f"T{min(_TEAM_IDS)}"
@@ -237,8 +238,8 @@ def test_standings_attribute_results_to_the_right_teams() -> None:
 
 def test_banked_record_appears_alongside_the_projection() -> None:
     """A reader that cannot see both cannot tell a 1-1 start from a 1-1 projection."""
-    outcomes, _, slots, locked, week, names = _run()
-    frame = build_standings(outcomes, slots, names, locked, season=2026, snapshot_week=week)
+    outcomes, _, slots, _locked, week, names = _run()
+    frame = build_standings(outcomes, slots, names, season=2026, snapshot_week=week)
     assert (frame["wins"] == 1).all()
     assert (frame["games_played"] == 2).all()
     # Two weeks banked, two simulated: nobody can finish below their banked wins.
@@ -288,8 +289,8 @@ def test_matchup_odds_come_from_the_same_run_as_the_standings() -> None:
 def test_snapshot_round_trips_through_the_store(tmp_path: Path) -> None:
     """The trend line is a read of accumulated partitions, so a snapshot has to come back out
     validating against the same schema it went in under."""
-    outcomes, schedule, slots, locked, week, names = _run()
-    standings = build_standings(outcomes, slots, names, locked, season=2026, snapshot_week=week)
+    outcomes, schedule, slots, _locked, week, names = _run()
+    standings = build_standings(outcomes, slots, names, season=2026, snapshot_week=week)
     odds = build_matchup_odds(outcomes, schedule, slots, season=2026, snapshot_week=week)
 
     for table, frame, schema in (
@@ -305,9 +306,9 @@ def test_snapshot_round_trips_through_the_store(tmp_path: Path) -> None:
 def test_two_weeks_of_snapshots_read_back_as_a_trend(tmp_path: Path) -> None:
     """The point of persisting: several weeks accumulate into one frame that can be plotted.
     A season-wide read must return every week, not just the newest."""
-    outcomes, _, slots, locked, _, names = _run()
+    outcomes, _, slots, _locked, _, names = _run()
     for week in (3, 4):
-        frame = build_standings(outcomes, slots, names, locked, season=2026, snapshot_week=week)
+        frame = build_standings(outcomes, slots, names, season=2026, snapshot_week=week)
         write_partition(tmp_path, "projected_standings", frame, season=2026, week=week)
 
     trend = read_partition(tmp_path, "projected_standings", season=2026)
@@ -389,3 +390,98 @@ def test_an_all_empty_resolution_raises_rather_than_simulating_zeros() -> None:
 
     with pytest.raises(ValueError, match="no rostered player"):
         rosters_to_slots(rosters, _id_map([]), slots, {"00-0000001"})
+
+
+# --- schedule validation, snapshot keys, seeding horizon ------------------------------------
+
+
+def test_a_week_where_a_team_plays_twice_is_rejected() -> None:
+    """The old guard checked only that a week was non-empty, which is not the invariant. Every
+    slot must play exactly once per week: a duplicated matchup row lets one team bank two
+    games in a week and finish with more wins than the season has games, and nothing fires."""
+    slots = SlotMap.from_team_ids(_TEAM_IDS)
+    doubled = pd.concat(
+        [_schedule(), _schedule().head(1)], ignore_index=True
+    )  # week 1 now holds 17-vs-3 twice
+    with pytest.raises(ValueError, match="exactly once"):
+        schedule_to_slots(doubled, slots, _CAL)
+
+
+def test_a_week_missing_half_its_matchups_is_rejected() -> None:
+    """The complement, and the failure the old message actually named: a week ESPN returned
+    only partially passes a non-empty check while half the league silently sits out."""
+    slots = SlotMap.from_team_ids(_TEAM_IDS)
+    partial = _schedule()
+    # Drop one of week 2's three matchups: the week is still non-empty.
+    drop = partial[(partial["week"] == 2)].index[0]
+    with pytest.raises(ValueError, match="exactly once"):
+        schedule_to_slots(partial.drop(index=drop), slots, _CAL)
+
+
+def test_matchup_odds_carry_the_snapshot_week_they_were_produced_in() -> None:
+    """`week` on this table is the MATCHUP week, but the partition key is the SNAPSHOT week.
+    Without a column recording which snapshot produced a row, two snapshots both containing
+    the same future fixture concatenate into a frame where the same (season, week, teams) key
+    appears twice with different probabilities and nothing says which is current."""
+    outcomes, schedule, slots, _, week, _ = _run()
+    odds = build_matchup_odds(outcomes, schedule, slots, season=2026, snapshot_week=week)
+    assert (odds["snapshot_week"] == week).all()
+    # And the matchup week is still its own column, distinct from the snapshot.
+    assert (odds["week"] >= week).all()
+    assert odds["week"].nunique() > 1
+
+
+def test_two_matchup_odds_snapshots_stay_distinguishable(tmp_path: Path) -> None:
+    outcomes, schedule, slots, _, _, _ = _run()
+    for snap in (3, 4):
+        frame = build_matchup_odds(outcomes, schedule, slots, season=2026, snapshot_week=snap)
+        write_partition(tmp_path, "matchup_odds", frame, season=2026, week=snap)
+    back = read_partition(tmp_path, "matchup_odds", season=2026)
+    assert sorted(back["snapshot_week"].unique()) == [3, 4]
+    # The same fixture appears once per snapshot, and the snapshot column separates them.
+    key = ["season", "snapshot_week", "week", "home_team_id", "away_team_id"]
+    assert not back.duplicated(subset=key).any()
+
+
+def test_standings_are_ordered_by_projected_points_not_banked_points() -> None:
+    """The simulator seeds on total (locked + simulated) points-for, so ordering the display
+    on banked points alone makes the row order disagree with the `mean_seed` printed beside
+    it -- and preseason, where every banked figure is 0.0, the order is arbitrary."""
+    outcomes, _, slots, _locked, week, names = _run()
+    frame = build_standings(outcomes, slots, names, season=2026, snapshot_week=week)
+    assert "projected_points_for" in frame.columns
+    assert (frame["projected_points_for"] >= frame["points_for"]).all()
+    ordered = frame.sort_values(
+        ["projected_wins", "projected_points_for"], ascending=False, ignore_index=True
+    )
+    assert list(frame["team_id"]) == list(ordered["team_id"])
+
+
+def test_standings_read_the_banked_record_off_the_simulation_that_used_it() -> None:
+    """`build_standings` used to take `locked` as its own argument, and the CLI passed
+    `locked_by_slot(...)` twice -- once into the simulator and once here. Nothing checked the
+    two agreed, so a mismatch would print a banked record that disagreed with the projection
+    sitting next to it, silently. The outcomes object now carries the records it was built
+    with, so there is only one source."""
+    outcomes, _, slots, locked, week, names = _run()
+    assert outcomes.locked == locked
+    frame = build_standings(outcomes, slots, names, season=2026, snapshot_week=week)
+    for row in frame.itertuples():
+        record = locked[slots.slot(int(row.team_id))]
+        assert row.wins == record.wins
+        assert row.points_for == pytest.approx(record.points_for)
+
+
+def test_the_end_to_end_fixture_derives_its_record_from_its_own_schedule() -> None:
+    """The fixture used to hand-write locked records that contradicted the schedule beside
+    them (schedule said 2-0 at 240 points, fixture asserted 1-1 at ~200), so
+    `team_records -> locked_by_slot` -- the real integration seam -- was never exercised
+    together. Deriving one from the other covers it and removes the invented numbers."""
+    schedule = _schedule(played_weeks=2)
+    slots = SlotMap.from_team_ids(_TEAM_IDS)
+    derived = locked_by_slot(team_records(schedule, through_week=2), slots)
+    # Every home team won both weeks at 120-90, so home sides are 2-0 and away sides 0-2.
+    home_slot = slots.slot(17)  # home in weeks 1 and 3 of the fixture pairing
+    assert derived[home_slot].games_played == 2
+    assert derived[home_slot].wins + derived[home_slot].losses == 2
+    assert sum(r.wins for r in derived.values()) == sum(r.losses for r in derived.values())

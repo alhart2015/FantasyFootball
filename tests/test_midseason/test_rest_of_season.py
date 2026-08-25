@@ -30,6 +30,13 @@ from projections.schemas import _PYARROW_STR
 
 
 def _pool(rows: list[tuple[str, str, float]]) -> pd.DataFrame:
+    """A real `VorpTableSchema` frame, not a subset of one.
+
+    `rest_of_season_pool` validates what it returns, so its input has to satisfy the same
+    contract the CLI actually hands it. The earlier fixture carried only the four columns the
+    function reads, which quietly under-specified the boundary being tested.
+    """
+    replacement = 80.0
     frame = pd.DataFrame(
         [
             {
@@ -37,12 +44,15 @@ def _pool(rows: list[tuple[str, str, float]]) -> pd.DataFrame:
                 "full_name": name,
                 "position": "RB",
                 "season_mean_fpts": preseason,
+                "vorp": preseason - replacement,
+                "replacement_fpts": replacement,
                 "is_rookie": False,
             }
             for gsis, name, preseason in rows
         ]
     )
     frame["gsis_id"] = frame["gsis_id"].astype(_PYARROW_STR)
+    frame["position"] = frame["position"].astype(_PYARROW_STR)
     return frame
 
 
