@@ -737,3 +737,59 @@ def test_team_records_is_empty_before_kickoff() -> None:
 def test_mmatchup_is_pulled_by_default() -> None:
     """Standings need the schedule, so it must not be an opt-in view a caller can forget."""
     assert "mMatchup" in DEFAULT_VIEWS
+
+
+# --- the locked/simulated week partition ---------------------------------------------------
+
+
+def test_team_records_can_be_bounded_to_the_weeks_the_simulator_will_not_replay() -> None:
+    """`locked` and `simulated` must partition the season's weeks exactly once.
+
+    `simulate_seasons` replays every week from `first_unplayed_week` onward, so anything
+    `team_records` banks from those same weeks is counted twice. Two real cases hit this:
+    a partially-played week (some matchups final, some not, which is every Sunday evening),
+    and playoff weeks, which `parse_schedule` deliberately returns and which must never reach
+    a REGULAR-season record. One boundary closes both.
+    """
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=99.0, winner="HOME"),
+            # Week 2 is partially played: this one final, the next still undecided.
+            _matchup(2, 1, 2, home_pts=115.0, away_pts=80.0, winner="HOME"),
+            _matchup(2, 3, 4, winner="UNDECIDED"),
+            # A playoff week, already decided.
+            _matchup(15, 1, 3, home_pts=140.0, away_pts=100.0, winner="HOME"),
+        ]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+
+    # Unbounded: banks week 2's finished game AND the playoff week -- 3 wins for team 1.
+    assert team_records(schedule).set_index("team_id").loc[1, "wins"] == 3
+
+    # Bounded to weeks strictly before the first unplayed week (2), only week 1 counts.
+    bounded = team_records(schedule, through_week=1).set_index("team_id")
+    assert bounded.loc[1, "wins"] == 1
+    assert bounded.loc[1, "games_played"] == 1
+    assert bounded.loc[1, "points_for"] == pytest.approx(120.0)
+
+
+def test_team_records_through_week_excludes_playoff_results_from_a_regular_season_record() -> None:
+    """A 14-week league whose playoffs are under way: the regular-season record must stay
+    14 games. Folding a playoff win in makes a team 'x-y' in a league that plays fewer games
+    than that, and contaminates the points-for that breaks seeding ties."""
+    payload = _payload(
+        schedule=[_matchup(w, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME") for w in (1, 2)]
+        + [_matchup(15, 1, 3, home_pts=150.0, away_pts=80.0, winner="HOME")]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+    recs = team_records(schedule, through_week=14).set_index("team_id")
+    assert recs.loc[1, "wins"] == 2
+    assert recs.loc[1, "points_for"] == pytest.approx(200.0)
+
+
+def test_team_records_through_week_none_keeps_the_previous_unbounded_behaviour() -> None:
+    payload = _payload(
+        schedule=[_matchup(w, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME") for w in (1, 2)]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+    assert team_records(schedule).equals(team_records(schedule, through_week=None))

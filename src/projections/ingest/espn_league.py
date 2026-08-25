@@ -39,6 +39,7 @@ from typing import Any
 
 import pandas as pd
 
+from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset, Team, normalize_team_code
 
@@ -678,17 +679,34 @@ def parse_schedule(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFrame
     return frame.sort_values(["week", "home_team_id"]).reset_index(drop=True)
 
 
-def team_records(schedule: pd.DataFrame) -> pd.DataFrame:
+def team_records(schedule: pd.DataFrame, *, through_week: int | None = None) -> pd.DataFrame:
     """Played matchups -> one row per team: `team_id wins losses ties points_for games_played`.
 
     Derived from the schedule rather than read from ESPN's `cumulativeScore`, so the record
     and the results it comes from can never disagree. Unplayed matchups contribute nothing.
 
-    **Ties are carried, not folded into a half-win.** Simulated weeks cannot tie (the
-    simulator breaks every matchup with `>=`), but real played weeks can, and a tie is neither
-    a win nor a loss for seeding.
+    **`through_week` bounds the tally to weeks `<= through_week`, and an in-season caller must
+    pass it.** A record and a simulation have to partition the season's weeks exactly once
+    between them: `simulate_seasons` replays every week from `first_unplayed_week` onward, so
+    anything banked from those same weeks is counted twice. Two real cases hit that, and one
+    boundary closes both:
+
+    - **A partially-played week.** `first_unplayed_week` is the earliest week holding *any*
+      unplayed matchup, so on any Sunday evening -- Monday night still to come -- the finished
+      matchups in that week would be banked here *and* re-simulated there.
+    - **Playoff weeks.** `parse_schedule` returns them deliberately, and they must never reach
+      a *regular-season* record: a playoff win would make a team 10-4 in a 13-game league and
+      contaminate the points-for that breaks seeding ties.
+
+    Left unbounded by default so the preseason snapshot path, where nothing is played and the
+    question does not arise, is unchanged.
+
+    **Ties are carried, not folded into a half-win** here -- but see `LockedRecord`, whose
+    consumer converts them to half a win for seeding, which is ESPN's rule.
     """
     played = schedule[schedule["is_played"]] if not schedule.empty else schedule
+    if through_week is not None and not played.empty:
+        played = played[played["week"] <= through_week]
     tally: dict[int, dict[str, float]] = {}
 
     def _seat(team_id: int) -> dict[str, float]:
@@ -871,8 +889,14 @@ def write_league_snapshot(
     schedule = parse_schedule(payload, teams)
     if not schedule.empty:
         schedule.to_csv(out_dir / "schedule.tsv", sep="	", index=False)
-    # Empty before kickoff -- no matchup has a winner yet, so there is no record to write.
-    records = team_records(schedule)
+    # Bounded to the regular season: `records.tsv` is a REGULAR-SEASON record, and
+    # `parse_schedule` returns playoff matchups too. Unbounded, a team that won two playoff
+    # games would read 10-4 in a 13-game league. Empty before kickoff, when no matchup has a
+    # winner yet and there is no record to write at all.
+    calendar = LeagueCalendar.from_espn_settings(
+        (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
+    )
+    records = team_records(schedule, through_week=calendar.reg_weeks)
     if not records.empty:
         records.to_csv(out_dir / "records.tsv", sep="	", index=False)
 
