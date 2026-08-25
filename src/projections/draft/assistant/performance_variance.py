@@ -15,7 +15,11 @@ from pathlib import Path
 import numpy as np
 
 _DEFAULT_PARAMS_PATH = Path("configs/performance_variance_params.json")
-_GAMES = 17
+#: Games the variance model spreads a season projection over. Public because callers that
+#: build a season_mean_fpts figure must express it over the SAME horizon this divides by --
+#: `rest_of_season.rest_of_season_pool` re-scales a partial-season pace through it.
+SEASON_GAMES = 17
+_GAMES = SEASON_GAMES  # retained: referenced below and in tests
 
 
 @dataclass(frozen=True)
