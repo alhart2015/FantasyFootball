@@ -25,6 +25,7 @@ from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
 from projections.midseason.standings import (
     SlotMap,
+    rosters_to_slots,
     build_matchup_odds,
     build_standings,
     first_unplayed_week,
@@ -312,3 +313,79 @@ def test_two_weeks_of_snapshots_read_back_as_a_trend(tmp_path: Path) -> None:
     trend = read_partition(tmp_path, "projected_standings", season=2026)
     assert sorted(trend["week"].unique()) == [3, 4]
     assert len(trend) == 2 * len(_TEAM_IDS)
+
+
+# --- roster resolution: ESPN player ids -> gsis ---------------------------------------------
+
+
+def _id_map(pairs: list[tuple[str, str]]) -> pd.DataFrame:
+    """Minimal (espn_id, gsis_id) crosswalk, the two columns rosters_to_slots joins on."""
+    frame = pd.DataFrame(
+        {
+            "espn_id": pd.Series([e for e, _ in pairs], dtype=_PYARROW_STR),
+            "gsis_id": pd.Series([g for _, g in pairs], dtype=_PYARROW_STR),
+        }
+    )
+    return frame
+
+
+def _espn_rosters(rows: list[tuple[int, str]]) -> pd.DataFrame:
+    """The shape `parse_rosters` actually returns: ESPN `player_id`, and NO gsis_id."""
+    frame = pd.DataFrame(
+        {
+            "team_id": [t for t, _ in rows],
+            "player_id": [int(p) for _, p in rows],
+            "player": pd.Series([f"P{p}" for _, p in rows], dtype=_PYARROW_STR),
+            "pos": pd.Series(["RB"] * len(rows), dtype=_PYARROW_STR),
+            "nfl_team": pd.Series([""] * len(rows), dtype=_PYARROW_STR),
+            "lineup_slot": pd.Series([""] * len(rows), dtype=_PYARROW_STR),
+            "acquisition_type": pd.Series([""] * len(rows), dtype=_PYARROW_STR),
+        }
+    )
+    return frame
+
+
+def test_rosters_are_resolved_through_the_id_map_not_a_gsis_column() -> None:
+    """`parse_rosters` emits ESPN `player_id`; the pool is keyed on `gsis_id`. Nothing in
+    `espn_league.py` produces a gsis at all, so reading a `gsis_id` column off an ESPN roster
+    silently matches nothing and every team comes back empty.
+
+    That failure is not loud. Empty rosters make `team_weekly_points` return all zeros, every
+    matchup resolves `0 >= 0` so the HOME team wins every game in every simulation, and the
+    output is a fully populated standings table whose playoff and title percentages are
+    determined entirely by how many home fixtures each team happens to have.
+    """
+    rosters = _espn_rosters([(17, "4001"), (17, "4002"), (3, "4003")])
+    id_map = _id_map([("4001", "00-0000001"), ("4002", "00-0000002"), ("4003", "00-0000003")])
+    slots = SlotMap.from_team_ids([17, 3])
+    pool_ids = {"00-0000001", "00-0000002", "00-0000003"}
+
+    by_slot, dropped = rosters_to_slots(rosters, id_map, slots, pool_ids)
+
+    assert by_slot[slots.slot(17)] == ["00-0000001", "00-0000002"]
+    assert by_slot[slots.slot(3)] == ["00-0000003"]
+    assert dropped == 0
+
+
+def test_players_outside_the_pool_are_dropped_and_counted() -> None:
+    """K and D/ST are rostered but unprojectable, so dropping them is right — but the count
+    has to be reported, because 'everything was dropped' and 'two kickers were dropped' print
+    the same way otherwise."""
+    rosters = _espn_rosters([(17, "4001"), (17, "9999")])
+    id_map = _id_map([("4001", "00-0000001"), ("9999", "00-0000009")])
+    slots = SlotMap.from_team_ids([17])
+
+    by_slot, dropped = rosters_to_slots(rosters, id_map, slots, {"00-0000001"})
+
+    assert by_slot[slots.slot(17)] == ["00-0000001"]
+    assert dropped == 1
+
+
+def test_an_all_empty_resolution_raises_rather_than_simulating_zeros() -> None:
+    """The guard the old `note:` line was not. If NOTHING resolves, the id_map join is broken,
+    and continuing produces a confident table built on zero-point rosters."""
+    rosters = _espn_rosters([(17, "4001"), (3, "4002")])
+    slots = SlotMap.from_team_ids([17, 3])
+
+    with pytest.raises(ValueError, match="no rostered player"):
+        rosters_to_slots(rosters, _id_map([]), slots, {"00-0000001"})

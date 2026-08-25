@@ -26,6 +26,7 @@ from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.league_calendar import LeagueCalendar
 from projections.ingest.espn_league import (
     EspnCredentials,
+    EspnLeagueError,
     build_league_config,
     fetch_league_payload,
     parse_rosters,
@@ -40,9 +41,10 @@ from projections.midseason.standings import (
     build_standings,
     first_unplayed_week,
     locked_by_slot,
+    rosters_to_slots,
     schedule_to_slots,
 )
-from projections.schemas import _PYARROW_STR
+from projections.schemas import _PYARROW_STR, VorpTableSchema
 from projections.store import write_partition
 
 
@@ -71,16 +73,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    creds = EspnCredentials.from_file(args.credentials)
-    if creds is None:
-        # `from_file` returns None for a missing file rather than raising, so an absent
-        # credentials path would otherwise reach the request as a None and fail there.
-        print(
-            f"No ESPN credentials at {args.credentials}. It needs "
-            '{"swid": ..., "espn_s2": ...} — copy both cookies from a logged-in '
-            "fantasy.espn.com session. The file is gitignored.",
-            file=sys.stderr,
-        )
+    # `resolve` tries the environment first and then the file, and raises with a longer
+    # message than anything reproduced here. Using it also keeps ESPN_SWID / ESPN_S2 working,
+    # which `from_file` alone silently ignored.
+    try:
+        creds = EspnCredentials.resolve(args.credentials)
+    except EspnLeagueError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
     payload = fetch_league_payload(args.league_id, args.season, creds=creds)
 
@@ -89,8 +88,29 @@ def main(argv: list[str] | None = None) -> int:
         (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
     )
     teams = parse_teams(payload)
+    if args.team_id is not None and args.team_id not in set(teams["team_id"]):
+        # `write_league_snapshot` performs exactly this check. Without it a typo just produces
+        # a report with no "you" marker and no matchup section, which reads like success.
+        print(
+            f"--team-id {args.team_id} is not a team in this league. Valid ids: "
+            f"{sorted(teams['team_id'])}.",
+            file=sys.stderr,
+        )
+        return 1
+
     schedule = parse_schedule(payload, teams)
-    records = team_records(schedule)
+    if schedule.empty:
+        # Without this, `first_unplayed_week` reports the season COMPLETE (no unplayed week
+        # exists), the banner reads "week 15 of 14, 0 to play" like a finished season, the ROS
+        # build zeroes the whole pool without warning, and the run dies later on an unrelated
+        # "no matchups for weeks 1..14".
+        print(
+            "ESPN returned no schedule for this league. The mMatchup view is missing or the "
+            "fixtures are not published yet; without it there is nothing to project over.",
+            file=sys.stderr,
+        )
+        return 1
+
     rosters_frame = parse_rosters(payload)
     if rosters_frame.empty:
         print(
@@ -101,23 +121,38 @@ def main(argv: list[str] | None = None) -> int:
 
     week = first_unplayed_week(schedule, calendar)
     weeks_remaining = max(calendar.reg_weeks - week + 1, 0)
+    # Bounded to the weeks the simulator will NOT replay. `simulate_seasons` re-runs every
+    # week from `week` onward, so anything banked from those same weeks double-counts -- which
+    # a partially-played week and any played playoff week both cause.
+    records = team_records(schedule, through_week=week - 1)
     print(
         f"{config.name} ({args.season}) — week {week} of {calendar.reg_weeks}, "
         f"{weeks_remaining} to play. {int(schedule['is_played'].sum())} matchups played."
     )
 
     slots = SlotMap.from_team_ids(list(teams["team_id"]))
-    pool = pd.read_parquet(args.pool)
-    pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
+    pool = _load_pool(args.pool)
     pool = attach_is_rookie(pool, season=args.season, data_root=args.data_root)
 
-    # TODO(week 1): points_to_date needs per-player actuals, which live in the played weeks'
-    # `rosterForMatchupPeriod` entries. Until a season is under way every value is zero and
-    # the subtraction is the identity, so this is wired as an empty mapping rather than
-    # guessed at -- see the spec's open question on the season-total assumption.
+    # **The pool IS the fresh projection source.** Its `season_mean_fpts` comes from whatever
+    # `external_projections` snapshot it was built against, so rebuilding it (the same
+    # generate_league_vorp_table.py run the draft prep already uses) is what makes these
+    # numbers current. Passing an empty mapping here instead -- as the first version did --
+    # sent 100% of the pool down the no-fresh-projection fallback and made the whole
+    # `ros = fresh - to_date` path dead code from its only caller.
+    fresh = {
+        str(gsis): float(points)
+        for gsis, points in zip(pool["gsis_id"], pool["season_mean_fpts"], strict=True)
+    }
+
+    # TODO(week 1): per-player actuals live in the played weeks' `rosterForMatchupPeriod`
+    # entries and are not parsed yet. Every value is zero until a season is under way, so the
+    # subtraction is currently the identity and this is left explicit rather than guessed at
+    # -- see the spec's open question on whether a provider's in-season season-total includes
+    # games already played.
     ros_pool, diagnostics = rest_of_season_pool(
         pool,
-        fresh_season_points={},
+        fresh_season_points=fresh,
         points_to_date={},
         weeks_remaining=weeks_remaining,
     )
@@ -125,7 +160,16 @@ def main(argv: list[str] | None = None) -> int:
     if warning:
         print(f"WARNING: {warning}", file=sys.stderr)
 
-    rosters = _rosters_by_slot(rosters_frame, slots, ros_pool)
+    id_map = pd.read_parquet(args.data_root / "raw" / "id_map.parquet")
+    rosters, dropped = rosters_to_slots(
+        rosters_frame, id_map, slots, set(ros_pool["gsis_id"].astype(str))
+    )
+    if dropped:
+        print(
+            f"note: {dropped} rostered players are outside the projection pool "
+            "(K/DST, or no projection) and were skipped.",
+            file=sys.stderr,
+        )
     availability = load_store_availability(ros_pool, season=args.season, data_root=args.data_root)
     outcomes = simulate_seasons(
         rosters,
@@ -164,31 +208,15 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _rosters_by_slot(
-    rosters_frame: pd.DataFrame, slots: SlotMap, pool: pd.DataFrame
-) -> dict[int, list[str]]:
-    """ESPN rosters -> {slot: [gsis_id]}, keeping only players the pool can project.
+def _load_pool(path: Path) -> pd.DataFrame:
+    """Read a VORP parquet the way every other consumer does, validation included.
 
-    A rostered player absent from the pool (a kicker, a defense, a rookie with no projection)
-    contributes nothing and would raise on the index lookup, so it is dropped here rather than
-    deeper in the simulator where the error would name a gsis id and nothing else.
+    `tournament_cli._load_pool` is the same three lines; this mirrors it rather than dropping
+    the `VorpTableSchema.validate` that version performs.
     """
-    known = set(pool["gsis_id"].astype(str))
-    by_slot: dict[int, list[str]] = {slot: [] for slot in range(1, len(slots) + 1)}
-    dropped = 0
-    for row in rosters_frame.itertuples():
-        gsis = str(getattr(row, "gsis_id", "") or "")
-        if gsis not in known:
-            dropped += 1
-            continue
-        by_slot[slots.slot(int(row.team_id))].append(gsis)
-    if dropped:
-        print(
-            f"note: {dropped} rostered players are outside the projection pool "
-            "(K/DST, or no projection) and were skipped.",
-            file=sys.stderr,
-        )
-    return by_slot
+    frame = pd.read_parquet(path)
+    frame["gsis_id"] = frame["gsis_id"].astype(_PYARROW_STR)
+    return VorpTableSchema.validate(frame)
 
 
 def _print_standings(standings: pd.DataFrame, *, my_team_id: int | None) -> None:

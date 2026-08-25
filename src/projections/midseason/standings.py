@@ -15,7 +15,7 @@ The ESPN payload speaks in **team ids** (arbitrary, e.g. 17) and the simulator s
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 import pandas as pd
@@ -100,6 +100,57 @@ def locked_by_slot(records: pd.DataFrame, slots: SlotMap) -> dict[int, LockedRec
         )
         for row in records.itertuples()
     }
+
+
+
+def rosters_to_slots(
+    rosters: pd.DataFrame,
+    id_map: pd.DataFrame,
+    slots: SlotMap,
+    pool_ids: Collection[str],
+) -> tuple[dict[int, list[str]], int]:
+    """ESPN rosters -> `{slot: [gsis_id]}`, plus a count of players the pool cannot project.
+
+    **The ESPN roster has no `gsis_id`.** `parse_rosters` emits ESPN's own `player_id`, and
+    nothing in `espn_league.py` produces a gsis at all -- the crosswalk lives in the id_map.
+    Reading a `gsis_id` column straight off an ESPN roster therefore matches nothing, and the
+    resulting failure is silent in the worst way: empty rosters make `team_weekly_points`
+    return all zeros, every matchup resolves `0 >= 0` so the HOME team wins every game in
+    every simulation, and the output is a fully populated standings table whose playoff and
+    title percentages come entirely from how many home fixtures each team happens to have.
+
+    Same inner join on `espn_id` that `draft/backtest/espn_weekly.py` uses.
+
+    Players the pool cannot project (kickers, defenses, anyone without a projection) are
+    dropped and counted -- that part is legitimate. But a resolution that drops *everything*
+    is an id_map failure rather than a roster of kickers, so it raises: the caller cannot tell
+    those two apart from a count alone, and the second one produces numbers that look fine.
+    """
+    if rosters.empty:
+        return {slot: [] for slot in range(1, len(slots) + 1)}, 0
+
+    cross = id_map[["espn_id", "gsis_id"]].dropna().astype({"espn_id": str})
+    merged = rosters.assign(espn_id=rosters["player_id"].astype(str)).merge(
+        cross, on="espn_id", how="inner"
+    )
+
+    by_slot: dict[int, list[str]] = {slot: [] for slot in range(1, len(slots) + 1)}
+    kept = 0
+    for row in merged.itertuples():
+        gsis = str(row.gsis_id)
+        if gsis not in pool_ids:
+            continue
+        by_slot[slots.slot(int(row.team_id))].append(gsis)
+        kept += 1
+
+    if kept == 0:
+        raise ValueError(
+            f"no rostered player resolved to a projectable pool entry: {len(rosters)} roster "
+            f"rows, {len(merged)} matched the id_map, 0 of those are in the pool. Simulating "
+            "this would score every roster at zero and hand every matchup to the home team. "
+            "Check that the id_map and the VORP pool cover this season."
+        )
+    return by_slot, len(rosters) - kept
 
 
 def build_standings(
