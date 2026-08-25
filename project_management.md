@@ -6,6 +6,24 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## League calendar is config, not constants — and it moved the title number (2026-08-25, branch `feat/parameterize-league-calendar`)
+
+**Prerequisite for in-season projected standings (#104), done first on purpose.** `league_projection` hard-coded one league's shape: `REG_WEEKS` 1..13, a wildcard week, a semifinal week, a two-week final at 16+17, top 6 with 2 byes. ESPN reports `matchupPeriodCount` and `playoffMatchupPeriodLength` per league, and **Critts plays 14 regular weeks with one-week playoff rounds**. For draft prep that was a footnote; for standings it is disqualifying, because locking already-played weeks requires the league's real week numbering.
+
+New `src/projections/draft/league_calendar.py`: `LeagueCalendar(reg_weeks, playoff_size, n_byes, final_weeks)` with derived bracket geometry and `from_espn_settings`. ESPN does not report a bye count, so it is derived — enough byes to make the first round a power of two, which is what 6-team/2-bye or 4-team/0-bye means.
+
+**The bracket is now a general single-elimination ladder** instead of six hard-coded seed variables, extracted as `resolve_bracket` so it is testable on synthetic points without a Monte-Carlo run. `SeasonOutcomes` carries the calendar it was simulated under — `seed <= playoff_size` is meaningless without knowing which `playoff_size`, and a result should not be readable against a bracket that did not produce it.
+
+**"Nothing existing changes" is tested, not asserted.** `DEFAULT_CALENDAR` reproduces the old constants and is what `calendar=None` resolves to. `test_default_calendar_bracket_matches_the_old_hardcoded_one` re-implements the previous bracket literally and checks the general one crowns the same champion and runner-up across **500 random seedings** — pinning the constants alone would not catch a reseeding or pairing bug inside the new loop. One deliberate change in an unreachable case: an exact tie in the final now breaks to the better seed (the documented rule) rather than to the winner of seed 1's half; float point totals do not tie.
+
+**The correction landed where predicted.** Two entries ago this log called the 13.0% championship figure "a mild *over*estimate" because a two-week final sums two draws, lowering variance and flattering the stronger team. Re-run under the real one-week final: **champ% 13.0% -> 12.3%**, playoffs 56.5% -> 57.5%, win% 58.5% -> 58.8% (records now out of 14 games, not 13). Small, in the predicted direction, and now correct rather than approximately right.
+
+The refreshed sample seasons make the draft-does-not-decide-the-season point harder than before: the **champion (12-2)** and the roster that **missed the playoffs (9-5, 7th)** are the *same roster strength* — both +812 VORP, joint-strongest of the four — while the **13-1 best record lost the final** and the 11-3 playoff team had the *weakest* roster (+684).
+
+**Next:** projected standings proper (#104 53b) — lock played weeks, sim the remainder. `mMatchup` supplies schedule + records + played-week actuals in one call; see the #104 comment for the view-by-view audit.
+
+---
+
 ## Draft-plan outcomes measured, and the projection data was 8 days stale (2026-08-24, branch `feat/critts-draft-plan`)
 
 **Season outcomes for the slot-8 plan, over 15 simulated drafts x 400 MC seasons = 6,000 seasons** (`scripts/_critts_slot8_outcomes.py`). It chains the two halves that were previously run apart: simulate the full 16-team draft, reconstruct all 16 rosters, then run `league_projection.simulate_seasons` over them. Both halves are random and have to be sampled together — one draft gives one roster, and its title odds are conditional on that roster.
