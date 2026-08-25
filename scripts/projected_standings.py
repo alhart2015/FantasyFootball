@@ -20,30 +20,15 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability_loader import load_store_availability
-from projections.draft.assistant.league_projection import simulate_seasons
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
-from projections.draft.league_calendar import LeagueCalendar
 from projections.ingest.espn_league import (
     EspnCredentials,
     EspnLeagueError,
-    build_league_config,
     fetch_league_payload,
-    parse_rosters,
-    parse_schedule,
     parse_teams,
-    team_records,
 )
-from projections.midseason.rest_of_season import rest_of_season_pool
-from projections.midseason.standings import (
-    SlotMap,
-    build_matchup_odds,
-    build_standings,
-    first_unplayed_week,
-    locked_by_slot,
-    rosters_to_slots,
-    schedule_to_slots,
-)
+from projections.midseason.standings import project_league_standings
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 from projections.store import write_partition
 
@@ -83,10 +68,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     payload = fetch_league_payload(args.league_id, args.season, creds=creds)
 
-    config = build_league_config(payload)
-    calendar = LeagueCalendar.from_espn_settings(
-        (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
-    )
     teams = parse_teams(payload)
     if args.team_id is not None and args.team_id not in set(teams["team_id"]):
         # `write_league_snapshot` performs exactly this check. Without it a typo just produces
@@ -98,102 +79,40 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    schedule = parse_schedule(payload, teams)
-    if schedule.empty:
-        # Without this, `first_unplayed_week` reports the season COMPLETE (no unplayed week
-        # exists), the banner reads "week 15 of 14, 0 to play" like a finished season, the ROS
-        # build zeroes the whole pool without warning, and the run dies later on an unrelated
-        # "no matchups for weeks 1..14".
-        print(
-            "ESPN returned no schedule for this league. The mMatchup view is missing or the "
-            "fixtures are not published yet; without it there is nothing to project over.",
-            file=sys.stderr,
+    pool = attach_is_rookie(_load_pool(args.pool), season=args.season, data_root=args.data_root)
+    try:
+        run = project_league_standings(
+            payload,
+            pool,
+            pd.read_parquet(args.data_root / "raw" / "id_map.parquet"),
+            load_store_availability(pool, season=args.season, data_root=args.data_root),
+            VarianceParams.load(),
+            season=args.season,
+            n_sims=args.n_sims,
+            rng=np.random.default_rng(args.seed),
         )
+    except ValueError as exc:
+        # The pipeline raises rather than returning a confident table built on zeros: no
+        # schedule, no rosters, or a roster that resolved to nothing.
+        print(str(exc), file=sys.stderr)
         return 1
 
-    rosters_frame = parse_rosters(payload)
-    if rosters_frame.empty:
-        print(
-            "No rosters yet — the draft has not happened, so there is nothing to project.",
-            file=sys.stderr,
-        )
-        return 1
-
-    week = first_unplayed_week(schedule, calendar)
-    weeks_remaining = max(calendar.reg_weeks - week + 1, 0)
-    # Bounded to the weeks the simulator will NOT replay. `simulate_seasons` re-runs every
-    # week from `week` onward, so anything banked from those same weeks double-counts -- which
-    # a partially-played week and any played playoff week both cause.
-    records = team_records(schedule, through_week=week - 1)
     print(
-        f"{config.name} ({args.season}) — week {week} of {calendar.reg_weeks}, "
-        f"{weeks_remaining} to play. {int(schedule['is_played'].sum())} matchups played."
+        f"{run.league_name} ({args.season}) — week {run.snapshot_week} of "
+        f"{run.calendar.reg_weeks}, {run.weeks_remaining} to play. "
+        f"{run.n_matchups_played} matchups played."
     )
-
-    slots = SlotMap.from_team_ids(list(teams["team_id"]))
-    pool = _load_pool(args.pool)
-    pool = attach_is_rookie(pool, season=args.season, data_root=args.data_root)
-
-    # **The pool IS the fresh projection source.** Its `season_mean_fpts` comes from whatever
-    # `external_projections` snapshot it was built against, so rebuilding it (the same
-    # generate_league_vorp_table.py run the draft prep already uses) is what makes these
-    # numbers current. Passing an empty mapping here instead -- as the first version did --
-    # sent 100% of the pool down the no-fresh-projection fallback and made the whole
-    # `ros = fresh - to_date` path dead code from its only caller.
-    fresh = {
-        str(gsis): float(points)
-        for gsis, points in zip(pool["gsis_id"], pool["season_mean_fpts"], strict=True)
-    }
-
-    # TODO(week 1): per-player actuals live in the played weeks' `rosterForMatchupPeriod`
-    # entries and are not parsed yet. Every value is zero until a season is under way, so the
-    # subtraction is currently the identity and this is left explicit rather than guessed at
-    # -- see the spec's open question on whether a provider's in-season season-total includes
-    # games already played.
-    ros_pool, diagnostics = rest_of_season_pool(
-        pool,
-        fresh_season_points=fresh,
-        points_to_date={},
-        weeks_remaining=weeks_remaining,
-    )
-    warning = diagnostics.warning()
+    warning = run.diagnostics.warning()
     if warning:
         print(f"WARNING: {warning}", file=sys.stderr)
-
-    id_map = pd.read_parquet(args.data_root / "raw" / "id_map.parquet")
-    rosters, dropped = rosters_to_slots(
-        rosters_frame, id_map, slots, set(ros_pool["gsis_id"].astype(str))
-    )
-    if dropped:
+    if run.n_players_dropped:
         print(
-            f"note: {dropped} rostered players are outside the projection pool "
+            f"note: {run.n_players_dropped} rostered players are outside the projection pool "
             "(K/DST, or no projection) and were skipped.",
             file=sys.stderr,
         )
-    availability = load_store_availability(ros_pool, season=args.season, data_root=args.data_root)
-    outcomes = simulate_seasons(
-        rosters,
-        ros_pool,
-        availability,
-        VarianceParams.load(),
-        league_config=config,
-        n_sims=args.n_sims,
-        rng=np.random.default_rng(args.seed),
-        calendar=calendar,
-        schedule=schedule_to_slots(schedule, slots, calendar),
-        locked=locked_by_slot(records, slots),
-        first_unplayed_week=week,
-    )
 
-    names = dict(zip(teams["team_id"], teams["team_name"], strict=False))
-    standings = build_standings(
-        outcomes,
-        slots,
-        names,
-        season=args.season,
-        snapshot_week=week,
-    )
-    odds = build_matchup_odds(outcomes, schedule, slots, season=args.season, snapshot_week=week)
+    standings, odds, week = run.standings, run.odds, run.snapshot_week
 
     _print_standings(standings, my_team_id=args.team_id)
     _print_my_matchups(odds, my_team_id=args.team_id)

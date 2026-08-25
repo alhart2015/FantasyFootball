@@ -17,15 +17,28 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
+import numpy as np
 import pandas as pd
 
+from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.league_projection import (
     _NO_RESULTS,
     LockedRecord,
     SeasonOutcomes,
+    simulate_seasons,
 )
+from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.league_calendar import LeagueCalendar
+from projections.ingest.espn_league import (
+    build_league_config,
+    parse_rosters,
+    parse_schedule,
+    parse_teams,
+    team_records,
+)
+from projections.midseason.rest_of_season import RosDiagnostics, rest_of_season_pool
 from projections.schemas import _PYARROW_STR, MatchupOddsSchema, ProjectedStandingsSchema
 
 
@@ -269,3 +282,120 @@ def build_matchup_odds(
     for column in ("home_team", "away_team"):
         frame[column] = frame[column].astype(_PYARROW_STR)
     return MatchupOddsSchema.validate(frame)
+
+
+@dataclass(frozen=True)
+class StandingsRun:
+    """Everything one projected-standings run produces. Returned rather than printed so the
+    orchestration can be tested; the CLI is then only argument parsing and formatting."""
+
+    standings: pd.DataFrame
+    odds: pd.DataFrame
+    diagnostics: RosDiagnostics
+    calendar: LeagueCalendar
+    snapshot_week: int
+    weeks_remaining: int
+    n_matchups_played: int
+    n_players_dropped: int
+    league_name: str
+
+
+def project_league_standings(
+    payload: Mapping[str, Any],
+    pool: pd.DataFrame,
+    id_map: pd.DataFrame,
+    availability: PlayerAvailability,
+    params: VarianceParams,
+    *,
+    season: int,
+    n_sims: int,
+    rng: np.random.Generator,
+) -> StandingsRun:
+    """ESPN payload + a VORP pool -> projected standings and matchup odds.
+
+    This is the whole in-season pipeline, in the library rather than in a script, because it
+    was where every wiring defect on this branch lived and none of it could be tested from
+    `scripts/`. The steps are ordered by what each one needs, and several of them exist only
+    to make a silent failure loud:
+
+    1. Calendar and config from ESPN's own settings, never assumed.
+    2. `first_unplayed_week` from the results, never from a flag or the wall clock.
+    3. `team_records` bounded to `week - 1` -- the weeks the simulator will NOT replay, so a
+       partially-played week and any played playoff week cannot be counted twice.
+    4. Rest-of-season projections, with the pool as the fresh source.
+    5. Rosters resolved ESPN id -> gsis through the id_map, raising if NOTHING resolves.
+    6. One simulation over the real remaining fixture list, with played weeks locked.
+    7. Standings and matchup odds read out of that single run.
+
+    Raises `ValueError` when the payload cannot support a projection at all -- no schedule, no
+    rosters, or a roster that resolves to nothing -- rather than returning a confident table
+    built on zeros.
+    """
+    settings = payload.get("settings", {}) or {}
+    calendar = LeagueCalendar.from_espn_settings(settings.get("scheduleSettings", {}) or {})
+    config = build_league_config(dict(payload))
+    teams = parse_teams(dict(payload))
+
+    schedule = parse_schedule(dict(payload), teams)
+    if schedule.empty:
+        raise ValueError(
+            "ESPN returned no schedule for this league. The mMatchup view is missing or the "
+            "fixtures are not published yet; without it there is nothing to project over."
+        )
+    rosters_frame = parse_rosters(dict(payload))
+    if rosters_frame.empty:
+        raise ValueError(
+            "No rosters yet — the draft has not happened, so there is nothing to project."
+        )
+
+    week = first_unplayed_week(schedule, calendar)
+    weeks_remaining = max(calendar.reg_weeks - week + 1, 0)
+    records = team_records(schedule, through_week=week - 1)
+    slots = SlotMap.from_team_ids(list(teams["team_id"]))
+
+    # The pool IS the fresh projection source: its `season_mean_fpts` comes from whichever
+    # `external_projections` snapshot it was built against, so rebuilding the pool is what
+    # makes these numbers current.
+    fresh = {
+        str(gsis): float(points)
+        for gsis, points in zip(pool["gsis_id"], pool["season_mean_fpts"], strict=True)
+    }
+    # TODO(week 1): per-player actuals live in the played weeks' `rosterForMatchupPeriod`
+    # entries and are not parsed yet. Every value is zero until a season is under way, so the
+    # subtraction is currently the identity, and this stays explicit rather than guessed at.
+    ros_pool, diagnostics = rest_of_season_pool(
+        pool,
+        fresh_season_points=fresh,
+        points_to_date={},
+        weeks_remaining=weeks_remaining,
+    )
+
+    rosters, dropped = rosters_to_slots(
+        rosters_frame, id_map, slots, set(ros_pool["gsis_id"].astype(str))
+    )
+    outcomes = simulate_seasons(
+        rosters,
+        ros_pool,
+        availability,
+        params,
+        league_config=config,
+        n_sims=n_sims,
+        rng=rng,
+        calendar=calendar,
+        schedule=schedule_to_slots(schedule, slots, calendar),
+        locked=locked_by_slot(records, slots),
+        first_unplayed_week=week,
+    )
+
+    names = dict(zip(teams["team_id"], teams["team_name"], strict=False))
+    return StandingsRun(
+        standings=build_standings(outcomes, slots, names, season=season, snapshot_week=week),
+        odds=build_matchup_odds(outcomes, schedule, slots, season=season, snapshot_week=week),
+        diagnostics=diagnostics,
+        calendar=calendar,
+        snapshot_week=week,
+        weeks_remaining=weeks_remaining,
+        n_matchups_played=int(schedule["is_played"].sum()),
+        n_players_dropped=dropped,
+        league_name=config.name,
+    )

@@ -104,7 +104,6 @@ class RosDiagnostics:
         return message
 
 
-
 def _validated(pool: pd.DataFrame) -> pd.DataFrame:
     """`df = SCHEMA.validate(df)` at the module boundary, per the repo convention.
 
