@@ -6,7 +6,7 @@ is loud:
 - **The scaling.** `sample_weekly_points` divides `season_mean_fpts` by a fixed `SEASON_GAMES`
   to get a per-game mean. Writing a remaining-points total straight into that column spreads
   it over a whole season instead of the weeks left, shrinking every projection by roughly
-  `weeks_remaining / SEASON_GAMES`. The numbers stay plausible, which is what makes it
+  `games_remaining / SEASON_GAMES`. The numbers stay plausible, which is what makes it
   dangerous, so it is pinned arithmetically here.
 - **The assumption.** The subtraction takes a provider's in-season "season total" to include
   games already played. If it is already rest-of-season, subtracting double-counts. That
@@ -61,7 +61,7 @@ def _pool(rows: list[tuple[str, str, float]]) -> pd.DataFrame:
 
 def test_half_a_season_scored_leaves_half_projected() -> None:
     points, clamped, fallback = rest_of_season_points(
-        200.0, 100.0, preseason_points=180.0, weeks_remaining=7
+        200.0, 100.0, preseason_points=180.0, games_remaining=7
     )
     assert (points, clamped, fallback) == (100.0, False, False)
 
@@ -70,7 +70,7 @@ def test_outscoring_the_projection_clamps_to_zero_and_is_reported() -> None:
     """Real and ordinary late in a season. Clamped rather than allowed to subtract from a
     lineup, and counted so it can be seen."""
     points, clamped, fallback = rest_of_season_points(
-        150.0, 175.0, preseason_points=180.0, weeks_remaining=3
+        150.0, 175.0, preseason_points=180.0, games_remaining=3
     )
     assert (points, clamped, fallback) == (0.0, True, False)
 
@@ -84,7 +84,7 @@ def test_a_player_with_no_fresh_projection_prorates_the_preseason_number() -> No
     other denominator makes the round trip a scale change instead of a no-op.
     """
     points, clamped, fallback = rest_of_season_points(
-        None, 0.0, preseason_points=float(SEASON_GAMES) * 10.0, weeks_remaining=7
+        None, 0.0, preseason_points=float(SEASON_GAMES) * 10.0, games_remaining=7
     )
     assert points == pytest.approx(70.0)  # 10/game pace x 7 weeks left
     assert (clamped, fallback) == (False, True)
@@ -105,7 +105,7 @@ def test_the_column_is_a_full_season_equivalent_pace_not_the_remaining_total() -
         _pool([("00-0000001", "Test Back", 180.0)]),
         fresh_season_points={"00-0000001": 200.0},
         points_to_date={"00-0000001": 100.0},
-        weeks_remaining=10,
+        games_remaining=10,
     )
     assert pool.loc[0, "season_mean_fpts"] == pytest.approx(10.0 * SEASON_GAMES)
     # And the round trip the model actually performs recovers the pace we meant.
@@ -120,13 +120,13 @@ def test_fewer_weeks_remaining_raises_the_pace_for_the_same_remaining_points() -
         _pool([("00-0000001", "Test Back", 180.0)]),
         fresh,
         scored,
-        weeks_remaining=10,
+        games_remaining=10,
     )
     five, _ = rest_of_season_pool(
         _pool([("00-0000001", "Test Back", 180.0)]),
         fresh,
         scored,
-        weeks_remaining=5,
+        games_remaining=5,
     )
     assert five.loc[0, "season_mean_fpts"] == pytest.approx(2 * ten.loc[0, "season_mean_fpts"])
 
@@ -137,7 +137,7 @@ def test_a_finished_regular_season_zeroes_the_pool() -> None:
         _pool([("00-0000001", "Test Back", 180.0)]),
         fresh_season_points={"00-0000001": 200.0},
         points_to_date={"00-0000001": 200.0},
-        weeks_remaining=0,
+        games_remaining=0,
     )
     assert (pool["season_mean_fpts"] == 0.0).all()
     assert diag.n_players == 1
@@ -151,7 +151,7 @@ def test_diagnostics_are_quiet_when_nothing_needed_papering_over() -> None:
         _pool([("00-0000001", "A", 180.0), ("00-0000002", "B", 160.0)]),
         fresh_season_points={"00-0000001": 200.0, "00-0000002": 150.0},
         points_to_date={"00-0000001": 50.0, "00-0000002": 40.0},
-        weeks_remaining=7,
+        games_remaining=7,
     )
     assert (diag.n_clamped, diag.n_fallback) == (0, 0)
     assert diag.warning() is None
@@ -163,7 +163,7 @@ def test_a_clamped_player_is_named_in_the_warning() -> None:
         _pool([("00-0000001", "Overachiever", 180.0), ("00-0000002", "B", 160.0)]),
         fresh_season_points={"00-0000001": 100.0, "00-0000002": 150.0},
         points_to_date={"00-0000001": 150.0, "00-0000002": 40.0},
-        weeks_remaining=7,
+        games_remaining=7,
     )
     assert diag.n_clamped == 1
     warning = diag.warning()
@@ -186,7 +186,7 @@ def test_wholesale_clamping_is_flagged_as_probable_double_counting() -> None:
         _pool(rows),
         fresh_season_points=fresh,
         points_to_date=to_date,
-        weeks_remaining=7,
+        games_remaining=7,
     )
     assert diag.n_clamped == 4
     assert diag.looks_like_double_counting
@@ -204,7 +204,7 @@ def test_one_clamped_player_is_not_flagged_as_double_counting() -> None:
         _pool(rows),
         fresh_season_points=fresh,
         points_to_date=to_date,
-        weeks_remaining=7,
+        games_remaining=7,
     )
     assert diag.n_clamped == 1
     assert not diag.looks_like_double_counting
@@ -218,7 +218,7 @@ def test_missing_players_are_counted_as_fallbacks() -> None:
         _pool([("00-0000001", "Known", 180.0), ("99-1234567", "Rookie", 120.0)]),
         fresh_season_points={"00-0000001": 200.0},
         points_to_date={"00-0000001": 50.0},
-        weeks_remaining=7,
+        games_remaining=7,
     )
     assert diag.n_fallback == 1
     warning = diag.warning()
@@ -250,25 +250,22 @@ def test_the_fallback_is_a_pace_no_op_not_a_21_percent_raise() -> None:
         _pool([("00-0000001", "Untouched", preseason)]),
         fresh_season_points={},  # nobody has a fresh projection -> fallback for all
         points_to_date={},
-        weeks_remaining=10,
+        games_remaining=10,
     )
     assert diag.n_fallback == 1
     assert pool.loc[0, "season_mean_fpts"] == pytest.approx(preseason)
 
 
-@pytest.mark.parametrize("reg_weeks", [13, 14, 17])
-@pytest.mark.parametrize("weeks_remaining", [1, 5, 10, 14])
-def test_the_fallback_no_op_holds_for_every_calendar(reg_weeks: int, weeks_remaining: int) -> None:
-    """A pace no-op cannot depend on how many weeks are left or how long the season is. The
-    old arithmetic made it depend on both."""
-    if weeks_remaining > reg_weeks:
-        pytest.skip("weeks_remaining cannot exceed the regular season")
+@pytest.mark.parametrize("games_remaining", [1, 5, 10, 14, 17])
+def test_the_fallback_no_op_holds_at_every_point_in_the_season(games_remaining: int) -> None:
+    """A pace no-op cannot depend on how many games are left. The old arithmetic made it
+    depend on that AND on the fantasy season's length, neither of which it should."""
     preseason = 200.0
     pool, _ = rest_of_season_pool(
         _pool([("00-0000001", "Untouched", preseason)]),
         fresh_season_points={},
         points_to_date={},
-        weeks_remaining=weeks_remaining,
+        games_remaining=games_remaining,
     )
     assert pool.loc[0, "season_mean_fpts"] == pytest.approx(preseason)
 
@@ -280,7 +277,7 @@ def test_a_fresh_projection_with_nothing_scored_is_also_a_pace_no_op() -> None:
         _pool([("00-0000001", "Fresh", 180.0)]),
         fresh_season_points={"00-0000001": 204.0},
         points_to_date={"00-0000001": 0.0},
-        weeks_remaining=SEASON_GAMES,
+        games_remaining=SEASON_GAMES,
     )
     assert pool.loc[0, "season_mean_fpts"] == pytest.approx(204.0)
 
@@ -304,7 +301,7 @@ def test_a_legitimately_zero_projection_is_not_counted_as_a_clamp() -> None:
         _pool(rows),
         fresh_season_points=dict.fromkeys((f"00-000000{i}" for i in range(1, 7)), 0.0),
         points_to_date={},
-        weeks_remaining=7,
+        games_remaining=7,
     )
     assert diag.n_clamped == 0
     assert not diag.looks_like_double_counting
@@ -316,7 +313,7 @@ def test_outscoring_the_projection_is_still_counted_as_a_clamp() -> None:
         _pool([("00-0000001", "Overachiever", 180.0)]),
         fresh_season_points={"00-0000001": 100.0},
         points_to_date={"00-0000001": 150.0},
-        weeks_remaining=7,
+        games_remaining=7,
     )
     assert diag.n_clamped == 1
 
@@ -335,7 +332,7 @@ def test_a_pool_projected_implausibly_near_zero_is_reported() -> None:
         _pool(rows),
         fresh_season_points=dict.fromkeys((f"00-000000{i}" for i in range(1, 7)), 0.4),
         points_to_date={},
-        weeks_remaining=7,
+        games_remaining=7,
     )
     assert diag.n_near_zero == 6
     warning = diag.warning()
@@ -349,7 +346,7 @@ def test_a_healthy_pool_reports_no_near_zero_players() -> None:
         _pool(rows),
         fresh_season_points=dict.fromkeys((f"00-000000{i}" for i in range(1, 7)), 200.0),
         points_to_date={},
-        weeks_remaining=7,
+        games_remaining=7,
     )
     assert diag.n_near_zero == 0
     assert diag.warning() is None
@@ -366,7 +363,95 @@ def test_a_missing_full_name_does_not_crash_the_diagnostics() -> None:
         frame,
         fresh_season_points={"00-0000001": 10.0, "00-0000002": 10.0},
         points_to_date={"00-0000001": 500.0, "00-0000002": 500.0},
-        weeks_remaining=7,
+        games_remaining=7,
     )
     assert diag.n_clamped == 2
     assert diag.warning() is not None
+
+
+# --- the denominator is NFL games remaining, not fantasy weeks remaining --------------------
+
+
+@pytest.mark.parametrize("snapshot_week", [1, 5, 10, 14, 15])
+def test_a_player_exactly_on_pace_stays_on_pace_at_any_point_in_the_season(
+    snapshot_week: int,
+) -> None:
+    """The invariant that caught a regression the first fix batch wrote.
+
+    `fresh - to_date` is points over the remaining **NFL games**; the earlier code divided it
+    by the remaining **fantasy regular-season weeks**. Those are different quantities, and the
+    mismatch inflated everyone -- measured at 1.21x preseason, 3.40x at week 10 of 14, and 17x
+    at week 14.
+
+    A player who has scored exactly his share so far, against an unrevised season total, is on
+    exactly that pace for what remains -- whenever you ask.
+    """
+    mean = 238.0
+    games_elapsed = snapshot_week - 1
+    pool, _ = rest_of_season_pool(
+        _pool([("00-0000001", "OnPace", mean)]),
+        fresh_season_points={"00-0000001": mean},
+        points_to_date={"00-0000001": mean * games_elapsed / SEASON_GAMES},
+        games_remaining=SEASON_GAMES - games_elapsed,
+    )
+    assert pool.loc[0, "season_mean_fpts"] == pytest.approx(mean)
+
+
+def test_a_player_scoring_to_pace_keeps_that_pace() -> None:
+    """Nine games in, exactly on a 14/game pace: the remaining projection must still be 14 a
+    game, i.e. `14 * SEASON_GAMES` in the column."""
+    per_game = 14.0
+    played, remaining_games = 9, SEASON_GAMES - 9
+    pool, _ = rest_of_season_pool(
+        _pool([("00-0000001", "OnPace", per_game * SEASON_GAMES)]),
+        fresh_season_points={"00-0000001": per_game * SEASON_GAMES},
+        points_to_date={"00-0000001": per_game * played},
+        games_remaining=remaining_games,
+    )
+    assert pool.loc[0, "season_mean_fpts"] == pytest.approx(per_game * SEASON_GAMES)
+
+
+def test_a_revised_down_season_total_lowers_the_remaining_pace() -> None:
+    """The realistic shape of a slump: the provider revises the season total down.
+
+    Note what does NOT happen -- underperforming against an *unrevised* total raises the
+    remaining pace, because the arithmetic says the player has to make it up. That is correct
+    and is the reason the fresh pull matters: a stale season total makes a slumping player
+    look stronger, not weaker.
+    """
+    per_game, played = 14.0, 9
+    scored = per_game * played * 0.5  # half pace so far
+    revised = scored + per_game * 0.5 * (SEASON_GAMES - played)  # provider marks him down
+    pool, _ = rest_of_season_pool(
+        _pool([("00-0000001", "Slump", per_game * SEASON_GAMES)]),
+        fresh_season_points={"00-0000001": revised},
+        points_to_date={"00-0000001": scored},
+        games_remaining=SEASON_GAMES - played,
+    )
+    assert pool.loc[0, "season_mean_fpts"] == pytest.approx(per_game * 0.5 * SEASON_GAMES)
+
+
+def test_underperforming_against_a_stale_total_raises_the_remaining_pace() -> None:
+    """Stated explicitly because it is surprising and it is correct: if the season total is
+    not revised, the points a player still 'owes' are squeezed into fewer games."""
+    total = 238.0
+    pool, _ = rest_of_season_pool(
+        _pool([("00-0000001", "Stale", total)]),
+        fresh_season_points={"00-0000001": total},
+        points_to_date={"00-0000001": total * 9 / SEASON_GAMES * 0.5},
+        games_remaining=SEASON_GAMES - 9,
+    )
+    assert pool.loc[0, "season_mean_fpts"] > total
+
+
+def test_the_playoff_weeks_are_not_projected_at_zero() -> None:
+    """A finished fantasy regular season still has NFL games left, and the bracket needs
+    points for them. Keying off remaining fantasy weeks zeroed the whole pool at exactly the
+    moment the playoffs are simulated, which handed every playoff matchup to the home side."""
+    pool, _ = rest_of_season_pool(
+        _pool([("00-0000001", "Playoffs", 238.0)]),
+        fresh_season_points={"00-0000001": 238.0},
+        points_to_date={"00-0000001": 200.0},
+        games_remaining=SEASON_GAMES - 14,
+    )
+    assert pool.loc[0, "season_mean_fpts"] > 0.0

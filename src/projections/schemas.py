@@ -1061,6 +1061,10 @@ class VorpTableSchema(pa.DataFrameModel):
     # consensus-fed preset path. Weekly-path VORP tables omit it and still validate. Slice 1
     # lands it here; Slice 2 feeds it to generate_auction_values as reference_prices.
     espn_auction_dollars: Series[pd.Int64Dtype] | None = pa.Field(ge=0, nullable=True)
+    # Optional (not-required): attached by `attach_is_rookie` for the variance model, which
+    # scales a rookie's spread differently. Declared here so a pool carrying it survives
+    # `strict="filter"` instead of needing callers to strip and restore it around validation.
+    is_rookie: Series[bool] | None = pa.Field()
 
     class Config:
         strict = "filter"

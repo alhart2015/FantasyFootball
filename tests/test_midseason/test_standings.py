@@ -388,7 +388,7 @@ def test_an_all_empty_resolution_raises_rather_than_simulating_zeros() -> None:
     rosters = _espn_rosters([(17, "4001"), (3, "4002")])
     slots = SlotMap.from_team_ids([17, 3])
 
-    with pytest.raises(ValueError, match="no rostered player"):
+    with pytest.raises(ValueError, match="no projectable players"):
         rosters_to_slots(rosters, _id_map([]), slots, {"00-0000001"})
 
 
@@ -403,7 +403,7 @@ def test_a_week_where_a_team_plays_twice_is_rejected() -> None:
     doubled = pd.concat(
         [_schedule(), _schedule().head(1)], ignore_index=True
     )  # week 1 now holds 17-vs-3 twice
-    with pytest.raises(ValueError, match="exactly once"):
+    with pytest.raises(ValueError, match="at most once"):
         schedule_to_slots(doubled, slots, _CAL)
 
 
@@ -414,7 +414,7 @@ def test_a_week_missing_half_its_matchups_is_rejected() -> None:
     partial = _schedule()
     # Drop one of week 2's three matchups: the week is still non-empty.
     drop = partial[(partial["week"] == 2)].index[0]
-    with pytest.raises(ValueError, match="exactly once"):
+    with pytest.raises(ValueError, match="at most once"):
         schedule_to_slots(partial.drop(index=drop), slots, _CAL)
 
 
@@ -485,3 +485,80 @@ def test_the_end_to_end_fixture_derives_its_record_from_its_own_schedule() -> No
     assert derived[home_slot].games_played == 2
     assert derived[home_slot].wins + derived[home_slot].losses == 2
     assert sum(r.wins for r in derived.values()) == sum(r.losses for r in derived.values())
+
+
+def test_an_odd_sized_league_gives_one_team_a_bye_each_week() -> None:
+    """`parse_schedule` DELIBERATELY drops ESPN's bye rows (a matchup with no away side), so in
+    an odd-sized league every week is one slot short. The every-slot-plays-once guard was
+    written against even leagues and rejected an 11-team league on week 1 -- a perfectly legal
+    setup, and the old non-empty check had tolerated it."""
+    odd_ids = [17, 3, 11, 5, 9]  # five teams: one sits out each week
+    slots = SlotMap.from_team_ids(odd_ids)
+    pairings = [
+        [(17, 3), (11, 5)],  # 9 has the bye
+        [(17, 11), (5, 9)],  # 3 has the bye
+        [(17, 5), (3, 9)],  # 11 has the bye
+        [(17, 9), (11, 3)],  # 5 has the bye
+    ]
+    rows: list[dict[str, object]] = []
+    for week, games in enumerate(pairings, start=1):
+        for home, away in games:
+            rows.append(
+                {
+                    "week": week,
+                    "home_team_id": home,
+                    "away_team_id": away,
+                    "home_team": f"T{home}",
+                    "away_team": f"T{away}",
+                    "home_points": 0.0,
+                    "away_points": 0.0,
+                    "winner": "UNDECIDED",
+                    "is_played": False,
+                }
+            )
+    frame = pd.DataFrame(rows)
+    for column in ("home_team", "away_team", "winner"):
+        frame[column] = frame[column].astype(_PYARROW_STR)
+
+    fixtures = schedule_to_slots(frame, slots, _CAL)
+    assert len(fixtures) == _CAL.reg_weeks
+    for week_games in fixtures:
+        seats = [seat for pair in week_games for seat in pair]
+        assert len(seats) == len(set(seats)), "nobody plays twice"
+        assert len(seats) == len(odd_ids) - 1, "exactly one team sits out"
+
+
+def test_a_duplicated_espn_id_does_not_roster_a_player_twice() -> None:
+    """`IdMapSchema` marks only `gsis_id` unique; `espn_id` is nullable and non-unique, and the
+    live `data/raw/id_map.parquet` genuinely holds two ESPN ids that each map to two different
+    players. An undeduplicated inner join fans out on those, puts a player on a roster twice --
+    where he can fill two starting slots at once and inflate that team's weekly points -- and
+    makes the dropped count negative, so the CLI prints 'note: -1 rostered players'."""
+    rosters = _espn_rosters([(17, "4001"), (17, "4002")])
+    id_map = pd.DataFrame(
+        {
+            "espn_id": pd.Series(["4001", "4001", "4002"], dtype=_PYARROW_STR),
+            "gsis_id": pd.Series(["00-0000001", "00-0000099", "00-0000002"], dtype=_PYARROW_STR),
+        }
+    )
+    slots = SlotMap.from_team_ids([17])
+    pool_ids = {"00-0000001", "00-0000002", "00-0000099"}
+
+    by_slot, dropped = rosters_to_slots(rosters, id_map, slots, pool_ids)
+
+    assert len(by_slot[slots.slot(17)]) == 2, "two roster rows must yield two players"
+    assert len(set(by_slot[slots.slot(17)])) == 2
+    assert dropped >= 0
+
+
+def test_one_team_resolving_to_nothing_raises_rather_than_being_simulated_at_zero() -> None:
+    """The guard used to fire only when EVERY team failed. One team whose players are all
+    missing from the id_map -- a new manager's roster of just-signed players -- was simulated
+    at zero points, losing every week, with champ_pct 0.0 and no message anywhere. That is the
+    same failure the guard exists to prevent, just retail instead of wholesale."""
+    rosters = _espn_rosters([(17, "4001"), (3, "9998"), (3, "9999")])
+    id_map = _id_map([("4001", "00-0000001")])  # team 3 resolves to nothing
+    slots = SlotMap.from_team_ids([17, 3])
+
+    with pytest.raises(ValueError, match="no projectable players"):
+        rosters_to_slots(rosters, id_map, slots, {"00-0000001"})

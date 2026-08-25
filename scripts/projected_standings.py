@@ -28,7 +28,7 @@ from projections.ingest.espn_league import (
     fetch_league_payload,
     parse_teams,
 )
-from projections.midseason.standings import project_league_standings
+from projections.midseason.standings import ProjectionInputError, project_league_standings
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 from projections.store import write_partition
 
@@ -79,21 +79,35 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    # Guarded like every other precondition here. The id_map is load-bearing for the whole run
+    # -- rosters cannot be matched to projections without it -- so a missing file should say so
+    # rather than surface as a bare FileNotFoundError from inside an argument list.
+    id_map_path = args.data_root / "raw" / "id_map.parquet"
+    if not id_map_path.exists():
+        print(
+            f"No id_map at {id_map_path}. Rosters are matched to projections through it, so "
+            "the run cannot proceed without one.",
+            file=sys.stderr,
+        )
+        return 1
+
     pool = attach_is_rookie(_load_pool(args.pool), season=args.season, data_root=args.data_root)
     try:
         run = project_league_standings(
             payload,
             pool,
-            pd.read_parquet(args.data_root / "raw" / "id_map.parquet"),
+            pd.read_parquet(id_map_path),
             load_store_availability(pool, season=args.season, data_root=args.data_root),
             VarianceParams.load(),
             season=args.season,
             n_sims=args.n_sims,
             rng=np.random.default_rng(args.seed),
         )
-    except ValueError as exc:
-        # The pipeline raises rather than returning a confident table built on zeros: no
-        # schedule, no rosters, or a roster that resolved to nothing.
+    except ProjectionInputError as exc:
+        # Only the "this payload cannot support a projection" cases: no schedule, no rosters,
+        # or a team that resolved to nothing. A bare `except ValueError` also swallowed the
+        # machinery's own bugs -- a zip-strict mismatch, SlotMap on an unknown team id -- and
+        # printed them as though the user had supplied bad input.
         print(str(exc), file=sys.stderr)
         return 1
 
@@ -112,15 +126,17 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    standings, odds, week = run.standings, run.odds, run.snapshot_week
-
-    _print_standings(standings, my_team_id=args.team_id)
-    _print_my_matchups(odds, my_team_id=args.team_id)
+    _print_standings(run.standings, my_team_id=args.team_id)
+    _print_my_matchups(run.odds, my_team_id=args.team_id)
 
     if args.write_snapshot:
-        for table, frame in (("projected_standings", standings), ("matchup_odds", odds)):
+        for table, frame in (("projected_standings", run.standings), ("matchup_odds", run.odds)):
             path = write_partition(
-                args.data_root / "processed", table, frame, season=args.season, week=week
+                args.data_root / "processed",
+                table,
+                frame,
+                season=args.season,
+                week=run.snapshot_week,
             )
             print(f"Wrote {path}")
     return 0

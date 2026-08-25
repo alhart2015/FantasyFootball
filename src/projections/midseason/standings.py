@@ -15,6 +15,7 @@ The ESPN payload speaks in **team ids** (arbitrary, e.g. 17) and the simulator s
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -29,7 +30,7 @@ from projections.draft.assistant.league_projection import (
     SeasonOutcomes,
     simulate_seasons,
 )
-from projections.draft.assistant.performance_variance import VarianceParams
+from projections.draft.assistant.performance_variance import SEASON_GAMES, VarianceParams
 from projections.draft.league_calendar import LeagueCalendar
 from projections.ingest.espn_league import (
     build_league_config,
@@ -40,6 +41,16 @@ from projections.ingest.espn_league import (
 )
 from projections.midseason.rest_of_season import RosDiagnostics, rest_of_season_pool
 from projections.schemas import _PYARROW_STR, MatchupOddsSchema, ProjectedStandingsSchema
+
+
+class ProjectionInputError(ValueError):
+    """The payload or its inputs cannot support a projection at all.
+
+    Distinct from the `ValueError`s the machinery raises for its own bugs -- a `zip(strict)`
+    mismatch, `SlotMap.slot` on an unknown id, a schedule that disagrees with its calendar. A
+    CLI catching bare `ValueError` reported all of those as though the user had supplied bad
+    input, under a message about there being no schedule.
+    """
 
 
 @dataclass(frozen=True)
@@ -100,17 +111,25 @@ def schedule_to_slots(
         if week not in by_week:
             continue  # playoff weeks: the bracket handles those, not the matchup loop
         by_week[week].append((slots.slot(int(row.home_team_id)), slots.slot(int(row.away_team_id))))
-    expected = sorted(range(1, len(slots) + 1))
+    # An odd-sized league gives exactly one team a bye each week, and `parse_schedule`
+    # deliberately drops ESPN's bye rows (a matchup with no away side) rather than
+    # half-recording them -- so the week legitimately comes up one slot short. Requiring every
+    # slot every week rejected an 11-team league, which is a perfectly legal setup.
+    n_slots = len(slots)
+    on_bye = n_slots % 2
+    expected = set(range(1, n_slots + 1))
     for week_no in calendar.reg_week_numbers:
-        seats = sorted(seat for pair in by_week[week_no] for seat in pair)
-        if seats != expected:
-            missing = sorted(set(expected) - set(seats))
-            doubled = sorted({seat for seat in seats if seats.count(seat) > 1})
+        seats = [seat for pair in by_week[week_no] for seat in pair]
+        counts = Counter(seats)
+        doubled = sorted(seat for seat, n in counts.items() if n > 1)
+        missing = sorted(expected - set(seats))
+        if doubled or len(missing) != on_bye:
             raise ValueError(
-                f"regular-season week {week_no} does not have every team playing exactly "
-                f"once: {len(by_week[week_no])} matchup(s), "
-                f"missing slots {missing or 'none'}, duplicated slots {doubled or 'none'}. "
-                "Simulating it would give some teams more games than the season has."
+                f"regular-season week {week_no} does not have each team playing at most once, "
+                f"with {'exactly one bye' if on_bye else 'nobody idle'}: "
+                f"{len(by_week[week_no])} matchup(s), missing slots {missing or 'none'}, "
+                f"duplicated slots {doubled or 'none'}. A duplicate would give a team more "
+                "games than the season has; an unexpected gap would sit half the league out."
             )
     return [by_week[w] for w in calendar.reg_week_numbers]
 
@@ -154,7 +173,13 @@ def rosters_to_slots(
     if rosters.empty:
         return {slot: [] for slot in range(1, len(slots) + 1)}, 0
 
-    cross = id_map[["espn_id", "gsis_id"]].dropna().astype({"espn_id": str})
+    # `IdMapSchema` marks only `gsis_id` unique -- `espn_id` is nullable and non-unique, and
+    # the live id_map holds two ESPN ids that each map to two different players. Without the
+    # dedup the inner join fans out on those: the same player lands on a roster twice, can
+    # fill two starting slots at once, and `len(rosters) - kept` goes negative.
+    cross = (
+        id_map[["espn_id", "gsis_id"]].dropna().astype({"espn_id": str}).drop_duplicates("espn_id")
+    )
     merged = rosters.assign(espn_id=rosters["player_id"].astype(str)).merge(
         cross, on="espn_id", how="inner"
     )
@@ -168,12 +193,18 @@ def rosters_to_slots(
         by_slot[slots.slot(int(row.team_id))].append(gsis)
         kept += 1
 
-    if kept == 0:
-        raise ValueError(
-            f"no rostered player resolved to a projectable pool entry: {len(rosters)} roster "
-            f"rows, {len(merged)} matched the id_map, 0 of those are in the pool. Simulating "
-            "this would score every roster at zero and hand every matchup to the home team. "
-            "Check that the id_map and the VORP pool cover this season."
+    # Checked PER SLOT, not just in total. A global check fires only when every team fails,
+    # which leaves the retail version of the same failure silent: one team whose players are
+    # all missing from the id_map -- a new manager's roster of just-signed players -- gets
+    # simulated at zero points, loses every week, and reports champ_pct 0.0 with no message.
+    empty = sorted(slots.team_id(slot) for slot, gsis_ids in by_slot.items() if not gsis_ids)
+    if empty:
+        raise ProjectionInputError(
+            f"team(s) {empty} have no projectable players: {len(rosters)} roster rows, "
+            f"{len(merged)} matched the id_map, {kept} of those are in the pool. Simulating "
+            "this would score those rosters at zero, losing every week and handing every "
+            "matchup to their opponents. Check that the id_map and the VORP pool cover this "
+            "season."
         )
     return by_slot, len(rosters) - kept
 
@@ -338,13 +369,13 @@ def project_league_standings(
 
     schedule = parse_schedule(dict(payload), teams)
     if schedule.empty:
-        raise ValueError(
+        raise ProjectionInputError(
             "ESPN returned no schedule for this league. The mMatchup view is missing or the "
             "fixtures are not published yet; without it there is nothing to project over."
         )
     rosters_frame = parse_rosters(dict(payload))
     if rosters_frame.empty:
-        raise ValueError(
+        raise ProjectionInputError(
             "No rosters yet — the draft has not happened, so there is nothing to project."
         )
 
@@ -363,11 +394,17 @@ def project_league_standings(
     # TODO(week 1): per-player actuals live in the played weeks' `rosterForMatchupPeriod`
     # entries and are not parsed yet. Every value is zero until a season is under way, so the
     # subtraction is currently the identity, and this stays explicit rather than guessed at.
+    # NFL games left, not fantasy weeks left. `fresh - points_to_date` is what a player will
+    # score over the games he has still to play, so that is the horizon it must be divided by;
+    # using the remaining fantasy regular-season weeks inflated every projection (1.21x
+    # preseason, 3.40x at week 10 of 14). It also keeps the playoff bracket projecting real
+    # points after the fantasy regular season ends.
+    games_remaining = max(SEASON_GAMES - (week - 1), 0)
     ros_pool, diagnostics = rest_of_season_pool(
         pool,
         fresh_season_points=fresh,
         points_to_date={},
-        weeks_remaining=weeks_remaining,
+        games_remaining=games_remaining,
     )
 
     rosters, dropped = rosters_to_slots(

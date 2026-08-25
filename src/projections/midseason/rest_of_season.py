@@ -33,8 +33,9 @@ import pandas as pd
 from projections.draft.assistant.performance_variance import SEASON_GAMES
 from projections.schemas import VorpTableSchema
 
-#: A healthy starter with this many points or fewer left, this early, is far more likely to be
-#: an ingest problem than a real projection. Used only to decide whether to warn.
+#: Points-over-a-full-season below which a projection is far more likely to be an ingest
+#: problem than a real number. Scaled by the games actually remaining at the point of use --
+#: see `rest_of_season_pool` -- because the figure it is compared against is a remaining total.
 _IMPLAUSIBLY_SMALL_ROS = 1.0
 
 
@@ -108,16 +109,17 @@ def _validated(pool: pd.DataFrame) -> pd.DataFrame:
     """`df = SCHEMA.validate(df)` at the module boundary, per the repo convention.
 
     Reassignment matters: `strict="filter"` returns a NEW frame with extras dropped, so
-    validating without taking the result back leaves them in place. `is_rookie` is not on
-    `VorpTableSchema` but `team_weekly_points` needs it, so it is restored afterwards -- the
-    validate is here to catch a frame that has lost `season_mean_fpts` or `gsis_id`, not to
-    strip the columns the simulator runs on.
+    validating without taking the result back leaves them in place. `is_rookie` is declared
+    optional on the schema rather than stripped and restored here -- a per-column allowlist
+    would silently drop the next extra column a caller needs.
+
+    **What this does NOT assert.** Only `season_mean_fpts` is rewritten to a rest-of-season
+    figure; `vorp` and `replacement_fpts` are carried through as their preseason values, so a
+    consumer reading those off the returned frame gets preseason valuations. The validate is
+    here to catch a frame that has lost `gsis_id` or `season_mean_fpts`, not to certify that
+    every column means what its name suggests after the rewrite.
     """
-    extras = {col: pool[col] for col in ("is_rookie",) if col in pool.columns}
-    validated = VorpTableSchema.validate(pool)
-    for col, values in extras.items():
-        validated[col] = values
-    return validated
+    return VorpTableSchema.validate(pool)
 
 
 def rest_of_season_points(
@@ -125,7 +127,7 @@ def rest_of_season_points(
     points_to_date: float,
     *,
     preseason_points: float,
-    weeks_remaining: int,
+    games_remaining: int,
 ) -> tuple[float, bool, bool]:
     """One player's remaining points -> (points, was_clamped, used_fallback).
 
@@ -139,13 +141,11 @@ def rest_of_season_points(
     lineup, and reported.
     """
     if fresh_season_points is None:
-        # Prorated over SEASON_GAMES, NOT reg_weeks. `preseason_points` is already a
-        # SEASON_GAMES-game total, and `rest_of_season_pool` re-expresses whatever comes back
-        # here as `points / weeks_remaining * SEASON_GAMES`. Dividing by reg_weeks instead
-        # composed to `preseason * SEASON_GAMES / reg_weeks` -- a silent 1.21x on a 14-week
-        # league and 1.31x on a 13-week one, for a player whose pace should be unchanged.
-        # Two horizons inside one function is exactly what this module exists to prevent.
-        prorated = preseason_points * (weeks_remaining / SEASON_GAMES)
+        # Prorated over the GAMES that remain, which is the same horizon
+        # `rest_of_season_pool` divides by. Any other denominator makes the round trip a
+        # silent scale change rather than a pace no-op -- see that function's docstring for
+        # the two ways this was got wrong.
+        prorated = preseason_points * (games_remaining / SEASON_GAMES)
         return max(prorated, 0.0), False, True
     remaining = fresh_season_points - points_to_date
     if remaining <= 0.0:
@@ -164,7 +164,7 @@ def rest_of_season_pool(
     fresh_season_points: Mapping[str, float],
     points_to_date: Mapping[str, float],
     *,
-    weeks_remaining: int,
+    games_remaining: int,
 ) -> tuple[pd.DataFrame, RosDiagnostics]:
     """Rewrite a pool's `season_mean_fpts` to a rest-of-season pace. Returns (pool, diagnostics).
 
@@ -173,18 +173,36 @@ def rest_of_season_pool(
     `season_mean_fpts` by a fixed `SEASON_GAMES` to get a per-game mean. Writing the remaining
     total straight into the column would therefore spread it across a whole season instead of
     the weeks that are left, and quietly shrink every projection by roughly
-    `weeks_remaining / SEASON_GAMES` — a bug that produces plausible-looking numbers.
+    `games_remaining / SEASON_GAMES` — a bug that produces plausible-looking numbers.
 
-    So the conversion is: per-game pace = `ros_points / weeks_remaining`, written back as
+    So the conversion is: per-game pace = `ros_points / games_remaining`, written back as
     `pace * SEASON_GAMES`.
 
-    `weeks_remaining == 0` (a finished regular season) returns a zeroed pool: there is nothing
-    left to project, and the caller's locked records already carry the whole answer.
+    **`games_remaining` is NFL games left, not fantasy weeks left,** and the distinction has
+    now bitten twice. `fresh - points_to_date` is the points a player will score over the
+    games he has left to play; dividing that by the remaining *fantasy regular-season* weeks
+    mixes two horizons and inflates everyone -- measured at 1.21x preseason, 3.40x at week 10
+    of a 14-week league, and 17x at week 14. Callers should pass
+    `SEASON_GAMES - (snapshot_week - 1)`.
+
+    Using games rather than weeks also keeps the playoff bracket honest: a finished fantasy
+    regular season still has NFL games left, and keying off fantasy weeks zeroed the entire
+    pool at exactly the point the bracket is simulated, handing every playoff matchup to the
+    home side.
+
+    `games_remaining <= 0` returns a zeroed pool -- genuinely nothing left to play.
     """
     out = pool.copy()
-    if weeks_remaining <= 0:
+    if games_remaining <= 0:
         out["season_mean_fpts"] = 0.0
         return _validated(out), RosDiagnostics(n_players=len(out))
+
+    # Scaled by the games that remain. `points` here is a REMAINING total, so an absolute
+    # threshold means "under a point for the rest of the season" early on and "under a point
+    # for one game" at the end -- and a full pool's deep bench clears the latter routinely,
+    # which would fire the wholesale alarm on a healthy run. That is the same cry-wolf failure
+    # the clamp semantics above were narrowed to remove.
+    near_zero_cutoff = _IMPLAUSIBLY_SMALL_ROS * games_remaining / SEASON_GAMES
 
     ros: list[float] = []
     clamped: list[str] = []
@@ -196,7 +214,7 @@ def rest_of_season_pool(
             fresh_season_points.get(gsis),
             float(points_to_date.get(gsis, 0.0)),
             preseason_points=float(row.season_mean_fpts),
-            weeks_remaining=weeks_remaining,
+            games_remaining=games_remaining,
         )
         if was_clamped:
             name = getattr(row, "full_name", None)
@@ -205,12 +223,12 @@ def rest_of_season_pool(
             # path whose whole purpose is making a failure visible, so it must not be the path
             # that crashes.
             clamped.append(gsis if name is None or pd.isna(name) else str(name))
-        elif not used_fallback and 0.0 < points < _IMPLAUSIBLY_SMALL_ROS:
+        elif not used_fallback and 0.0 < points < near_zero_cutoff:
             n_near_zero += 1
         n_fallback += used_fallback
         # Per-game pace, re-expressed over a full season so the variance model's fixed
         # SEASON_GAMES divisor recovers the pace we meant. See the docstring.
-        ros.append(points / weeks_remaining * SEASON_GAMES)
+        ros.append(points / games_remaining * SEASON_GAMES)
 
     out["season_mean_fpts"] = ros
     return _validated(out), RosDiagnostics(

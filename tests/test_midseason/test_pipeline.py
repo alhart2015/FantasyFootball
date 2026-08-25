@@ -17,7 +17,11 @@ import pytest
 
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.performance_variance import VarianceParams
-from projections.midseason.standings import project_league_standings
+from projections.midseason.standings import (
+    ProjectionInputError,
+    StandingsRun,
+    project_league_standings,
+)
 from projections.schemas import _PYARROW_STR
 
 _N_TEAMS = 6
@@ -140,7 +144,7 @@ def _id_map() -> pd.DataFrame:
     )
 
 
-def _run(*, played_weeks: int = 2, with_schedule: bool = True, n_sims: int = 80):
+def _run(*, played_weeks: int = 2, with_schedule: bool = True, n_sims: int = 80) -> StandingsRun:
     pool = _pool()
     return project_league_standings(
         _payload(played_weeks=played_weeks, with_schedule=with_schedule),
@@ -199,9 +203,7 @@ def test_played_weeks_are_banked_and_not_replayed() -> None:
 
 def test_playoff_odds_are_an_identity_over_the_field() -> None:
     run = _run()
-    assert run.standings["make_playoffs_pct"].sum() == pytest.approx(
-        run.calendar.playoff_size
-    )
+    assert run.standings["make_playoffs_pct"].sum() == pytest.approx(run.calendar.playoff_size)
     assert run.standings["champ_pct"].sum() == pytest.approx(1.0)
 
 
@@ -234,7 +236,7 @@ def test_a_completed_season_leaves_nothing_to_simulate() -> None:
 def test_a_missing_schedule_raises_rather_than_reading_as_a_finished_season() -> None:
     """Without the guard, `first_unplayed_week` returns `reg_weeks + 1` (no unplayed week
     exists), the pool is silently zeroed, and the run dies later on an unrelated error."""
-    with pytest.raises(ValueError, match="no schedule"):
+    with pytest.raises(ProjectionInputError, match="no schedule"):
         _run(with_schedule=False)
 
 
@@ -248,7 +250,7 @@ def test_rosters_that_resolve_to_nothing_raise() -> None:
             "gsis_id": pd.Series([], dtype=_PYARROW_STR),
         }
     )
-    with pytest.raises(ValueError, match="no rostered player"):
+    with pytest.raises(ProjectionInputError, match="no projectable players"):
         project_league_standings(
             _payload(),
             pool,
