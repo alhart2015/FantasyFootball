@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from projections.ingest.espn_league import (
+    DEFAULT_VIEWS,
     ESPN_LINEUP_SLOTS,
     ESPN_PRO_TEAMS,
     EspnCredentials,
@@ -25,9 +26,11 @@ from projections.ingest.espn_league import (
     parse_roster_slots,
     parse_rosters,
     parse_ruleset,
+    parse_schedule,
     parse_teams,
     pro_team_code,
     scoring_family,
+    team_records,
     write_league_snapshot,
 )
 from projections.schemas import _RULESET_NAME_VALUES, RosterSlot, Team
@@ -612,3 +615,125 @@ def test_parse_draft_order_is_empty_when_no_order_is_drawn() -> None:
     order = parse_draft_order(payload, parse_teams(payload))
     assert order.empty
     assert "round_pick" in order.columns
+
+
+# --- schedule + records -------------------------------------------------------------------
+
+
+def _matchup(
+    week: int,
+    home_id: int,
+    away_id: int,
+    *,
+    home_pts: float = 0.0,
+    away_pts: float = 0.0,
+    winner: str = "UNDECIDED",
+) -> dict[str, Any]:
+    return {
+        "matchupPeriodId": week,
+        "winner": winner,
+        "home": {"teamId": home_id, "totalPoints": home_pts},
+        "away": {"teamId": away_id, "totalPoints": away_pts},
+    }
+
+
+def test_parse_schedule_reads_the_real_fixture_list() -> None:
+    """The league's actual pairings, which in-season standings must simulate over rather than
+    the synthetic `gauntlet_schedule` the preseason simulator uses."""
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.5, away_pts=99.0, winner="HOME"),
+            _matchup(1, 3, 4, home_pts=88.0, away_pts=101.25, winner="AWAY"),
+            _matchup(2, 1, 3),
+        ]
+    )
+    sched = parse_schedule(payload, parse_teams(payload))
+    assert list(sched["week"]) == [1, 1, 2]
+    assert list(sched["home_team_id"]) == [1, 3, 1]
+    assert list(sched["is_played"]) == [True, True, False]
+    assert sched.loc[0, "home_points"] == pytest.approx(120.5)
+    assert sched.loc[1, "away_points"] == pytest.approx(101.25)
+
+
+def test_is_played_comes_from_winner_not_from_points() -> None:
+    """ESPN reports `totalPoints: 0.0` for an unplayed matchup, which is indistinguishable
+    from a real scoreless one. `winner` is the authoritative signal, and reading points
+    instead would mark a genuine 0-0 week as never played."""
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=0.0, away_pts=0.0, winner="TIE"),
+            _matchup(2, 1, 2, home_pts=0.0, away_pts=0.0),
+        ]
+    )
+    sched = parse_schedule(payload, parse_teams(payload))
+    assert list(sched["is_played"]) == [True, False]
+
+
+def test_parse_schedule_is_empty_before_kickoff_but_still_lists_the_fixtures() -> None:
+    """The expected state during draft prep: every matchup exists, none is played."""
+    payload = _payload(schedule=[_matchup(w, 1, 2) for w in range(1, 15)])
+    sched = parse_schedule(payload, parse_teams(payload))
+    assert len(sched) == 14
+    assert not sched["is_played"].any()
+
+
+def test_parse_schedule_skips_a_bye_rather_than_half_recording_it() -> None:
+    """An odd team count gives someone a bye, which ESPN reports as a matchup with no `away`.
+    A bye is not a game, and a row with a null opponent would break every downstream join."""
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, winner="HOME"),
+            {"matchupPeriodId": 1, "winner": "UNDECIDED", "home": {"teamId": 3}},
+        ]
+    )
+    sched = parse_schedule(payload, parse_teams(payload))
+    assert len(sched) == 1
+    assert sched.loc[0, "home_team_id"] == 1
+
+
+def test_team_records_tallies_wins_losses_and_points() -> None:
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=99.0, winner="HOME"),
+            _matchup(2, 2, 1, home_pts=130.0, away_pts=110.0, winner="HOME"),
+            _matchup(3, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME"),
+        ]
+    )
+    recs = team_records(parse_schedule(payload, parse_teams(payload))).set_index("team_id")
+    assert (recs.loc[1, "wins"], recs.loc[1, "losses"]) == (2, 1)
+    assert (recs.loc[2, "wins"], recs.loc[2, "losses"]) == (1, 2)
+    assert recs.loc[1, "points_for"] == pytest.approx(120.0 + 110.0 + 100.0)
+    assert recs.loc[2, "points_for"] == pytest.approx(99.0 + 130.0 + 90.0)
+    assert recs.loc[1, "games_played"] == 3
+
+
+def test_team_records_carries_ties_as_neither_win_nor_loss() -> None:
+    """Simulated weeks cannot tie -- the simulator breaks every matchup with `>=` -- but real
+    played weeks can, and a tie must not be folded into a win or a loss for seeding."""
+    payload = _payload(schedule=[_matchup(1, 1, 2, home_pts=100.0, away_pts=100.0, winner="TIE")])
+    recs = team_records(parse_schedule(payload, parse_teams(payload))).set_index("team_id")
+    for team_id in (1, 2):
+        assert (recs.loc[team_id, "wins"], recs.loc[team_id, "losses"]) == (0, 0)
+        assert recs.loc[team_id, "ties"] == 1
+        assert recs.loc[team_id, "games_played"] == 1
+
+
+def test_team_records_ignores_unplayed_matchups() -> None:
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=99.0, winner="HOME"),
+            _matchup(2, 1, 2),
+        ]
+    )
+    recs = team_records(parse_schedule(payload, parse_teams(payload))).set_index("team_id")
+    assert recs.loc[1, "games_played"] == 1
+
+
+def test_team_records_is_empty_before_kickoff() -> None:
+    payload = _payload(schedule=[_matchup(1, 1, 2)])
+    assert team_records(parse_schedule(payload, parse_teams(payload))).empty
+
+
+def test_mmatchup_is_pulled_by_default() -> None:
+    """Standings need the schedule, so it must not be an opt-in view a caller can forget."""
+    assert "mMatchup" in DEFAULT_VIEWS

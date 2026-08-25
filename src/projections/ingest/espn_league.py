@@ -50,9 +50,22 @@ _BASE_URL = (
 )
 _UA = "Mozilla/5.0"
 
-#: Views worth pulling for draft prep. `mSettings` carries scoring + roster rules,
-#: `mTeam` / `mRoster` the franchises and their players, `mDraftDetail` the pick log.
-DEFAULT_VIEWS: tuple[str, ...] = ("mSettings", "mTeam", "mRoster", "mDraftDetail")
+#: Views worth pulling. `mSettings` carries scoring + roster rules, `mTeam` / `mRoster` the
+#: franchises and their players, `mDraftDetail` the pick log, `mMatchup` the head-to-head
+#: schedule with per-week results. ESPN honours repeated `view=` params, so all five cost one
+#: request.
+DEFAULT_VIEWS: tuple[str, ...] = (
+    "mSettings",
+    "mTeam",
+    "mRoster",
+    "mDraftDetail",
+    "mMatchup",
+)
+
+#: `schedule[].winner` when a matchup has not been played. Every other value ("HOME", "AWAY",
+#: "TIE") means it has. This, not `totalPoints`, is the authoritative played/unplayed signal:
+#: an unplayed matchup and a genuinely scoreless one both report 0.0 points.
+UNPLAYED_WINNER = "UNDECIDED"
 
 #: Default location for cookies when the env vars are unset. Gitignored — never commit.
 DEFAULT_CREDS_PATH = Path("configs/espn_credentials.json")
@@ -603,6 +616,117 @@ def parse_rosters(payload: dict[str, Any]) -> pd.DataFrame:
     return frame
 
 
+def parse_schedule(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFrame:
+    """`schedule` -> one row per head-to-head matchup.
+
+    Columns: `week home_team_id away_team_id home_team away_team home_points away_points
+    winner is_played`.
+
+    This is the league's **real fixture list**, and it is what in-season projected standings
+    must simulate over. The preseason simulator uses `gauntlet_schedule`, a synthetic
+    round-robin -- correct before a season, when no fixture list exists and every seat should
+    be strength-of-schedule neutral, and wrong during one, where who you actually play drives
+    your record.
+
+    `is_played` comes from `winner`, not from points: ESPN reports `totalPoints: 0.0` for an
+    unplayed matchup, which is indistinguishable from a real (if improbable) scoreless week.
+    Before kickoff every row is unplayed, which is the expected state during draft prep.
+
+    Playoff matchups carry a `playoffTierType`; regular-season ones do not. Both are returned
+    -- `matchupPeriodId` distinguishes them against `LeagueCalendar.reg_weeks`.
+    """
+    names = dict(zip(teams["team_id"], teams["team_name"], strict=False)) if not teams.empty else {}
+    rows: list[dict[str, Any]] = []
+    for entry in payload.get("schedule", []) or []:
+        home, away = entry.get("home") or {}, entry.get("away") or {}
+        # A league with an odd team count gives someone a bye, which ESPN reports as a matchup
+        # with no `away`. Skipped rather than half-recorded: a bye is not a game, and a row
+        # with a null opponent would break every downstream join.
+        if not home or not away:
+            continue
+        winner = str(entry.get("winner", UNPLAYED_WINNER) or UNPLAYED_WINNER)
+        home_id, away_id = int(home.get("teamId", 0)), int(away.get("teamId", 0))
+        rows.append(
+            {
+                "week": int(entry.get("matchupPeriodId", 0)),
+                "home_team_id": home_id,
+                "away_team_id": away_id,
+                "home_team": str(names.get(home_id, "")),
+                "away_team": str(names.get(away_id, "")),
+                "home_points": float(home.get("totalPoints", 0.0) or 0.0),
+                "away_points": float(away.get("totalPoints", 0.0) or 0.0),
+                "winner": winner,
+                "is_played": winner != UNPLAYED_WINNER,
+            }
+        )
+    frame = pd.DataFrame(
+        rows,
+        columns=[
+            "week",
+            "home_team_id",
+            "away_team_id",
+            "home_team",
+            "away_team",
+            "home_points",
+            "away_points",
+            "winner",
+            "is_played",
+        ],
+    )
+    for column in ("home_team", "away_team", "winner"):
+        frame[column] = frame[column].astype(_PYARROW_STR)
+    return frame.sort_values(["week", "home_team_id"]).reset_index(drop=True)
+
+
+def team_records(schedule: pd.DataFrame) -> pd.DataFrame:
+    """Played matchups -> one row per team: `team_id wins losses ties points_for games_played`.
+
+    Derived from the schedule rather than read from ESPN's `cumulativeScore`, so the record
+    and the results it comes from can never disagree. Unplayed matchups contribute nothing.
+
+    **Ties are carried, not folded into a half-win.** Simulated weeks cannot tie (the
+    simulator breaks every matchup with `>=`), but real played weeks can, and a tie is neither
+    a win nor a loss for seeding.
+    """
+    played = schedule[schedule["is_played"]] if not schedule.empty else schedule
+    tally: dict[int, dict[str, float]] = {}
+
+    def _seat(team_id: int) -> dict[str, float]:
+        return tally.setdefault(
+            team_id, {"wins": 0.0, "losses": 0.0, "ties": 0.0, "points_for": 0.0}
+        )
+
+    for row in played.itertuples():
+        home, away = _seat(int(row.home_team_id)), _seat(int(row.away_team_id))
+        home["points_for"] += float(row.home_points)
+        away["points_for"] += float(row.away_points)
+        if row.winner == "HOME":
+            home["wins"] += 1
+            away["losses"] += 1
+        elif row.winner == "AWAY":
+            away["wins"] += 1
+            home["losses"] += 1
+        else:  # TIE
+            home["ties"] += 1
+            away["ties"] += 1
+
+    frame = pd.DataFrame(
+        [
+            {
+                "team_id": team_id,
+                "wins": int(rec["wins"]),
+                "losses": int(rec["losses"]),
+                "ties": int(rec["ties"]),
+                "points_for": rec["points_for"],
+                "games_played": int(rec["wins"] + rec["losses"] + rec["ties"]),
+            }
+            for team_id, rec in sorted(tally.items())
+        ],
+        columns=["team_id", "wins", "losses", "ties", "points_for", "games_played"],
+    )
+    return frame.astype({"team_id": int, "wins": int, "losses": int, "ties": int})
+
+
 def parse_draft_picks(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFrame:
     """`draftDetail.picks` -> the `pick salary player nfl_team pos fantasy_team` TSV shape
     that `scripts/_will_league_2026_outcomes.py --picks` consumes.
@@ -744,6 +868,14 @@ def write_league_snapshot(
     if not order.empty:
         order.to_csv(out_dir / "draft_order.tsv", sep="\t", index=False)
 
+    schedule = parse_schedule(payload, teams)
+    if not schedule.empty:
+        schedule.to_csv(out_dir / "schedule.tsv", sep="	", index=False)
+    # Empty before kickoff -- no matchup has a winner yet, so there is no record to write.
+    records = team_records(schedule)
+    if not records.empty:
+        records.to_csv(out_dir / "records.tsv", sep="	", index=False)
+
     if my_team_id is not None and my_team_id not in set(teams["team_id"]):
         raise EspnLeagueError(
             f"--team-id {my_team_id} is not a team in this league. Valid ids: "
@@ -758,6 +890,8 @@ def write_league_snapshot(
         "order": order,
         "my_team_id": resolved_team_id,
         "draft_settings": parse_draft_settings(payload),
+        "schedule": schedule,
+        "records": records,
     }
 
 
