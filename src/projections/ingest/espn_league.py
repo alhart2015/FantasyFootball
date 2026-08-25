@@ -893,10 +893,25 @@ def write_league_snapshot(
     # `parse_schedule` returns playoff matchups too. Unbounded, a team that won two playoff
     # games would read 10-4 in a 13-game league. Empty before kickoff, when no matchup has a
     # winner yet and there is no record to write at all.
-    calendar = LeagueCalendar.from_espn_settings(
-        (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
+    #
+    # Only when ESPN actually reported the week count. `from_espn_settings` falls back to 13
+    # for an absent `scheduleSettings` -- a payload fetched with a custom `views` tuple, or a
+    # saved `espn_raw.json` without it -- and bounding a 14-week league at 13 would silently
+    # DROP week 14's results, making a 10-4 team read 9-4 with a week of points-for missing
+    # from the seeding tiebreak. Unbounded is the lesser error there, and it is visible.
+    schedule_settings = (payload.get("settings", {}) or {}).get("scheduleSettings") or {}
+    reg_weeks = (
+        LeagueCalendar.from_espn_settings(schedule_settings).reg_weeks
+        if "matchupPeriodCount" in schedule_settings
+        else None
     )
-    records = team_records(schedule, through_week=calendar.reg_weeks)
+    if reg_weeks is None and not schedule.empty and schedule["is_played"].any():
+        _log.warning(
+            "Schedule: no matchupPeriodCount in the payload, so records.tsv cannot be bounded "
+            "to the regular season and may include playoff results. Re-pull with the "
+            "mSettings view for a clean regular-season record."
+        )
+    records = team_records(schedule, through_week=reg_weeks)
     if not records.empty:
         records.to_csv(out_dir / "records.tsv", sep="	", index=False)
 

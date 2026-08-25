@@ -9,8 +9,6 @@ exercises the real path instead.
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -23,133 +21,27 @@ from projections.midseason.standings import (
     project_league_standings,
 )
 from projections.schemas import _PYARROW_STR
+from tests.test_midseason.conftest import (
+    REG_WEEKS,
+    TEAM_IDS,
+    espn_payload,
+    id_map,
+    vorp_pool,
+)
 
-_N_TEAMS = 6
-_TEAM_IDS = [17, 3, 11, 5, 9, 1]
-_REG_WEEKS = 4
-#: ESPN lineup slot ids: 0 QB, 2 RB, 4 WR, 6 TE, 20 BENCH.
-_SLOT_COUNTS = {"0": 1, "2": 2, "4": 2, "6": 1, "20": 1}
-_POSITIONS = ("QB", "RB", "RB", "WR", "WR", "TE")
-#: ESPN defaultPositionId: 1 QB, 2 RB, 3 WR, 4 TE.
-_ESPN_POS_ID = {"QB": 1, "RB": 2, "WR": 3, "TE": 4}
-
-
-def _espn_player_id(team_id: int, index: int) -> int:
-    return 100_000 + team_id * 100 + index
+_N_TEAMS = len(TEAM_IDS)
+_TEAM_IDS = TEAM_IDS
+_REG_WEEKS = REG_WEEKS
 
 
-def _gsis(team_id: int, index: int) -> str:
-    return f"00-{team_id:04d}{index:03d}"
-
-
-def _payload(*, played_weeks: int = 2, with_schedule: bool = True) -> dict[str, Any]:
-    """A realistically shaped mid-season ESPN payload for a `_N_TEAMS`-team league."""
-    pairings = [
-        [(17, 3), (11, 5), (9, 1)],
-        [(17, 11), (3, 9), (5, 1)],
-        [(17, 5), (11, 9), (3, 1)],
-        [(17, 9), (5, 3), (11, 1)],
-    ]
-    schedule: list[dict[str, Any]] = []
-    for week, games in enumerate(pairings, start=1):
-        for home, away in games:
-            played = week <= played_weeks
-            schedule.append(
-                {
-                    "matchupPeriodId": week,
-                    "winner": "HOME" if played else "UNDECIDED",
-                    "home": {"teamId": home, "totalPoints": 120.0 if played else 0.0},
-                    "away": {"teamId": away, "totalPoints": 90.0 if played else 0.0},
-                }
-            )
-
-    teams: list[dict[str, Any]] = []
-    for team_id in _TEAM_IDS:
-        entries = [
-            {
-                "lineupSlotId": 20,
-                "playerId": _espn_player_id(team_id, i),
-                "playerPoolEntry": {
-                    "player": {
-                        "id": _espn_player_id(team_id, i),
-                        "fullName": f"Player {team_id}-{i}",
-                        "defaultPositionId": _ESPN_POS_ID[pos],
-                        "proTeamId": 1,
-                    }
-                },
-            }
-            for i, pos in enumerate(_POSITIONS)
-        ]
-        teams.append(
-            {
-                "id": team_id,
-                "abbrev": f"T{team_id}",
-                "name": f"Team {team_id}",
-                "owners": [],
-                "roster": {"entries": entries},
-            }
-        )
-
-    return {
-        "id": 999,
-        "settings": {
-            "name": "Pipeline Test League",
-            "size": _N_TEAMS,
-            "draftSettings": {"type": "SNAKE", "auctionBudget": 0, "keeperCount": 0},
-            "rosterSettings": {"lineupSlotCounts": _SLOT_COUNTS},
-            "scoringSettings": {"scoringItems": [{"statId": 53, "points": 0.5}]},
-            "scheduleSettings": {
-                "matchupPeriodCount": _REG_WEEKS,
-                "playoffTeamCount": 2,
-                "playoffMatchupPeriodLength": 1,
-            },
-        },
-        "teams": teams,
-        "schedule": schedule if with_schedule else [],
-        "members": [],
-    }
-
-
-def _pool() -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    for rank, team_id in enumerate(_TEAM_IDS):
-        for i, pos in enumerate(_POSITIONS):
-            mean = 240.0 - 20.0 * rank - 2.0 * i
-            rows.append(
-                {
-                    "gsis_id": _gsis(team_id, i),
-                    "full_name": f"Player {team_id}-{i}",
-                    "position": pos,
-                    "season_mean_fpts": mean,
-                    "vorp": mean - 80.0,
-                    "replacement_fpts": 80.0,
-                    "is_rookie": False,
-                }
-            )
-    frame = pd.DataFrame(rows)
-    frame["gsis_id"] = frame["gsis_id"].astype(_PYARROW_STR)
-    frame["position"] = frame["position"].astype(_PYARROW_STR)
-    return frame
-
-
-def _id_map() -> pd.DataFrame:
-    pairs = [
-        (str(_espn_player_id(t, i)), _gsis(t, i)) for t in _TEAM_IDS for i in range(len(_POSITIONS))
-    ]
-    return pd.DataFrame(
-        {
-            "espn_id": pd.Series([e for e, _ in pairs], dtype=_PYARROW_STR),
-            "gsis_id": pd.Series([g for _, g in pairs], dtype=_PYARROW_STR),
-        }
-    )
-
-
-def _run(*, played_weeks: int = 2, with_schedule: bool = True, n_sims: int = 80) -> StandingsRun:
-    pool = _pool()
+def _run(
+    *, played_weeks: int = 2, with_schedule: bool = True, n_sims: int = 80
+) -> StandingsRun:
+    pool = vorp_pool()
     return project_league_standings(
-        _payload(played_weeks=played_weeks, with_schedule=with_schedule),
+        espn_payload(played_weeks=played_weeks, with_schedule=with_schedule),
         pool,
-        _id_map(),
+        id_map(),
         PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={}),
         VarianceParams.load(),
         season=2026,
@@ -243,7 +135,7 @@ def test_a_missing_schedule_raises_rather_than_reading_as_a_finished_season() ->
 def test_rosters_that_resolve_to_nothing_raise() -> None:
     """An id_map that covers none of the league is an ingest failure, and simulating it would
     hand every matchup to the home team behind a plausible-looking table."""
-    pool = _pool()
+    pool = vorp_pool()
     empty_map = pd.DataFrame(
         {
             "espn_id": pd.Series([], dtype=_PYARROW_STR),
@@ -252,7 +144,7 @@ def test_rosters_that_resolve_to_nothing_raise() -> None:
     )
     with pytest.raises(ProjectionInputError, match="no projectable players"):
         project_league_standings(
-            _payload(),
+            espn_payload(),
             pool,
             empty_map,
             PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={}),

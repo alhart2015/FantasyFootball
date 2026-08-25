@@ -1552,6 +1552,10 @@ class ProjectedStandingsSchema(pa.DataFrameModel):
     points_for: Series[float] = pa.Field(ge=0)
     games_played: Series[int] = pa.Field(ge=0)
     # --- projected to season end
+    #: Season-end CREDITED wins: banked + simulated, with a tie counting half, matching ESPN's
+    #: win percentage. Deliberately not comparable to `wins` above by subtraction -- a 6-1-1
+    #: team with nothing left to play has `wins=6` and `projected_wins=6.5`, and the 0.5 is
+    #: the tie, not a game still to come.
     projected_wins: Series[float] = pa.Field(ge=0)
     #: Season-end points-for (banked + simulated) -- the figure the simulator seeds on, and
     #: what the standings order by. `points_for` above is banked-only.

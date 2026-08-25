@@ -287,3 +287,28 @@ def test_head_to_head_of_two_scoreless_teams_is_not_a_double_win() -> None:
     forward = res.head_to_head(1, 2, 1)
     reverse = res.head_to_head(2, 1, 1)
     assert forward + reverse == pytest.approx(1.0)
+
+
+def test_a_simulated_tie_is_half_a_win_to_each_side() -> None:
+    """One run must not disagree with itself.
+
+    `head_to_head` splits exact ties 0.5/0.5, but the win tally used `pa >= pb` and handed the
+    whole win to the home side. On two rosters with deterministically identical point vectors
+    -- which a zeroed pool produces -- the odds table said 0.5 while the standings credited a
+    full win, from the same simulations. Both now split, matching how a real tie is scored.
+    """
+    zeroed = dict.fromkeys(range(1, _N_TEAMS + 1), 0.0)
+    res = _run(zeroed, n_sims=30)
+    # Every team scores zero, so every matchup is a tie: half a win each, every week.
+    for slot in range(1, _N_TEAMS + 1):
+        col = res.slots.index(slot)
+        assert res.wins[:, col] == pytest.approx(_CAL.reg_weeks * 0.5)
+    # And the odds agree with the standings rather than contradicting them.
+    assert res.head_to_head(1, 2, 1) == pytest.approx(0.5)
+
+
+def test_a_decisive_week_is_still_a_whole_win() -> None:
+    """The complement: splitting ties must not blunt an ordinary result."""
+    strengths = {s: (2.0 if s == 1 else 0.1) for s in range(1, _N_TEAMS + 1)}
+    res = _run(strengths, n_sims=60)
+    assert res.wins[:, res.slots.index(1)].mean() > _CAL.reg_weeks * 0.9

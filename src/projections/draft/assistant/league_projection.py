@@ -348,9 +348,15 @@ def simulate_seasons(
             pa, pb = weekly[a][:, w - 1], weekly[b][:, w - 1]
             pf[a] += pa
             pf[b] += pb
-            a_win = pa >= pb
+            # An exact tie is half a win to each side -- the same rule `head_to_head` and
+            # `LockedRecord.credited_wins` use, and how a real tie is scored. `pa >= pb`
+            # handed the whole win to the home side, so on two rosters with identical point
+            # vectors the odds table reported 0.5 while the standings credited 1.0, from the
+            # same simulations. Continuous point totals make this a no-op in practice; it
+            # matters when a roster resolves to all zeros.
+            a_win = np.where(pa > pb, 1.0, np.where(pa == pb, 0.5, 0.0))
             wins[a] += a_win
-            wins[b] += ~a_win
+            wins[b] += 1.0 - a_win
 
     win_mat = np.stack([wins[s] for s in slots], axis=1)
     pf_mat = np.stack([pf[s] for s in slots], axis=1)

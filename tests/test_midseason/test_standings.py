@@ -21,7 +21,6 @@ from projections.draft.assistant.league_projection import (
     simulate_seasons,
 )
 from projections.draft.assistant.performance_variance import VarianceParams
-from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
 from projections.ingest.espn_league import team_records
 from projections.midseason.standings import (
@@ -41,41 +40,16 @@ from projections.schemas import (
     Ruleset,
 )
 from projections.store import read_partition, write_partition
+from tests.test_midseason.conftest import CALENDAR, TEAM_IDS, schedule_frame
 
-_CAL = LeagueCalendar(reg_weeks=4, playoff_size=2, n_byes=0, final_weeks=1)
-#: Deliberately non-contiguous and unsorted, like a real ESPN league with deleted franchises.
-_TEAM_IDS = [17, 3, 11, 5, 9, 1]
+_CAL = CALENDAR
+
+_TEAM_IDS = TEAM_IDS
 
 
 def _schedule(played_weeks: int = 0) -> pd.DataFrame:
-    """Round-robin over `_TEAM_IDS`, with the first `played_weeks` weeks decided."""
-    pairings = [
-        [(17, 3), (11, 5), (9, 1)],
-        [(17, 11), (3, 9), (5, 1)],
-        [(17, 5), (11, 9), (3, 1)],
-        [(17, 9), (5, 3), (11, 1)],
-    ]
-    rows: list[dict[str, object]] = []
-    for week, games in enumerate(pairings, start=1):
-        for home, away in games:
-            played = week <= played_weeks
-            rows.append(
-                {
-                    "week": week,
-                    "home_team_id": home,
-                    "away_team_id": away,
-                    "home_team": f"T{home}",
-                    "away_team": f"T{away}",
-                    "home_points": 120.0 if played else 0.0,
-                    "away_points": 90.0 if played else 0.0,
-                    "winner": "HOME" if played else "UNDECIDED",
-                    "is_played": played,
-                }
-            )
-    frame = pd.DataFrame(rows)
-    for column in ("home_team", "away_team", "winner"):
-        frame[column] = frame[column].astype(_PYARROW_STR)
-    return frame
+    """Alias over the shared builder, so the existing call sites read unchanged."""
+    return schedule_frame(played_weeks)
 
 
 # --- SlotMap ------------------------------------------------------------------------------

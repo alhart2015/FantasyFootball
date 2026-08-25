@@ -127,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     _print_standings(run.standings, my_team_id=args.team_id)
+    _print_ties_footnote(run.standings)
     _print_my_matchups(run.odds, my_team_id=args.team_id)
 
     if args.write_snapshot:
@@ -155,7 +156,9 @@ def _load_pool(path: Path) -> pd.DataFrame:
 
 def _print_standings(standings: pd.DataFrame, *, my_team_id: int | None) -> None:
     print()
-    print(f"{'TEAM':<28}{'REC':>8}{'PROJ W':>9}{'PLAYOFF':>10}{'BYE':>8}{'TITLE':>8}")
+    # "PROJ W" is credited wins -- a tie counts half, as ESPN seeds -- so it is not `REC`
+    # plus games still to come. A 6-1-1 team with the season over reads 6-1-1 / 6.5.
+    print(f"{'TEAM':<28}{'REC':>8}{'PROJ W*':>9}{'PLAYOFF':>10}{'BYE':>8}{'TITLE':>8}")
     for row in standings.itertuples():
         mark = " <-- you" if my_team_id is not None and row.team_id == my_team_id else ""
         record = f"{row.wins}-{row.losses}" + (f"-{row.ties}" if row.ties else "")
@@ -163,6 +166,13 @@ def _print_standings(standings: pd.DataFrame, *, my_team_id: int | None) -> None
             f"{str(row.team_name)[:27]:<28}{record:>8}{row.projected_wins:>9.1f}"
             f"{row.make_playoffs_pct:>9.1%}{row.bye_pct:>8.1%}{row.champ_pct:>8.1%}{mark}"
         )
+
+
+def _print_ties_footnote(standings: pd.DataFrame) -> None:
+    """Explain the starred column, but only when a tie actually makes it differ."""
+    if standings["ties"].sum():
+        print()
+        print("* PROJ W counts a tie as half a win, which is how ESPN seeds.")
 
 
 def _print_my_matchups(odds: pd.DataFrame, *, my_team_id: int | None) -> None:
