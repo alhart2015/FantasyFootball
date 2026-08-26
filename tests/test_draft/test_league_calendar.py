@@ -301,7 +301,8 @@ def test_usable_int_accepts_only_what_can_actually_be_a_week_count(
 
 def test_an_unusable_week_count_falls_back_rather_than_raising() -> None:
     """`from_espn_settings` must degrade to its default, not abort its caller mid-write."""
-    for raw in (True, "full", float("nan"), 0, -3, []):
+    unusable: tuple[object, ...] = (True, "full", float("nan"), 0, -3, [])
+    for raw in unusable:
         assert LeagueCalendar.from_espn_settings({"matchupPeriodCount": raw}).reg_weeks == 13
 
 
