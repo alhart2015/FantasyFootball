@@ -11,6 +11,8 @@ import pandas as pd
 import pytest
 from flask import Flask, render_template
 
+from projections.midseason.my_team import MyTeamRun
+from projections.midseason.rest_of_season import RosDiagnostics
 from projections.schemas import _PYARROW_STR
 from projections.web.views.team_view import TeamPage, build_team_page, empty_team_page
 
@@ -85,16 +87,18 @@ def _page(**overrides: object) -> TeamPage:
             ("00-0009003", "WR", 190.0),
         ]
     )
-    kwargs: dict[str, object] = {
+    fields: dict[str, object] = {
+        "team_name": "Silence of the Lamb",
         "roster": roster,
         "ytd": ytd,
         "ros": ros,
-        "team_name": "Silence of the Lamb",
-        "season": 2026,
         "week": 6,
+        "reg_weeks": 14,
+        "diagnostics": RosDiagnostics(n_players=6),
+        "notes": (),
     }
-    kwargs.update(overrides)
-    return build_team_page(**kwargs)  # type: ignore[arg-type]
+    fields.update(overrides)
+    return build_team_page(MyTeamRun(**fields), season=2026)  # type: ignore[arg-type]
 
 
 def test_every_rostered_player_gets_a_row() -> None:
@@ -267,28 +271,6 @@ def test_the_sort_reads_the_value_not_the_formatted_string() -> None:
 # --- data the real feed produces that the fixtures did not ------------------------------------
 
 
-def test_a_player_recorded_at_two_positions_is_one_row_with_one_total() -> None:
-    """`actual_season_total` groups by (gsis_id, position), so a player whose nflverse position
-    changes mid-season -- a reclassification, a QB/TE hybrid -- comes back as TWO rows.
-
-    `set_index("gsis_id")` then has a duplicate label, which makes `frame.at[gsis, col]` invalid
-    scalar access rather than a lookup, splits his season points in two, and counts him twice
-    inside his own position group so everyone below him loses a rank.
-    """
-    ytd = _ytd(
-        [
-            ("00-0000001", "RB", 100.0),
-            ("00-0000001", "WR", 40.0),  # same player, reclassified mid-season
-            ("00-0009001", "RB", 130.0),
-            ("00-0009002", "RB", 120.0),
-        ]
-    )
-    page = _page(ytd=ytd)
-    assert _cell(page, 0, "ytd_points") == "140.0", "his two rows are one player's season"
-    # 140 beats 130 and 120, so he is the top RB -- not second, behind a phantom of himself.
-    assert _cell(page, 0, "ytd_rank") == "1"
-
-
 def test_an_unrecognised_lineup_slot_does_not_count_as_a_starter() -> None:
     """`parse_rosters` maps an unknown ESPN `lineupSlotId` to `""`, and `""` is not in
     `_BENCH_SLOTS` -- so a slot ESPN adds next season would silently join the starting lineup
@@ -362,3 +344,35 @@ def test_a_players_points_still_count_even_when_the_pool_cannot_rank_him() -> No
     ytd_points = next(i for i, c in enumerate(page.columns) if c.key == "ytd_points")
     assert kicker.cells[ytd_points].text == "55.0"
     assert kicker.cells[ytd_rank].text == "—", "no projection means no comparable rank"
+
+
+def test_a_real_zero_projection_outranks_no_projection_at_all() -> None:
+    """`remaining_totals` clamps at zero, so a player who has already outscored his season
+    projection has a REAL 0.0 -- ordinary by week 12. The sort key used `or`, which maps 0.0
+    to the same sentinel as "no projection", filing him among the kickers.
+
+    Same falsy-zero conflation the roster total was fixed for one line away, in the same batch.
+    """
+    roster = _roster(
+        [
+            ("00-0000009", "Some Kicker", "K", "RB"),
+            ("00-0000002", "Spent RB", "RB", "RB"),
+            ("00-0000001", "Star RB", "RB", "RB"),
+        ]
+    )
+    ros = _ros([("00-0000001", "RB", 150.0), ("00-0000002", "RB", 0.0)])
+    page = _page(roster=roster, ros=ros)
+    assert [row.gsis_id for row in page.rows] == ["00-0000001", "00-0000002", "00-0000009"], (
+        "a clamped-to-zero projection is still a projection and sorts above having none"
+    )
+
+
+def test_the_team_page_does_not_print_a_week_past_the_season(app: Flask) -> None:
+    """`first_unplayed_week` returns `reg_weeks + 1` for a finished regular season. The
+    standings page was taught to say "complete"; the team page started reading the same week
+    source in the same batch of fixes and kept printing the number."""
+    page = _page(week=15, reg_weeks=14)
+    with app.test_request_context():
+        html = render_template("team.html", page=page)
+    assert "week 15" not in html.lower(), html[:600]
+    assert "complete" in html.lower(), html[:600]

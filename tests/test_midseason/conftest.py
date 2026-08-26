@@ -16,12 +16,14 @@ every team exactly one game per week over a short season.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 import pandas as pd
 
 from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
+from projections.ingest.espn_league import ESPN_LINEUP_SLOTS
 from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset, VorpTableSchema
 
 #: Non-contiguous and unsorted on purpose: `SlotMap` has to map these onto 1..n.
@@ -40,11 +42,27 @@ PAIRINGS: list[list[tuple[int, int]]] = [
 ]
 CALENDAR = LeagueCalendar(reg_weeks=REG_WEEKS, playoff_size=2, n_byes=0, final_weeks=1)
 
-#: ESPN lineup slot ids: 0 QB, 2 RB, 4 WR, 6 TE, 20 BENCH.
-ESPN_SLOT_COUNTS: dict[str, int] = {"0": 1, "2": 2, "4": 2, "6": 1, "20": 1}
-#: The slot each POSITIONS entry occupies, so a fixture roster has real starters rather than a
-#: bench of six -- which silently made every starters-only total zero.
-ESPN_SLOT_FOR_POSITION: dict[str, int] = {"QB": 0, "RB": 2, "WR": 4, "TE": 6}
+#: Which POSITIONS indices sit on the bench. A roster with both starters and bench is what the
+#: My Team page's starter/bench split is for; an all-bench fixture silently made every
+#: starters-only total zero.
+BENCH_INDICES: frozenset[int] = frozenset({2, 4})
+#: The slot each POSITIONS entry occupies. Derived from production's own mapping rather than
+#: re-spelled, so a renumbering on ESPN's side cannot leave the fixture green against a changed
+#: parser.
+ESPN_SLOT_FOR_POSITION: dict[str, int] = {
+    slot.value: slot_id for slot_id, slot in ESPN_LINEUP_SLOTS.items()
+}
+ESPN_BENCH_SLOT: int = ESPN_SLOT_FOR_POSITION[RosterSlot.BENCH.value]
+#: `rosterSettings.lineupSlotCounts`, DERIVED from the roster the fixture actually builds, so
+#: the declared lineup and the players available to fill it cannot disagree. Spelled out by
+#: hand it said 2 RB / 2 WR / 1 bench while the roster started 1 of each and benched two.
+ESPN_SLOT_COUNTS: dict[str, int] = dict(
+    Counter(
+        str(ESPN_BENCH_SLOT if i in BENCH_INDICES else ESPN_SLOT_FOR_POSITION[pos])
+        for i, pos in enumerate(POSITIONS)
+    )
+)
+
 #: ESPN defaultPositionId.
 ESPN_POSITION_ID: dict[str, int] = {"QB": 1, "RB": 2, "WR": 3, "TE": 4}
 
@@ -162,9 +180,10 @@ def espn_payload(*, played_weeks: int = 2, with_schedule: bool = True) -> dict[s
     for team_id in TEAM_IDS:
         entries = [
             {
-                # The last RB and the last WR sit on the bench; the rest start. A roster with
-                # both is what the page's starter/bench split is for.
-                "lineupSlotId": 20 if i in (2, 4) else ESPN_SLOT_FOR_POSITION[pos],
+                # The second RB and the second WR sit on the bench; the rest start.
+                "lineupSlotId": (
+                    ESPN_BENCH_SLOT if i in BENCH_INDICES else ESPN_SLOT_FOR_POSITION[pos]
+                ),
                 "playerId": espn_player_id(team_id, i),
                 "playerPoolEntry": {
                     "player": {

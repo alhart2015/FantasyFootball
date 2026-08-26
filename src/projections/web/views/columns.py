@@ -11,7 +11,7 @@ knows what the columns *are*.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -198,12 +198,56 @@ def require_every_key(
     indistinguishable from a whole column of missing PLAYERS, and neither the tests nor the
     page say anything.
     """
-    missing = [column.key for column in columns if column.key not in set(available)]
+    # Materialised once. `available` is an Iterable, so a generator argument was consumed by
+    # the first column and every column after it reported missing -- a KeyError naming columns
+    # that are all present.
+    have = set(available)
+    missing = [column.key for column in columns if column.key not in have]
     if missing:
         raise KeyError(
             f"{source} has no column for {missing}; every entry in the column registry must "
             "have a value to read, or its cells silently render as em dashes"
         )
+
+
+def column_intensities(
+    rows: Sequence[Mapping[str, CellValue]], columns: tuple[Column, ...]
+) -> dict[str, list[float | None]]:
+    """Per column, each row's signed [-1, 1] position within that column's own range.
+
+    Shared by both pages. `Cell` moved here because both tables render one; this is the rule
+    that computes the property `Cell` carries, and leaving it behind produced two copies with
+    different tie and missing-value semantics in the two modules least likely to be diffed
+    together.
+
+    **A column where every row has the same value gets no colour**, rather than every cell
+    painted at the midpoint. Before the season starts every probability column is exactly that,
+    and a uniformly-tinted table implies a spread that does not exist. A missing value is
+    likewise uncoloured rather than treated as zero, and a `neutral` column carries no
+    intensity at all -- which is a different statement from "colour it in the middle".
+
+    `lower-better` inverts, so rank 1 reads as good.
+    """
+    out: dict[str, list[float | None]] = {}
+    for column in columns:
+        values = [row.get(column.key) for row in rows]
+        if column.sense == "neutral":
+            out[column.key] = [None] * len(values)
+            continue
+        numbers = [float(v) for v in values if isinstance(v, int | float)]
+        if not numbers or max(numbers) == min(numbers):
+            out[column.key] = [None] * len(values)
+            continue
+        low, high = min(numbers), max(numbers)
+        scaled: list[float | None] = []
+        for value in values:
+            if not isinstance(value, int | float):
+                scaled.append(None)
+                continue
+            share = 2 * ((float(value) - low) / (high - low)) - 1
+            scaled.append(-share if column.sense == "lower-better" else share)
+        out[column.key] = scaled
+    return out
 
 
 COLUMNS: Mapping[str, tuple[Column, ...]] = {

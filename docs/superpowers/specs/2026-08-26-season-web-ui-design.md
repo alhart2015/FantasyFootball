@@ -178,8 +178,25 @@ worth having before the team page exists.
 
 ## 10. What was actually built (2026-08-26)
 
-The plan in §9 was followed step for step. Three things in this spec did **not** get built, and
-one thing it did not anticipate turned out to matter more than anything it did.
+The plan in §9 was followed step for step. **Four** things in this spec did not get built, and
+two things it did not anticipate turned out to matter more than anything it did.
+
+### Cut: the Trend section (§3)
+
+The standings page has no trend block. §3 promises "Playoff % across accumulated weekly
+snapshots, once more than one exists", reading the accumulated `projected_standings`
+partitions, and there is no such code, template block or test — `grep -rn "trend\|snapshot"
+src/projections/web/` finds only `run.snapshot_week`.
+
+The reason is the same one as for the rank badge, and stronger: a line chart across weekly
+snapshots requires **at least two weekly snapshots**, and as of 2026-08-26 there are zero. It
+cannot be built against real data, cannot be eyeballed, and a fixture of synthetic snapshots
+would be testing the chart library rather than the feature. It is the first thing to build once
+Week 2 has been played and the partitions start accumulating — the writer already runs each
+week, so the data will be there without any further work.
+
+(This entry was itself a review finding: §10 originally said three things were cut and listed
+the three that were easy to remember.)
 
 ### Cut: the rank badge (§4)
 
@@ -201,6 +218,19 @@ ROS side by side as it predicted. Deferred as written. There is no partial-rende
 The header row in §4 ends with `Δ`, which the body of the spec never defines. Rank-change
 against what — last week? draft day? Both need a stored history the repo does not keep, which
 is a snapshot feature, not a column. Dropped rather than guessed at.
+
+### Added: the two pages have to be one pipeline, not two
+
+The assembly for the My Team page moved twice. It began inline in `routes/team.py`, where
+nothing could test it (see the last section). The first fix lifted it into the view model,
+which was still the wrong home: a module that both parses ESPN payloads and formats table cells
+has two halves, and the seam between them is where the next round of defects sat — a frame the
+presenter cleaned was read by the pipeline one step earlier, taking the page down with a 500,
+and a docstring in the presenter described the pipeline the *other* page uses.
+
+It lives in `midseason/my_team.py` now, beside `project_league_standings`, which is the same
+layer for the standings page. Both pages are then the same shape: a domain function returning a
+`*Run`, and a view model that renders it.
 
 ### Added: rest-of-season means rest-of-season
 

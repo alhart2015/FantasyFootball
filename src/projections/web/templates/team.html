@@ -6,7 +6,8 @@
     <h1>{{ page.team_name or "My Team" }}</h1>
     {% if not page.is_empty %}
       <p class="muted">
-        {{ page.season }} · week {{ page.week }} ·
+        {{ page.season }} ·
+        {% if page.regular_season_complete %}regular season complete{% else %}week {{ page.week }}{% endif %} ·
         roster {{ "%.1f"|format(page.roster_ytd) }} YTD ·
         starters {{ "%.1f"|format(page.starter_ros) }} projected rest of season
       </p>

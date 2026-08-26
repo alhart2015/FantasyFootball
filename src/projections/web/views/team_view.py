@@ -2,40 +2,44 @@
 
 Year-to-date points and rank beside rest-of-season projection and rank, per player. Like the
 standings view, **no Flask import belongs here** — every rule below is checked by calling a
-function.
+function, and `tests/test_web/test_app.py` parses this module's imports to keep it that way.
 
-Unlike the standings view, this one assembles rather than presents: nothing in the repo
-previously joined a roster to its actuals and its projection. The assembly is still pure, so
-the I/O (reading `weekly_stats`, pulling the roster) stays in the route.
+**This module presents; it does not assemble.** Parsing the ESPN payload, deriving the week,
+scoring `weekly_stats` and rewriting the pool to remaining points all live in
+`midseason.my_team`, which is the layer `project_league_standings` occupies for the other page.
+An earlier version did both here, and the seam between the two halves is where the defects
+were: a frame the presenter cleaned was read by the pipeline one step earlier, and a docstring
+here described the pipeline the *other* page uses.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
-from typing import Any
+from dataclasses import dataclass
 
 import pandas as pd
 
-from projections.draft.league_calendar import LeagueCalendar
-from projections.draft.league_config import LeagueConfig
-from projections.ingest.espn_league import espn_to_gsis, parse_rosters, parse_schedule, parse_teams
-from projections.midseason.standings import ProjectionInputError, first_unplayed_week
+from projections.midseason.my_team import MyTeamRun
 from projections.rankings import rank_within_position
-from projections.schemas import _PYARROW_STR, RosterSlot
-from projections.scoring.actuals import actual_season_total
+from projections.schemas import RosterSlot
 from projections.web.views.columns import (
     TEAM_COLUMNS,
     Cell,
     CellValue,
     Column,
+    column_intensities,
     require_every_key,
 )
 
 #: Slots that do not start. `RosterSlot` values rather than the strings they wrap, per
 #: CLAUDE.md -- `parse_rosters` produces these FROM `ESPN_LINEUP_SLOTS`, which is keyed on the
-#: enum, so comparing against the enum is comparing against the source of the value.
+#: enum, so what makes the comparison safe is that the producer and the check read one source.
+#: An unrecognised ESPN slot id becomes `""` there, which is in neither set.
 _BENCH_SLOTS = frozenset({RosterSlot.BENCH, RosterSlot.IR})
+
+#: A row's raw values, keyed by column, plus the two fields the page needs that are not
+#: columns. Formatting happens last, so the sort and the colour scale read numbers rather than
+#: parsing them back out of a rendered cell.
+RowValues = dict[str, "CellValue | bool"]
 
 
 @dataclass(frozen=True)
@@ -43,13 +47,8 @@ class PlayerRow:
     gsis_id: str
     #: Starters and bench are visually separated; a bench player outscoring a starter is the
     #: single most actionable thing this page can show.
-    is_starter: bool = True
-    #: Rest-of-season points, carried so the sort reads the VALUE rather than parsing it back
-    #: out of the formatted cell. None sorts last -- his cell holds an em dash, not a number.
-    sort_value: float | None = None
-    #: The raw values behind the cells, kept so the colour scale can range over the column.
-    values: Mapping[str, CellValue] = field(default_factory=dict)
-    cells: tuple[Cell, ...] = ()
+    is_starter: bool
+    cells: tuple[Cell, ...]
 
 
 @dataclass(frozen=True)
@@ -57,6 +56,7 @@ class TeamPage:
     team_name: str
     season: int
     week: int
+    reg_weeks: int
     columns: tuple[Column, ...]
     rows: tuple[PlayerRow, ...]
     #: Season points across the WHOLE roster. Deliberately not a starters-only figure:
@@ -75,113 +75,75 @@ class TeamPage:
     def is_empty(self) -> bool:
         return self.message is not None
 
+    @property
+    def regular_season_complete(self) -> bool:
+        """`first_unplayed_week` returns `reg_weeks + 1` once every week has been played, so a
+        header printing the week unconditionally reads "week 15" in a 14-week league. The
+        standings page learned this first; the team page started using the same week source in
+        the same batch of fixes and did not get the same treatment."""
+        return self.reg_weeks > 0 and self.week > self.reg_weeks
 
-def build_team_page(
-    roster: pd.DataFrame,
-    ytd: pd.DataFrame,
-    ros: pd.DataFrame,
-    *,
-    team_name: str,
-    season: int,
-    week: int,
-) -> TeamPage:
-    """Roster + year-to-date actuals + rest-of-season projections -> the page model.
 
-    `roster` is `parse_rosters`-shaped for one team, already carrying `gsis_id` (the route
-    resolves ESPN ids through the id_map, exactly as the standings pipeline does).
-
-    `ytd` is `actual_season_total`-shaped: `gsis_id`, `position`, `actual_total`. `ros` is the
-    projection pool: `gsis_id`, `position`, `season_mean_fpts`.
+def build_team_page(run: MyTeamRun, *, season: int) -> TeamPage:
+    """`MyTeamRun` -> the rendered page model. Presentation only.
 
     **Ranks are computed over the whole league pool, not over this roster.** "RB 4" means
     fourth-best running back in the league; ranking within a 13-man roster would produce a
     number that looks the same and means nothing.
 
     **Both ranks are computed over the SAME universe** -- the projection pool. They sit in
-    adjacent columns under near-identical tooltips, which is an invitation to read "YTD 8, ROS
-    22" as a fall of fourteen places -- a subtraction that only means anything if both numbers
-    count the same players. `ytd` arrives NFL-wide, straight off `weekly_stats`: every
-    practice-squad running back who took a carry is in it, and none of them are in the pool.
-    Ranking YTD over that set and ROS over the pool put a bigger denominator under one column
-    than the other, so the same player's YTD rank read worse for no reason but the universe.
+    adjacent columns under near-identical tooltips, which invites reading "YTD 8, ROS 22" as a
+    fall of fourteen places, a subtraction that only means anything if both numbers count the
+    same players. `run.ytd` is NFL-wide, straight off `weekly_stats`: every practice-squad
+    running back who took a carry is in it, and none of them are in the pool.
 
-    POINTS still come from the full frame. A kicker is not in the pool, and dropping his actual
-    points from the roster total to make a rank comparable would be fixing the wrong number.
+    POINTS still come from the full frame. A kicker is not in the pool, so he has no rank, but
+    he really did score those points and dropping them to make a rank comparable would be
+    fixing the wrong number.
     """
-    pool_universe = set(ros["gsis_id"].astype(str)) if not ros.empty else set()
-    one_per_player = _one_row_per_player(ytd)
-    ytd_by_id = one_per_player.set_index("gsis_id")
-    ranked_universe = one_per_player[one_per_player["gsis_id"].astype(str).isin(pool_universe)]
-    ytd_rank_by_id = _with_rank(
-        ranked_universe, "actual_total", "ytd_rank", ascending=False
-    ).set_index("gsis_id")
-    ros_by_id = _with_rank(ros, "season_mean_fpts", "ros_rank", ascending=False).set_index(
+    pool_universe = set(run.ros["gsis_id"].astype(str)) if not run.ros.empty else set()
+    ytd_by_id = run.ytd.set_index("gsis_id")
+    in_universe = run.ytd[run.ytd["gsis_id"].astype(str).isin(pool_universe)]
+    ytd_rank_by_id = _with_rank(in_universe, "actual_total", "ytd_rank", ascending=False).set_index(
+        "gsis_id"
+    )
+    ros_by_id = _with_rank(run.ros, "season_mean_fpts", "ros_rank", ascending=False).set_index(
         "gsis_id"
     )
 
-    rows: list[PlayerRow] = []
-    roster_ytd = starter_ros = 0.0
-    for _, player in roster.iterrows():
-        gsis = str(player["gsis_id"])
-        raw_slot = player.get("lineup_slot")
-        slot = "" if raw_slot is None or pd.isna(raw_slot) else str(raw_slot)
-        # An unrecognised ESPN slot id becomes "" in `parse_rosters`, and "" is not in
-        # _BENCH_SLOTS -- so an unknown slot used to count as a STARTER and inflate the
-        # starters-only total. Unknown is treated as bench: crediting a player we cannot place
-        # to the starting lineup is the more wrong of the two guesses.
-        is_starter = bool(slot) and slot not in _BENCH_SLOTS
+    rows = [
+        _row_values(player, ytd_by_id, ytd_rank_by_id, ros_by_id)
+        for _, player in run.roster.iterrows()
+    ]
+    if rows:
+        # Once, over the keys this function writes -- not once per player. The keys are fixed
+        # in the source, so what the check is worth here is catching a registry that gained a
+        # column nothing fills.
+        require_every_key(rows[0], TEAM_COLUMNS, source="the assembled player row")
 
-        ytd_points = _lookup(ytd_by_id, gsis, "actual_total")
-        ros_points = _lookup(ros_by_id, gsis, "season_mean_fpts")
-        # `is not None` rather than `or`: a genuine 0.0 and "did not play" are kept distinct
-        # everywhere else on this page, and this was the one line that erased the difference.
-        if ytd_points is not None:
-            roster_ytd += ytd_points
-        if is_starter and ros_points is not None:
-            starter_ros += ros_points
-
-        values: Mapping[str, CellValue] = {
-            "slot": slot or None,
-            "player": _text(player.get("player")) or gsis,
-            "position": _text(player.get("pos")),
-            "ytd_points": ytd_points,
-            "ytd_rank": _lookup_rank(ytd_rank_by_id, gsis, "ytd_rank"),
-            "ros_points": ros_points,
-            "ros_rank": _lookup_rank(ros_by_id, gsis, "ros_rank"),
-        }
-        require_every_key(values, TEAM_COLUMNS, source="the assembled player row")
-        rows.append(
-            PlayerRow(
-                gsis_id=gsis,
-                is_starter=is_starter,
-                sort_value=ros_points,
-                values=values,
-            )
-        )
+    roster_ytd = sum(_number(row["ytd_points"]) for row in rows)
+    starter_ros = sum(_number(row["ros_points"]) for row in rows if row["is_starter"])
 
     # Starters first, then bench, each by rest-of-season projection. A bench player above a
-    # starter in the same position block is the page's most actionable signal, and burying it
-    # under ESPN's slot ordering would hide it. Sorted on the VALUE, not on the formatted
-    # string: at precision=1, 150.04 and 149.96 both render "150.0" and would tie.
-    rows.sort(key=lambda row: (not row.is_starter, -(row.sort_value or float("-inf"))))
+    # starter is the page's most actionable signal, and burying it under ESPN's slot ordering
+    # would hide it.
+    #
+    # Sorted on the VALUE, not the formatted string (at precision=1, 150.04 and 149.96 both
+    # render "150.0"), and keyed on `is None` rather than `or`: `remaining_totals` clamps at
+    # zero, so a player who has outscored his projection has a REAL 0.0, and `or` would file
+    # him with the players who have no projection at all.
+    rows.sort(key=lambda row: (not row["is_starter"], _sort_key(row["ros_points"])))
 
-    # Colour every directional column against the ROSTER's own range, so a reader can see at a
-    # glance which of his players are carrying the team. Ranks invert, since rank 1 is best.
-    intensities = {
-        column.key: _intensity([r.values.get(column.key) for r in rows], column.sense)
-        for column in TEAM_COLUMNS
-        if column.sense != "neutral"
-    }
+    display = [_display(row) for row in rows]
+    scales = column_intensities(display, TEAM_COLUMNS)
     rendered = tuple(
         PlayerRow(
-            gsis_id=row.gsis_id,
-            is_starter=row.is_starter,
-            sort_value=row.sort_value,
-            values=row.values,
+            gsis_id=_str(row["gsis_id"]),
+            is_starter=bool(row["is_starter"]),
             cells=tuple(
                 Cell(
-                    text=column.format(row.values[column.key]),
-                    intensity=intensities.get(column.key, [None] * len(rows))[i],
+                    text=column.format(display[i][column.key]),
+                    intensity=scales[column.key][i],
                     numeric=column.numeric,
                     is_label=column.is_label,
                 )
@@ -192,14 +154,15 @@ def build_team_page(
     )
 
     return TeamPage(
-        team_name=team_name,
+        team_name=run.team_name,
         season=season,
-        week=week,
+        week=run.week,
+        reg_weeks=run.reg_weeks,
         columns=TEAM_COLUMNS,
         rows=rendered,
         roster_ytd=roster_ytd,
         starter_ros=starter_ros,
-        notes=_notes(roster, ytd_by_id, ros_by_id),
+        notes=run.notes + _blank_column_notes(run, ros_by_id),
     )
 
 
@@ -209,6 +172,7 @@ def empty_team_page(message: str, *, season: int) -> TeamPage:
         team_name="",
         season=season,
         week=0,
+        reg_weeks=0,
         columns=TEAM_COLUMNS,
         rows=(),
         roster_ytd=0.0,
@@ -217,36 +181,40 @@ def empty_team_page(message: str, *, season: int) -> TeamPage:
     )
 
 
-def _text(value: object) -> str:
-    """A display string, tolerating pandas NA.
+def _row_values(
+    player: pd.Series,
+    ytd_by_id: pd.DataFrame,
+    ytd_rank_by_id: pd.DataFrame,
+    ros_by_id: pd.DataFrame,
+) -> RowValues:
+    """One player's raw values, keyed by column.
 
-    `x or y` evaluates `bool(x)`, and `bool(pd.NA)` raises -- so the idiom crashes the whole
-    page rather than blanking one cell. Name columns here are pyarrow-backed nullable strings,
-    where NA is admissible.
+    `gsis_id` may be empty: `build_my_team` deliberately keeps roster entries the id_map cannot
+    resolve rather than deleting them, so they render as a name and a row of em dashes.
     """
-    if value is None or (not isinstance(value, str) and pd.isna(value)):
-        return ""
-    return str(value)
+    gsis = _text(player.get("gsis_id"))
+    raw_slot = player.get("lineup_slot")
+    slot = "" if raw_slot is None or pd.isna(raw_slot) else str(raw_slot)
+    return {
+        "gsis_id": gsis,
+        # An unrecognised ESPN slot id becomes "" in `parse_rosters`, and "" is in neither slot
+        # set -- so an unknown slot used to count as a STARTER and inflate the starters-only
+        # total. Unknown reads as bench: crediting a player we cannot place to the starting
+        # lineup is the more wrong of the two guesses.
+        "is_starter": bool(slot) and slot not in _BENCH_SLOTS,
+        "slot": slot or None,
+        "player": _text(player.get("player")) or gsis or _text(player.get("player_id")),
+        "position": _text(player.get("pos")),
+        "ytd_points": _lookup(ytd_by_id, gsis, "actual_total"),
+        "ytd_rank": _lookup_rank(ytd_rank_by_id, gsis, "ytd_rank"),
+        "ros_points": _lookup(ros_by_id, gsis, "season_mean_fpts"),
+        "ros_rank": _lookup_rank(ros_by_id, gsis, "ros_rank"),
+    }
 
 
-def _one_row_per_player(ytd: pd.DataFrame) -> pd.DataFrame:
-    """Collapse `actual_season_total`'s (gsis_id, position) rows to one per player.
-
-    That function groups by BOTH, so a player whose nflverse position is not constant across
-    the season -- a positional reclassification, a QB/TE hybrid -- yields two rows. Left alone
-    they make `set_index("gsis_id")` non-unique, which turns `frame.at[gsis, col]` into invalid
-    scalar access, splits his season total in two, and counts him twice inside his position
-    group so every player below him drops a rank.
-
-    His points are summed; his position is the one he scored most at, which is the one a reader
-    would call him.
-    """
-    if ytd.empty or not ytd["gsis_id"].duplicated().any():
-        return ytd
-    ordered = ytd.sort_values("actual_total", ascending=False)
-    return ordered.groupby("gsis_id", as_index=False).agg(
-        position=("position", "first"), actual_total=("actual_total", "sum")
-    )
+def _display(row: RowValues) -> dict[str, CellValue]:
+    """The row without the two bookkeeping fields, which are not columns and never render."""
+    return {key: _cell(value) for key, value in row.items() if key not in ("gsis_id", "is_starter")}
 
 
 def _with_rank(frame: pd.DataFrame, by: str, name: str, *, ascending: bool) -> pd.DataFrame:
@@ -270,56 +238,68 @@ def _lookup(frame: pd.DataFrame, gsis: str, column: str) -> float | None:
     None rather than 0.0 on purpose: a player with no weekly stats has not scored zero, he has
     not played, and the column renders those differently (an em dash against "0.0").
     """
-    if gsis not in frame.index:
+    if not gsis or gsis not in frame.index:
         return None
     value = frame.at[gsis, column]
     return None if pd.isna(value) else float(value)
 
 
 def _lookup_rank(frame: pd.DataFrame, gsis: str, column: str) -> int | None:
-    if gsis not in frame.index:
+    if not gsis or gsis not in frame.index:
         return None
     value = frame.at[gsis, column]
     return None if pd.isna(value) else int(value)
 
 
-def _intensity(values: list[CellValue], sense: str) -> list[float | None]:
-    """Signed [-1, 1] position within the column's own range, or all-None when tied.
+def _cell(value: CellValue | bool) -> CellValue:
+    return None if isinstance(value, bool) else value
 
-    Same rule as the standings scale: a column where every value is identical carries no
-    colour rather than every cell painted at the midpoint, and a missing value is uncoloured
-    rather than treated as zero.
+
+def _str(value: CellValue | bool) -> str:
+    return "" if value is None or isinstance(value, bool) else str(value)
+
+
+def _number(value: CellValue | bool) -> float:
+    """A value's contribution to a total. `is not None` rather than `or`: a genuine 0.0 and
+    "did not play" are kept distinct everywhere else on this page."""
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0.0
+
+
+def _sort_key(value: CellValue | bool) -> float:
+    """Descending by projection, with "no projection" last -- and a real 0.0 ahead of it."""
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return float("inf")
+    return -float(value)
+
+
+def _text(value: object) -> str:
+    """A display string, tolerating pandas NA.
+
+    `x or y` evaluates `bool(x)`, and `bool(pd.NA)` raises -- so the idiom crashes the whole
+    page rather than blanking one cell. Name columns here are pyarrow-backed nullable strings,
+    where NA is admissible.
     """
-    numbers = [v for v in values if isinstance(v, int | float)]
-    if not numbers or max(numbers) == min(numbers):
-        return [None] * len(values)
-    low, high = min(numbers), max(numbers)
-    out: list[float | None] = []
-    for value in values:
-        if not isinstance(value, int | float):
-            out.append(None)
-            continue
-        scaled = 2 * ((float(value) - low) / (high - low)) - 1
-        out.append(-scaled if sense == "lower-better" else scaled)
-    return out
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return ""
+    return str(value)
 
 
-def _notes(roster: pd.DataFrame, ytd: pd.DataFrame, ros: pd.DataFrame) -> tuple[str, ...]:
+def _blank_column_notes(run: MyTeamRun, ros_by_id: pd.DataFrame) -> tuple[str, ...]:
     """What the page had to leave blank, said out loud.
 
     A roster full of em dashes looks like a broken page. Saying "no weekly stats for this
     season yet" makes it obviously the expected preseason state instead.
     """
     notes: list[str] = []
-    if ytd.empty:
+    if run.ytd.empty:
         notes.append(
             "No weekly stats for this season yet, so year-to-date columns are empty. They "
             "fill in once Week 1 has been played."
         )
     unprojected = [
-        _text(player.get("player")) or str(player["gsis_id"])
-        for _, player in roster.iterrows()
-        if str(player["gsis_id"]) not in ros.index
+        _text(player.get("player")) or _text(player.get("gsis_id"))
+        for _, player in run.roster.iterrows()
+        if _text(player.get("gsis_id")) not in ros_by_id.index
     ]
     if unprojected:
         shown = ", ".join(unprojected[:5])
@@ -328,134 +308,3 @@ def _notes(roster: pd.DataFrame, ytd: pd.DataFrame, ros: pd.DataFrame) -> tuple[
             "defenses, and anyone the pool does not cover."
         )
     return tuple(notes)
-
-
-def remaining_points(pool: pd.DataFrame, ytd: pd.DataFrame) -> pd.DataFrame:
-    """Points a player still has to score: his season projection minus what he already has.
-
-    **This is a remaining TOTAL, and that is what the column claims to show.** Note it is not
-    what `rest_of_season_pool` returns -- that one converts to a full-season-equivalent PACE,
-    because the variance model divides by a fixed `SEASON_GAMES` to get a per-game mean. A pace
-    is the right input for the simulator and the wrong thing to print under "projected points
-    for the rest of the season", where a reader wants the number of points still coming.
-
-    Both sides are our own numbers under the league ruleset -- the pool's `season_mean_fpts` is
-    consensus projections scored by it, `actual_total` is weekly stats scored by it -- so the
-    subtraction is like-for-like.
-
-    Clamped at zero: a player who has already outscored his projection has nothing negative
-    left to give, and a negative cell would read as a deduction.
-    """
-    scored = ytd.set_index("gsis_id")["actual_total"] if not ytd.empty else None
-    out = pool.copy()
-    if scored is None:
-        return out
-    already = out["gsis_id"].astype(str).map(scored).fillna(0.0)
-    out["season_mean_fpts"] = (out["season_mean_fpts"] - already).clip(lower=0.0)
-    return out
-
-
-def assemble_team_page(
-    payload: Mapping[str, Any],
-    pool: pd.DataFrame,
-    id_map: pd.DataFrame,
-    weekly_stats: pd.DataFrame,
-    league_config: LeagueConfig,
-    *,
-    my_team_id: int,
-    season: int,
-) -> TeamPage:
-    """The whole My Team pipeline, with the I/O lifted out so it can be tested.
-
-    Every input is already-fetched data. The route does the reading; this does the assembly.
-    That split is the point: pass 1 of the review found eight defects in this logic while it
-    lived inline in a route, reachable only through an HTTP request that first made a live ESPN
-    call. It was the only code on the branch without a test.
-
-    The steps, and what each one is careful about:
-
-    1. **The week comes from the schedule**, via `first_unplayed_week` -- the same authority the
-       standings page uses. Deriving it from `max(weekly_stats.week)` describes nfl_data_py's
-       ingest lag rather than the league, so the two pages disagreed on the same day.
-    2. **The roster is filtered by `team_id`**, not by pool membership. Filtering by the pool
-       deleted kickers and defenses before they could be shown, and made the note written to
-       name them unreachable.
-    3. **Rest-of-season is actually rest-of-season.** The pool is a full-season projection;
-       `rest_of_season_pool` converts it over the games that remain, exactly as
-       `project_league_standings` does, so the two pages agree about a player.
-    4. A stats partition behind the schedule is reported rather than silently producing a
-       partial season total under a later week's header.
-    """
-    teams = parse_teams(dict(payload))
-    if my_team_id not in set(teams["team_id"]):
-        raise ProjectionInputError(
-            f"team {my_team_id} is not a team in this league. Valid ids: "
-            f"{sorted(teams['team_id'])}."
-        )
-
-    calendar = LeagueCalendar.from_espn_settings(
-        (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
-    )
-    schedule = parse_schedule(dict(payload), teams)
-    week = first_unplayed_week(schedule, calendar) if not schedule.empty else 1
-
-    rosters = parse_rosters(dict(payload))
-    if rosters.empty:
-        return empty_team_page("No rosters yet — the draft has not happened.", season=season)
-    roster = rosters[rosters["team_id"] == my_team_id].assign(
-        gsis_id=espn_to_gsis(rosters, id_map).astype(_PYARROW_STR)
-    )
-    roster = roster[roster["gsis_id"].notna()]
-
-    ytd = (
-        actual_season_total(weekly_stats, league_config.ruleset)
-        if not weekly_stats.empty
-        else _empty_ytd()
-    )
-    ros = remaining_points(pool, ytd)
-
-    page = build_team_page(
-        roster,
-        ytd,
-        ros,
-        team_name=_team_name(teams, my_team_id),
-        season=season,
-        week=week,
-    )
-    stale = _staleness_note(weekly_stats, week)
-    return replace(page, notes=page.notes + stale) if stale else page
-
-
-def _empty_ytd() -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "gsis_id": pd.Series(dtype=_PYARROW_STR),
-            "position": pd.Series(dtype=_PYARROW_STR),
-            "actual_total": pd.Series(dtype="float64"),
-        }
-    )
-
-
-def _staleness_note(weekly_stats: pd.DataFrame, week: int) -> tuple[str, ...]:
-    """Say so when the stats partition is behind the schedule.
-
-    The dangerous case is stale-but-present: a PARTIAL season total under a header claiming a
-    later week, which reads as a real number. An empty partition is already explained
-    elsewhere; this covers the half that is not empty and not current.
-    """
-    if weekly_stats.empty:
-        return ()
-    latest = int(weekly_stats["week"].max())
-    expected = week - 1
-    if latest >= expected:
-        return ()
-    return (
-        f"Year-to-date columns are stale: the stats partition ends at week {latest} but "
-        f"{expected} weeks have been played. They are behind by "
-        f"{expected - latest} week(s) until the weekly-stats ingest is re-run.",
-    )
-
-
-def _team_name(teams: pd.DataFrame, my_team_id: int) -> str:
-    match = teams[teams["team_id"] == my_team_id]
-    return str(match.iloc[0]["team_name"]) if not match.empty else f"Team {my_team_id}"

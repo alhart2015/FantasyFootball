@@ -34,6 +34,7 @@ from projections.draft.assistant.performance_variance import SEASON_GAMES, Varia
 from projections.draft.league_calendar import LeagueCalendar
 from projections.ingest.espn_league import (
     build_league_config,
+    espn_to_gsis,
     parse_rosters,
     parse_schedule,
     parse_teams,
@@ -166,7 +167,9 @@ def rosters_to_slots(
     side and the percentages tracked home-fixture counts. Different artifact, equally
     confident, equally wrong.)
 
-    Same inner join on `espn_id` that `draft/backtest/espn_weekly.py` uses.
+    Resolution goes through `espn_league.espn_to_gsis`, which the team page also uses -- the
+    two pages resolving the same ESPN id to different players is exactly the divergence a
+    shared crosswalk exists to prevent.
 
     Players the pool cannot project (kickers, defenses, anyone without a projection) are
     dropped and counted -- that part is legitimate. But a resolution that drops *everything*
@@ -176,16 +179,10 @@ def rosters_to_slots(
     if rosters.empty:
         return {slot: [] for slot in range(1, len(slots) + 1)}, 0
 
-    # `IdMapSchema` marks only `gsis_id` unique -- `espn_id` is nullable and non-unique, and
-    # the live id_map holds two ESPN ids that each map to two different players. Without the
-    # dedup the inner join fans out on those: the same player lands on a roster twice, can
-    # fill two starting slots at once, and `len(rosters) - kept` goes negative.
-    cross = (
-        id_map[["espn_id", "gsis_id"]].dropna().astype({"espn_id": str}).drop_duplicates("espn_id")
-    )
-    merged = rosters.assign(espn_id=rosters["player_id"].astype(str)).merge(
-        cross, on="espn_id", how="inner"
-    )
+    # One crosswalk, shared with the season dashboard's team page, so a player cannot resolve
+    # differently on the two pages -- including the dedup on `espn_id`, which `IdMapSchema`
+    # does not enforce and the live id_map violates twice.
+    merged = rosters.assign(gsis_id=espn_to_gsis(rosters, id_map)).dropna(subset=["gsis_id"])
 
     by_slot: dict[int, list[str]] = {slot: [] for slot in range(1, len(slots) + 1)}
     kept = 0

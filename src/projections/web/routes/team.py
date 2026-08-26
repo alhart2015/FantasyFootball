@@ -1,23 +1,26 @@
 """My Team page: year-to-date and rest-of-season stats, with league-wide rankings.
 
-I/O only. Every rule about what the page shows lives in `views.team_view.assemble_team_page`,
-which takes already-fetched data and is tested directly -- pass 1 of the review found eight
-defects in this logic while it lived here, reachable only through an HTTP request that first
-made a live ESPN call.
+I/O only. The assembly lives in `midseason.my_team.build_my_team` and the presentation in
+`views.team_view.build_team_page`, both of which take already-fetched data and are tested
+directly -- pass 1 of the review found eight defects in this logic while it lived here,
+reachable only through an HTTP request that first made a live ESPN call.
 """
 
 from __future__ import annotations
 
 import pandas as pd
 from flask import Blueprint, current_app, render_template
+from pandera.errors import SchemaError
 
 from projections.draft.league_config import LeagueConfig
 from projections.ingest.espn_league import EspnCredentials, EspnLeagueError, fetch_league_payload
+from projections.midseason.my_team import build_my_team
 from projections.midseason.standings import ProjectionInputError
 from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
 from projections.store import read_partition
 from projections.web.app import DashboardConfig, dashboard_config
-from projections.web.views.team_view import TeamPage, assemble_team_page, empty_team_page
+from projections.web.inputs import missing_inputs, pool_and_id_map
+from projections.web.views.team_view import TeamPage, build_team_page, empty_team_page
 
 bp = Blueprint("team", __name__)
 
@@ -38,35 +41,25 @@ def team() -> str:
         return render_template("team.html", page=empty_team_page(missing, season=config.season))
     try:
         page = _build(config, config.my_team_id)
-    except (ProjectionInputError, EspnLeagueError, OSError) as exc:
+    except (ProjectionInputError, EspnLeagueError, OSError, SchemaError) as exc:
         # OSError covers FileNotFoundError and the socket timeouts that `fetch_league_payload`
         # does not wrap -- a stalled ESPN read raises TimeoutError, which is not a URLError.
+        # SchemaError covers the pandera validations below: a pool or id_map that has drifted
+        # from its schema is a data problem this page can name, not a traceback.
         page = empty_team_page(str(exc), season=config.season)
     return render_template("team.html", page=page)
 
 
 def _missing_inputs(config: DashboardConfig) -> str | None:
-    """Name what is absent, or None. Checked before the ESPN call so a missing local file does
-    not cost a network round trip first."""
+    """Checked before the ESPN call so a missing local file does not cost a round trip first."""
     required = {
-        "the VORP pool": (config.pool_path, "scripts/generate_league_vorp_table.py"),
-        "the id_map": (
-            config.data_root / "raw" / "id_map.parquet",
-            "projections.ingest.id_map.build_id_map",
-        ),
+        **pool_and_id_map(config),
         "the league config": (
             config.league_dir / "league_config.json",
             "python -m projections.ingest.espn_league",
         ),
     }
-    absent = [
-        f"{label} at {path} (build it with {how})"
-        for label, (path, how) in required.items()
-        if not path.exists()
-    ]
-    if not absent:
-        return None
-    return "Cannot show your team — missing " + "; ".join(absent) + "."
+    return missing_inputs(config, required, page="show your team")
 
 
 def _build(config: DashboardConfig, my_team_id: int) -> TeamPage:
@@ -76,7 +69,7 @@ def _build(config: DashboardConfig, my_team_id: int) -> TeamPage:
     pool = pd.read_parquet(config.pool_path)
     pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
 
-    return assemble_team_page(
+    run = build_my_team(
         payload,
         VorpTableSchema.validate(pool),
         IdMapSchema.validate(pd.read_parquet(config.data_root / "raw" / "id_map.parquet")),
@@ -85,6 +78,7 @@ def _build(config: DashboardConfig, my_team_id: int) -> TeamPage:
         my_team_id=my_team_id,
         season=config.season,
     )
+    return build_team_page(run, season=config.season)
 
 
 def _weekly_stats(config: DashboardConfig) -> pd.DataFrame:

@@ -238,3 +238,67 @@ def rest_of_season_pool(
         n_near_zero=n_near_zero,
         clamped_examples=tuple(str(name) for name in clamped[:5]),
     )
+
+
+def remaining_totals(
+    pool: pd.DataFrame,
+    points_to_date: Mapping[str, float],
+) -> tuple[pd.DataFrame, RosDiagnostics]:
+    """Rewrite `season_mean_fpts` to the points a player still has to score. Returns
+    (pool, diagnostics).
+
+    **Sibling of `rest_of_season_pool`, and deliberately not the same thing.** Both subtract
+    points-to-date from a full-season projection; they differ in what they write back:
+
+    - `rest_of_season_pool` writes a full-season-equivalent PACE, because its consumer is the
+      variance model, which divides `season_mean_fpts` by a fixed `SEASON_GAMES`.
+    - this one writes the raw remaining TOTAL, because its consumer is a table cell under the
+      header "projected points for the rest of the season", where a reader wants the number of
+      points still coming.
+
+    Printing a pace under that header roughly doubles it by week 10; feeding a total to the
+    simulator shrinks every roster by `games_remaining / SEASON_GAMES`. Both mistakes have been
+    made in this repo, which is why the two functions sit next to each other with this
+    paragraph between them.
+
+    Shares `rest_of_season_points` with its sibling, so the clamp rule and the "clamped only
+    when actuals pushed it under" narrowing cannot drift between the two callers -- and returns
+    the same `RosDiagnostics`, so the wholesale-clamp alarm that exists to catch the inverted
+    season-total assumption is available to a page, not just to the simulator.
+    """
+    out = pool.copy()
+    totals: list[float] = []
+    clamped: list[str] = []
+    n_fallback = 0
+    n_near_zero = 0
+    for row in out.itertuples():
+        gsis = str(row.gsis_id)
+        season_points = float(row.season_mean_fpts)
+        points, was_clamped, used_fallback = rest_of_season_points(
+            season_points,
+            float(points_to_date.get(gsis, 0.0)),
+            preseason_points=season_points,
+            # Every player is measured against the whole season, so nothing is prorated and
+            # `used_fallback` is never set: the pool IS the projection here, rather than a
+            # preseason number standing in for a fresh pull that is missing.
+            games_remaining=SEASON_GAMES,
+        )
+        if was_clamped:
+            name = getattr(row, "full_name", None)
+            # `x or y` evaluates bool(x), and bool(pd.NA) raises. This is the one path whose
+            # whole purpose is making a failure visible, so it must not be the path that
+            # crashes.
+            clamped.append(gsis if name is None or pd.isna(name) else str(name))
+        elif not used_fallback and 0.0 < points < _IMPLAUSIBLY_SMALL_ROS:
+            n_near_zero += 1
+        n_fallback += used_fallback
+        totals.append(points)
+
+    out["season_mean_fpts"] = totals
+    return _validated(out), RosDiagnostics(
+        n_players=len(out),
+        n_clamped=len(clamped),
+        n_fallback=n_fallback,
+        n_near_zero=n_near_zero,
+        clamped_examples=tuple(clamped[:5]),
+    )

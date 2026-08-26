@@ -1,9 +1,14 @@
-"""`assemble_team_page` — the My Team pipeline, with the I/O lifted out.
+"""`build_my_team` — the My Team pipeline.
 
 Every one of these tests was impossible before this function existed. The assembly lived
 inline in `routes/team.py`, reachable only through an HTTP request that first made a live ESPN
 call, and pass 1 of the review found eight defects in it — the single densest cluster on the
-branch. That is not a coincidence: it was the only code here without a test.
+branch. That is not a coincidence: it was the only code there without a test.
+
+It then spent a pass living in `web/views/team_view.py`, which was the wrong home for a
+different reason: a presenter that also parses ESPN payloads has two halves, and the seam
+between them is where the next defects were. It sits here now, beside
+`project_league_standings`, which is the same layer for the other page.
 """
 
 from __future__ import annotations
@@ -13,9 +18,10 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from projections.midseason.my_team import MyTeamRun, build_my_team
 from projections.midseason.standings import ProjectionInputError
 from projections.schemas import _PYARROW_STR, VorpTableSchema
-from projections.web.views.team_view import TeamPage, assemble_team_page
+from projections.web.views.team_view import TeamPage, build_team_page
 from tests.test_midseason.conftest import (
     MY_TEAM_ID,
     POSITIONS,
@@ -97,7 +103,7 @@ def _weekly_stats(weeks: int) -> pd.DataFrame:
     return frame
 
 
-def _assemble(*, played_weeks: int = 2, my_team_id: int = MY_TEAM_ID, **overrides: Any) -> TeamPage:
+def _run(*, played_weeks: int = 2, my_team_id: int = MY_TEAM_ID, **overrides: Any) -> MyTeamRun:
     kwargs: dict[str, Any] = {
         "payload": espn_payload(played_weeks=played_weeks),
         "pool": _pool(),
@@ -108,7 +114,17 @@ def _assemble(*, played_weeks: int = 2, my_team_id: int = MY_TEAM_ID, **override
         "season": 2026,
     }
     kwargs.update(overrides)
-    return assemble_team_page(**kwargs)
+    return build_my_team(**kwargs)
+
+
+def _assemble(**overrides: Any) -> TeamPage:
+    """The pipeline and the presenter together, which is what the route does.
+
+    Several of these tests are about a number that only exists once the page is rendered
+    (`starter_ros`, a cell showing an em dash), so they need both halves. The ones that are
+    purely about the run assert on `_run(...)` directly.
+    """
+    return build_team_page(_run(**overrides), season=2026)
 
 
 # --- the critical defect ---------------------------------------------------------------------
@@ -262,3 +278,100 @@ def test_the_ytd_total_is_labelled_as_the_whole_roster_not_as_starters() -> None
     every_ytd = sum(float(row.cells[3].text) for row in page.rows if row.cells[3].text != "—")
     assert page.roster_ytd == pytest.approx(every_ytd)
     assert page.starter_ros > 0.0
+
+
+# --- the crash the last batch of fixes wrote ---------------------------------------------------
+
+
+def test_a_player_recorded_at_two_positions_does_not_take_the_page_down() -> None:
+    """`actual_season_total` groups by (gsis_id, position), so a player reclassified mid-season
+    comes back as TWO rows. The previous fix collapsed them -- but inside the presenter, one
+    step AFTER the remaining-points subtraction had already done
+    `ytd.set_index("gsis_id")["actual_total"]` on the duplicate index.
+
+    `Series.map` on a non-unique index raises `InvalidIndexError`, which is not in the route's
+    caught tuple, so `/team` returned a traceback rather than an empty state. Collapsing at the
+    pipeline boundary is what makes every later step safe, and the check belongs here because
+    this is where the frame is built.
+    """
+    weekly = _weekly_stats(2)
+    # The same player, credited at a second position from week 2 -- exactly what a
+    # reclassification looks like coming out of nflverse.
+    reclassified = weekly[weekly["week"] == 2].copy()
+    reclassified["position"] = "WR"
+    doubled = pd.concat([weekly, reclassified], ignore_index=True)
+
+    page = _assemble(weekly_stats=doubled)
+    assert page.rows, "the page renders rather than raising"
+    ytd = next(i for i, c in enumerate(page.columns) if c.key == "ytd_points")
+    assert all(row.cells[ytd].text != "—" for row in page.rows if row.cells[ytd].text)
+
+
+def test_his_two_rows_are_summed_into_one_season() -> None:
+    weekly = _weekly_stats(2)
+    reclassified = weekly[weekly["week"] == 2].copy()
+    reclassified["position"] = "WR"
+    run = _run(weekly_stats=pd.concat([weekly, reclassified], ignore_index=True))
+    assert not run.ytd["gsis_id"].duplicated().any(), "one row per player leaves the pipeline"
+
+
+# --- nothing vanishes silently ------------------------------------------------------------------
+
+
+def test_a_player_the_id_map_cannot_resolve_is_listed_and_named() -> None:
+    """The mirror of `test_players_the_pool_cannot_project_still_appear`, one filter earlier.
+
+    `espn_to_gsis` returns NA for any ESPN id the crosswalk does not hold -- a just-signed
+    player, a defense -- and the previous version dropped those rows with no note, so a 15-man
+    roster rendered as 14 and nothing said why.
+    """
+    payload = espn_payload(played_weeks=2)
+    my_team = next(t for t in payload["teams"] if t["id"] == MY_TEAM_ID)
+    my_team["roster"]["entries"].append(
+        {
+            "lineupSlotId": 20,
+            "playerId": 888_001,  # in no id_map
+            "playerPoolEntry": {
+                "player": {
+                    "id": 888_001,
+                    "fullName": "Just Signed",
+                    "defaultPositionId": 2,
+                    "proTeamId": 1,
+                }
+            },
+        }
+    )
+    page = _assemble(payload=payload)
+    player = next(i for i, c in enumerate(page.columns) if c.key == "player")
+    assert any("Just Signed" in row.cells[player].text for row in page.rows), "still listed"
+    assert any("id_map" in note for note in page.notes), page.notes
+
+
+def test_my_own_empty_roster_is_explained_not_rendered_as_a_headed_table() -> None:
+    """The league-wide `rosters.empty` check passes as soon as ANYONE has drafted, so mid-draft
+    my own empty roster produced a table with a header row and no body and no message."""
+    payload = espn_payload(played_weeks=2)
+    my_team = next(t for t in payload["teams"] if t["id"] == MY_TEAM_ID)
+    my_team["roster"]["entries"] = []
+    with pytest.raises(ProjectionInputError, match="no players"):
+        _run(payload=payload)
+
+
+# --- the wholesale-clamp alarm reaches this page too --------------------------------------------
+
+
+def test_a_provider_already_reporting_rest_of_season_is_called_out() -> None:
+    """The assumption that cannot be verified until Week 1: if a provider's "season total" is
+    already rest-of-season, subtracting actuals double-counts and drives the pool to zero.
+
+    `rest_of_season_pool` has raised this alarm since it was written, and the team page --
+    which used its own copy of the subtraction -- did not. Sharing `remaining_totals` is what
+    gives it the same alarm.
+    """
+    pool = _pool()
+    # Everyone has already outscored their whole projection: the shape of the inverted
+    # assumption.
+    pool["season_mean_fpts"] = 1.0
+    run = _run(pool=pool)
+    assert run.diagnostics.looks_like_double_counting
+    assert any("REST-OF-SEASON" in note.upper() for note in run.notes), run.notes

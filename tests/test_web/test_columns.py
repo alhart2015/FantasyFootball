@@ -143,15 +143,20 @@ def test_the_shared_table_macros_are_the_only_copy() -> None:
     Two copies of an a11y contract is one copy that goes stale without anything failing, so the
     markup lives in `_table.html` and the pages call it.
     """
-    pages = [t for t in _TEMPLATES.rglob("*.html") if not t.name.startswith("_")]
-    offenders = {
-        template.name: marker
-        for template in pages
-        for marker in ("table-scroll", "cell.intensity")
-        if marker in template.read_text(encoding="utf-8")
-    }
+    offenders: dict[str, list[str]] = {}
+    for template in _TEMPLATES.rglob("*.html"):
+        if template.name.startswith("_"):
+            continue
+        text = template.read_text(encoding="utf-8")
+        # Every marker, not just the last one to match -- a dict keyed on the filename inside
+        # the comprehension reported one offender per file and hid the rest.
+        found = [marker for marker in ("table-scroll", "cell.intensity") if marker in text]
+        if found:
+            offenders[template.name] = found
     assert not offenders, (
-        f"{offenders} re-implements shared table markup; call the macros in _table.html"
+        f"{offenders} re-implements shared table markup; call the macros in _table.html. "
+        "This holds for hand-written tables too -- the remaining-games table has literal "
+        "headers because no registry drives it, and still gets its wrapper from `t.scroll`."
     )
 
 
@@ -174,9 +179,18 @@ def test_exactly_one_label_column_per_table() -> None:
 
 
 def test_no_stylesheet_rule_targets_a_column_by_position() -> None:
-    """`nth-child` and `first-child` on a data cell encode column order. The one exception is
-    kept deliberately: the leading column is a rank or slot in both tables and is dimmed as a
-    group, not as a specific field."""
+    """`nth-child(2)` on a data cell hard-codes which column holds the name -- an ordering
+    `views/columns.py` owns, so reordering a table would silently accent the wrong cell.
+
+    All the positional spellings are checked, not just `nth-child`: `nth-of-type`, `last-child`
+    and the `td + td` chain say the same thing in different words, and a rule that bans one
+    spelling of a mistake invites the others.
+
+    `:first-child` is the deliberate exception, and it is allowlisted by its exact rule rather
+    than by pattern. It is positional because what it means is positional: the LEADING column
+    is dimmed whatever it holds -- a rank on one table, a slot on the other -- so it says "this
+    is the gutter", not "this is the rank".
+    """
     css = (
         Path(__file__).resolve().parents[2]
         / "src"
@@ -185,7 +199,16 @@ def test_no_stylesheet_rule_targets_a_column_by_position() -> None:
         / "static"
         / "season.css"
     ).read_text(encoding="utf-8")
-    offenders = [line.strip() for line in css.splitlines() if "nth-child" in line and "td" in line]
+    allowed = {".data-table td:first-child { color: var(--muted); }"}
+    # Anchored to `td`, because the position of a ROW is not the position of a COLUMN --
+    # `tr:last-child td { border-bottom: none }` is about the bottom of the table and has
+    # nothing to do with which column holds what.
+    positional = re.compile(r"td:(?:nth-child|nth-of-type|first-child|last-child)|td\s*\+\s*td")
+    offenders = [
+        line.strip()
+        for line in css.splitlines()
+        if positional.search(line) and line.strip() not in allowed
+    ]
     assert not offenders, f"style these by semantic class, not position: {offenders}"
 
 

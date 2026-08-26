@@ -124,9 +124,15 @@ def test_no_page_reaches_the_network_during_tests(
     calls: list[tuple[int, int]] = []
 
     def spy(league_id: int, season: int, **kwargs: object) -> dict[str, object]:
+        # Records and returns a payload the pipeline will reject cleanly, rather than raising.
+        # An earlier version raised AssertionError, which no route catches -- so it propagated
+        # out of `client.get`, the loop never reached the line below, and `assert calls == []`
+        # was unreachable in the only case where it could have failed.
         calls.append((league_id, season))
-        raise AssertionError(f"test made a live ESPN call: league {league_id}, season {season}")
+        return {}
 
+    # Both route modules bind the name at import, so patching each of them is what matters;
+    # the source module is patched too so a future route that imports it lazily is covered.
     monkeypatch.setattr("projections.ingest.espn_league.fetch_league_payload", spy)
     monkeypatch.setattr("projections.web.routes.team.fetch_league_payload", spy)
     monkeypatch.setattr("projections.web.routes.standings.fetch_league_payload", spy)

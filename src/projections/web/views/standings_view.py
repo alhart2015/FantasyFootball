@@ -20,6 +20,7 @@ from projections.web.views.columns import (
     Cell,
     CellValue,
     Column,
+    column_intensities,
     require_every_key,
 )
 
@@ -76,27 +77,6 @@ def _record(row: pd.Series) -> str:
     return f"{base}-{int(row['ties'])}" if int(row["ties"]) else base
 
 
-def _intensity(values: pd.Series, sense: str) -> pd.Series:
-    """Signed [-1, 1] position within the column's own range, or all-None when tied.
-
-    **A column where every team has the same value gets no colour**, rather than every cell
-    painted at the midpoint. Before the season starts every probability column is exactly that,
-    and a uniformly-tinted table implies a spread that does not exist.
-
-    `lower-better` inverts, so rank 1 reads as good.
-    """
-    if sense == "neutral":
-        return pd.Series([None] * len(values), index=values.index, dtype="object")
-    numeric = pd.to_numeric(values, errors="coerce")
-    low, high = numeric.min(), numeric.max()
-    if pd.isna(low) or pd.isna(high) or high == low:
-        return pd.Series([None] * len(values), index=values.index, dtype="object")
-    scaled = 2 * ((numeric - low) / (high - low)) - 1
-    if sense == "lower-better":
-        scaled = -scaled
-    return scaled.astype("object")
-
-
 def build_standings_page(
     run: StandingsRun,
     *,
@@ -117,11 +97,13 @@ def build_standings_page(
 
     require_every_key(display.columns, STANDINGS_COLUMNS, source="the standings frame")
 
-    intensities = {
-        column.key: _intensity(display[column.key], column.sense)
-        for column in STANDINGS_COLUMNS
-        if column.key in display.columns and column.sense != "neutral"
-    }
+    # `require_every_key` above raises when a registry key is absent, so the per-column
+    # membership test the previous version carried here could no longer be false.
+    values = [
+        {column.key: _cell_value(row, column) for column in STANDINGS_COLUMNS}
+        for _, row in display.iterrows()
+    ]
+    scales = column_intensities(values, STANDINGS_COLUMNS)
 
     rows = tuple(
         TeamRow(
@@ -129,15 +111,15 @@ def build_standings_page(
             is_mine=my_team_id is not None and int(row["team_id"]) == my_team_id,
             cells=tuple(
                 Cell(
-                    text=column.format(_cell_value(row, column)),
-                    intensity=_maybe_float(intensities.get(column.key, {}).get(index)),
+                    text=column.format(values[i][column.key]),
+                    intensity=scales[column.key][i],
                     numeric=column.numeric,
                     is_label=column.is_label,
                 )
                 for column in STANDINGS_COLUMNS
             ),
         )
-        for index, row in display.iterrows()
+        for i, (_, row) in enumerate(display.iterrows())
     )
 
     notes: list[str] = []
@@ -189,12 +171,6 @@ def _cell_value(row: pd.Series, column: Column) -> CellValue:
     if isinstance(value, str):
         return value
     return float(value) if column.precision is not None or column.percent else int(value)
-
-
-def _maybe_float(value: object) -> float | None:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return None
-    return float(value)  # type: ignore[arg-type]
 
 
 def _my_games(odds: pd.DataFrame, my_team_id: int | None) -> tuple[RemainingGame, ...]:

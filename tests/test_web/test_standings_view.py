@@ -223,5 +223,8 @@ def test_the_week_label_does_not_exceed_the_season(app: Flask) -> None:
     page = _page(played_weeks=4)
     with app.test_request_context():
         html = render_template("standings.html", page=page)
-    assert "of 4" not in html or "Week 5 of 4" not in html
+    # Written as two statements, not `A or B`: `"of 4" not in html or "Week 5 of 4" not in html`
+    # collapses to the second clause whenever the first is present and is vacuously true
+    # otherwise, so it asserted nothing in the case it was written for.
+    assert "Week 5 of 4" not in html, html[:600]
     assert "complete" in html.lower(), html[:600]

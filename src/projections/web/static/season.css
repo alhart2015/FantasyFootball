@@ -144,9 +144,15 @@ h2 {
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr:hover td { background: rgba(255, 255, 255, 0.025); }
 
-/* Styled by semantic class, never by column position: `nth-child` hard-coded an ordering
-   that `views/columns.py` owns, so reordering a table would have silently accented the wrong
-   cell -- the same failure the column registry exists to prevent, expressed in CSS. */
+/* Column-specific styling goes by semantic class, never by position: `nth-child(2)` hard-coded
+   which column holds the name, an ordering `views/columns.py` owns, so reordering a table would
+   have silently accented the wrong cell -- the failure the column registry exists to prevent,
+   expressed in CSS.
+
+   This rule is the deliberate exception, and it is positional because what it means is
+   positional: the LEADING column is dimmed whatever it holds (a rank on one table, a slot on
+   the other). It says "this is the gutter", not "this is the rank". The test below allows
+   `:first-child` for that reason and forbids every other positional selector. */
 .data-table td:first-child { color: var(--muted); }
 
 /* The viewer's own row. */
