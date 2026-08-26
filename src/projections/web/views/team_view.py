@@ -22,13 +22,15 @@ from projections.draft.league_config import LeagueConfig
 from projections.ingest.espn_league import espn_to_gsis, parse_rosters, parse_schedule, parse_teams
 from projections.midseason.standings import ProjectionInputError, first_unplayed_week
 from projections.rankings import rank_within_position
-from projections.schemas import _PYARROW_STR
+from projections.schemas import _PYARROW_STR, RosterSlot
 from projections.scoring.actuals import actual_season_total
 from projections.web.views.columns import TEAM_COLUMNS, CellValue, Column
 from projections.web.views.standings_view import Cell
 
-#: Bench players are ranked and scored like anyone else, but the slot is worth showing as-is.
-_BENCH_SLOTS = frozenset({"BENCH", "IR"})
+#: Slots that do not start. `RosterSlot` values rather than the strings they wrap, per
+#: CLAUDE.md -- `parse_rosters` produces these FROM `ESPN_LINEUP_SLOTS`, which is keyed on the
+#: enum, so comparing against the enum is comparing against the source of the value.
+_BENCH_SLOTS = frozenset({RosterSlot.BENCH, RosterSlot.IR})
 
 
 @dataclass(frozen=True)
@@ -90,7 +92,7 @@ def build_team_page(
     fourth-best running back in the league; ranking within a 13-man roster would produce a
     number that looks the same and means nothing.
     """
-    ytd_ranked = _with_rank(ytd, "actual_total", "ytd_rank", ascending=False)
+    ytd_ranked = _with_rank(_one_row_per_player(ytd), "actual_total", "ytd_rank", ascending=False)
     ros_ranked = _with_rank(ros, "season_mean_fpts", "ros_rank", ascending=False)
 
     ytd_by_id = ytd_ranked.set_index("gsis_id")
@@ -100,8 +102,13 @@ def build_team_page(
     roster_ytd = starter_ros = 0.0
     for _, player in roster.iterrows():
         gsis = str(player["gsis_id"])
-        slot = str(player.get("lineup_slot", "") or "")
-        is_starter = slot.upper() not in _BENCH_SLOTS
+        raw_slot = player.get("lineup_slot")
+        slot = "" if raw_slot is None or pd.isna(raw_slot) else str(raw_slot)
+        # An unrecognised ESPN slot id becomes "" in `parse_rosters`, and "" is not in
+        # _BENCH_SLOTS -- so an unknown slot used to count as a STARTER and inflate the
+        # starters-only total. Unknown is treated as bench: crediting a player we cannot place
+        # to the starting lineup is the more wrong of the two guesses.
+        is_starter = bool(slot) and slot not in _BENCH_SLOTS
 
         ytd_points = _lookup(ytd_by_id, gsis, "actual_total")
         ros_points = _lookup(ros_by_id, gsis, "season_mean_fpts")
@@ -113,9 +120,9 @@ def build_team_page(
             starter_ros += ros_points
 
         values: Mapping[str, CellValue] = {
-            "slot": slot or "—",
-            "player": str(player.get("player", "") or gsis),
-            "position": str(player.get("pos", "") or ""),
+            "slot": slot or None,
+            "player": _text(player.get("player")) or gsis,
+            "position": _text(player.get("pos")),
             "ytd_points": ytd_points,
             "ytd_rank": _lookup_rank(ytd_by_id, gsis, "ytd_rank"),
             "ros_points": ros_points,
@@ -188,6 +195,38 @@ def empty_team_page(message: str, *, season: int) -> TeamPage:
     )
 
 
+def _text(value: object) -> str:
+    """A display string, tolerating pandas NA.
+
+    `x or y` evaluates `bool(x)`, and `bool(pd.NA)` raises -- so the idiom crashes the whole
+    page rather than blanking one cell. Name columns here are pyarrow-backed nullable strings,
+    where NA is admissible.
+    """
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return ""
+    return str(value)
+
+
+def _one_row_per_player(ytd: pd.DataFrame) -> pd.DataFrame:
+    """Collapse `actual_season_total`'s (gsis_id, position) rows to one per player.
+
+    That function groups by BOTH, so a player whose nflverse position is not constant across
+    the season -- a positional reclassification, a QB/TE hybrid -- yields two rows. Left alone
+    they make `set_index("gsis_id")` non-unique, which turns `frame.at[gsis, col]` into invalid
+    scalar access, splits his season total in two, and counts him twice inside his position
+    group so every player below him drops a rank.
+
+    His points are summed; his position is the one he scored most at, which is the one a reader
+    would call him.
+    """
+    if ytd.empty or not ytd["gsis_id"].duplicated().any():
+        return ytd
+    ordered = ytd.sort_values("actual_total", ascending=False)
+    return ordered.groupby("gsis_id", as_index=False).agg(
+        position=("position", "first"), actual_total=("actual_total", "sum")
+    )
+
+
 def _with_rank(frame: pd.DataFrame, by: str, name: str, *, ascending: bool) -> pd.DataFrame:
     """Rank within position across the whole frame, tolerating an empty one.
 
@@ -256,7 +295,7 @@ def _notes(roster: pd.DataFrame, ytd: pd.DataFrame, ros: pd.DataFrame) -> tuple[
             "fill in once Week 1 has been played."
         )
     unprojected = [
-        str(player.get("player", "") or player["gsis_id"])
+        _text(player.get("player")) or str(player["gsis_id"])
         for _, player in roster.iterrows()
         if str(player["gsis_id"]) not in ros.index
     ]

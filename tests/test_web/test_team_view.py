@@ -262,3 +262,56 @@ def test_the_sort_reads_the_value_not_the_formatted_string() -> None:
     ros = _ros([("00-0000001", "RB", 149.96), ("00-0000002", "RB", 150.04)])
     page = _page(roster=roster, ros=ros)
     assert page.rows[0].gsis_id == "00-0000002", "the genuinely larger value sorts first"
+
+
+# --- data the real feed produces that the fixtures did not ------------------------------------
+
+
+def test_a_player_recorded_at_two_positions_is_one_row_with_one_total() -> None:
+    """`actual_season_total` groups by (gsis_id, position), so a player whose nflverse position
+    changes mid-season -- a reclassification, a QB/TE hybrid -- comes back as TWO rows.
+
+    `set_index("gsis_id")` then has a duplicate label, which makes `frame.at[gsis, col]` invalid
+    scalar access rather than a lookup, splits his season points in two, and counts him twice
+    inside his own position group so everyone below him loses a rank.
+    """
+    ytd = _ytd(
+        [
+            ("00-0000001", "RB", 100.0),
+            ("00-0000001", "WR", 40.0),  # same player, reclassified mid-season
+            ("00-0009001", "RB", 130.0),
+            ("00-0009002", "RB", 120.0),
+        ]
+    )
+    page = _page(ytd=ytd)
+    assert _cell(page, 0, "ytd_points") == "140.0", "his two rows are one player's season"
+    # 140 beats 130 and 120, so he is the top RB -- not second, behind a phantom of himself.
+    assert _cell(page, 0, "ytd_rank") == "1"
+
+
+def test_an_unrecognised_lineup_slot_does_not_count_as_a_starter() -> None:
+    """`parse_rosters` maps an unknown ESPN `lineupSlotId` to `""`, and `""` is not in
+    `_BENCH_SLOTS` -- so a slot ESPN adds next season would silently join the starting lineup
+    and inflate the starters-only rest-of-season total. Unknown is treated as bench: crediting
+    a player we cannot place to the starters is the more wrong of the two guesses."""
+    roster = _roster(
+        [
+            ("00-0000001", "Star RB", "RB", "RB"),
+            ("00-0000003", "Mystery WR", "WR", ""),  # slot id ESPN added and we do not map
+        ]
+    )
+    page = _page(roster=roster)
+    mystery = next(r for r in page.rows if r.gsis_id == "00-0000003")
+    assert not mystery.is_starter
+    assert page.starter_ros == pytest.approx(150.0), "only the real starter is counted"
+
+
+def test_a_missing_name_blanks_one_cell_rather_than_raising() -> None:
+    """`player.get("player") or gsis` evaluates `bool(pd.NA)`, which RAISES -- so one nullable
+    string in a pyarrow-backed name column took down the entire page instead of leaving a cell
+    reading as the player's id."""
+    roster = _roster([("00-0000001", "Star RB", "RB", "RB")])
+    roster.loc[0, "player"] = pd.NA
+    page = _page(roster=roster)
+    assert _cell(page, 0, "player") == "00-0000001"
+    assert any("00-0000001" in note for note in page.notes) or page.rows
