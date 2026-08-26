@@ -85,3 +85,16 @@ td[style*="--neg"] { background: rgba(196, 85, 61, calc(var(--neg) * 0.18)); }
 .data-table tr.user-team td[style*="--pos"] {
   background: rgba(79, 179, 88, calc(var(--pos) * 0.28));
 }
+
+/* --- my team ------------------------------------------------------------------------------ */
+.data-table tr.group-break td {
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.35rem 0.7rem;
+}
+/* Bench rows are dimmed rather than hidden: a bench player projected above a starter is the
+   most actionable thing on this page, and hiding him would bury it. */
+.data-table tr.bench td { color: var(--muted); }

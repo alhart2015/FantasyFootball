@@ -1,6 +1,49 @@
 {% extends "base.html" %}
-{% block title %}My Team{% endblock %}
+{% block title %}{{ page.team_name or "My Team" }}{% endblock %}
 {% block content %}
-  <h1>My Team</h1>
-  <p class="muted">{{ season }} season.</p>
+  <header class="page-head">
+    <h1>{{ page.team_name or "My Team" }}</h1>
+    {% if not page.is_empty %}
+      <p class="muted">
+        {{ page.season }} · week {{ page.week }} ·
+        starters {{ "%.1f"|format(page.starter_ytd) }} YTD,
+        {{ "%.1f"|format(page.starter_ros) }} projected rest of season
+      </p>
+    {% endif %}
+  </header>
+
+  {% if page.is_empty %}
+    <p class="empty">{{ page.message }}</p>
+  {% else %}
+    {% for note in page.notes %}
+      <p class="note">{{ note }}</p>
+    {% endfor %}
+
+    <div class="table-scroll" tabindex="0" role="region" aria-label="My roster">
+      <table class="data-table">
+        <thead>
+          <tr>
+            {% for column in page.columns %}
+              <th {% if column.numeric %}class="num"{% endif %}
+                  {% if column.help %}title="{{ column.help }}"{% endif %}>{{ column.label }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in page.rows %}
+            {% if loop.changed(row.is_starter) and not row.is_starter %}
+              <tr class="group-break">
+                <td colspan="{{ page.columns|length }}">Bench</td>
+              </tr>
+            {% endif %}
+            <tr {% if not row.is_starter %}class="bench"{% endif %}>
+              {% for cell in row.cells %}
+                <td class="{{ 'num' if cell.numeric else '' }}">{{ cell.text }}</td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
 {% endblock %}
