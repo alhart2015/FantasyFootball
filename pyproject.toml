@@ -40,6 +40,12 @@ dev = [
 ui = [
     "streamlit>=1.36",
 ]
+# The season dashboard. Separate from `ui` because it is a different stack for a different
+# job: the draft and auction boards are interactive session tools (Streamlit's strength),
+# while this is a server-rendered dashboard over batch-computed data.
+web = [
+    "flask>=3.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

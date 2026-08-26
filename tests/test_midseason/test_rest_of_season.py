@@ -23,10 +23,11 @@ import pytest
 from projections.draft.assistant.performance_variance import SEASON_GAMES
 from projections.midseason.rest_of_season import (
     RosDiagnostics,
+    remaining_totals,
     rest_of_season_points,
     rest_of_season_pool,
 )
-from projections.schemas import _PYARROW_STR
+from projections.schemas import _PYARROW_STR, VorpTableSchema
 
 
 def _pool(rows: list[tuple[str, str, float]]) -> pd.DataFrame:
@@ -455,3 +456,68 @@ def test_the_playoff_weeks_are_not_projected_at_zero() -> None:
         games_remaining=SEASON_GAMES - 14,
     )
     assert pool.loc[0, "season_mean_fpts"] > 0.0
+
+
+# --- remaining_totals: the sibling that writes a total rather than a pace -----------------------
+
+
+def _small_pool() -> pd.DataFrame:
+    frame = pd.DataFrame(
+        {
+            "gsis_id": pd.Series(["00-0000001", "00-0000002"], dtype=_PYARROW_STR),
+            "full_name": pd.Series(["Star RB", "Spent WR"], dtype=_PYARROW_STR),
+            "position": pd.Series(["RB", "WR"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [240.0, 100.0],
+            "vorp": [160.0, 20.0],
+            "replacement_fpts": [80.0, 80.0],
+        }
+    )
+    return VorpTableSchema.validate(frame)
+
+
+def test_remaining_totals_writes_a_total_not_a_pace() -> None:
+    """The whole reason it exists beside `rest_of_season_pool`. A reader under the header
+    "projected points for the rest of the season" wants the points still coming; the simulator
+    wants a full-season-equivalent pace. Printing the pace roughly doubles the number by week
+    10, which is the bug this pair of functions was split to make impossible."""
+    pool, _ = remaining_totals(_small_pool(), {"00-0000001": 100.0}, games_remaining=8)
+    by_id = pool.set_index("gsis_id")["season_mean_fpts"]
+    assert by_id["00-0000001"] == pytest.approx(140.0), "240 projected minus 100 scored"
+    assert by_id["00-0000002"] == pytest.approx(100.0), "nothing scored, nothing subtracted"
+
+
+def test_remaining_totals_clamps_a_player_who_beat_his_projection_and_says_so() -> None:
+    pool, diagnostics = remaining_totals(_small_pool(), {"00-0000002": 150.0}, games_remaining=8)
+    assert pool.set_index("gsis_id")["season_mean_fpts"]["00-0000002"] == 0.0
+    assert diagnostics.n_clamped == 1
+    assert "Spent WR" in (diagnostics.warning() or "")
+
+
+def test_remaining_totals_quotes_the_cutoff_it_actually_applied() -> None:
+    """The near-zero cutoff is scaled by the games left, so at week 10 it is 0.47, not 1. The
+    message quoted the unscaled constant -- telling the reader a check ran at a threshold it
+    did not use, on the one page a human reads."""
+    pool = _small_pool()
+    pool["season_mean_fpts"] = [0.3, 0.3]
+    _, diagnostics = remaining_totals(pool, {}, games_remaining=8)
+    assert diagnostics.n_near_zero == 2
+    warning = diagnostics.warning() or ""
+    assert "0.47" in warning, warning
+
+
+def test_remaining_totals_says_so_when_there_is_no_season_left() -> None:
+    """`games_remaining <= 0` zeroes every cell, which looks like a bad team rather than an
+    exhausted season. Reachable in a league whose regular season runs to 17 weeks or more,
+    where `first_unplayed_week` returns `reg_weeks + 1`."""
+    pool, diagnostics = remaining_totals(_small_pool(), {}, games_remaining=0)
+    assert (pool["season_mean_fpts"] == 0.0).all()
+    assert diagnostics.warning() is not None, "a zeroed roster must explain itself"
+
+
+def test_remaining_totals_refuses_a_pool_with_a_duplicated_player() -> None:
+    """Two rows sharing a gsis_id were both scored against whichever came last -- a plausible
+    wrong number rather than a failure. `VorpTableSchema` forbids it, but this function is
+    public and validates on the way OUT."""
+    pool = pd.concat([_small_pool(), _small_pool().head(1)], ignore_index=True)
+    with pytest.raises(ValueError, match="duplicate gsis_id"):
+        remaining_totals(pool, {}, games_remaining=8)

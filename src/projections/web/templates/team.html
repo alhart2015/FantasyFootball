@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% import "_table.html" as t %}
+{% block title %}{{ page.team_name or "My Team" }}{% endblock %}
+{% block content %}
+  <header class="page-head">
+    <h1>{{ page.team_name or "My Team" }}</h1>
+    {% if not page.is_empty %}
+      <p class="muted">
+        {{ page.season }} ·
+        {% if page.regular_season_complete %}regular season complete{% else %}week {{ page.week }}{% endif %} ·
+        roster {{ "%.1f"|format(page.roster_ytd) }} YTD ·
+        starters {{ "%.1f"|format(page.starter_ros) }} projected rest of season
+      </p>
+    {% endif %}
+  </header>
+
+  {# Notes render on BOTH branches, matching standings.html. Today `empty_team_page` never
+     carries any -- `build_my_team` raises before it has warned about anything -- so this is
+     the shape being kept consistent rather than a live behaviour on this page. See
+     standings.html for the case where it matters. #}
+  {{ t.notes(page) }}
+  {% if page.is_empty %}
+    <p class="empty">{{ page.message }}</p>
+  {% else %}
+
+    {% call t.scroll("My roster") %}
+      {{ t.head(page.columns) }}
+      <tbody>
+        {% for row in page.rows %}
+          {% if loop.changed(row.is_starter) and not row.is_starter %}
+            <tr class="group-break">
+              <td colspan="{{ page.columns|length }}">Bench</td>
+            </tr>
+          {% endif %}
+          <tr {% if not row.is_starter %}class="bench"{% endif %}>{{ t.cells(row) }}</tr>
+        {% endfor %}
+      </tbody>
+    {% endcall %}
+  {% endif %}
+{% endblock %}

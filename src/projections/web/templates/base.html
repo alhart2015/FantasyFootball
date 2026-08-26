@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Season dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='season.css') }}">
+</head>
+<body>
+  <nav class="nav">
+    <a class="nav-brand" href="{{ url_for('standings.standings') }}">Season</a>
+    {# aria-current marks the active page for a screen reader, and the stylesheet hangs the
+       underline off the same attribute rather than a second "active" class. #}
+    <a class="nav-link" href="{{ url_for('standings.standings') }}"
+       {% if request.endpoint == 'standings.standings' %}aria-current="page"{% endif %}>Standings</a>
+    <a class="nav-link" href="{{ url_for('team.team') }}"
+       {% if request.endpoint == 'team.team' %}aria-current="page"{% endif %}>My Team</a>
+  </nav>
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

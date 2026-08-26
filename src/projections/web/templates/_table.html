@@ -1,0 +1,47 @@
+{#
+  Shared table rendering. Both pages draw the same table -- the same scroll wrapper with the
+  same accessibility attributes, the same header loop over the column registry, the same
+  cell loop emitting the colour-scale custom property -- and each had its own copy. Two copies
+  of an a11y contract is one copy that silently goes stale, and the cell loop in particular is
+  four lines of whitespace-control that nobody would diff carefully.
+#}
+
+{# The scrolling region. `tabindex` and `role` are load-bearing: a horizontally scrolling
+   region a keyboard user cannot reach or name is a WCAG 2.1.1 failure. #}
+{% macro scroll(label, narrow=false) %}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="{{ label }}">
+    <table class="data-table{{ ' narrow' if narrow else '' }}">{{ caller() }}</table>
+  </div>
+{% endmacro %}
+
+{# Headers straight off the column registry. A template never names a column. #}
+{% macro head(columns) %}
+  <thead>
+    <tr>
+      {% for column in columns %}
+        <th {% if column.numeric %}class="num"{% endif %}
+            {% if column.help %}title="{{ column.help }}"{% endif %}>{{ column.label }}</th>
+      {% endfor %}
+    </tr>
+  </thead>
+{% endmacro %}
+
+{# One row's cells. `--pos`/`--neg` are the only inline styles on the site: they are per-cell
+   DATA computed by the view model, not theming, and the stylesheet does the mixing. #}
+{% macro cells(row) %}
+  {% for cell in row.cells %}
+    <td class="{{ 'num' if cell.numeric else '' }}{{ ' name' if cell.is_label else '' }}"
+        {%- if cell.intensity is not none %}
+          {%- if cell.intensity > 0 %} style="--pos: {{ cell.intensity|round(3) }}"
+          {%- elif cell.intensity < 0 %} style="--neg: {{ (-cell.intensity)|round(3) }}"
+          {%- endif %}
+        {%- endif %}>{{ cell.text }}</td>
+  {% endfor %}
+{% endmacro %}
+
+{# Non-fatal warnings: a stale pool, players with no projection. #}
+{% macro notes(page) %}
+  {% for note in page.notes %}
+    <p class="note">{{ note }}</p>
+  {% endfor %}
+{% endmacro %}

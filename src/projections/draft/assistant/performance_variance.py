@@ -14,7 +14,10 @@ from pathlib import Path
 
 import numpy as np
 
-_DEFAULT_PARAMS_PATH = Path("configs/performance_variance_params.json")
+#: Where the fitted parameters ship. Relative, so it resolves against the process CWD --
+#: callers that may run from elsewhere should check it exists and say so rather than
+#: letting `load()` raise a bare FileNotFoundError.
+DEFAULT_PARAMS_PATH = Path("configs/performance_variance_params.json")
 #: Games the variance model spreads a season projection over. Public because callers that
 #: build a season_mean_fpts figure must express it over the SAME horizon this divides by --
 #: `rest_of_season.rest_of_season_pool` re-scales a partial-season pace through it.
@@ -32,7 +35,7 @@ class VarianceParams:
     mean_mult_log_sd: dict[str, float]
 
     @classmethod
-    def load(cls, path: Path = _DEFAULT_PARAMS_PATH) -> VarianceParams:
+    def load(cls, path: Path = DEFAULT_PARAMS_PATH) -> VarianceParams:
         blob = json.loads(Path(path).read_text())
         return cls(blob["weekly_std_affine"], blob["mean_mult_log_sd"])
 

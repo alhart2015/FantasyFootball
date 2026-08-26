@@ -97,6 +97,7 @@ def load_store_availability(
     season: int,
     data_root: Path,
     history_seasons: range | None = None,
+    notes: list[str] | None = None,
 ) -> PlayerAvailability:
     """Build `PlayerAvailability` for `pool` from store partitions under `data_root`.
 
@@ -106,29 +107,38 @@ def load_store_availability(
 
     A history that is narrower than expected degrades the model rather than failing,
     and warns. That is softer than the hard error for NO history, deliberately: with
-    some good seasons present the model is usable, just weaker. Note the warning goes
-    to stderr, so the Streamlit callers do not surface it in their UI.
+    some good seasons present the model is usable, just weaker.
+
+    Pass `notes` to receive those same messages as strings. `warnings.warn` alone reaches
+    stderr, which is where the Streamlit callers leave it -- acceptable for a CLI, wrong for a
+    web page that has a slot for exactly this and would otherwise render a projection built on
+    a thinner history than the reader thinks, saying nothing. An explicit list rather than
+    `warnings.catch_warnings` at the call site: that manipulates process-global filter state,
+    which is not thread-safe, and this runs inside a request handler.
+
+    Warnings raised further down (`build_availability` on a missing schedule) still go only to
+    stderr; this covers the history-staleness messages raised here.
     """
     raw = data_root / "raw"
     found = _usable_history(raw, season, history_seasons)
     frames = found.frames
 
     if found.incomplete:
-        warnings.warn(
+        _report(
             f"weekly_stats season(s) {found.incomplete} are on disk but incomplete (they do "
             f"not run through the end of the regular season) and were EXCLUDED from the "
             f"availability model. Reading a partial season would score every player in it "
             f"at weeks-so-far / full-season. Re-ingest once the season finishes.",
-            stacklevel=2,
+            notes,
         )
 
     if found.gaps:
-        warnings.warn(
+        _report(
             f"weekly_stats season(s) {found.gaps} have no partition at all, but sit between "
             f"seasons that do. A missing season narrows the availability history silently "
             f"(an interrupted refresh leaves nothing behind, since write_partition unlinks "
             f"before writing). Re-ingest them.",
-            stacklevel=2,
+            notes,
         )
 
     if not frames:
@@ -159,3 +169,10 @@ def load_store_availability(
         raise FileNotFoundError(f"id_map.parquet not found at {id_map_path}; check --data-root")
     id_map = pd.read_parquet(id_map_path)
     return build_availability(weekly_stats, schedules, id_map, pool, season=season)
+
+
+def _report(message: str, notes: list[str] | None) -> None:
+    """Warn, and hand the caller the text if it asked for it."""
+    warnings.warn(message, stacklevel=3)
+    if notes is not None:
+        notes.append(message)

@@ -17,6 +17,20 @@ from pydantic import BaseModel, ConfigDict, Field
 _PYARROW_STR: Final = pd.StringDtype("pyarrow")
 
 
+def display_str(value: object) -> str:
+    """A display string, tolerating pandas NA. Empty when there is nothing to show.
+
+    Lives beside `_PYARROW_STR` because that dtype is what makes it necessary: a nullable
+    string column yields `pd.NA`, and the natural idiom for a fallback -- `value or default` --
+    evaluates `bool(pd.NA)`, which RAISES. One missing name then takes down a whole page rather
+    than blanking one cell. It had four near-copies across the midseason and web layers before
+    this existed.
+    """
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return ""
+    return str(value)
+
+
 class Position(StrEnum):
     """NFL fantasy-relevant positions. Use Position.QB, never the string "QB"."""
 

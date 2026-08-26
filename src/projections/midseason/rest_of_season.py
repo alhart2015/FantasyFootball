@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from projections.draft.assistant.performance_variance import SEASON_GAMES
-from projections.schemas import VorpTableSchema
+from projections.schemas import VorpTableSchema, display_str
 
 #: Points-over-a-full-season below which a projection is far more likely to be an ingest
 #: problem than a real number. Scaled by the games actually remaining at the point of use --
@@ -55,6 +55,14 @@ class RosDiagnostics:
     #: zero while the whole pool is quietly near-zeroed.
     n_near_zero: int = 0
     clamped_examples: tuple[str, ...] = field(default_factory=tuple)
+    #: The cutoff `n_near_zero` was counted against. Carried rather than re-derived in the
+    #: message, which quoted the unscaled constant while the code applied
+    #: `_IMPLAUSIBLY_SMALL_ROS * games_remaining / SEASON_GAMES` -- so at week 10 the note said
+    #: "under 1 points" about a check that used 0.47.
+    near_zero_cutoff: float = _IMPLAUSIBLY_SMALL_ROS
+    #: The projection that was subtracted from is a PRESEASON one rather than a fresh
+    #: mid-season pull. It changes what a wholesale clamp means -- see `warning()`.
+    projection_is_preseason: bool = False
 
     @property
     def looks_like_double_counting(self) -> bool:
@@ -80,7 +88,7 @@ class RosDiagnostics:
         if self.n_near_zero:
             parts.append(
                 f"{self.n_near_zero} of {self.n_players} players project implausibly near "
-                f"zero for the rest of the season (under {_IMPLAUSIBLY_SMALL_ROS:g} points) "
+                f"zero for the rest of the season (under {self.near_zero_cutoff:.2g} points) "
                 "without clamping"
             )
         if self.n_fallback:
@@ -95,7 +103,18 @@ class RosDiagnostics:
                 "is the shape of a provider already reporting rest-of-season points, but the "
                 "near-miss form that clamping alone cannot see. Check one player by hand."
             )
-        if self.looks_like_double_counting:
+        if self.looks_like_double_counting and self.projection_is_preseason:
+            # Two causes, and from a preseason pool the innocent one gets likelier every week:
+            # by December a good share of any August projection has simply been beaten. Naming
+            # only the provider bug here would be confidently wrong on the page a human reads.
+            message += (
+                " MORE THAN A THIRD OF THE POOL CLAMPED. Either the projections being "
+                "subtracted from are stale — they are preseason numbers, and late in a season "
+                "many players have beaten them outright — or the provider is already "
+                "reporting rest-of-season points, in which case every projection here is too "
+                "low. Re-pull projections; if it persists, check one player by hand."
+            )
+        elif self.looks_like_double_counting:
             message += (
                 " MORE THAN A THIRD OF THE POOL CLAMPED — this is the signature of the "
                 "provider already reporting rest-of-season points, in which case subtracting "
@@ -197,6 +216,31 @@ def rest_of_season_pool(
         out["season_mean_fpts"] = 0.0
         return _validated(out), RosDiagnostics(n_players=len(out))
 
+    totals, diagnostics = _remaining(
+        out, fresh_season_points, points_to_date, games_remaining=games_remaining
+    )
+    # Per-game pace, re-expressed over a full season so the variance model's fixed
+    # SEASON_GAMES divisor recovers the pace we meant. See the docstring.
+    out["season_mean_fpts"] = [points / games_remaining * SEASON_GAMES for points in totals]
+    return _validated(out), diagnostics
+
+
+def _remaining(
+    pool: pd.DataFrame,
+    fresh_season_points: Mapping[str, float],
+    points_to_date: Mapping[str, float],
+    *,
+    games_remaining: int,
+    projection_is_preseason: bool = False,
+) -> tuple[list[float], RosDiagnostics]:
+    """Per-player remaining totals, plus what had to be papered over.
+
+    The shared half of `rest_of_season_pool` and `remaining_totals`. Those two differ ONLY in
+    what they write back -- a full-season-equivalent pace for the simulator, a raw remaining
+    total for a table cell -- so everything before that point lives here. The alternative was
+    two copies of the clamp accounting, the near-zero rule and the diagnostics assembly, which
+    is what the first version of `remaining_totals` was.
+    """
     # Scaled by the games that remain. `points` here is a REMAINING total, so an absolute
     # threshold means "under a point for the rest of the season" early on and "under a point
     # for one game" at the end -- and a full pool's deep bench clears the latter routinely,
@@ -204,11 +248,11 @@ def rest_of_season_pool(
     # the clamp semantics above were narrowed to remove.
     near_zero_cutoff = _IMPLAUSIBLY_SMALL_ROS * games_remaining / SEASON_GAMES
 
-    ros: list[float] = []
+    totals: list[float] = []
     clamped: list[str] = []
     n_fallback = 0
     n_near_zero = 0
-    for row in out.itertuples():
+    for row in pool.itertuples():
         gsis = str(row.gsis_id)
         points, was_clamped, used_fallback = rest_of_season_points(
             fresh_season_points.get(gsis),
@@ -217,24 +261,95 @@ def rest_of_season_pool(
             games_remaining=games_remaining,
         )
         if was_clamped:
-            name = getattr(row, "full_name", None)
-            # `x or y` evaluates bool(x), and bool(pd.NA) raises. Name columns here are
-            # pyarrow-backed nullable strings, so pd.NA is admissible -- and this is the one
-            # path whose whole purpose is making a failure visible, so it must not be the path
-            # that crashes.
-            clamped.append(gsis if name is None or pd.isna(name) else str(name))
+            # `display_str` rather than `name or gsis`: `bool(pd.NA)` raises, and this is the
+            # one path whose whole purpose is making a failure visible, so it must not be the
+            # path that crashes.
+            clamped.append(display_str(getattr(row, "full_name", None)) or gsis)
         elif not used_fallback and 0.0 < points < near_zero_cutoff:
             n_near_zero += 1
         n_fallback += used_fallback
-        # Per-game pace, re-expressed over a full season so the variance model's fixed
-        # SEASON_GAMES divisor recovers the pace we meant. See the docstring.
-        ros.append(points / games_remaining * SEASON_GAMES)
+        totals.append(points)
 
-    out["season_mean_fpts"] = ros
-    return _validated(out), RosDiagnostics(
-        n_players=len(out),
+    return totals, RosDiagnostics(
+        n_players=len(pool),
         n_clamped=len(clamped),
         n_fallback=n_fallback,
         n_near_zero=n_near_zero,
-        clamped_examples=tuple(str(name) for name in clamped[:5]),
+        near_zero_cutoff=near_zero_cutoff,
+        clamped_examples=tuple(clamped[:5]),
+        projection_is_preseason=projection_is_preseason,
     )
+
+
+def remaining_totals(
+    pool: pd.DataFrame,
+    points_to_date: Mapping[str, float],
+    *,
+    games_remaining: int,
+) -> tuple[pd.DataFrame, RosDiagnostics]:
+    """Rewrite `season_mean_fpts` to the points a player still has to score. Returns
+    (pool, diagnostics).
+
+    **Sibling of `rest_of_season_pool`, and deliberately not the same thing.** Both subtract
+    points-to-date from a season projection; they differ in what they write back:
+
+    - `rest_of_season_pool` writes a full-season-equivalent PACE, because its consumer is the
+      variance model, which divides `season_mean_fpts` by a fixed `SEASON_GAMES`.
+    - this one writes the raw remaining TOTAL, because its consumer is a table cell under the
+      header "projected points for the rest of the season", where a reader wants the number of
+      points still coming.
+
+    Printing a pace under that header roughly doubles it by week 10; feeding a total to the
+    simulator shrinks every roster by `games_remaining / SEASON_GAMES`. Both mistakes have been
+    made in this repo, which is why the two functions sit next to each other with this
+    paragraph between them. Everything before the write-back is `_remaining`, shared.
+
+    **The pool is a PRESEASON projection here, not a fresh mid-season pull**, and that changes
+    what a clamp means. `rest_of_season_pool`'s caller supplies re-pulled season totals, so a
+    wholesale clamp really is the signature of a provider reporting rest-of-season. Here it is
+    at least as likely to mean "the pool is from August and the season is nearly over" -- by
+    week 15 a good share of any preseason projection has been beaten. `projection_is_preseason`
+    makes the warning say both, rather than confidently naming the wrong cause on the one page
+    a human reads.
+
+    `games_remaining` is still needed even though nothing is prorated: it scales the near-zero
+    cutoff, which is compared against a remaining total and would otherwise mean "under a point
+    for the whole rest of the season" in September and "under a point for one game" in
+    December.
+    """
+    out = pool.copy()
+    if games_remaining <= 0:
+        # Every cell renders 0.0 and the roster total with it, which looks like a bad team
+        # rather than an exhausted season -- so it is counted as a wholesale clamp, which is
+        # what makes `warning()` say something. Reachable in a league whose regular season runs
+        # to 17 weeks or more, where `first_unplayed_week` returns `reg_weeks + 1`.
+        out["season_mean_fpts"] = 0.0
+        return _validated(out), RosDiagnostics(
+            n_players=len(out),
+            n_clamped=len(out),
+            clamped_examples=tuple(str(g) for g in out["gsis_id"].head(5)),
+            projection_is_preseason=True,
+        )
+    # Each player is measured against his own whole-season projection, so `fresh` IS the pool
+    # and nothing is ever prorated -- `used_fallback` cannot be set from here.
+    #
+    # `VorpTableSchema` marks `gsis_id` unique, but this function is public and `_remaining`
+    # runs BEFORE the validate on the way out, so a caller handing over an unvalidated pool
+    # would have had both of a duplicated player's rows scored against whichever came last.
+    # Checked rather than assumed, because the symptom is a plausible wrong number.
+    duplicated = out["gsis_id"].astype(str).duplicated()
+    if duplicated.any():
+        raise ValueError(
+            f"pool holds duplicate gsis_id(s) {sorted(set(out.loc[duplicated, 'gsis_id']))}; "
+            "each player must appear once or his remaining points are ambiguous"
+        )
+    fresh = {str(row.gsis_id): float(row.season_mean_fpts) for row in out.itertuples()}
+    totals, diagnostics = _remaining(
+        out,
+        fresh,
+        points_to_date,
+        games_remaining=games_remaining,
+        projection_is_preseason=True,
+    )
+    out["season_mean_fpts"] = totals
+    return _validated(out), diagnostics

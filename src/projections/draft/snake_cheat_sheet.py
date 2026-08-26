@@ -14,6 +14,7 @@ from numpy.typing import NDArray
 
 from projections.draft._pool import _select_pool
 from projections.draft.league_config import LeagueConfig
+from projections.rankings import rank_within_position
 from projections.schemas import _PYARROW_STR, Position, SnakeCheatSheetSchema, VorpTableSchema
 
 DISPLAY_NAME_FALLBACK = "—"
@@ -51,19 +52,6 @@ def _assign_tiers(
         start = int(cut) + 1
     tier[start:] = n_tiers
     return tier
-
-
-def _rank_within_position(frame: pd.DataFrame, by: str, ascending: bool) -> pd.Series:
-    """Gap-free 1-based integer rank within each position: sort by `by` (tie-broken by
-    gsis_id) then cumcount. Deliberately NOT `Series.rank()`, whose default 'average'
-    method yields fractional ranks. The returned Series is index-aligned to `frame`.
-    """
-    return (
-        frame.sort_values(["position", by, "gsis_id"], ascending=[True, ascending, True])
-        .groupby("position", sort=False)
-        .cumcount()
-        + 1
-    )
 
 
 def generate_snake_cheat_sheet(
@@ -121,13 +109,13 @@ def generate_snake_cheat_sheet(
     df["tier"] = tier_col
 
     # ADP-delta: within position, over the non-null-consensus_adp subset, delta = adp_rank -
-    # vorp_rank (both gap-free integer ranks; see _rank_within_position). Positive = value
+    # vorp_rank (both gap-free integer ranks; see rank_within_position). Positive = value
     # (market drafts later than VORP rank), negative = reach. NA for null-ADP rows.
     adp_delta = pd.Series(pd.array([pd.NA] * len(df), dtype=pd.Int64Dtype()), index=df.index)
     sub = df[df["consensus_adp"].notna()]
     if not sub.empty:
-        adp_rank = _rank_within_position(sub, "consensus_adp", ascending=True)
-        vorp_rank = _rank_within_position(sub, "vorp", ascending=False)
+        adp_rank = rank_within_position(sub, "consensus_adp", ascending=True)
+        vorp_rank = rank_within_position(sub, "vorp", ascending=False)
         delta = (adp_rank - vorp_rank).astype(pd.Int64Dtype())  # index-aligned subtraction
         adp_delta.loc[delta.index] = delta
     df["adp_delta"] = adp_delta

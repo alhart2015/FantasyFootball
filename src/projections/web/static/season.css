@@ -1,0 +1,203 @@
+/* Season dashboard styles.
+ *
+ * Tokens first, everything else in terms of them. Page theming lives here and only here --
+ * the model repo documented exactly that boundary and then leaked inline `style="..."`
+ * attributes across a dozen templates. The one exception is the colour-scale custom property
+ * the view model computes per cell, which has to be inline because it is per-cell data.
+ */
+
+:root {
+  /* Surface ramp, darkest to lightest. */
+  --bg: #101319;
+  --surface: #171b23;
+  --surface-2: #1e232d;
+  --line: #29303b;
+
+  /* Text ramp. */
+  --ink: #e8ebf1;
+  --ink-dim: #a8b1c0;
+  --muted: #78818f;
+
+  --accent: #e0aa4c;
+  --good: #4fb358;
+  --bad: #c4553d;
+
+  --radius: 6px;
+  --pad: 0.5rem 0.75rem;
+
+  /* Colour-scale strength. Kept as tokens so the two scales can be retuned without touching
+     the rules that use them, and so a page can override the pair under its own scope. */
+  --scale-pos: 0.24;
+  --scale-neg: 0.20;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); }
+
+/* --- chrome -------------------------------------------------------------------------------- */
+
+.nav {
+  display: flex;
+  align-items: baseline;
+  gap: 1.5rem;
+  padding: 0.8rem 1.5rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.nav-brand {
+  font-weight: 650;
+  color: var(--accent);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.nav-link {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  padding-bottom: 0.15rem;
+  border-bottom: 2px solid transparent;
+}
+.nav-link:hover { color: var(--ink); }
+.nav-link[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
+
+.content { padding: 1.75rem 1.5rem 4rem; max-width: 1180px; margin: 0 auto; }
+
+.page-head { margin-bottom: 1.25rem; }
+h1 { font-size: 1.5rem; margin: 0; letter-spacing: -0.02em; }
+h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin: 2.25rem 0 0.6rem;
+  font-weight: 600;
+}
+.page-head p { margin: 0.3rem 0 0; color: var(--ink-dim); font-size: 0.9rem; }
+.muted { color: var(--muted); }
+
+/* --- messages ------------------------------------------------------------------------------ */
+
+.empty, .note {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius);
+  color: var(--ink-dim);
+}
+.empty { font-size: 0.95rem; max-width: 60ch; }
+.note { margin: 0 0 0.6rem; font-size: 0.85rem; }
+
+/* --- tables -------------------------------------------------------------------------------- */
+
+/* The scroll container carries the a11y attributes: a horizontally scrolling region a
+   keyboard user cannot reach or name is a WCAG 2.1.1 failure. */
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  /* Tabular figures so digits line up column-wise; without it a table of numbers shimmers. */
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+.data-table.narrow { width: auto; min-width: 24rem; }
+
+.data-table th, .data-table td {
+  padding: var(--pad);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+.data-table th {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.data-table th[title] { cursor: help; text-decoration: underline dotted currentColor; }
+.data-table th[title]:hover { color: var(--ink-dim); }
+.data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr:hover td { background: rgba(255, 255, 255, 0.025); }
+
+/* Column-specific styling goes by semantic class, never by position: `nth-child(2)` hard-coded
+   which column holds the name, an ordering `views/columns.py` owns, so reordering a table would
+   have silently accented the wrong cell -- the failure the column registry exists to prevent,
+   expressed in CSS.
+
+   This rule is the deliberate exception, and it is positional because what it means is
+   positional: the LEADING column is dimmed whatever it holds (a rank on one table, a slot on
+   the other). It says "this is the gutter", not "this is the rank".
+   `tests/test_web/test_columns.py::test_no_stylesheet_rule_targets_a_column_by_position`
+   allowlists this exact rule for that reason and forbids every other positional
+   selector on a data cell. */
+.data-table td:first-child { color: var(--muted); }
+
+/* The viewer's own row. */
+.data-table tr.user-team td { background: rgba(224, 170, 76, 0.07); }
+.data-table tr.user-team td.name { color: var(--accent); font-weight: 600; }
+.data-table tr.user-team:hover td { background: rgba(224, 170, 76, 0.11); }
+
+/* --- the colour scale ---------------------------------------------------------------------- */
+
+/* One custom property per cell, computed by the view model; CSS does the mixing, so a single
+   rule covers the whole gradient. A column where every team is tied carries no property at
+   all and renders neutral -- which is the honest rendering of "no spread", rather than every
+   cell painted at the midpoint. */
+td[style*="--pos"] { background: rgba(79, 179, 88, calc(var(--pos) * var(--scale-pos))); }
+td[style*="--neg"] { background: rgba(196, 85, 61, calc(var(--neg) * var(--scale-neg))); }
+.data-table tr.user-team td[style*="--pos"] {
+  background: rgba(79, 179, 88, calc(var(--pos) * var(--scale-pos) * 1.3));
+}
+.data-table tr.user-team td[style*="--neg"] {
+  background: rgba(196, 85, 61, calc(var(--neg) * var(--scale-neg) * 1.3));
+}
+
+/* --- my team ------------------------------------------------------------------------------- */
+
+.data-table tr.group-break td {
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+/* Bench rows are dimmed, not hidden: a bench player projected above a starter is the most
+   actionable thing on this page, and hiding him would bury it. */
+.data-table tr.bench td { color: var(--muted); }
+.data-table tr.bench td.name { color: var(--ink-dim); }
+
+/* --- small screens -------------------------------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .content { padding: 1.25rem 0.9rem 3rem; }
+  .nav { padding: 0.7rem 0.9rem; gap: 1rem; }
+  .data-table { font-size: 0.85rem; }
+  .data-table th, .data-table td { padding: 0.4rem 0.55rem; }
+}

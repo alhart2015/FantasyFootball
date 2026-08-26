@@ -1,4 +1,9 @@
-"""Shared synthetic-league builders for the mid-season tests.
+"""Shared synthetic-league builders.
+
+Named for `tests/test_midseason/` because that is where the league shape was first needed,
+but `tests/test_web/` imports it too -- the dashboard renders exactly this league, and a
+second synthetic league that drifts from this one would let the two suites disagree about
+what a correct page looks like. That import is the intended arrangement, not a leak.
 
 Pass 1 of the review flagged that three test modules each built the same synthetic roster;
 the fix for it added a fourth. The league shape now lives here once, so changing it is one
@@ -11,16 +16,21 @@ every team exactly one game per week over a short season.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 import pandas as pd
 
 from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
+from projections.ingest.espn_league import ESPN_LINEUP_SLOTS
 from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset, VorpTableSchema
 
 #: Non-contiguous and unsorted on purpose: `SlotMap` has to map these onto 1..n.
 TEAM_IDS: list[int] = [17, 3, 11, 5, 9, 1]
+#: The team the tests view the league AS. Named here rather than spelled `17` in each module:
+#: it was written out in four places, so changing the fixture league meant finding all four.
+MY_TEAM_ID: int = TEAM_IDS[0]
 REG_WEEKS = 4
 POSITIONS: tuple[str, ...] = ("QB", "RB", "RB", "WR", "WR", "TE")
 #: Every team plays exactly once a week.
@@ -32,8 +42,65 @@ PAIRINGS: list[list[tuple[int, int]]] = [
 ]
 CALENDAR = LeagueCalendar(reg_weeks=REG_WEEKS, playoff_size=2, n_byes=0, final_weeks=1)
 
-#: ESPN lineup slot ids: 0 QB, 2 RB, 4 WR, 6 TE, 20 BENCH.
-ESPN_SLOT_COUNTS: dict[str, int] = {"0": 1, "2": 2, "4": 2, "6": 1, "20": 1}
+#: Which POSITIONS indices sit on the bench. A roster with both starters and bench is what the
+#: My Team page's starter/bench split is for; an all-bench fixture silently made every
+#: starters-only total zero.
+BENCH_INDICES: frozenset[int] = frozenset({2, 4})
+#: The ESPN id for each slot the fixture uses. Derived from production's own mapping rather
+#: than re-spelled, so a renumbering on ESPN's side cannot leave the fixture green against a
+#: changed parser.
+#:
+#: Restricted to the slots the fixture actually seats, and asserted unique. `ESPN_LINEUP_SLOTS`
+#: is many-to-one -- ids 3, 5 and 23 are all FLEX -- so a blanket inversion silently keeps
+#: whichever id came last, which is the opposite of the robustness the derivation is for.
+_FIXTURE_SLOTS: frozenset[RosterSlot] = frozenset(
+    {
+        RosterSlot.QB,
+        RosterSlot.RB,
+        RosterSlot.WR,
+        RosterSlot.TE,
+        RosterSlot.BENCH,
+    }
+)
+
+
+def _espn_id_for_slot() -> dict[str, int]:
+    """A function, not a module-level loop: the loop leaked its variables into the namespace of
+    a conftest three suites import, and its uniqueness check was a bare `assert`, which
+    `python -O` strips -- in the one configuration where a silent last-wins would matter."""
+    ids: dict[str, int] = {}
+    for slot_id, slot in ESPN_LINEUP_SLOTS.items():
+        if slot not in _FIXTURE_SLOTS:
+            continue
+        if slot.value in ids:
+            raise AssertionError(
+                f"{slot} has more than one ESPN id; the fixture cannot pick one for you"
+            )
+        ids[slot.value] = slot_id
+    return ids
+
+
+ESPN_ID_FOR_SLOT: dict[str, int] = _espn_id_for_slot()
+ESPN_BENCH_SLOT: int = ESPN_ID_FOR_SLOT[RosterSlot.BENCH.value]
+#: The starting lineup the fixture actually seats.
+#:
+#: Both the ESPN payload's `rosterSettings.lineupSlotCounts` and `LeagueConfig.roster_slots`
+#: are derived from it, so the declared lineup and the players available to fill it cannot
+#: disagree. Spelled out by hand they said 2 RB / 2 WR while the roster seated 1 of each --
+#: two declarations of one league, and any test handing both to the same pipeline was
+#: describing neither.
+STARTING_SLOTS: dict[RosterSlot, int] = dict(
+    Counter(RosterSlot(pos) for i, pos in enumerate(POSITIONS) if i not in BENCH_INDICES)
+)
+
+#: `rosterSettings.lineupSlotCounts`, keyed by ESPN's slot ids and counting the bench too.
+ESPN_SLOT_COUNTS: dict[str, int] = dict(
+    Counter(
+        str(ESPN_BENCH_SLOT if i in BENCH_INDICES else ESPN_ID_FOR_SLOT[RosterSlot(pos).value])
+        for i, pos in enumerate(POSITIONS)
+    )
+)
+
 #: ESPN defaultPositionId.
 ESPN_POSITION_ID: dict[str, int] = {"QB": 1, "RB": 2, "WR": 3, "TE": 4}
 
@@ -50,12 +117,11 @@ def league_config(n_teams: int = len(TEAM_IDS), *, name: str = "midseason_test")
     return LeagueConfig(
         name=name,
         n_teams=n_teams,
-        roster_slots={
-            RosterSlot.QB: 1,
-            RosterSlot.RB: 2,
-            RosterSlot.WR: 2,
-            RosterSlot.TE: 1,
-        },
+        # DERIVED from the same roster the payload builds, like `ESPN_SLOT_COUNTS`. Spelled
+        # out here it said 2 RB / 2 WR while the payload seated 1 of each -- so a test handing
+        # both to the same pipeline was describing two different leagues, which is the defect
+        # deriving `ESPN_SLOT_COUNTS` was meant to remove, relocated one declaration over.
+        roster_slots=STARTING_SLOTS,
         ruleset=Ruleset.espn_half(),
     )
 
@@ -151,7 +217,16 @@ def espn_payload(*, played_weeks: int = 2, with_schedule: bool = True) -> dict[s
     for team_id in TEAM_IDS:
         entries = [
             {
-                "lineupSlotId": 20,
+                # The second RB and the second WR sit on the bench; the rest start.
+                "lineupSlotId": (
+                    ESPN_BENCH_SLOT
+                    if i in BENCH_INDICES
+                    # `RosterSlot(pos)` rather than indexing with the position string: they
+                    # happen to spell the same letters, and relying on that is the slot-vs-
+                    # position conflation CLAUDE.md's enum rule exists to stop. A position with
+                    # no same-named slot now fails loudly instead of raising a bare KeyError.
+                    else ESPN_ID_FOR_SLOT[RosterSlot(pos).value]
+                ),
                 "playerId": espn_player_id(team_id, i),
                 "playerPoolEntry": {
                     "player": {
