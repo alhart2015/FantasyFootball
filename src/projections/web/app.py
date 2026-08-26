@@ -38,6 +38,8 @@ class DashboardConfig:
     league_id: int
     #: Which team is mine. None means the "you" highlight is simply absent.
     my_team_id: int | None = None
+    #: ESPN cookie file. Gitignored, and read only to pull the league.
+    credentials_path: Path = Path("configs/espn_credentials.json")
     #: Monte-Carlo draws per standings run. Lower in tests.
     n_sims: int = 2000
 

@@ -30,6 +30,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--pool", type=Path, required=True, help="VORP parquet for this league.")
     p.add_argument("--league-dir", type=Path, default=_DEFAULT_LEAGUE_DIR)
     p.add_argument("--data-root", type=Path, default=Path("data"))
+    p.add_argument(
+        "--credentials",
+        type=Path,
+        default=Path("configs/espn_credentials.json"),
+        help="ESPN cookie file (gitignored).",
+    )
     p.add_argument("--n-sims", type=int, default=2000)
     p.add_argument("--port", type=int, default=5002)
     p.add_argument("--debug", action="store_true")
@@ -45,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         season=args.season,
         league_id=args.league_id,
         my_team_id=args.team_id,
+        credentials_path=args.credentials,
         n_sims=args.n_sims,
     )
 

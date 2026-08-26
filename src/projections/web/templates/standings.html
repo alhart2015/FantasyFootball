@@ -1,6 +1,70 @@
 {% extends "base.html" %}
-{% block title %}Standings{% endblock %}
+{% block title %}Standings — {{ page.league_name or page.season }}{% endblock %}
 {% block content %}
-  <h1>Standings</h1>
-  <p class="muted">{{ season }} season.</p>
+  <header class="page-head">
+    <h1>{{ page.league_name or "Standings" }}</h1>
+    {% if not page.is_empty %}
+      <p class="muted">
+        Week {{ page.week }} of {{ page.reg_weeks }} ·
+        {{ page.weeks_remaining }} to play ·
+        {{ page.n_matchups_played }} matchups played
+      </p>
+    {% endif %}
+  </header>
+
+  {% if page.is_empty %}
+    <p class="empty">{{ page.message }}</p>
+  {% else %}
+    {% for note in page.notes %}
+      <p class="note">{{ note }}</p>
+    {% endfor %}
+
+    <div class="table-scroll" tabindex="0" role="region" aria-label="League standings">
+      <table class="data-table">
+        <thead>
+          <tr>
+            {% for column in page.columns %}
+              <th {% if column.numeric %}class="num"{% endif %}
+                  {% if column.help %}title="{{ column.help }}"{% endif %}>{{ column.label }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in page.rows %}
+            <tr {% if row.is_mine %}class="user-team"{% endif %}>
+              {% for cell in row.cells %}
+                <td class="{{ 'num' if cell.numeric else '' }}"
+                    {%- if cell.intensity is not none %}
+                      {%- if cell.intensity > 0 %} style="--pos: {{ cell.intensity|round(3) }}"
+                      {%- elif cell.intensity < 0 %} style="--neg: {{ (-cell.intensity)|round(3) }}"
+                      {%- endif %}
+                    {%- endif %}>{{ cell.text }}</td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if page.my_games %}
+      <h2>Your remaining games</h2>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Your remaining games">
+        <table class="data-table narrow">
+          <thead>
+            <tr><th class="num">Wk</th><th></th><th>Opponent</th><th class="num">Win</th></tr>
+          </thead>
+          <tbody>
+            {% for game in page.my_games %}
+              <tr>
+                <td class="num">{{ game.week }}</td>
+                <td class="muted">{{ "vs" if game.at_home else "@" }}</td>
+                <td>{{ game.opponent }}</td>
+                <td class="num">{{ "%.0f%%"|format(game.win_pct * 100) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  {% endif %}
 {% endblock %}
