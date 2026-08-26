@@ -17,6 +17,7 @@ from projections.midseason.standings import ProjectionInputError
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 from projections.web.views.team_view import TeamPage, assemble_team_page
 from tests.test_midseason.conftest import (
+    MY_TEAM_ID,
     POSITIONS,
     TEAM_IDS,
     espn_payload,
@@ -24,8 +25,6 @@ from tests.test_midseason.conftest import (
     league_config,
 )
 from tests.test_midseason.conftest import id_map as league_id_map
-
-_MY_TEAM = 17
 
 
 def _pool(extra_positions: dict[str, str] | None = None) -> pd.DataFrame:
@@ -98,7 +97,7 @@ def _weekly_stats(weeks: int) -> pd.DataFrame:
     return frame
 
 
-def _assemble(*, played_weeks: int = 2, my_team_id: int = _MY_TEAM, **overrides: Any) -> TeamPage:
+def _assemble(*, played_weeks: int = 2, my_team_id: int = MY_TEAM_ID, **overrides: Any) -> TeamPage:
     kwargs: dict[str, Any] = {
         "payload": espn_payload(played_weeks=played_weeks),
         "pool": _pool(),
@@ -154,7 +153,7 @@ def test_players_the_pool_cannot_project_still_appear() -> None:
     the pool never contains -- were deleted before the view saw them. A 13-man roster rendered
     as 11 with no message, and the note written to name them was unreachable in production."""
     payload = espn_payload(played_weeks=2)
-    my_team = next(t for t in payload["teams"] if t["id"] == _MY_TEAM)
+    my_team = next(t for t in payload["teams"] if t["id"] == MY_TEAM_ID)
     my_team["roster"]["entries"].append(
         {
             "lineupSlotId": 17,  # K
@@ -191,7 +190,7 @@ def test_players_the_pool_cannot_project_still_appear() -> None:
 
 def test_only_my_players_appear() -> None:
     page = _assemble()
-    mine = {gsis_id(_MY_TEAM, i) for i in range(len(POSITIONS))}
+    mine = {gsis_id(MY_TEAM_ID, i) for i in range(len(POSITIONS))}
     assert {row.gsis_id for row in page.rows} == mine
 
 

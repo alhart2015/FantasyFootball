@@ -18,9 +18,13 @@ from projections.web.views.standings_view import (
     build_standings_page,
     empty_standings_page,
 )
-from tests.test_midseason.conftest import TEAM_IDS, espn_payload, id_map, vorp_pool
-
-_MY_TEAM = 17
+from tests.test_midseason.conftest import (
+    MY_TEAM_ID,
+    TEAM_IDS,
+    espn_payload,
+    id_map,
+    vorp_pool,
+)
 
 
 def _run(*, played_weeks: int = 2) -> StandingsRun:
@@ -37,7 +41,7 @@ def _run(*, played_weeks: int = 2) -> StandingsRun:
     )
 
 
-def _page(*, played_weeks: int = 2, my_team_id: int | None = _MY_TEAM) -> StandingsPage:
+def _page(*, played_weeks: int = 2, my_team_id: int | None = MY_TEAM_ID) -> StandingsPage:
     return build_standings_page(_run(played_weeks=played_weeks), season=2026, my_team_id=my_team_id)
 
 
@@ -59,7 +63,7 @@ def test_my_row_is_marked_and_only_mine() -> None:
     page = _page()
     mine = [row for row in page.rows if row.is_mine]
     assert len(mine) == 1
-    assert mine[0].team_id == _MY_TEAM
+    assert mine[0].team_id == MY_TEAM_ID
 
 
 def test_no_row_is_marked_when_there_is_no_my_team() -> None:
@@ -80,7 +84,7 @@ def test_a_record_with_ties_shows_them() -> None:
     frame = run.standings.copy()
     frame.loc[0, "ties"] = 1
     page = build_standings_page(
-        StandingsRun(**{**run.__dict__, "standings": frame}), season=2026, my_team_id=_MY_TEAM
+        StandingsRun(**{**run.__dict__, "standings": frame}), season=2026, my_team_id=MY_TEAM_ID
     )
     assert page.rows[0].cells[2].text.count("-") == 2
 
@@ -127,22 +131,22 @@ def test_my_games_state_the_probability_from_my_side() -> None:
     """`home_win_pct` on a row where I am AWAY is my chance of losing. A table that forgets to
     flip it reports the exact opposite of what it claims."""
     run = _run()
-    page = build_standings_page(run, season=2026, my_team_id=_MY_TEAM)
+    page = build_standings_page(run, season=2026, my_team_id=MY_TEAM_ID)
     assert page.my_games
 
     odds = run.odds
     for game in page.my_games:
         row = odds[
             (odds["week"] == game.week)
-            & ((odds["home_team_id"] == _MY_TEAM) | (odds["away_team_id"] == _MY_TEAM))
+            & ((odds["home_team_id"] == MY_TEAM_ID) | (odds["away_team_id"] == MY_TEAM_ID))
         ].iloc[0]
         expected = (
             float(row["home_win_pct"])
-            if int(row["home_team_id"]) == _MY_TEAM
+            if int(row["home_team_id"]) == MY_TEAM_ID
             else 1.0 - float(row["home_win_pct"])
         )
         assert game.win_pct == pytest.approx(expected)
-        assert game.at_home == (int(row["home_team_id"]) == _MY_TEAM)
+        assert game.at_home == (int(row["home_team_id"]) == MY_TEAM_ID)
 
 
 def test_my_games_are_empty_without_a_my_team() -> None:

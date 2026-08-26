@@ -1,4 +1,9 @@
-"""Shared synthetic-league builders for the mid-season tests.
+"""Shared synthetic-league builders.
+
+Named for `tests/test_midseason/` because that is where the league shape was first needed,
+but `tests/test_web/` imports it too -- the dashboard renders exactly this league, and a
+second synthetic league that drifts from this one would let the two suites disagree about
+what a correct page looks like. That import is the intended arrangement, not a leak.
 
 Pass 1 of the review flagged that three test modules each built the same synthetic roster;
 the fix for it added a fourth. The league shape now lives here once, so changing it is one
@@ -21,6 +26,9 @@ from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset, VorpTableSche
 
 #: Non-contiguous and unsorted on purpose: `SlotMap` has to map these onto 1..n.
 TEAM_IDS: list[int] = [17, 3, 11, 5, 9, 1]
+#: The team the tests view the league AS. Named here rather than spelled `17` in each module:
+#: it was written out in four places, so changing the fixture league meant finding all four.
+MY_TEAM_ID: int = TEAM_IDS[0]
 REG_WEEKS = 4
 POSITIONS: tuple[str, ...] = ("QB", "RB", "RB", "WR", "WR", "TE")
 #: Every team plays exactly once a week.

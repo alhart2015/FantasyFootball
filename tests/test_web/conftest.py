@@ -22,12 +22,16 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from projections.web import DashboardConfig, create_app
+from tests.test_midseason.conftest import MY_TEAM_ID
 
-#: Matches the mid-season test league so fixtures can be shared conceptually with
-#: `tests/test_midseason/conftest.py` without importing across the boundary.
+#: The league the dashboard tests render. The shape itself comes from
+#: `tests/test_midseason/conftest.py`, which several modules here import directly -- the two
+#: suites describe the same league on purpose, and a second copy of `17` was how they would
+#: quietly stop doing so. Only the two ids the dashboard config needs and the domain fixtures
+#: do not have are declared here.
 TEST_SEASON = 2026
 TEST_LEAGUE_ID = 856974
-TEST_TEAM_ID = 17
+TEST_TEAM_ID = MY_TEAM_ID
 
 
 @pytest.fixture(autouse=True)
