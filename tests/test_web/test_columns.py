@@ -105,3 +105,29 @@ def test_a_string_in_a_numeric_column_is_a_loud_wiring_error() -> None:
     ValueError from deep inside a format call with no mention of which column."""
     with pytest.raises(TypeError, match="ytd_points"):
         Column(key="ytd_points", label="YTD", precision=1).format("6-1-1")
+
+
+def test_exactly_one_label_column_per_table() -> None:
+    """The stylesheet accents the cell naming each row's subject. It used to find it with
+    `nth-child(2)`, which hard-coded an ordering this module owns -- reorder a table and the
+    accent silently moved to the wrong cell, the same failure `test_no_template_re_declares_a_
+    column` exists to prevent, expressed in CSS where that test does not look."""
+    for table, columns in COLUMNS.items():
+        labels = [c for c in columns if c.is_label]
+        assert len(labels) == 1, f"{table} should have exactly one label column, got {labels}"
+
+
+def test_no_stylesheet_rule_targets_a_column_by_position() -> None:
+    """`nth-child` and `first-child` on a data cell encode column order. The one exception is
+    kept deliberately: the leading column is a rank or slot in both tables and is dimmed as a
+    group, not as a specific field."""
+    css = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "projections"
+        / "web"
+        / "static"
+        / "season.css"
+    ).read_text(encoding="utf-8")
+    offenders = [line.strip() for line in css.splitlines() if "nth-child" in line and "td" in line]
+    assert not offenders, f"style these by semantic class, not position: {offenders}"

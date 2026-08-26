@@ -30,6 +30,8 @@ class Cell:
     text: str
     intensity: float | None = None
     numeric: bool = True
+    #: The cell naming the row's subject. Styled by class, not by position.
+    is_label: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,7 @@ def build_standings_page(
                     text=column.format(_cell_value(row, column)),
                     intensity=_maybe_float(intensities.get(column.key, {}).get(index)),
                     numeric=column.numeric,
+                    is_label=column.is_label,
                 )
                 for column in STANDINGS_COLUMNS
             ),

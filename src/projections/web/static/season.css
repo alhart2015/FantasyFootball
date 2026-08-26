@@ -144,12 +144,14 @@ h2 {
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr:hover td { background: rgba(255, 255, 255, 0.025); }
 
-/* First data column reads as a label, not a number. */
+/* Styled by semantic class, never by column position: `nth-child` hard-coded an ordering
+   that `views/columns.py` owns, so reordering a table would have silently accented the wrong
+   cell -- the same failure the column registry exists to prevent, expressed in CSS. */
 .data-table td:first-child { color: var(--muted); }
 
 /* The viewer's own row. */
 .data-table tr.user-team td { background: rgba(224, 170, 76, 0.07); }
-.data-table tr.user-team td:nth-child(2) { color: var(--accent); font-weight: 600; }
+.data-table tr.user-team td.name { color: var(--accent); font-weight: 600; }
 .data-table tr.user-team:hover td { background: rgba(224, 170, 76, 0.11); }
 
 /* --- the colour scale ---------------------------------------------------------------------- */
@@ -181,7 +183,7 @@ td[style*="--neg"] { background: rgba(196, 85, 61, calc(var(--neg) * var(--scale
 /* Bench rows are dimmed, not hidden: a bench player projected above a starter is the most
    actionable thing on this page, and hiding him would bury it. */
 .data-table tr.bench td { color: var(--muted); }
-.data-table tr.bench td:nth-child(2) { color: var(--ink-dim); }
+.data-table tr.bench td.name { color: var(--ink-dim); }
 
 /* --- small screens -------------------------------------------------------------------------- */
 

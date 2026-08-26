@@ -42,6 +42,10 @@ class Column:
     percent: bool = False
     #: Right-align. Numbers read better right-aligned; names do not.
     numeric: bool = True
+    #: Marks the column that names the thing each row is about. The stylesheet targets this
+    #: rather than `nth-child`, which hard-coded an ordering only this module owns -- reorder a
+    #: table and the accent would have highlighted the wrong cell, silently.
+    is_label: bool = False
 
     def format(self, value: CellValue) -> str:
         """The value as it should appear in a cell.
@@ -72,7 +76,7 @@ class Column:
 #: a presentation layer over that contract rather than a second declaration of it.
 STANDINGS_COLUMNS: tuple[Column, ...] = (
     Column(key="rank", label="#", numeric=True),
-    Column(key="team_name", label="Team", numeric=False),
+    Column(key="team_name", label="Team", numeric=False, is_label=True),
     Column(key="record", label="Rec", help="Wins-losses-ties from played weeks", numeric=False),
     Column(
         key="points_for",
@@ -125,7 +129,7 @@ STANDINGS_COLUMNS: tuple[Column, ...] = (
 #: ruleset; `ros_*` from the rest-of-season projection. Ranks are within position.
 TEAM_COLUMNS: tuple[Column, ...] = (
     Column(key="slot", label="Slot", numeric=False),
-    Column(key="player", label="Player", numeric=False),
+    Column(key="player", label="Player", numeric=False, is_label=True),
     Column(key="position", label="Pos", numeric=False),
     Column(
         key="ytd_points",

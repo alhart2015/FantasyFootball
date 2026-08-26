@@ -154,6 +154,7 @@ def build_team_page(
                     text=column.format(row.values[column.key]),
                     intensity=intensities.get(column.key, [None] * len(rows))[i],
                     numeric=column.numeric,
+                    is_label=column.is_label,
                 )
                 for column in TEAM_COLUMNS
             ),
