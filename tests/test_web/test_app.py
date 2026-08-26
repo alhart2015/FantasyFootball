@@ -10,11 +10,16 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import numpy as np
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
+from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.performance_variance import VarianceParams
+from projections.midseason.standings import StandingsRun, project_league_standings
 from projections.web import DashboardConfig, create_app, dashboard_config
+from tests.test_midseason.conftest import espn_payload, id_map, vorp_pool
 
 _WEB_ROOT = Path(__file__).resolve().parents[2] / "src" / "projections" / "web"
 
@@ -156,3 +161,44 @@ def test_absent_credentials_are_reported_naming_both_sources(
     message = _missing_inputs(dashboard_config)
     assert message is not None
     assert "ESPN_SWID" in message and "the ESPN credentials" in message, message
+
+
+def test_availability_staleness_reaches_the_page_not_just_stderr(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`load_store_availability` warns when the injury history is thinner than expected --
+    an incomplete season on disk, or one that vanished between two that did not.
+
+    `warnings.warn` reaches stderr, which nobody looking at a web page will ever see, so the
+    page rendered a projection built on a thinner history than the reader believed and said
+    nothing about it. The standings page has a notes slot for exactly this, and the route now
+    hands its list down to the loader and reads it back.
+    """
+    from projections.web.routes import standings as standings_route
+
+    stale = "weekly_stats season(s) [2024] are on disk but incomplete"
+
+    def stub(config: object, notes: list[str]) -> StandingsRun:
+        notes.append(stale)
+        return _standings_run()
+
+    monkeypatch.setattr(standings_route, "_missing_inputs", lambda config: None)
+    monkeypatch.setattr(standings_route, "_run_projection", stub)
+
+    body = client.get("/standings").get_data(as_text=True)
+    assert stale in body, "a warning the reader cannot see is a warning that does not exist"
+
+
+def _standings_run() -> StandingsRun:
+    """A real run over the shared synthetic league, so the page under test is a real page."""
+    pool = vorp_pool()
+    return project_league_standings(
+        espn_payload(played_weeks=2),
+        pool,
+        id_map(),
+        PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={}),
+        VarianceParams.load(),
+        season=2026,
+        n_sims=20,
+        rng=np.random.default_rng(0),
+    )

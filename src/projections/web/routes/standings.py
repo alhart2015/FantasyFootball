@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 from flask import Blueprint, current_app, render_template
@@ -36,8 +38,9 @@ def standings() -> str:
         return render_template(
             "standings.html", page=empty_standings_page(missing, season=config.season)
         )
+    notes: list[str] = []
     try:
-        run = _run_projection(config)
+        run = _run_projection(config, notes)
     except (ProjectionInputError, EspnLeagueError, OSError) as exc:
         # ProjectionInputError and EspnLeagueError mean "there is nothing to project yet",
         # which before the season is the normal state rather than a fault. OSError covers the
@@ -48,6 +51,11 @@ def standings() -> str:
         page = empty_standings_page(str(exc), season=config.season)
     else:
         page = build_standings_page(run, season=config.season, my_team_id=config.my_team_id)
+        # The availability model's staleness warnings go to stderr, where nobody looking at a
+        # web page will ever see them -- and a projection built on a thinner injury history
+        # than the reader assumes is precisely what the notes slot is for.
+        if notes:
+            page = replace(page, notes=tuple(notes) + page.notes)
     return render_template("standings.html", page=page)
 
 
@@ -90,7 +98,7 @@ def _missing_inputs(config: DashboardConfig) -> str | None:
     return "Cannot project standings — missing " + "; ".join(absent) + "."
 
 
-def _run_projection(config: DashboardConfig) -> StandingsRun:
+def _run_projection(config: DashboardConfig, notes: list[str]) -> StandingsRun:
     """Pull the league and project it. Kept beside the route rather than in the view model
     because it does I/O -- the view model stays a pure function over the result."""
     creds = EspnCredentials.resolve(config.credentials_path)
@@ -105,7 +113,9 @@ def _run_projection(config: DashboardConfig) -> StandingsRun:
         payload,
         pool,
         pd.read_parquet(config.data_root / "raw" / "id_map.parquet"),
-        load_store_availability(pool, season=config.season, data_root=config.data_root),
+        load_store_availability(
+            pool, season=config.season, data_root=config.data_root, notes=notes
+        ),
         VarianceParams.load(),
         season=config.season,
         n_sims=config.n_sims,

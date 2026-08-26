@@ -300,3 +300,40 @@ def test_error_names_only_the_span_that_was_examined(tmp_path: Path) -> None:
             _pool(), season=2026, data_root=root, history_seasons=range(2022, 2023)
         )
     assert "2018" not in str(exc.value)
+
+
+# --- the same messages, in a form a UI can render ----------------------------------------------
+
+
+def test_the_loader_hands_back_its_warnings_when_asked(tmp_path: Path) -> None:
+    """`warnings.warn` alone reaches stderr, which is fine for a CLI and useless for a web page.
+
+    The season dashboard has a notes slot for exactly this, and without it renders a projection
+    built on a thinner injury history than the reader believes, saying nothing. An explicit list
+    rather than `warnings.catch_warnings` at the call site: that mutates process-global filter
+    state, which is not thread-safe, and the caller is a request handler.
+    """
+    root = _store(tmp_path, {2022: _full_season(2022), 2023: _full_season(2023), 2024: 6})
+    notes: list[str] = []
+    with pytest.warns(UserWarning, match="incomplete"):
+        load_store_availability(_pool(), season=2026, data_root=root, notes=notes)
+
+    assert len(notes) == 1
+    assert "incomplete" in notes[0] and "2024" in notes[0]
+
+
+def test_a_vanished_season_reaches_the_notes_too(tmp_path: Path) -> None:
+    root = _store(tmp_path, {2022: _full_season(2022), 2024: _full_season(2024)})
+    notes: list[str] = []
+    with pytest.warns(UserWarning, match="no partition at all"):
+        load_store_availability(_pool(), season=2026, data_root=root, notes=notes)
+
+    assert any("no partition at all" in note for note in notes), notes
+
+
+def test_a_clean_history_adds_no_notes(tmp_path: Path) -> None:
+    """Otherwise every page carries a warning, which trains the reader to ignore all of them."""
+    root = _store(tmp_path, {2022: _full_season(2022), 2023: _full_season(2023)})
+    notes: list[str] = []
+    load_store_availability(_pool(), season=2026, data_root=root, notes=notes)
+    assert notes == []
