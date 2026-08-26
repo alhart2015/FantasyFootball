@@ -198,7 +198,8 @@ def test_players_the_pool_cannot_project_still_appear() -> None:
     )
     page = _assemble(payload=payload, id_map=id_map)
 
-    assert any("Some Kicker" in row.cells[1].text for row in page.rows), (
+    player = next(i for i, c in enumerate(page.columns) if c.key == "player")
+    assert any("Some Kicker" in row.cells[player].text for row in page.rows), (
         "an unprojectable player must still be listed, with an em dash rather than vanishing"
     )
     assert any("Some Kicker" in note for note in page.notes), "and be named as unprojected"
@@ -275,7 +276,8 @@ def test_the_ytd_total_is_labelled_as_the_whole_roster_not_as_starters() -> None
     stays a starters-only figure.
     """
     page = _assemble()
-    every_ytd = sum(float(row.cells[3].text) for row in page.rows if row.cells[3].text != "—")
+    ytd = next(i for i, c in enumerate(page.columns) if c.key == "ytd_points")
+    every_ytd = sum(float(row.cells[ytd].text) for row in page.rows if row.cells[ytd].text != "—")
     assert page.roster_ytd == pytest.approx(every_ytd)
     assert page.starter_ros > 0.0
 
@@ -304,15 +306,32 @@ def test_a_player_recorded_at_two_positions_does_not_take_the_page_down() -> Non
     page = _assemble(weekly_stats=doubled)
     assert page.rows, "the page renders rather than raising"
     ytd = next(i for i, c in enumerate(page.columns) if c.key == "ytd_points")
-    assert all(row.cells[ytd].text != "—" for row in page.rows if row.cells[ytd].text)
+    # No filter: `Column.format` never returns an empty string, so a guard on `if ...text`
+    # would exclude nothing while reading as though some rows were deliberately skipped.
+    assert all(row.cells[ytd].text != "—" for row in page.rows)
 
 
 def test_his_two_rows_are_summed_into_one_season() -> None:
+    """Both halves of what collapsing is for: his points add up, and he does not appear twice
+    inside his own position group, where a phantom copy of himself would push everyone below
+    him down a rank.
+
+    An earlier version of this test asserted only that the index was unique, which is the
+    implementation detail that makes the two facts possible rather than the facts themselves.
+    """
     weekly = _weekly_stats(2)
     reclassified = weekly[weekly["week"] == 2].copy()
     reclassified["position"] = "WR"
     run = _run(weekly_stats=pd.concat([weekly, reclassified], ignore_index=True))
-    assert not run.ytd["gsis_id"].duplicated().any(), "one row per player leaves the pipeline"
+
+    one_week = _run(weekly_stats=_weekly_stats(1)).ytd.set_index("gsis_id")["actual_total"]
+    two_weeks = _run(weekly_stats=_weekly_stats(2)).ytd.set_index("gsis_id")["actual_total"]
+    doubled = run.ytd.set_index("gsis_id")["actual_total"]
+    mine = gsis_id(MY_TEAM_ID, 1)
+    # Week 2 counted once as RB and once as WR, so his season is the plain two-week total plus
+    # one more week -- not half of it filed under each position.
+    assert doubled[mine] == pytest.approx(two_weeks[mine] + one_week[mine])
+    assert (run.ytd["gsis_id"].value_counts() == 1).all(), "and he is one player, not two"
 
 
 # --- nothing vanishes silently ------------------------------------------------------------------
@@ -375,3 +394,56 @@ def test_a_provider_already_reporting_rest_of_season_is_called_out() -> None:
     run = _run(pool=pool)
     assert run.diagnostics.looks_like_double_counting
     assert any("REST-OF-SEASON" in note.upper() for note in run.notes), run.notes
+
+
+def test_weekly_stats_for_the_wrong_season_is_refused() -> None:
+    """`season` was accepted and never read, so nothing checked that the payload, the pool and
+    the stats describe the same year. A 2025 partition passed as 2026 renders last season's
+    totals under this season's header -- and `_staleness_note` calls them fresh, because week
+    17 is not behind week 3, so the page reads as correct and is a year out.
+    """
+    stale = _weekly_stats(2)
+    stale["season"] = 2025
+    with pytest.raises(ProjectionInputError, match="2025"):
+        _run(weekly_stats=stale)
+
+
+def test_an_unresolved_player_is_named_once_not_twice() -> None:
+    """He has no gsis_id, so he is also absent from the projection pool -- which used to earn
+    him a second note calling him "someone the pool does not cover". He is not; he is someone
+    the id_map does not know, which the first note already says."""
+    payload = espn_payload(played_weeks=2)
+    my_team = next(t for t in payload["teams"] if t["id"] == MY_TEAM_ID)
+    my_team["roster"]["entries"].append(
+        {
+            "lineupSlotId": 20,
+            "playerId": 888_002,
+            "playerPoolEntry": {
+                "player": {
+                    "id": 888_002,
+                    "fullName": "Just Signed",
+                    "defaultPositionId": 2,
+                    "proTeamId": 1,
+                }
+            },
+        }
+    )
+    page = _assemble(payload=payload)
+    naming_him = [note for note in page.notes if "Just Signed" in note]
+    assert len(naming_him) == 1, naming_him
+    assert "id_map" in naming_him[0]
+
+
+def test_a_stale_preseason_pool_is_not_blamed_on_the_provider() -> None:
+    """The wholesale-clamp alarm has two possible causes on this page and only one on the
+    other. The standings pipeline subtracts from a re-pulled season total, so a wholesale clamp
+    really is the signature of a provider already reporting rest-of-season. Here the pool is a
+    PRESEASON projection, and by December a good share of any August number has simply been
+    beaten -- naming only the provider bug would be confidently wrong.
+    """
+    pool = _pool()
+    pool["season_mean_fpts"] = 1.0
+    run = _run(pool=pool)
+    warning = run.diagnostics.warning()
+    assert warning is not None
+    assert "stale" in warning.lower() and "preseason" in warning.lower(), warning

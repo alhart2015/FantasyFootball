@@ -18,9 +18,9 @@ from projections.midseason.standings import (
     StandingsRun,
     project_league_standings,
 )
-from projections.schemas import _PYARROW_STR, VorpTableSchema
+from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
 from projections.web.app import DashboardConfig, dashboard_config
-from projections.web.inputs import missing_inputs, pool_and_id_map, variance_params
+from projections.web.inputs import VARIANCE_PARAMS, missing_inputs, pool_and_id_map
 from projections.web.views.standings_view import build_standings_page, empty_standings_page
 
 bp = Blueprint("standings", __name__)
@@ -54,8 +54,9 @@ def standings() -> str:
         page = build_standings_page(run, season=config.season, my_team_id=config.my_team_id)
     # The availability model's staleness warnings go to stderr, where nobody looking at a web
     # page will ever see them -- and a projection built on a thinner injury history than the
-    # reader assumes is precisely what the notes slot is for. Applied on BOTH paths: the loader
-    # runs before the parts of the pipeline that can fail, so its warnings survive the failure.
+    # reader assumes is precisely what the notes slot is for. Applied on BOTH paths, so a run
+    # that fails AFTER the loader still shows what the loader found; the template renders notes
+    # on its empty branch too, which is what makes that worth doing.
     if notes:
         page = replace(page, notes=tuple(notes) + page.notes)
     return render_template("standings.html", page=page)
@@ -63,8 +64,8 @@ def standings() -> str:
 
 def _missing_inputs(config: DashboardConfig) -> str | None:
     """Checked before the ESPN call so a missing local file does not cost a round trip first."""
-    required = {**pool_and_id_map(config), **variance_params(config)}
-    return missing_inputs(config, required, page="project standings")
+    required = {**pool_and_id_map(config), **VARIANCE_PARAMS}
+    return missing_inputs(config, required, action="project standings")
 
 
 def _run_projection(config: DashboardConfig, notes: list[str]) -> StandingsRun:
@@ -81,7 +82,10 @@ def _run_projection(config: DashboardConfig, notes: list[str]) -> StandingsRun:
     return project_league_standings(
         payload,
         pool,
-        pd.read_parquet(config.data_root / "raw" / "id_map.parquet"),
+        # Validated, as the team route does. The two pages read the SAME file, so a page
+        # that skips the check surfaces a drifted id_map as a traceback while the other
+        # names it -- the divergence `web/inputs.py` exists to remove, one layer down.
+        IdMapSchema.validate(pd.read_parquet(config.data_root / "raw" / "id_map.parquet")),
         load_store_availability(
             pool, season=config.season, data_root=config.data_root, notes=notes
         ),

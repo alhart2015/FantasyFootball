@@ -151,8 +151,10 @@ h2 {
 
    This rule is the deliberate exception, and it is positional because what it means is
    positional: the LEADING column is dimmed whatever it holds (a rank on one table, a slot on
-   the other). It says "this is the gutter", not "this is the rank". The test below allows
-   `:first-child` for that reason and forbids every other positional selector. */
+   the other). It says "this is the gutter", not "this is the rank".
+   `tests/test_web/test_columns.py::test_no_stylesheet_rule_targets_a_column_by_position`
+   allowlists this exact rule for that reason and forbids every other positional
+   selector on a data cell. */
 .data-table td:first-child { color: var(--muted); }
 
 /* The viewer's own row. */

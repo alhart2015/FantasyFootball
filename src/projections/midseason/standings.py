@@ -95,6 +95,17 @@ def first_unplayed_week(schedule: pd.DataFrame, calendar: LeagueCalendar) -> int
     return int(unplayed["week"].min())
 
 
+def regular_season_complete(week: int, reg_weeks: int) -> bool:
+    """Whether `week` is past the end of the regular season.
+
+    Beside `first_unplayed_week` because it exists to compensate for that function's `reg_weeks
+    + 1` convention: a header printing the week unconditionally reads "Week 15 of 14". Both
+    page models call it rather than each spelling the comparison, which is how the standings
+    page got the treatment and the team page did not.
+    """
+    return reg_weeks > 0 and week > reg_weeks
+
+
 def schedule_to_slots(
     schedule: pd.DataFrame, slots: SlotMap, calendar: LeagueCalendar
 ) -> list[list[tuple[int, int]]]:

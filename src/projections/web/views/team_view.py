@@ -19,8 +19,9 @@ from dataclasses import dataclass
 import pandas as pd
 
 from projections.midseason.my_team import MyTeamRun
+from projections.midseason.standings import regular_season_complete
 from projections.rankings import rank_within_position
-from projections.schemas import RosterSlot
+from projections.schemas import RosterSlot, display_str
 from projections.web.views.columns import (
     TEAM_COLUMNS,
     Cell,
@@ -36,10 +37,27 @@ from projections.web.views.columns import (
 #: An unrecognised ESPN slot id becomes `""` there, which is in neither set.
 _BENCH_SLOTS = frozenset({RosterSlot.BENCH, RosterSlot.IR})
 
-#: A row's raw values, keyed by column, plus the two fields the page needs that are not
-#: columns. Formatting happens last, so the sort and the colour scale read numbers rather than
-#: parsing them back out of a rendered cell.
-RowValues = dict[str, "CellValue | bool"]
+#: The column keys `_row_values` fills. Checked against the registry once, at import, rather
+#: than per player per request: these keys are literals in the source, so what the check is
+#: worth is catching a registry that gained a column nothing fills -- and it should catch that
+#: whether or not a roster happens to be non-empty.
+_ROW_KEYS: frozenset[str] = frozenset(
+    {"slot", "player", "position", "ytd_points", "ytd_rank", "ros_points", "ros_rank"}
+)
+
+
+@dataclass(frozen=True)
+class _Row:
+    """One player before rendering: who he is, whether he starts, and his raw column values.
+
+    The two bookkeeping fields are FIELDS, not entries in `values`. Folding them into the
+    column dict widened its type to `CellValue | bool` and bought four coercion helpers whose
+    only job was narrowing it back, most of whose branches were unreachable.
+    """
+
+    gsis_id: str
+    is_starter: bool
+    values: dict[str, CellValue]
 
 
 @dataclass(frozen=True)
@@ -77,11 +95,7 @@ class TeamPage:
 
     @property
     def regular_season_complete(self) -> bool:
-        """`first_unplayed_week` returns `reg_weeks + 1` once every week has been played, so a
-        header printing the week unconditionally reads "week 15" in a 14-week league. The
-        standings page learned this first; the team page started using the same week source in
-        the same batch of fixes and did not get the same treatment."""
-        return self.reg_weeks > 0 and self.week > self.reg_weeks
+        return regular_season_complete(self.week, self.reg_weeks)
 
 
 def build_team_page(run: MyTeamRun, *, season: int) -> TeamPage:
@@ -115,14 +129,8 @@ def build_team_page(run: MyTeamRun, *, season: int) -> TeamPage:
         _row_values(player, ytd_by_id, ytd_rank_by_id, ros_by_id)
         for _, player in run.roster.iterrows()
     ]
-    if rows:
-        # Once, over the keys this function writes -- not once per player. The keys are fixed
-        # in the source, so what the check is worth here is catching a registry that gained a
-        # column nothing fills.
-        require_every_key(rows[0], TEAM_COLUMNS, source="the assembled player row")
-
-    roster_ytd = sum(_number(row["ytd_points"]) for row in rows)
-    starter_ros = sum(_number(row["ros_points"]) for row in rows if row["is_starter"])
+    roster_ytd = sum(_number(row.values["ytd_points"]) for row in rows)
+    starter_ros = sum(_number(row.values["ros_points"]) for row in rows if row.is_starter)
 
     # Starters first, then bench, each by rest-of-season projection. A bench player above a
     # starter is the page's most actionable signal, and burying it under ESPN's slot ordering
@@ -132,17 +140,16 @@ def build_team_page(run: MyTeamRun, *, season: int) -> TeamPage:
     # render "150.0"), and keyed on `is None` rather than `or`: `remaining_totals` clamps at
     # zero, so a player who has outscored his projection has a REAL 0.0, and `or` would file
     # him with the players who have no projection at all.
-    rows.sort(key=lambda row: (not row["is_starter"], _sort_key(row["ros_points"])))
+    rows.sort(key=lambda row: (not row.is_starter, _sort_key(row.values["ros_points"])))
 
-    display = [_display(row) for row in rows]
-    scales = column_intensities(display, TEAM_COLUMNS)
+    scales = column_intensities([row.values for row in rows], TEAM_COLUMNS)
     rendered = tuple(
         PlayerRow(
-            gsis_id=_str(row["gsis_id"]),
-            is_starter=bool(row["is_starter"]),
+            gsis_id=row.gsis_id,
+            is_starter=row.is_starter,
             cells=tuple(
                 Cell(
-                    text=column.format(display[i][column.key]),
+                    text=column.format(row.values[column.key]),
                     intensity=scales[column.key][i],
                     numeric=column.numeric,
                     is_label=column.is_label,
@@ -166,6 +173,9 @@ def build_team_page(run: MyTeamRun, *, season: int) -> TeamPage:
     )
 
 
+require_every_key(_ROW_KEYS, TEAM_COLUMNS, source="the assembled player row")
+
+
 def empty_team_page(message: str, *, season: int) -> TeamPage:
     """No roster, or no team selected. Carries the reason rather than an empty table."""
     return TeamPage(
@@ -186,35 +196,33 @@ def _row_values(
     ytd_by_id: pd.DataFrame,
     ytd_rank_by_id: pd.DataFrame,
     ros_by_id: pd.DataFrame,
-) -> RowValues:
-    """One player's raw values, keyed by column.
+) -> _Row:
+    """One player before rendering.
 
     `gsis_id` may be empty: `build_my_team` deliberately keeps roster entries the id_map cannot
     resolve rather than deleting them, so they render as a name and a row of em dashes.
     """
-    gsis = _text(player.get("gsis_id"))
-    raw_slot = player.get("lineup_slot")
-    slot = "" if raw_slot is None or pd.isna(raw_slot) else str(raw_slot)
-    return {
-        "gsis_id": gsis,
+    gsis = display_str(player.get("gsis_id"))
+    slot = display_str(player.get("lineup_slot"))
+    return _Row(
+        gsis_id=gsis,
         # An unrecognised ESPN slot id becomes "" in `parse_rosters`, and "" is in neither slot
         # set -- so an unknown slot used to count as a STARTER and inflate the starters-only
         # total. Unknown reads as bench: crediting a player we cannot place to the starting
         # lineup is the more wrong of the two guesses.
-        "is_starter": bool(slot) and slot not in _BENCH_SLOTS,
-        "slot": slot or None,
-        "player": _text(player.get("player")) or gsis or _text(player.get("player_id")),
-        "position": _text(player.get("pos")),
-        "ytd_points": _lookup(ytd_by_id, gsis, "actual_total"),
-        "ytd_rank": _lookup_rank(ytd_rank_by_id, gsis, "ytd_rank"),
-        "ros_points": _lookup(ros_by_id, gsis, "season_mean_fpts"),
-        "ros_rank": _lookup_rank(ros_by_id, gsis, "ros_rank"),
-    }
-
-
-def _display(row: RowValues) -> dict[str, CellValue]:
-    """The row without the two bookkeeping fields, which are not columns and never render."""
-    return {key: _cell(value) for key, value in row.items() if key not in ("gsis_id", "is_starter")}
+        is_starter=bool(slot) and slot not in _BENCH_SLOTS,
+        values={
+            "slot": slot or None,
+            "player": display_str(player.get("player"))
+            or gsis
+            or display_str(player.get("player_id")),
+            "position": display_str(player.get("pos")),
+            "ytd_points": _lookup(ytd_by_id, gsis, "actual_total"),
+            "ytd_rank": _lookup_rank(ytd_rank_by_id, gsis, "ytd_rank"),
+            "ros_points": _lookup(ros_by_id, gsis, "season_mean_fpts"),
+            "ros_rank": _lookup_rank(ros_by_id, gsis, "ros_rank"),
+        },
+    )
 
 
 def _with_rank(frame: pd.DataFrame, by: str, name: str, *, ascending: bool) -> pd.DataFrame:
@@ -251,37 +259,15 @@ def _lookup_rank(frame: pd.DataFrame, gsis: str, column: str) -> int | None:
     return None if pd.isna(value) else int(value)
 
 
-def _cell(value: CellValue | bool) -> CellValue:
-    return None if isinstance(value, bool) else value
-
-
-def _str(value: CellValue | bool) -> str:
-    return "" if value is None or isinstance(value, bool) else str(value)
-
-
-def _number(value: CellValue | bool) -> float:
+def _number(value: CellValue) -> float:
     """A value's contribution to a total. `is not None` rather than `or`: a genuine 0.0 and
     "did not play" are kept distinct everywhere else on this page."""
-    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0.0
+    return float(value) if isinstance(value, int | float) else 0.0
 
 
-def _sort_key(value: CellValue | bool) -> float:
+def _sort_key(value: CellValue) -> float:
     """Descending by projection, with "no projection" last -- and a real 0.0 ahead of it."""
-    if not isinstance(value, int | float) or isinstance(value, bool):
-        return float("inf")
-    return -float(value)
-
-
-def _text(value: object) -> str:
-    """A display string, tolerating pandas NA.
-
-    `x or y` evaluates `bool(x)`, and `bool(pd.NA)` raises -- so the idiom crashes the whole
-    page rather than blanking one cell. Name columns here are pyarrow-backed nullable strings,
-    where NA is admissible.
-    """
-    if value is None or (not isinstance(value, str) and pd.isna(value)):
-        return ""
-    return str(value)
+    return float("inf") if not isinstance(value, int | float) else -float(value)
 
 
 def _blank_column_notes(run: MyTeamRun, ros_by_id: pd.DataFrame) -> tuple[str, ...]:
@@ -296,10 +282,15 @@ def _blank_column_notes(run: MyTeamRun, ros_by_id: pd.DataFrame) -> tuple[str, .
             "No weekly stats for this season yet, so year-to-date columns are empty. They "
             "fill in once Week 1 has been played."
         )
+    # Players the id_map could not resolve are skipped: `build_my_team` already names them,
+    # under the reason that actually applies. Counting them here too listed the same player
+    # twice, the second time miscategorising a just-signed WR as someone the pool does not
+    # cover.
     unprojected = [
-        _text(player.get("player")) or _text(player.get("gsis_id"))
+        display_str(player.get("player")) or display_str(player.get("gsis_id"))
         for _, player in run.roster.iterrows()
-        if _text(player.get("gsis_id")) not in ros_by_id.index
+        if display_str(player.get("gsis_id"))
+        and display_str(player.get("gsis_id")) not in ros_by_id.index
     ]
     if unprojected:
         shown = ", ".join(unprojected[:5])

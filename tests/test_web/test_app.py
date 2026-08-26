@@ -20,6 +20,7 @@ from projections.draft.assistant.performance_variance import VarianceParams
 from projections.midseason.standings import StandingsRun, project_league_standings
 from projections.web import DashboardConfig, create_app, dashboard_config
 from tests.test_midseason.conftest import espn_payload, id_map, vorp_pool
+from tests.test_web.conftest import TEST_LEAGUE_ID, TEST_SEASON
 
 _WEB_ROOT = Path(__file__).resolve().parents[2] / "src" / "projections" / "web"
 
@@ -137,9 +138,20 @@ def test_no_page_reaches_the_network_during_tests(
     monkeypatch.setattr("projections.web.routes.team.fetch_league_payload", spy)
     monkeypatch.setattr("projections.web.routes.standings.fetch_league_payload", spy)
 
+    # The pre-flight check is stubbed out, or every route short-circuits on the empty fixture
+    # tree and `calls == []` holds for a reason that has nothing to do with credentials --
+    # which is exactly how this test passed while `/team` was calling the real league.
+    for module in ("standings", "team"):
+        monkeypatch.setattr(f"projections.web.routes.{module}._missing_inputs", lambda config: None)
+    monkeypatch.setenv("ESPN_SWID", "{ABC}")
+    monkeypatch.setenv("ESPN_S2", "s2value")
+
     for route in ("/", "/standings", "/team"):
         assert client.get(route).status_code == 200, route
-    assert calls == [], f"pages attempted network calls: {calls}"
+    assert calls == [(TEST_LEAGUE_ID, TEST_SEASON)] * 3, (
+        "each page must reach the patched fetch -- if it does not, this test is not "
+        f"exercising the path it names. Saw: {calls}"
+    )
 
 
 def test_env_credentials_are_not_reported_as_missing(
@@ -148,11 +160,13 @@ def test_env_credentials_are_not_reported_as_missing(
     """`EspnCredentials.resolve` reads ESPN_SWID/ESPN_S2 before the file, so requiring the file
     reported "missing the ESPN credentials" as a falsehood on any machine using environment
     credentials -- and refused to render standings while /team worked fine."""
-    from projections.web.routes.standings import _missing_inputs
+    from projections.web.inputs import missing_inputs, pool_and_id_map
 
     monkeypatch.setenv("ESPN_SWID", "{ABC}")
     monkeypatch.setenv("ESPN_S2", "s2value")
-    message = _missing_inputs(dashboard_config)
+    message = missing_inputs(
+        dashboard_config, pool_and_id_map(dashboard_config), action="project standings"
+    )
     assert message is not None, "the pool and id_map are still absent"
     # Matched on the phrase, not the bare word: pytest's tmp_path is named after the test, so
     # "credentials" appears in every path in the message.
@@ -162,11 +176,28 @@ def test_env_credentials_are_not_reported_as_missing(
 def test_absent_credentials_are_reported_naming_both_sources(
     dashboard_config: DashboardConfig,
 ) -> None:
-    from projections.web.routes.standings import _missing_inputs
+    from projections.web.inputs import missing_inputs, pool_and_id_map
 
-    message = _missing_inputs(dashboard_config)
+    message = missing_inputs(
+        dashboard_config, pool_and_id_map(dashboard_config), action="project standings"
+    )
     assert message is not None
     assert "ESPN_SWID" in message and "the ESPN credentials" in message, message
+
+
+def test_both_pages_report_a_missing_input_the_same_way(
+    dashboard_config: DashboardConfig,
+) -> None:
+    """The two pre-checks were copies, and they had already diverged: the standings page
+    checked the ESPN credentials and the team page did not, so the same missing input was a
+    friendly sentence on one page and a raw resolver error on the other."""
+    from projections.web.routes.standings import _missing_inputs as standings_check
+    from projections.web.routes.team import _missing_inputs as team_check
+
+    for message in (standings_check(dashboard_config), team_check(dashboard_config)):
+        assert message is not None
+        assert "the ESPN credentials" in message, message
+        assert "the VORP pool" in message and "the id_map" in message, message
 
 
 def test_availability_staleness_reaches_the_page_not_just_stderr(

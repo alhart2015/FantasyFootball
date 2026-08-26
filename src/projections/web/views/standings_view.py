@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from projections.midseason.standings import StandingsRun
+from projections.midseason.standings import StandingsRun, regular_season_complete
 from projections.web.views.columns import (
     STANDINGS_COLUMNS,
     Cell,
@@ -65,9 +65,7 @@ class StandingsPage:
 
     @property
     def regular_season_complete(self) -> bool:
-        """`first_unplayed_week` returns `reg_weeks + 1` when every week has been played, so a
-        template printing "Week {week} of {reg_weeks}" unconditionally reads "Week 15 of 14"."""
-        return self.reg_weeks > 0 and self.week > self.reg_weeks
+        return regular_season_complete(self.week, self.reg_weeks)
 
 
 def _record(row: pd.Series) -> str:
@@ -99,16 +97,19 @@ def build_standings_page(
 
     # `require_every_key` above raises when a registry key is absent, so the per-column
     # membership test the previous version carried here could no longer be false.
-    values = [
-        {column.key: _cell_value(row, column) for column in STANDINGS_COLUMNS}
-        for _, row in display.iterrows()
-    ]
+    # One walk of the frame. The previous version walked it twice and kept the two passes in
+    # step by a positional index, which is a coupling with nothing enforcing it.
+    values = []
+    team_ids = []
+    for _, row in display.iterrows():
+        values.append({column.key: _cell_value(row, column) for column in STANDINGS_COLUMNS})
+        team_ids.append(int(row["team_id"]))
     scales = column_intensities(values, STANDINGS_COLUMNS)
 
     rows = tuple(
         TeamRow(
-            team_id=int(row["team_id"]),
-            is_mine=my_team_id is not None and int(row["team_id"]) == my_team_id,
+            team_id=team_id,
+            is_mine=my_team_id is not None and team_id == my_team_id,
             cells=tuple(
                 Cell(
                     text=column.format(values[i][column.key]),
@@ -119,7 +120,7 @@ def build_standings_page(
                 for column in STANDINGS_COLUMNS
             ),
         )
-        for i, (_, row) in enumerate(display.iterrows())
+        for i, team_id in enumerate(team_ids)
     )
 
     notes: list[str] = []
@@ -167,6 +168,8 @@ def empty_standings_page(message: str, *, season: int) -> StandingsPage:
 def _cell_value(row: pd.Series, column: Column) -> CellValue:
     value = row.get(column.key)
     if value is None or (not isinstance(value, str) and pd.isna(value)):
+        # Not `display_str`: an absent NUMBER renders as an em dash, which is a different fact
+        # from an absent name rendering as blank, and the two must not converge.
         return None
     if isinstance(value, str):
         return value

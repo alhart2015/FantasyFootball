@@ -34,7 +34,7 @@ def pool_and_id_map(config: DashboardConfig) -> Required:
     }
 
 
-def missing_inputs(config: DashboardConfig, required: Required, *, page: str) -> str | None:
+def missing_inputs(config: DashboardConfig, required: Required, *, action: str) -> str | None:
     """Name what is absent, or None when everything is present.
 
     The ESPN credentials are always checked, and checked in BOTH places they can live:
@@ -54,21 +54,19 @@ def missing_inputs(config: DashboardConfig, required: Required, *, page: str) ->
         )
     if not absent:
         return None
-    return f"Cannot {page} — missing " + "; ".join(absent) + "."
+    return f"Cannot {action} — missing " + "; ".join(absent) + "."
 
 
-def variance_params(config: DashboardConfig) -> Required:
-    """The simulator's fitted parameters.
-
-    `VarianceParams.load()` defaults to a RELATIVE path, resolved against the process CWD
-    rather than `data_root`, so starting the dashboard from anywhere but the repo root used to
-    500 inside the projection. Named rather than left to raise -- and the CWD-dependence is
-    the reason the message quotes the path it actually checked.
-    """
-    del config
-    return {
-        "the variance params": (
-            DEFAULT_PARAMS_PATH,
-            "they ship with the repo — run the dashboard from the repo root",
-        )
-    }
+#: The simulator's fitted parameters.
+#:
+#: A constant rather than a function of the config, because it is not one: `VarianceParams.load()`
+#: defaults to a RELATIVE path, resolved against the process CWD rather than `data_root`, so
+#: starting the dashboard from anywhere but the repo root used to 500 inside the projection.
+#: Naming it in the pre-check is what turns that into a sentence a reader can act on, and the
+#: CWD-dependence is exactly why the message quotes the path it actually checked.
+VARIANCE_PARAMS: Required = {
+    "the variance params": (
+        DEFAULT_PARAMS_PATH,
+        "they ship with the repo — run the dashboard from the repo root",
+    )
+}

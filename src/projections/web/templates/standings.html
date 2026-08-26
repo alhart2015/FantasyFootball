@@ -17,10 +17,14 @@
     {% endif %}
   </header>
 
+  {# Notes render on BOTH branches. They were inside the `else`, so a page that could not be
+     built showed only its reason and silently dropped everything the pipeline had already
+     warned about -- a thin injury history is exactly the sort of thing that explains the
+     failure printed under it. #}
+  {{ t.notes(page) }}
   {% if page.is_empty %}
     <p class="empty">{{ page.message }}</p>
   {% else %}
-    {{ t.notes(page) }}
 
     {% call t.scroll("League standings") %}
       {{ t.head(page.columns) }}

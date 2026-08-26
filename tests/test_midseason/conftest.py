@@ -46,19 +46,35 @@ CALENDAR = LeagueCalendar(reg_weeks=REG_WEEKS, playoff_size=2, n_byes=0, final_w
 #: My Team page's starter/bench split is for; an all-bench fixture silently made every
 #: starters-only total zero.
 BENCH_INDICES: frozenset[int] = frozenset({2, 4})
-#: The slot each POSITIONS entry occupies. Derived from production's own mapping rather than
-#: re-spelled, so a renumbering on ESPN's side cannot leave the fixture green against a changed
-#: parser.
-ESPN_SLOT_FOR_POSITION: dict[str, int] = {
-    slot.value: slot_id for slot_id, slot in ESPN_LINEUP_SLOTS.items()
-}
-ESPN_BENCH_SLOT: int = ESPN_SLOT_FOR_POSITION[RosterSlot.BENCH.value]
+#: The ESPN id for each slot the fixture uses. Derived from production's own mapping rather
+#: than re-spelled, so a renumbering on ESPN's side cannot leave the fixture green against a
+#: changed parser.
+#:
+#: Restricted to the slots the fixture actually seats, and asserted unique. `ESPN_LINEUP_SLOTS`
+#: is many-to-one -- ids 3, 5 and 23 are all FLEX -- so a blanket inversion silently keeps
+#: whichever id came last, which is the opposite of the robustness the derivation is for.
+_FIXTURE_SLOTS: tuple[RosterSlot, ...] = (
+    RosterSlot.QB,
+    RosterSlot.RB,
+    RosterSlot.WR,
+    RosterSlot.TE,
+    RosterSlot.BENCH,
+)
+ESPN_ID_FOR_SLOT: dict[str, int] = {}
+for _slot_id, _slot in ESPN_LINEUP_SLOTS.items():
+    if _slot not in _FIXTURE_SLOTS:
+        continue
+    assert _slot.value not in ESPN_ID_FOR_SLOT, (
+        f"{_slot} has more than one ESPN id; the fixture cannot pick one for you"
+    )
+    ESPN_ID_FOR_SLOT[_slot.value] = _slot_id
+ESPN_BENCH_SLOT: int = ESPN_ID_FOR_SLOT[RosterSlot.BENCH.value]
 #: `rosterSettings.lineupSlotCounts`, DERIVED from the roster the fixture actually builds, so
 #: the declared lineup and the players available to fill it cannot disagree. Spelled out by
 #: hand it said 2 RB / 2 WR / 1 bench while the roster started 1 of each and benched two.
 ESPN_SLOT_COUNTS: dict[str, int] = dict(
     Counter(
-        str(ESPN_BENCH_SLOT if i in BENCH_INDICES else ESPN_SLOT_FOR_POSITION[pos])
+        str(ESPN_BENCH_SLOT if i in BENCH_INDICES else ESPN_ID_FOR_SLOT[RosterSlot(pos).value])
         for i, pos in enumerate(POSITIONS)
     )
 )
@@ -182,7 +198,13 @@ def espn_payload(*, played_weeks: int = 2, with_schedule: bool = True) -> dict[s
             {
                 # The second RB and the second WR sit on the bench; the rest start.
                 "lineupSlotId": (
-                    ESPN_BENCH_SLOT if i in BENCH_INDICES else ESPN_SLOT_FOR_POSITION[pos]
+                    ESPN_BENCH_SLOT
+                    if i in BENCH_INDICES
+                    # `RosterSlot(pos)` rather than indexing with the position string: they
+                    # happen to spell the same letters, and relying on that is the slot-vs-
+                    # position conflation CLAUDE.md's enum rule exists to stop. A position with
+                    # no same-named slot now fails loudly instead of raising a bare KeyError.
+                    else ESPN_ID_FOR_SLOT[RosterSlot(pos).value]
                 ),
                 "playerId": espn_player_id(team_id, i),
                 "playerPoolEntry": {

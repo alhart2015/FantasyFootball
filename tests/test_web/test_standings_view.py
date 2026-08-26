@@ -6,6 +6,8 @@ one, with no app, request, or rendered HTML to assert substrings against.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from flask import Flask, render_template
@@ -228,3 +230,22 @@ def test_the_week_label_does_not_exceed_the_season(app: Flask) -> None:
     # otherwise, so it asserted nothing in the case it was written for.
     assert "Week 5 of 4" not in html, html[:600]
     assert "complete" in html.lower(), html[:600]
+
+
+def test_notes_are_shown_even_when_the_page_could_not_be_built(app: Flask) -> None:
+    """The notes loop sat inside the template's `else`, so a page that could not be built
+    showed only its reason and silently dropped everything the pipeline had already warned
+    about -- and a thin injury history is exactly the sort of thing that explains the failure
+    printed under it.
+
+    The route was changed to attach notes on both paths; without this, that change was a no-op
+    nobody would have noticed, because the template threw them away one layer later.
+    """
+    page = replace(
+        empty_standings_page("Nothing to project yet.", season=2026),
+        notes=("weekly_stats season(s) [2024] are on disk but incomplete",),
+    )
+    with app.test_request_context():
+        html = render_template("standings.html", page=page)
+    assert "Nothing to project yet." in html
+    assert "incomplete" in html, "a warning the reader cannot see is a warning that does not exist"

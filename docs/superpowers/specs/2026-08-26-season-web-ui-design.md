@@ -38,18 +38,25 @@ broke this rule.
 ```
 src/projections/web/
     app.py                  create_app(); nothing else
+    inputs.py               what a page needs on disk, checked once for both
     views/
-        standings_view.py   format_standings_page(...) -> StandingsPage
-        team_view.py        format_team_page(...) -> TeamPage
+        columns.py          the column registry, Cell, the colour scale (§5)
+        standings_view.py   build_standings_page(StandingsRun) -> StandingsPage
+        team_view.py        build_team_page(MyTeamRun) -> TeamPage
     routes/
-        standings.py        Blueprint: read data, call formatter, render
+        standings.py        Blueprint: read data, call the view model, render
         team.py             Blueprint
     templates/  static/
 ```
 
-**Layer 1 — domain.** Already exists: `midseason.standings`, `midseason.rest_of_season`,
+*(As built. The tree originally written here named `format_*_page` and listed neither
+`columns.py` nor `inputs.py`; §10 records why each exists.)*
+
+**Layer 1 — domain.** Mostly exists: `midseason.standings`, `midseason.rest_of_season`,
 `scoring.actuals`, `draft.snake_cheat_sheet._rank_within_position`. Knows nothing about the
-web. **No new domain logic belongs in this branch** beyond the YTD/ranking assembly in §4.
+web. **No new domain logic belongs in this branch** beyond the YTD/ranking assembly in §4 —
+which, as built, is `midseason.my_team.build_my_team` plus `rest_of_season.remaining_totals`.
+Both are domain modules, and putting them in `web/` is precisely the mistake §10 records.
 
 **Layer 2 — view models.** Pure functions, **zero Flask imports**, returning frozen
 dataclasses. Modelled on the baseball repo's `trajectory_view.py` (frozen dataclasses, typed
@@ -178,7 +185,7 @@ worth having before the team page exists.
 
 ## 10. What was actually built (2026-08-26)
 
-The plan in §9 was followed step for step. **Four** things in this spec did not get built, and
+The plan in §9 was followed step for step. **Five** things in this spec did not get built, and
 two things it did not anticipate turned out to matter more than anything it did.
 
 ### Cut: the Trend section (§3)
@@ -197,6 +204,15 @@ week, so the data will be there without any further work.
 
 (This entry was itself a review finding: §10 originally said three things were cut and listed
 the three that were easy to remember.)
+
+### Cut: the standings header's stale-data note (§3)
+
+§3's header row promises "a stale-data note if the snapshot is old". The page pulls the league
+live on every request rather than reading a stored snapshot, so there is no snapshot to be old
+— the notes it does carry are about the *inputs* (a thin availability history, players outside
+the pool). The line was written before the page's data flow was settled and describes a page
+that does not exist. It becomes meaningful again alongside the Trend section, which is what
+introduces stored snapshots.
 
 ### Cut: the rank badge (§4)
 
@@ -237,7 +253,7 @@ layer for the standings page. Both pages are then the same shape: a domain funct
 Not in the spec at all, and the single most consequential thing on the branch. The pool's
 `season_mean_fpts` is a FULL-SEASON figure; printing it under "projected points for the rest
 of the season" overstates by roughly the fraction of the season already played — about double
-at week 10. `remaining_points` subtracts what a player has already scored.
+at week 10. `rest_of_season.remaining_totals` subtracts what a player has already scored.
 
 Note it is deliberately NOT `rest_of_season_pool`, which the simulator uses: that converts to a
 full-season-equivalent PACE, because the variance model divides by a fixed `SEASON_GAMES`. A
@@ -263,5 +279,6 @@ holds the name. Columns carry `is_label`; the CSS targets a class.
 "These pages can be tested, not eyeballed" was written as a constraint. It behaved like one:
 the only code on the branch without a view-model test — the My Team assembly, which lived
 inline in a route and so was reachable only through an HTTP request that first made a live
-ESPN call — held eight of the defects the review found. Lifting it into `assemble_team_page`
+ESPN call — held eight of the defects the review found. Lifting it out (first into
+`assemble_team_page`, then into `midseason.my_team.build_my_team`, where it belonged)
 was the first fix of the loop and the one the rest depended on.

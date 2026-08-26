@@ -59,7 +59,7 @@ def _missing_inputs(config: DashboardConfig) -> str | None:
             "python -m projections.ingest.espn_league",
         ),
     }
-    return missing_inputs(config, required, page="show your team")
+    return missing_inputs(config, required, action="show your team")
 
 
 def _build(config: DashboardConfig, my_team_id: int) -> TeamPage:

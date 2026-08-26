@@ -33,12 +33,13 @@ from typing import Any
 
 import pandas as pd
 
+from projections.draft.assistant.performance_variance import SEASON_GAMES
 from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
 from projections.ingest.espn_league import espn_to_gsis, parse_rosters, parse_schedule, parse_teams
 from projections.midseason.rest_of_season import RosDiagnostics, remaining_totals
 from projections.midseason.standings import ProjectionInputError, first_unplayed_week
-from projections.schemas import _PYARROW_STR
+from projections.schemas import _PYARROW_STR, display_str
 from projections.scoring.actuals import actual_season_total
 
 
@@ -60,12 +61,6 @@ class MyTeamRun:
     #: Non-fatal problems worth telling the reader about.
     notes: tuple[str, ...] = ()
 
-    @property
-    def regular_season_complete(self) -> bool:
-        """`first_unplayed_week` returns `reg_weeks + 1` once every week has been played, so a
-        header printing the week unconditionally reads "week 15" in a 14-week league."""
-        return self.reg_weeks > 0 and self.week > self.reg_weeks
-
 
 def build_my_team(
     payload: Mapping[str, Any],
@@ -79,9 +74,9 @@ def build_my_team(
 ) -> MyTeamRun:
     """Already-fetched data in, a `MyTeamRun` out. No I/O, no Flask, no formatting.
 
-    Raises `ProjectionInputError` when `my_team_id` is not a team in this league, or when the
-    team exists but has no roster -- both are states a page should explain rather than render
-    as an empty table.
+    Raises `ProjectionInputError` when `my_team_id` is not a team in this league, when the team
+    exists but has no roster, or when `weekly_stats` is for a different season -- all three are
+    states a page should explain rather than render as an empty table.
     """
     teams = parse_teams(dict(payload))
     if my_team_id not in set(teams["team_id"]):
@@ -98,6 +93,7 @@ def build_my_team(
 
     roster, unresolved = _my_roster(dict(payload), id_map, my_team_id)
 
+    _require_one_season(weekly_stats, season)
     ytd = (
         _one_row_per_player(actual_season_total(weekly_stats, league_config.ruleset))
         if not weekly_stats.empty
@@ -106,7 +102,10 @@ def build_my_team(
     scored = (
         ytd.set_index("gsis_id")["actual_total"].astype(float).to_dict() if not ytd.empty else {}
     )
-    ros, diagnostics = remaining_totals(pool, scored)
+    # NFL games left, not fantasy weeks left -- the same horizon `project_league_standings`
+    # passes, and the distinction has bitten this repo twice. It scales the near-zero cutoff,
+    # which is compared against a remaining total.
+    ros, diagnostics = remaining_totals(pool, scored, games_remaining=SEASON_GAMES - (week - 1))
 
     notes = _notes(unresolved, weekly_stats, week, diagnostics)
     return MyTeamRun(
@@ -119,6 +118,24 @@ def build_my_team(
         diagnostics=diagnostics,
         notes=notes,
     )
+
+
+def _require_one_season(weekly_stats: pd.DataFrame, season: int) -> None:
+    """The stats partition must be the season the page claims to show.
+
+    `season` was otherwise unused here, which meant nothing checked that the payload, the pool
+    and the stats describe the same year. A 2025 partition passed as 2026 renders last season's
+    totals under this season's header, and `_staleness_note` calls it fresh -- week 17 is not
+    behind week 3 -- so the page reads as correct and is a year out.
+    """
+    if weekly_stats.empty or "season" not in weekly_stats.columns:
+        return
+    seasons = set(weekly_stats["season"].dropna().astype(int))
+    if seasons - {season}:
+        raise ProjectionInputError(
+            f"weekly_stats holds season(s) {sorted(seasons)} but this page is showing "
+            f"{season}. Read the partition for the season being displayed."
+        )
 
 
 def _my_roster(
@@ -145,7 +162,7 @@ def _my_roster(
             "makes a pick."
         )
     unresolved = tuple(
-        _text(player.get("player")) or str(player["player_id"])
+        display_str(player.get("player")) or display_str(player.get("player_id"))
         for _, player in roster.iterrows()
         if pd.isna(player["gsis_id"])
     )
@@ -168,9 +185,15 @@ def _one_row_per_player(ytd: pd.DataFrame) -> pd.DataFrame:
     His points are summed; his position is the one he scored most at, which is the one a reader
     would call him.
     """
+    columns = ["gsis_id", "position", "actual_total"]
     if ytd.empty or not ytd["gsis_id"].duplicated().any():
-        return ytd
-    ordered = ytd.sort_values("actual_total", ascending=False)
+        # The same three columns either way. Returning `ytd` untouched made the frame's shape
+        # depend on whether anyone happened to be reclassified, which is not a contract.
+        return ytd[columns]
+    # `kind="stable"`, because the default quicksort would make the position tiebreak arbitrary
+    # for a player who scored identically at two positions -- and a fixture that reproduces it
+    # would pass or fail by luck.
+    ordered = ytd.sort_values("actual_total", ascending=False, kind="stable")
     return ordered.groupby("gsis_id", as_index=False).agg(
         position=("position", "first"), actual_total=("actual_total", "sum")
     )
@@ -231,17 +254,6 @@ def _staleness_note(weekly_stats: pd.DataFrame, week: int) -> tuple[str, ...]:
 
 
 def _team_name(teams: pd.DataFrame, my_team_id: int) -> str:
-    match = teams[teams["team_id"] == my_team_id]
-    return str(match.iloc[0]["team_name"]) if not match.empty else f"Team {my_team_id}"
-
-
-def _text(value: object) -> str:
-    """A display string, tolerating pandas NA.
-
-    `x or y` evaluates `bool(x)`, and `bool(pd.NA)` raises -- so the idiom crashes the caller
-    rather than blanking one field. Name columns here are pyarrow-backed nullable strings,
-    where NA is admissible.
-    """
-    if value is None or (not isinstance(value, str) and pd.isna(value)):
-        return ""
-    return str(value)
+    """`build_my_team` has already raised for an id that is not in `teams`, so there is no
+    fallback branch here -- the one that used to be read as a live safety net and was dead."""
+    return str(teams[teams["team_id"] == my_team_id].iloc[0]["team_name"])
