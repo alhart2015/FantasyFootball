@@ -133,14 +133,47 @@ class SeasonOutcomes:
     #: result can never be read back against a different bracket than produced it -- `seed <=
     #: playoff_size` means nothing without knowing which playoff_size.
     calendar: LeagueCalendar
-    wins: np.ndarray  # (n_sims, n_slots) regular-season wins
+    #: The already-played results these seasons were seeded with, per slot. Carried for the
+    #: same reason as the calendar: a reader that takes its banked record from somewhere else
+    #: can print a record that disagrees with the projection beside it, and nothing would
+    #: catch it. Empty preseason.
+    locked: Mapping[int, LockedRecord]
+    #: (n_sims, n_slots) regular-season CREDITED wins -- banked plus simulated, a tie counting
+    #: half. **Not integers.** A caller formatting a record from this must not assume they are:
+    #: `int(6.5)` floors and `f"{6.5:.0f}"` banker-rounds, either of which prints a record that
+    #: does not sum to the season.
+    wins: np.ndarray
     points_for: np.ndarray  # (n_sims, n_slots) regular-season points
     seed: np.ndarray  # (n_sims, n_slots) 1-based final seed
     champion: np.ndarray  # (n_sims,) winning slot
     runner_up: np.ndarray  # (n_sims,) losing finalist slot
+    #: (n_sims, n_slots, n_weeks) per-slot weekly points, weeks indexed as
+    #: `calendar.all_week_numbers`. Retained so matchup odds -- P(A beats B in week w) -- are a
+    #: read of the same simulations that produced the standings, not a second run that could
+    #: disagree with them.
+    weekly_points: np.ndarray
 
     def _col(self, slot: int) -> int:
         return self.slots.index(slot)
+
+    def week_points(self, slot: int, week: int) -> np.ndarray:
+        """(n_sims,) points for one slot in one absolute week number."""
+        return self.weekly_points[:, self._col(slot), week - 1]
+
+    def head_to_head(self, home: int, away: int, week: int) -> float:
+        """P(`home` outscores `away`) in `week`, over the simulations already run.
+
+        An exact tie splits half to each side rather than counting for both. `>=` alone
+        returned 1.0 for BOTH directions when the two point vectors were identical, so
+        `P(A beats B) + P(B beats A)` came to 2.0. That is not unreachable despite continuous
+        totals: `sample_weekly_points` returns exactly 0.0 for a non-positive projection, so a
+        zeroed pool -- which a finished regular season produces -- gives deterministic
+        all-zero columns for every team.
+        """
+        home_pts, away_pts = self.week_points(home, week), self.week_points(away, week)
+        wins = (home_pts > away_pts).mean()
+        draws = (home_pts == away_pts).mean()
+        return float(wins + 0.5 * draws)
 
     def made_playoffs(self, slot: int) -> np.ndarray:
         return self.seed[:, self._col(slot)] <= self.calendar.playoff_size
@@ -159,6 +192,44 @@ class SeasonOutcomes:
             else:
                 out.append("missed playoffs")
         return out
+
+
+@dataclass(frozen=True)
+class LockedRecord:
+    """One team's ACTUAL results over the weeks already played.
+
+    Mid-season those weeks are facts, not distributions: simulating them discards information
+    and produces a spread around a record you can simply look up. Seeding then runs on
+    (locked + simulated) wins and points-for, which is exactly ESPN's rule.
+
+    `wins`, `losses` and `ties` are stored as ESPN reports them -- a tie is its own outcome,
+    not a rounded win -- but **seeding uses `credited_wins`, where a tie is half a win.** That
+    is ESPN's rule: it seeds on winning percentage, so 6-1-1 (.8125) outranks 6-2-0 (.750).
+    Seeding on `wins` alone treats those two records as identical and separates them on
+    points-for instead, which flips playoff berths and byes.
+
+    Simulated weeks can tie too -- the matchup loop splits an exact tie half to each side, the
+    same rule -- but continuous point totals make that vanishingly rare, so in a real run these
+    come from played weeks.
+    """
+
+    wins: int = 0
+    losses: int = 0
+    ties: int = 0
+    points_for: float = 0.0
+
+    @property
+    def games_played(self) -> int:
+        return self.wins + self.losses + self.ties
+
+    @property
+    def credited_wins(self) -> float:
+        """Wins for seeding purposes: a tie counts half, matching ESPN's win percentage."""
+        return self.wins + 0.5 * self.ties
+
+
+#: Shared empty record, so a slot absent from `locked` costs no allocation per lookup.
+_NO_RESULTS = LockedRecord()
 
 
 def resolve_bracket(
@@ -210,20 +281,38 @@ def simulate_seasons(
     n_sims: int,
     rng: np.random.Generator,
     calendar: LeagueCalendar | None = None,
+    schedule: Sequence[Sequence[tuple[int, int]]] | None = None,
+    locked: Mapping[int, LockedRecord] | None = None,
+    first_unplayed_week: int = 1,
 ) -> SeasonOutcomes:
-    """`n_sims` full projected-vs-projected seasons, returning every sim's realized result.
+    """`n_sims` projected-vs-projected seasons, returning every sim's realized result.
 
-    The regular season runs `calendar.reg_weeks` via the gauntlet schedule -> records +
-    points-for; seeding is (wins, points_for). The top `calendar.playoff_size` make the
-    playoffs and the top `calendar.n_byes` skip the first round; the bracket is single
-    elimination, reseeded each round, with the final spanning `calendar.final_weeks`.
-    Ties (matchup or championship) break to the better seed / lower slot.
+    The regular season runs `calendar.reg_weeks` -> records + points-for; seeding is
+    (wins, points_for). The top `calendar.playoff_size` make the playoffs and the top
+    `calendar.n_byes` skip the first round; the bracket is single elimination, reseeded each
+    round, with the final spanning `calendar.final_weeks`.
+
+    An exact **matchup** tie is half a win to each side, matching `head_to_head` and
+    `LockedRecord.credited_wins`. A **championship** tie still breaks to the better seed --
+    a final has to produce one winner.
 
     `calendar` defaults to `DEFAULT_CALENDAR` -- 13 regular weeks, top 6, 2 byes, two-week
-    final -- which is exactly the shape this function hard-coded before it was parameterised,
-    so callers that pass nothing are unaffected. Pass a real one whenever the league's own
+    final -- exactly the shape this function hard-coded before it was parameterised, so
+    callers that pass nothing are unaffected. Pass a real one whenever the league's own
     settings are known: ESPN reports `matchupPeriodCount` and `playoffMatchupPeriodLength`
     per league and they do not always match the defaults.
+
+    **Preseason vs in-season.** With `schedule=None` the fixture list is `gauntlet_schedule`,
+    a synthetic round-robin. That is the right choice before a season: no real fixture list
+    exists yet, and a synthetic one is strength-of-schedule neutral, so no seat is advantaged
+    by a draw that has not happened. It is the wrong choice during a season, where who you
+    actually play drives your record -- pass the league's real fixture list, **in slot space**
+    (the caller maps ESPN team ids to 1..n_teams slots; this function knows only slots).
+
+    `locked` supplies each slot's ACTUAL wins/losses/ties/points-for from the weeks already
+    played, and `first_unplayed_week` says where simulation starts. Weeks before it are not
+    simulated at all -- they are facts. Their points still get drawn (the bracket needs
+    playoff-week points regardless) but contribute nothing to the regular-season tally.
     """
     calendar = calendar or DEFAULT_CALENDAR
     n_teams = league_config.n_teams
@@ -246,18 +335,36 @@ def simulate_seasons(
         for s in slots
     }
 
-    wins = {s: np.zeros(n_sims) for s in slots}
-    pf = {s: np.zeros(n_sims) for s in slots}
+    # Locked weeks seed the tally with real results; everything from `first_unplayed_week`
+    # on is simulated. Preseason (`locked=None`, `first_unplayed_week=1`) both start at zero,
+    # which is the previous behaviour exactly.
+    locked = locked or {}
+    wins = {s: np.full(n_sims, locked.get(s, _NO_RESULTS).credited_wins) for s in slots}
+    pf = {s: np.full(n_sims, locked.get(s, _NO_RESULTS).points_for) for s in slots}
+
     reg_weeks = calendar.reg_week_numbers
-    schedule = gauntlet_schedule(n_teams, len(reg_weeks))
-    for w, matchups in zip(reg_weeks, schedule, strict=True):
+    fixtures = schedule if schedule is not None else gauntlet_schedule(n_teams, len(reg_weeks))
+    if len(fixtures) != len(reg_weeks):
+        raise ValueError(
+            f"schedule covers {len(fixtures)} weeks but the calendar has {len(reg_weeks)} "
+            "regular-season weeks; they must line up week-for-week."
+        )
+    for w, matchups in zip(reg_weeks, fixtures, strict=True):
+        if w < first_unplayed_week:
+            continue  # already played: its result is in `locked`, not simulated
         for a, b in matchups:
             pa, pb = weekly[a][:, w - 1], weekly[b][:, w - 1]
             pf[a] += pa
             pf[b] += pb
-            a_win = pa >= pb
+            # An exact tie is half a win to each side -- the same rule `head_to_head` and
+            # `LockedRecord.credited_wins` use, and how a real tie is scored. `pa >= pb`
+            # handed the whole win to the home side, so on two rosters with identical point
+            # vectors the odds table reported 0.5 while the standings credited 1.0, from the
+            # same simulations. Continuous point totals make this a no-op in practice; it
+            # matters when a roster resolves to all zeros.
+            a_win = np.where(pa > pb, 1.0, np.where(pa == pb, 0.5, 0.0))
             wins[a] += a_win
-            wins[b] += ~a_win
+            wins[b] += 1.0 - a_win
 
     win_mat = np.stack([wins[s] for s in slots], axis=1)
     pf_mat = np.stack([pf[s] for s in slots], axis=1)
@@ -286,6 +393,8 @@ def simulate_seasons(
     return SeasonOutcomes(
         slots=tuple(slots),
         calendar=calendar,
+        locked=dict(locked),
+        weekly_points=np.stack([weekly[s] for s in slots], axis=1),
         wins=win_mat,
         points_for=pf_mat,
         seed=seed_mat,

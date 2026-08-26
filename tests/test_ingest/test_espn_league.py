@@ -10,9 +10,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from projections.ingest.espn_league import (
+    DEFAULT_VIEWS,
     ESPN_LINEUP_SLOTS,
     ESPN_PRO_TEAMS,
     EspnCredentials,
@@ -25,9 +27,11 @@ from projections.ingest.espn_league import (
     parse_roster_slots,
     parse_rosters,
     parse_ruleset,
+    parse_schedule,
     parse_teams,
     pro_team_code,
     scoring_family,
+    team_records,
     write_league_snapshot,
 )
 from projections.schemas import _RULESET_NAME_VALUES, RosterSlot, Team
@@ -612,3 +616,221 @@ def test_parse_draft_order_is_empty_when_no_order_is_drawn() -> None:
     order = parse_draft_order(payload, parse_teams(payload))
     assert order.empty
     assert "round_pick" in order.columns
+
+
+# --- schedule + records -------------------------------------------------------------------
+
+
+def _matchup(
+    week: int,
+    home_id: int,
+    away_id: int,
+    *,
+    home_pts: float = 0.0,
+    away_pts: float = 0.0,
+    winner: str = "UNDECIDED",
+) -> dict[str, Any]:
+    return {
+        "matchupPeriodId": week,
+        "winner": winner,
+        "home": {"teamId": home_id, "totalPoints": home_pts},
+        "away": {"teamId": away_id, "totalPoints": away_pts},
+    }
+
+
+def test_parse_schedule_reads_the_real_fixture_list() -> None:
+    """The league's actual pairings, which in-season standings must simulate over rather than
+    the synthetic `gauntlet_schedule` the preseason simulator uses."""
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.5, away_pts=99.0, winner="HOME"),
+            _matchup(1, 3, 4, home_pts=88.0, away_pts=101.25, winner="AWAY"),
+            _matchup(2, 1, 3),
+        ]
+    )
+    sched = parse_schedule(payload, parse_teams(payload))
+    assert list(sched["week"]) == [1, 1, 2]
+    assert list(sched["home_team_id"]) == [1, 3, 1]
+    assert list(sched["is_played"]) == [True, True, False]
+    assert sched.loc[0, "home_points"] == pytest.approx(120.5)
+    assert sched.loc[1, "away_points"] == pytest.approx(101.25)
+
+
+def test_is_played_comes_from_winner_not_from_points() -> None:
+    """ESPN reports `totalPoints: 0.0` for an unplayed matchup, which is indistinguishable
+    from a real scoreless one. `winner` is the authoritative signal, and reading points
+    instead would mark a genuine 0-0 week as never played."""
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=0.0, away_pts=0.0, winner="TIE"),
+            _matchup(2, 1, 2, home_pts=0.0, away_pts=0.0),
+        ]
+    )
+    sched = parse_schedule(payload, parse_teams(payload))
+    assert list(sched["is_played"]) == [True, False]
+
+
+def test_parse_schedule_is_empty_before_kickoff_but_still_lists_the_fixtures() -> None:
+    """The expected state during draft prep: every matchup exists, none is played."""
+    payload = _payload(schedule=[_matchup(w, 1, 2) for w in range(1, 15)])
+    sched = parse_schedule(payload, parse_teams(payload))
+    assert len(sched) == 14
+    assert not sched["is_played"].any()
+
+
+def test_parse_schedule_skips_a_bye_rather_than_half_recording_it() -> None:
+    """An odd team count gives someone a bye, which ESPN reports as a matchup with no `away`.
+    A bye is not a game, and a row with a null opponent would break every downstream join."""
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, winner="HOME"),
+            {"matchupPeriodId": 1, "winner": "UNDECIDED", "home": {"teamId": 3}},
+        ]
+    )
+    sched = parse_schedule(payload, parse_teams(payload))
+    assert len(sched) == 1
+    assert sched.loc[0, "home_team_id"] == 1
+
+
+def test_team_records_tallies_wins_losses_and_points() -> None:
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=99.0, winner="HOME"),
+            _matchup(2, 2, 1, home_pts=130.0, away_pts=110.0, winner="HOME"),
+            _matchup(3, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME"),
+        ]
+    )
+    recs = team_records(parse_schedule(payload, parse_teams(payload))).set_index("team_id")
+    assert (recs.loc[1, "wins"], recs.loc[1, "losses"]) == (2, 1)
+    assert (recs.loc[2, "wins"], recs.loc[2, "losses"]) == (1, 2)
+    assert recs.loc[1, "points_for"] == pytest.approx(120.0 + 110.0 + 100.0)
+    assert recs.loc[2, "points_for"] == pytest.approx(99.0 + 130.0 + 90.0)
+    assert recs.loc[1, "games_played"] == 3
+
+
+def test_team_records_carries_ties_as_neither_win_nor_loss() -> None:
+    """Simulated weeks cannot tie -- the simulator breaks every matchup with `>=` -- but real
+    played weeks can, and a tie must not be folded into a win or a loss for seeding."""
+    payload = _payload(schedule=[_matchup(1, 1, 2, home_pts=100.0, away_pts=100.0, winner="TIE")])
+    recs = team_records(parse_schedule(payload, parse_teams(payload))).set_index("team_id")
+    for team_id in (1, 2):
+        assert (recs.loc[team_id, "wins"], recs.loc[team_id, "losses"]) == (0, 0)
+        assert recs.loc[team_id, "ties"] == 1
+        assert recs.loc[team_id, "games_played"] == 1
+
+
+def test_team_records_ignores_unplayed_matchups() -> None:
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=99.0, winner="HOME"),
+            _matchup(2, 1, 2),
+        ]
+    )
+    recs = team_records(parse_schedule(payload, parse_teams(payload))).set_index("team_id")
+    assert recs.loc[1, "games_played"] == 1
+
+
+def test_team_records_is_empty_before_kickoff() -> None:
+    payload = _payload(schedule=[_matchup(1, 1, 2)])
+    assert team_records(parse_schedule(payload, parse_teams(payload))).empty
+
+
+def test_mmatchup_is_pulled_by_default() -> None:
+    """Standings need the schedule, so it must not be an opt-in view a caller can forget."""
+    assert "mMatchup" in DEFAULT_VIEWS
+
+
+# --- the locked/simulated week partition ---------------------------------------------------
+
+
+def test_team_records_can_be_bounded_to_the_weeks_the_simulator_will_not_replay() -> None:
+    """`locked` and `simulated` must partition the season's weeks exactly once.
+
+    `simulate_seasons` replays every week from `first_unplayed_week` onward, so anything
+    `team_records` banks from those same weeks is counted twice. Two real cases hit this:
+    a partially-played week (some matchups final, some not, which is every Sunday evening),
+    and playoff weeks, which `parse_schedule` deliberately returns and which must never reach
+    a REGULAR-season record. One boundary closes both.
+    """
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=99.0, winner="HOME"),
+            # Week 2 is partially played: this one final, the next still undecided.
+            _matchup(2, 1, 2, home_pts=115.0, away_pts=80.0, winner="HOME"),
+            _matchup(2, 3, 4, winner="UNDECIDED"),
+            # A playoff week, already decided.
+            _matchup(15, 1, 3, home_pts=140.0, away_pts=100.0, winner="HOME"),
+        ]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+
+    # Unbounded: banks week 2's finished game AND the playoff week -- 3 wins for team 1.
+    assert team_records(schedule).set_index("team_id").loc[1, "wins"] == 3
+
+    # Bounded to weeks strictly before the first unplayed week (2), only week 1 counts.
+    bounded = team_records(schedule, through_week=1).set_index("team_id")
+    assert bounded.loc[1, "wins"] == 1
+    assert bounded.loc[1, "games_played"] == 1
+    assert bounded.loc[1, "points_for"] == pytest.approx(120.0)
+
+
+def test_team_records_through_week_excludes_playoff_results_from_a_regular_season_record() -> None:
+    """A 14-week league whose playoffs are under way: the regular-season record must stay
+    14 games. Folding a playoff win in makes a team 'x-y' in a league that plays fewer games
+    than that, and contaminates the points-for that breaks seeding ties."""
+    payload = _payload(
+        schedule=[_matchup(w, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME") for w in (1, 2)]
+        + [_matchup(15, 1, 3, home_pts=150.0, away_pts=80.0, winner="HOME")]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+    recs = team_records(schedule, through_week=14).set_index("team_id")
+    assert recs.loc[1, "wins"] == 2
+    assert recs.loc[1, "points_for"] == pytest.approx(200.0)
+
+
+def test_team_records_through_week_none_keeps_the_previous_unbounded_behaviour() -> None:
+    payload = _payload(
+        schedule=[_matchup(w, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME") for w in (1, 2)]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+    assert team_records(schedule).equals(team_records(schedule, through_week=None))
+
+
+def test_a_present_but_unusable_week_count_does_not_bound_the_record(tmp_path: Path) -> None:
+    """`from_espn_settings` silently falls back to 13 for anything it cannot read, so testing
+    that `matchupPeriodCount` is merely PRESENT is not enough: `null` is present and still
+    resolves to the default, which would drop week 14 of a 14-week league with no warning --
+    the precise failure the bound was added to prevent."""
+    payload = _payload(
+        schedule=[_matchup(w, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME") for w in (1, 14)]
+    )
+    payload["settings"]["scheduleSettings"] = {"matchupPeriodCount": None}
+    creds = EspnCredentials(swid=_MY_SWID, espn_s2="s2")
+
+    write_league_snapshot(payload, tmp_path, creds, my_team_id=1)
+
+    records = pd.read_csv(tmp_path / "records.tsv", sep="\t").set_index("team_id")
+    # Unbounded: week 14 survives rather than being silently dropped by a defaulted calendar.
+    assert records.loc[1, "wins"] == 2
+
+
+def test_the_reported_week_count_is_the_one_used(tmp_path: Path) -> None:
+    """Week 14 must COUNT and week 15 must not.
+
+    Asserting only that week 15 is dropped would pass under a bound of 13 too, so it pins
+    "some bound was applied" rather than "the league's real 14-week calendar was applied" --
+    which is the whole point of plumbing `reg_weeks` through. Week 14 is the discriminating
+    case: it survives a bound of 14 and is dropped by the default 13.
+    """
+    payload = _payload(
+        schedule=[
+            _matchup(w, 1, 2, home_pts=100.0, away_pts=90.0, winner="HOME") for w in (1, 14, 15)
+        ]
+    )
+    payload["settings"]["scheduleSettings"] = {"matchupPeriodCount": 14}
+    creds = EspnCredentials(swid=_MY_SWID, espn_s2="s2")
+
+    write_league_snapshot(payload, tmp_path, creds, my_team_id=1)
+
+    records = pd.read_csv(tmp_path / "records.tsv", sep="	").set_index("team_id")
+    assert records.loc[1, "wins"] == 2, "week 14 counts; a bound of 13 would drop it"

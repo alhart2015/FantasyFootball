@@ -1061,6 +1061,10 @@ class VorpTableSchema(pa.DataFrameModel):
     # consensus-fed preset path. Weekly-path VORP tables omit it and still validate. Slice 1
     # lands it here; Slice 2 feeds it to generate_auction_values as reference_prices.
     espn_auction_dollars: Series[pd.Int64Dtype] | None = pa.Field(ge=0, nullable=True)
+    # Optional (not-required): attached by `attach_is_rookie` for the variance model, which
+    # scales a rookie's spread differently. Declared here so a pool carrying it survives
+    # `strict="filter"` instead of needing callers to strip and restore it around validation.
+    is_rookie: Series[bool] | None = pa.Field()
 
     class Config:
         strict = "filter"
@@ -1521,3 +1525,74 @@ class PickemPicksSchema(pa.DataFrameModel):
 
     class Config:
         strict = "filter"
+
+
+class ProjectedStandingsSchema(pa.DataFrameModel):
+    """One weekly snapshot of projected final standings: one row per team per (season, week).
+
+    Written after each week's run so the trajectory can be read back across a season -- "my
+    playoff odds over time" is a read of the accumulated partitions, not a separate
+    computation. `week` is the week the snapshot was TAKEN, i.e. the first unplayed week; the
+    projections are for the season's end.
+
+    Actual and projected figures are kept side by side on purpose. `wins`/`losses`/`ties` are
+    banked facts from played weeks; `projected_wins` is that plus the simulated remainder. A
+    reader that cannot see both cannot tell a 2-0 start from a 2-0 projection.
+    """
+
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    #: Snapshot week = the first unplayed week. `reg_weeks + 1` once the season is complete.
+    week: Series[int] = pa.Field(ge=1, le=23)
+    team_id: Series[int] = pa.Field(ge=0)
+    team_name: Series[str]
+    # --- banked, from played weeks
+    wins: Series[int] = pa.Field(ge=0)
+    losses: Series[int] = pa.Field(ge=0)
+    ties: Series[int] = pa.Field(ge=0)
+    points_for: Series[float] = pa.Field(ge=0)
+    games_played: Series[int] = pa.Field(ge=0)
+    # --- projected to season end
+    #: Season-end CREDITED wins: banked + simulated, with a tie counting half, matching ESPN's
+    #: win percentage. Deliberately not comparable to `wins` above by subtraction -- a 6-1-1
+    #: team with nothing left to play has `wins=6` and `projected_wins=6.5`, and the 0.5 is
+    #: the tie, not a game still to come.
+    projected_wins: Series[float] = pa.Field(ge=0)
+    #: Season-end points-for (banked + simulated) -- the figure the simulator seeds on, and
+    #: what the standings order by. `points_for` above is banked-only.
+    projected_points_for: Series[float] = pa.Field(ge=0)
+    make_playoffs_pct: Series[float] = pa.Field(ge=0, le=1)
+    bye_pct: Series[float] = pa.Field(ge=0, le=1)
+    champ_pct: Series[float] = pa.Field(ge=0, le=1)
+    mean_seed: Series[float] = pa.Field(gt=0)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+
+
+class MatchupOddsSchema(pa.DataFrameModel):
+    """P(win) for each remaining head-to-head matchup, from the same simulation run.
+
+    Not a second engine: every simulated week already produces both teams' point totals per
+    simulation, so `P(home beats away)` is the fraction of simulations where the home total is
+    the larger. Only unplayed matchups appear -- a played one has a result, not a probability.
+    """
+
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    #: The snapshot this row was produced in -- the partition key. Distinct from `week`, and
+    #: required: two snapshots holding the same future fixture would otherwise concatenate into
+    #: a frame with one key carrying two probabilities and no way to tell which is current.
+    snapshot_week: Series[int] = pa.Field(ge=1, le=23)
+    #: The week the matchup is played in, not the week the snapshot was taken.
+    week: Series[int] = pa.Field(ge=1, le=23)
+    home_team_id: Series[int] = pa.Field(ge=0)
+    away_team_id: Series[int] = pa.Field(ge=0)
+    home_team: Series[str]
+    away_team: Series[str]
+    home_win_pct: Series[float] = pa.Field(ge=0, le=1)
+    home_mean_points: Series[float] = pa.Field(ge=0)
+    away_mean_points: Series[float] = pa.Field(ge=0)
+
+    class Config:
+        strict = "filter"
+        coerce = True

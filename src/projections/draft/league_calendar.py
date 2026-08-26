@@ -120,17 +120,50 @@ class LeagueCalendar(BaseModel):
         yields a usable calendar.
         """
 
-        def _int(key: str, default: int) -> int:
-            raw = schedule_settings.get(key, default)
-            return int(raw) if isinstance(raw, int | float | str) else default
+        def _int(key: str, default: int, *, minimum: int = 1) -> int:
+            return usable_int(schedule_settings.get(key), minimum=minimum) or default
 
-        playoff_size = _int("playoffTeamCount", DEFAULT_PLAYOFF_SIZE)
+        # minimum=2: `playoff_size` is `gt=1`, so a reported 1 has to fall back rather than
+        # reach the constructor.
+        playoff_size = _int("playoffTeamCount", DEFAULT_PLAYOFF_SIZE, minimum=2)
         return cls(
             reg_weeks=_int("matchupPeriodCount", DEFAULT_REG_WEEKS),
             playoff_size=playoff_size,
             n_byes=_byes_for(playoff_size),
             final_weeks=_int("playoffMatchupPeriodLength", DEFAULT_FINAL_WEEKS),
         )
+
+
+def usable_int(raw: object, *, minimum: int = 1) -> int | None:
+    """A positive int from an ESPN settings value, or None if it cannot be one.
+
+    Split out and made public because "did ESPN actually report this?" is a question two
+    callers need and a type test cannot answer:
+
+    - **`bool` is an `int` in Python.** `matchupPeriodCount: true` would otherwise become
+      `reg_weeks=1` -- a one-week regular season, with every later week discarded from the
+      locked record and playoff odds computed off a single game.
+    - **Passing the type test is not the same as converting.** `int("full")` raises,
+      `int(float("nan"))` raises, `int(float("inf"))` overflows, and `0` or a negative trips
+      `LeagueCalendar`'s own `gt=0` -- any of which would abort a caller mid-write rather
+      than letting it fall back.
+    - **`minimum` because the fields do not share a bound.** `playoff_size` is `gt=1`, not
+      `gt=0`, so `playoffTeamCount: 1` would clear a one-size-fits-all check and then raise
+      from the constructor -- exactly the abort this function exists to prevent.
+
+    Returning None rather than raising keeps the decision with the caller: `from_espn_settings`
+    substitutes its default, while `write_league_snapshot` leaves its record unbounded and says
+    so.
+    """
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if not isinstance(raw, int | float | str):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if value >= minimum else None
 
 
 def _byes_for(playoff_size: int) -> int:

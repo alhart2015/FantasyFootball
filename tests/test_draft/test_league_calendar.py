@@ -21,7 +21,7 @@ from projections.draft.assistant.league_projection import (
     simulate_seasons,
 )
 from projections.draft.assistant.performance_variance import VarianceParams
-from projections.draft.league_calendar import LeagueCalendar, _byes_for
+from projections.draft.league_calendar import LeagueCalendar, _byes_for, usable_int
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset
 
@@ -267,3 +267,55 @@ def test_outcomes_carry_the_calendar_they_were_simulated_under() -> None:
     res = _run(8, LeagueCalendar(reg_weeks=14, playoff_size=4, n_byes=0, final_weeks=1))
     assert res.calendar.playoff_size == 4
     assert res.made_playoffs(1).sum() == (res.seed[:, 0] <= 4).sum()
+
+
+# --- usable_int ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (14, 14),
+        ("14", 14),
+        (14.0, 14),
+        # `bool` is an `int` in Python, so a naive type test lets True through as 1 -- a
+        # one-week regular season, with every later week discarded from the locked record.
+        (True, None),
+        (False, None),
+        (None, None),
+        ("full", None),
+        (float("nan"), None),
+        (float("inf"), None),
+        ([], None),
+        ({}, None),
+        # LeagueCalendar's own gt=0 would reject these, but only by raising mid-call.
+        (0, None),
+        (-3, None),
+    ],
+)
+def test_usable_int_accepts_only_what_can_actually_be_a_week_count(
+    raw: object, expected: int | None
+) -> None:
+    assert usable_int(raw) == expected
+
+
+def test_an_unusable_week_count_falls_back_rather_than_raising() -> None:
+    """`from_espn_settings` must degrade to its default, not abort its caller mid-write."""
+    unusable: tuple[object, ...] = (True, "full", float("nan"), 0, -3, [])
+    for raw in unusable:
+        assert LeagueCalendar.from_espn_settings({"matchupPeriodCount": raw}).reg_weeks == 13
+
+
+def test_a_playoff_size_of_one_falls_back_rather_than_raising() -> None:
+    """`playoff_size` is `gt=1`, not `gt=0`, so a one-size-fits-all positivity check let
+    `playoffTeamCount: 1` through to the constructor -- which raises, aborting the caller.
+    That is the exact abort `usable_int` exists to prevent, so it takes a `minimum`."""
+    assert usable_int(1, minimum=2) is None
+    assert LeagueCalendar.from_espn_settings({"playoffTeamCount": 1}).playoff_size == 6
+
+
+def test_a_bad_value_in_one_field_does_not_disturb_the_others() -> None:
+    cal = LeagueCalendar.from_espn_settings(
+        {"matchupPeriodCount": 14, "playoffTeamCount": 0, "playoffMatchupPeriodLength": 1}
+    )
+    assert (cal.reg_weeks, cal.playoff_size, cal.final_weeks) == (14, 6, 1)
