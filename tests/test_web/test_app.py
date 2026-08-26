@@ -87,3 +87,29 @@ def test_routes_do_not_grow_into_a_god_module() -> None:
         if len(path.read_text(encoding="utf-8").splitlines()) > 150
     }
     assert not too_long, f"route modules should stay thin; move logic to views: {too_long}"
+
+
+def test_no_page_reaches_the_network_during_tests(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A test must never call the real ESPN API.
+
+    `EspnCredentials.resolve` reads ESPN_SWID/ESPN_S2 from the environment BEFORE the file, so
+    pointing the fixture at tmp_path is not enough: on a machine with those exported --
+    which is this one -- `/team` reached `fetch_league_payload(856974, 2026)` over the wire.
+    Verified by instrumentation before this test existed. It passed either way, because a
+    failed call becomes an empty page and a 200, which is exactly why nobody would notice.
+    """
+    calls: list[tuple[int, int]] = []
+
+    def spy(league_id: int, season: int, **kwargs: object) -> dict[str, object]:
+        calls.append((league_id, season))
+        raise AssertionError(f"test made a live ESPN call: league {league_id}, season {season}")
+
+    monkeypatch.setattr("projections.ingest.espn_league.fetch_league_payload", spy)
+    monkeypatch.setattr("projections.web.routes.team.fetch_league_payload", spy)
+    monkeypatch.setattr("projections.web.routes.standings.fetch_league_payload", spy)
+
+    for route in ("/", "/standings", "/team"):
+        assert client.get(route).status_code == 200, route
+    assert calls == [], f"pages attempted network calls: {calls}"
