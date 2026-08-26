@@ -303,3 +303,18 @@ def test_an_unusable_week_count_falls_back_rather_than_raising() -> None:
     """`from_espn_settings` must degrade to its default, not abort its caller mid-write."""
     for raw in (True, "full", float("nan"), 0, -3, []):
         assert LeagueCalendar.from_espn_settings({"matchupPeriodCount": raw}).reg_weeks == 13
+
+
+def test_a_playoff_size_of_one_falls_back_rather_than_raising() -> None:
+    """`playoff_size` is `gt=1`, not `gt=0`, so a one-size-fits-all positivity check let
+    `playoffTeamCount: 1` through to the constructor -- which raises, aborting the caller.
+    That is the exact abort `usable_int` exists to prevent, so it takes a `minimum`."""
+    assert usable_int(1, minimum=2) is None
+    assert LeagueCalendar.from_espn_settings({"playoffTeamCount": 1}).playoff_size == 6
+
+
+def test_a_bad_value_in_one_field_does_not_disturb_the_others() -> None:
+    cal = LeagueCalendar.from_espn_settings(
+        {"matchupPeriodCount": 14, "playoffTeamCount": 0, "playoffMatchupPeriodLength": 1}
+    )
+    assert (cal.reg_weeks, cal.playoff_size, cal.final_weeks) == (14, 6, 1)

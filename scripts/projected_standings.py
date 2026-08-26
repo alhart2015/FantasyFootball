@@ -175,8 +175,8 @@ def _print_ties_footnote() -> None:
     """Say what PROJ W is. Unconditional, because both reasons it is fractional always are."""
     print()
     print(
-        "* PROJ W is the MEAN simulated final win total, so it is fractional whether or not "
-        "anyone ties. Ties count half a win, as ESPN seeds."
+        "* PROJ W is a mean over remaining-season simulations, and counts a tie as half a "
+        "win the way ESPN seeds. Either is enough to make it fractional."
     )
 
 

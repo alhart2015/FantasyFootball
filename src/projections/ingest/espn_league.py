@@ -911,10 +911,14 @@ def write_league_snapshot(
         # message has to say which: told "no matchupPeriodCount in the payload" about a
         # `null` sitting right there in espn_raw.json, an operator re-pulls mSettings and
         # nothing changes, because mSettings was never the problem.
+        # `.get()` returns None for BOTH an absent key and a present JSON null, so the
+        # membership test is what actually separates them -- which is the whole point of the
+        # message: an operator told "no matchupPeriodCount" about a null sitting right there
+        # re-pulls mSettings and nothing changes.
         detail = (
-            "has no matchupPeriodCount"
-            if raw_weeks is None
-            else f"reports matchupPeriodCount as {raw_weeks!r}, which is not a week count"
+            f"reports matchupPeriodCount as {raw_weeks!r}, which is not a week count"
+            if "matchupPeriodCount" in schedule_settings
+            else "has no matchupPeriodCount"
         )
         _log.warning(
             "Schedule: the payload %s, so records.tsv cannot be bounded to the regular "
