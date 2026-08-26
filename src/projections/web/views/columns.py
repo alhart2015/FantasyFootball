@@ -162,7 +162,10 @@ TEAM_COLUMNS: tuple[Column, ...] = (
     Column(
         key="ytd_rank",
         label="YTD rk",
-        help="Rank at his position, by points scored so far",
+        help=(
+            "Rank at his position among projected players, by points scored so far. "
+            "Same universe as the ROS rank beside it, so the two are comparable."
+        ),
         sense="lower-better",
     ),
     Column(
@@ -175,7 +178,10 @@ TEAM_COLUMNS: tuple[Column, ...] = (
     Column(
         key="ros_rank",
         label="ROS rk",
-        help="Rank at his position, by projected rest-of-season points",
+        help=(
+            "Rank at his position among projected players, by projected rest-of-season "
+            "points. Same universe as the YTD rank beside it."
+        ),
         sense="lower-better",
     ),
 )

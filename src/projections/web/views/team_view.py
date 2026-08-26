@@ -96,12 +96,28 @@ def build_team_page(
     **Ranks are computed over the whole league pool, not over this roster.** "RB 4" means
     fourth-best running back in the league; ranking within a 13-man roster would produce a
     number that looks the same and means nothing.
-    """
-    ytd_ranked = _with_rank(_one_row_per_player(ytd), "actual_total", "ytd_rank", ascending=False)
-    ros_ranked = _with_rank(ros, "season_mean_fpts", "ros_rank", ascending=False)
 
-    ytd_by_id = ytd_ranked.set_index("gsis_id")
-    ros_by_id = ros_ranked.set_index("gsis_id")
+    **Both ranks are computed over the SAME universe** -- the projection pool. They sit in
+    adjacent columns under near-identical tooltips, which is an invitation to read "YTD 8, ROS
+    22" as a fall of fourteen places -- a subtraction that only means anything if both numbers
+    count the same players. `ytd` arrives NFL-wide, straight off `weekly_stats`: every
+    practice-squad running back who took a carry is in it, and none of them are in the pool.
+    Ranking YTD over that set and ROS over the pool put a bigger denominator under one column
+    than the other, so the same player's YTD rank read worse for no reason but the universe.
+
+    POINTS still come from the full frame. A kicker is not in the pool, and dropping his actual
+    points from the roster total to make a rank comparable would be fixing the wrong number.
+    """
+    pool_universe = set(ros["gsis_id"].astype(str)) if not ros.empty else set()
+    one_per_player = _one_row_per_player(ytd)
+    ytd_by_id = one_per_player.set_index("gsis_id")
+    ranked_universe = one_per_player[one_per_player["gsis_id"].astype(str).isin(pool_universe)]
+    ytd_rank_by_id = _with_rank(
+        ranked_universe, "actual_total", "ytd_rank", ascending=False
+    ).set_index("gsis_id")
+    ros_by_id = _with_rank(ros, "season_mean_fpts", "ros_rank", ascending=False).set_index(
+        "gsis_id"
+    )
 
     rows: list[PlayerRow] = []
     roster_ytd = starter_ros = 0.0
@@ -129,7 +145,7 @@ def build_team_page(
             "player": _text(player.get("player")) or gsis,
             "position": _text(player.get("pos")),
             "ytd_points": ytd_points,
-            "ytd_rank": _lookup_rank(ytd_by_id, gsis, "ytd_rank"),
+            "ytd_rank": _lookup_rank(ytd_rank_by_id, gsis, "ytd_rank"),
             "ros_points": ros_points,
             "ros_rank": _lookup_rank(ros_by_id, gsis, "ros_rank"),
         }

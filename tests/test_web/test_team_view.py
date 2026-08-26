@@ -315,3 +315,50 @@ def test_a_missing_name_blanks_one_cell_rather_than_raising() -> None:
     page = _page(roster=roster)
     assert _cell(page, 0, "player") == "00-0000001"
     assert any("00-0000001" in note for note in page.notes) or page.rows
+
+
+def test_both_ranks_count_the_same_players() -> None:
+    """The two rank columns sit side by side under near-identical tooltips, which invites
+    reading "YTD 8, ROS 22" as a fall of fourteen places. That subtraction means nothing unless
+    both numbers count the same players.
+
+    `ytd` arrives NFL-wide off `weekly_stats` -- every practice-squad back who took a carry is
+    in it, and none of them are in the projection pool. Here two such players outscore the
+    roster's RB, which used to push his YTD rank down without touching his ROS rank.
+    """
+    ytd = _ytd(
+        [
+            ("00-0000001", "RB", 140.0),
+            ("00-0000003", "WR", 120.0),
+            # In weekly_stats, absent from the pool: nobody projects them, so they must not
+            # appear in either ranking.
+            ("00-0007001", "RB", 300.0),
+            ("00-0007002", "RB", 250.0),
+        ]
+    )
+    ros = _ros([("00-0000001", "RB", 150.0), ("00-0000003", "WR", 130.0)])
+    page = _page(ytd=ytd, ros=ros)
+    star = next(r for r in page.rows if r.gsis_id == "00-0000001")
+    ytd_rank = next(i for i, c in enumerate(page.columns) if c.key == "ytd_rank")
+    ros_rank = next(i for i, c in enumerate(page.columns) if c.key == "ros_rank")
+    assert star.cells[ytd_rank].text == star.cells[ros_rank].text == "1", (
+        "unprojected players must not sit between him and the top of either column"
+    )
+
+
+def test_a_players_points_still_count_even_when_the_pool_cannot_rank_him() -> None:
+    """The universe fix must not shrink the roster total. A kicker is not in the pool, so he
+    has no rank -- but he really did score those points, and dropping them from the roster
+    total to make a rank comparable would be fixing the wrong number."""
+    roster = _roster(
+        [("00-0000001", "Star RB", "RB", "RB"), ("00-0004001", "Some Kicker", "K", "K")]
+    )
+    ytd = _ytd([("00-0000001", "RB", 140.0), ("00-0004001", "K", 55.0)])
+    ros = _ros([("00-0000001", "RB", 150.0)])
+    page = _page(roster=roster, ytd=ytd, ros=ros)
+    assert page.roster_ytd == pytest.approx(195.0)
+    kicker = next(r for r in page.rows if r.gsis_id == "00-0004001")
+    ytd_rank = next(i for i, c in enumerate(page.columns) if c.key == "ytd_rank")
+    ytd_points = next(i for i, c in enumerate(page.columns) if c.key == "ytd_points")
+    assert kicker.cells[ytd_points].text == "55.0"
+    assert kicker.cells[ytd_rank].text == "—", "no projection means no comparable rank"
