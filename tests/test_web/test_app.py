@@ -113,3 +113,30 @@ def test_no_page_reaches_the_network_during_tests(
     for route in ("/", "/standings", "/team"):
         assert client.get(route).status_code == 200, route
     assert calls == [], f"pages attempted network calls: {calls}"
+
+
+def test_env_credentials_are_not_reported_as_missing(
+    dashboard_config: DashboardConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`EspnCredentials.resolve` reads ESPN_SWID/ESPN_S2 before the file, so requiring the file
+    reported "missing the ESPN credentials" as a falsehood on any machine using environment
+    credentials -- and refused to render standings while /team worked fine."""
+    from projections.web.routes.standings import _missing_inputs
+
+    monkeypatch.setenv("ESPN_SWID", "{ABC}")
+    monkeypatch.setenv("ESPN_S2", "s2value")
+    message = _missing_inputs(dashboard_config)
+    assert message is not None, "the pool and id_map are still absent"
+    # Matched on the phrase, not the bare word: pytest's tmp_path is named after the test, so
+    # "credentials" appears in every path in the message.
+    assert "the ESPN credentials" not in message, message
+
+
+def test_absent_credentials_are_reported_naming_both_sources(
+    dashboard_config: DashboardConfig,
+) -> None:
+    from projections.web.routes.standings import _missing_inputs
+
+    message = _missing_inputs(dashboard_config)
+    assert message is not None
+    assert "ESPN_SWID" in message and "the ESPN credentials" in message, message

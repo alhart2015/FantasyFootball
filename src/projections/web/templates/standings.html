@@ -5,8 +5,12 @@
     <h1>{{ page.league_name or "Standings" }}</h1>
     {% if not page.is_empty %}
       <p class="muted">
-        Week {{ page.week }} of {{ page.reg_weeks }} ·
-        {{ page.weeks_remaining }} to play ·
+        {% if page.regular_season_complete %}
+          Regular season complete ·
+        {% else %}
+          Week {{ page.week }} of {{ page.reg_weeks }} ·
+          {{ page.weeks_remaining }} to play ·
+        {% endif %}
         {{ page.n_matchups_played }} matchups played
       </p>
     {% endif %}

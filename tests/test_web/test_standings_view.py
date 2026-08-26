@@ -211,3 +211,13 @@ def test_the_empty_state_renders_its_reason_and_no_table(app: Flask) -> None:
         html = render_template("standings.html", page=page)
     assert "The draft has not happened." in html
     assert "<tbody>" not in html, "no table at all, rather than an empty one reading as 0-0"
+
+
+def test_the_week_label_does_not_exceed_the_season(app: Flask) -> None:
+    """`first_unplayed_week` returns `reg_weeks + 1` for a finished regular season, so the
+    template printed "Week 15 of 14". The page should say the regular season is complete."""
+    page = _page(played_weeks=4)
+    with app.test_request_context():
+        html = render_template("standings.html", page=page)
+    assert "of 4" not in html or "Week 5 of 4" not in html
+    assert "complete" in html.lower(), html[:600]

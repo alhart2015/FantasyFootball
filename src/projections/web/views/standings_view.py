@@ -70,6 +70,12 @@ class StandingsPage:
     def is_empty(self) -> bool:
         return self.message is not None
 
+    @property
+    def regular_season_complete(self) -> bool:
+        """`first_unplayed_week` returns `reg_weeks + 1` when every week has been played, so a
+        template printing "Week {week} of {reg_weeks}" unconditionally reads "Week 15 of 14"."""
+        return self.reg_weeks > 0 and self.week > self.reg_weeks
+
 
 def _record(row: pd.Series) -> str:
     """`6-1` or `6-1-1`. The tie is only shown when there is one, because "6-1-0" reads as

@@ -7,6 +7,9 @@ import pandas as pd
 from flask import Blueprint, current_app, render_template
 
 from projections.draft.assistant.availability_loader import load_store_availability
+from projections.draft.assistant.performance_variance import (
+    _DEFAULT_PARAMS_PATH as DEFAULT_VARIANCE_PARAMS_PATH,
+)
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
 from projections.ingest.espn_league import EspnCredentials, EspnLeagueError, fetch_league_payload
@@ -35,10 +38,13 @@ def standings() -> str:
         )
     try:
         run = _run_projection(config)
-    except (ProjectionInputError, EspnLeagueError) as exc:
-        # Both mean "there is nothing to project yet", which before the season is the normal
-        # state rather than a fault. The reason goes on the page; an empty table would read as
-        # "everyone is 0-0".
+    except (ProjectionInputError, EspnLeagueError, OSError) as exc:
+        # ProjectionInputError and EspnLeagueError mean "there is nothing to project yet",
+        # which before the season is the normal state rather than a fault. OSError covers the
+        # two the pre-check cannot: load_store_availability raises FileNotFoundError when no
+        # complete prior weekly_stats season is on disk, and a stalled ESPN read raises
+        # TimeoutError, which is not a URLError and so is not wrapped. Either would otherwise
+        # be a traceback on a page built to have an empty state.
         page = empty_standings_page(str(exc), season=config.season)
     else:
         page = build_standings_page(run, season=config.season, my_team_id=config.my_team_id)
@@ -58,9 +64,12 @@ def _missing_inputs(config: DashboardConfig) -> str | None:
             config.data_root / "raw" / "id_map.parquet",
             "projections.ingest.id_map.build_id_map",
         ),
-        "the ESPN credentials": (
-            config.credentials_path,
-            'a JSON file of {"swid": ..., "espn_s2": ...}',
+        # `VarianceParams.load()` defaults to a RELATIVE path, resolved against the process
+        # CWD rather than data_root, so starting the dashboard from anywhere but the repo root
+        # used to 500 here. Named rather than left to raise.
+        "the variance params": (
+            DEFAULT_VARIANCE_PARAMS_PATH,
+            "they ship with the repo — run from the repo root",
         ),
     }
     absent = [
@@ -68,6 +77,14 @@ def _missing_inputs(config: DashboardConfig) -> str | None:
         for label, (path, how) in required.items()
         if not path.exists()
     ]
+    # Credentials are checked separately: `EspnCredentials.resolve` reads ESPN_SWID/ESPN_S2
+    # BEFORE the file, so requiring the file reported "missing the ESPN credentials" as a
+    # falsehood on any machine using environment credentials.
+    if EspnCredentials.from_env() is None and not config.credentials_path.exists():
+        absent.append(
+            f"the ESPN credentials — neither ESPN_SWID/ESPN_S2 in the environment nor a file "
+            f"at {config.credentials_path}"
+        )
     if not absent:
         return None
     return "Cannot project standings — missing " + "; ".join(absent) + "."
