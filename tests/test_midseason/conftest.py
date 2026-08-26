@@ -34,6 +34,9 @@ CALENDAR = LeagueCalendar(reg_weeks=REG_WEEKS, playoff_size=2, n_byes=0, final_w
 
 #: ESPN lineup slot ids: 0 QB, 2 RB, 4 WR, 6 TE, 20 BENCH.
 ESPN_SLOT_COUNTS: dict[str, int] = {"0": 1, "2": 2, "4": 2, "6": 1, "20": 1}
+#: The slot each POSITIONS entry occupies, so a fixture roster has real starters rather than a
+#: bench of six -- which silently made every starters-only total zero.
+ESPN_SLOT_FOR_POSITION: dict[str, int] = {"QB": 0, "RB": 2, "WR": 4, "TE": 6}
 #: ESPN defaultPositionId.
 ESPN_POSITION_ID: dict[str, int] = {"QB": 1, "RB": 2, "WR": 3, "TE": 4}
 
@@ -151,7 +154,9 @@ def espn_payload(*, played_weeks: int = 2, with_schedule: bool = True) -> dict[s
     for team_id in TEAM_IDS:
         entries = [
             {
-                "lineupSlotId": 20,
+                # The last RB and the last WR sit on the bench; the rest start. A roster with
+                # both is what the page's starter/bench split is for.
+                "lineupSlotId": 20 if i in (2, 4) else ESPN_SLOT_FOR_POSITION[pos],
                 "playerId": espn_player_id(team_id, i),
                 "playerPoolEntry": {
                     "player": {

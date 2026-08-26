@@ -133,11 +133,18 @@ def test_within_a_group_the_order_is_by_projection() -> None:
     assert ros_values == sorted(ros_values, reverse=True)
 
 
-def test_totals_count_starters_only() -> None:
-    """The bench does not score. A total including it would overstate the team every week."""
+def test_the_two_totals_measure_different_things_on_purpose() -> None:
+    """`roster_ytd` spans the WHOLE roster; `starter_ros` counts starters only.
+
+    Not an inconsistency. `is_starter` reads today's slot, while YTD points span the season, so
+    a starters-only YTD would credit a player benched for weeks 1-5 with all of his points --
+    neither what the starting lineups scored nor the team's points-for, which the standings
+    page reports as PF. Rest-of-season is forward-looking, so attributing it to the current
+    starters IS meaningful.
+    """
     page = _page()
-    assert page.starter_ytd == pytest.approx(140.0 + 120.0)
-    assert page.starter_ros == pytest.approx(150.0 + 110.0)
+    assert page.roster_ytd == pytest.approx(140.0 + 90.0 + 120.0), "bench included"
+    assert page.starter_ros == pytest.approx(150.0 + 110.0), "bench excluded"
 
 
 # --- the empty and partial states ---------------------------------------------------------

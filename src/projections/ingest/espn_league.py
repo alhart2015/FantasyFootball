@@ -745,6 +745,28 @@ def team_records(schedule: pd.DataFrame, *, through_week: int | None = None) -> 
     return frame.astype({"team_id": int, "wins": int, "losses": int, "ties": int})
 
 
+def espn_to_gsis(rosters: pd.DataFrame, id_map: pd.DataFrame) -> pd.Series:
+    """ESPN `player_id` -> `gsis_id`, index-aligned to `rosters`. NA where unmapped.
+
+    **Deduplicated on `espn_id`.** `IdMapSchema` marks only `gsis_id` unique -- `espn_id` is
+    nullable and non-unique, and the live `data/raw/id_map.parquet` holds two ESPN ids that
+    each map to two different players. Left as-is, a join on it fans out: the same player lands
+    on a roster twice, where he can fill two starting slots at once.
+
+    Extracted so the two callers -- `midseason.standings.rosters_to_slots` and the season
+    dashboard's team page -- resolve a player identically. They previously built this crosswalk
+    separately, line for line including the dedup rationale.
+    """
+    cross = (
+        id_map[["espn_id", "gsis_id"]]
+        .dropna()
+        .astype({"espn_id": str})
+        .drop_duplicates("espn_id")
+        .set_index("espn_id")["gsis_id"]
+    )
+    return rosters["player_id"].astype(str).map(cross)
+
+
 def parse_draft_picks(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFrame:
     """`draftDetail.picks` -> the `pick salary player nfl_team pos fantasy_team` TSV shape
     that `scripts/_will_league_2026_outcomes.py --picks` consumes.

@@ -6,8 +6,8 @@
     {% if not page.is_empty %}
       <p class="muted">
         {{ page.season }} · week {{ page.week }} ·
-        starters {{ "%.1f"|format(page.starter_ytd) }} YTD,
-        {{ "%.1f"|format(page.starter_ros) }} projected rest of season
+        roster {{ "%.1f"|format(page.roster_ytd) }} YTD ·
+        starters {{ "%.1f"|format(page.starter_ros) }} projected rest of season
       </p>
     {% endif %}
   </header>
