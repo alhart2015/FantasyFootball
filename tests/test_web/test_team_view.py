@@ -7,6 +7,8 @@ partition and the draft has not happened — so these tests are the only thing s
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pandas as pd
 import pytest
 from flask import Flask, render_template
@@ -376,3 +378,17 @@ def test_the_team_page_does_not_print_a_week_past_the_season(app: Flask) -> None
         html = render_template("team.html", page=page)
     assert "week 15" not in html.lower(), html[:600]
     assert "complete" in html.lower(), html[:600]
+
+
+def test_the_team_template_shows_notes_on_the_empty_page_too(app: Flask) -> None:
+    """The mirror of the standings test. `empty_team_page` carries no notes today, so this
+    pins the template's shape rather than a live behaviour -- which is the point: the two
+    templates render the same table and drifted apart once already, in exactly this loop."""
+    page = replace(
+        empty_team_page("No team selected.", season=2026),
+        notes=("weekly_stats season(s) [2024] are on disk but incomplete",),
+    )
+    with app.test_request_context():
+        html = render_template("team.html", page=page)
+    assert "No team selected." in html
+    assert "incomplete" in html

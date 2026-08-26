@@ -379,21 +379,16 @@ def test_my_own_empty_roster_is_explained_not_rendered_as_a_headed_table() -> No
 # --- the wholesale-clamp alarm reaches this page too --------------------------------------------
 
 
-def test_a_provider_already_reporting_rest_of_season_is_called_out() -> None:
-    """The assumption that cannot be verified until Week 1: if a provider's "season total" is
-    already rest-of-season, subtracting actuals double-counts and drives the pool to zero.
+def test_a_wholesale_clamp_reaches_this_page_at_all() -> None:
+    """The alarm that catches a pool everyone has outscored.
 
-    `rest_of_season_pool` has raised this alarm since it was written, and the team page --
-    which used its own copy of the subtraction -- did not. Sharing `remaining_totals` is what
-    gives it the same alarm.
+    `rest_of_season_pool` has raised it since it was written, and the team page -- which used
+    its own copy of the subtraction -- did not. Sharing `remaining_totals` is what gives it the
+    same alarm. What the alarm SAYS on this page is the next test's business.
     """
-    pool = _pool()
-    # Everyone has already outscored their whole projection: the shape of the inverted
-    # assumption.
-    pool["season_mean_fpts"] = 1.0
-    run = _run(pool=pool)
+    run = _run(pool=_outscored_pool())
     assert run.diagnostics.looks_like_double_counting
-    assert any("REST-OF-SEASON" in note.upper() for note in run.notes), run.notes
+    assert any("CLAMPED" in note.upper() for note in run.notes), run.notes
 
 
 def test_weekly_stats_for_the_wrong_season_is_refused() -> None:
@@ -434,6 +429,14 @@ def test_an_unresolved_player_is_named_once_not_twice() -> None:
     assert "id_map" in naming_him[0]
 
 
+def _outscored_pool() -> pd.DataFrame:
+    """A pool every player has already beaten -- the shape both the inverted-provider bug and a
+    months-old projection produce."""
+    pool = _pool()
+    pool["season_mean_fpts"] = 1.0
+    return pool
+
+
 def test_a_stale_preseason_pool_is_not_blamed_on_the_provider() -> None:
     """The wholesale-clamp alarm has two possible causes on this page and only one on the
     other. The standings pipeline subtracts from a re-pulled season total, so a wholesale clamp
@@ -441,9 +444,7 @@ def test_a_stale_preseason_pool_is_not_blamed_on_the_provider() -> None:
     PRESEASON projection, and by December a good share of any August number has simply been
     beaten -- naming only the provider bug would be confidently wrong.
     """
-    pool = _pool()
-    pool["season_mean_fpts"] = 1.0
-    run = _run(pool=pool)
+    run = _run(pool=_outscored_pool())
     warning = run.diagnostics.warning()
     assert warning is not None
     assert "stale" in warning.lower() and "preseason" in warning.lower(), warning

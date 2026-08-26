@@ -53,25 +53,47 @@ BENCH_INDICES: frozenset[int] = frozenset({2, 4})
 #: Restricted to the slots the fixture actually seats, and asserted unique. `ESPN_LINEUP_SLOTS`
 #: is many-to-one -- ids 3, 5 and 23 are all FLEX -- so a blanket inversion silently keeps
 #: whichever id came last, which is the opposite of the robustness the derivation is for.
-_FIXTURE_SLOTS: tuple[RosterSlot, ...] = (
-    RosterSlot.QB,
-    RosterSlot.RB,
-    RosterSlot.WR,
-    RosterSlot.TE,
-    RosterSlot.BENCH,
+_FIXTURE_SLOTS: frozenset[RosterSlot] = frozenset(
+    {
+        RosterSlot.QB,
+        RosterSlot.RB,
+        RosterSlot.WR,
+        RosterSlot.TE,
+        RosterSlot.BENCH,
+    }
 )
-ESPN_ID_FOR_SLOT: dict[str, int] = {}
-for _slot_id, _slot in ESPN_LINEUP_SLOTS.items():
-    if _slot not in _FIXTURE_SLOTS:
-        continue
-    assert _slot.value not in ESPN_ID_FOR_SLOT, (
-        f"{_slot} has more than one ESPN id; the fixture cannot pick one for you"
-    )
-    ESPN_ID_FOR_SLOT[_slot.value] = _slot_id
+
+
+def _espn_id_for_slot() -> dict[str, int]:
+    """A function, not a module-level loop: the loop leaked its variables into the namespace of
+    a conftest three suites import, and its uniqueness check was a bare `assert`, which
+    `python -O` strips -- in the one configuration where a silent last-wins would matter."""
+    ids: dict[str, int] = {}
+    for slot_id, slot in ESPN_LINEUP_SLOTS.items():
+        if slot not in _FIXTURE_SLOTS:
+            continue
+        if slot.value in ids:
+            raise AssertionError(
+                f"{slot} has more than one ESPN id; the fixture cannot pick one for you"
+            )
+        ids[slot.value] = slot_id
+    return ids
+
+
+ESPN_ID_FOR_SLOT: dict[str, int] = _espn_id_for_slot()
 ESPN_BENCH_SLOT: int = ESPN_ID_FOR_SLOT[RosterSlot.BENCH.value]
-#: `rosterSettings.lineupSlotCounts`, DERIVED from the roster the fixture actually builds, so
-#: the declared lineup and the players available to fill it cannot disagree. Spelled out by
-#: hand it said 2 RB / 2 WR / 1 bench while the roster started 1 of each and benched two.
+#: The starting lineup the fixture actually seats.
+#:
+#: Both the ESPN payload's `rosterSettings.lineupSlotCounts` and `LeagueConfig.roster_slots`
+#: are derived from it, so the declared lineup and the players available to fill it cannot
+#: disagree. Spelled out by hand they said 2 RB / 2 WR while the roster seated 1 of each --
+#: two declarations of one league, and any test handing both to the same pipeline was
+#: describing neither.
+STARTING_SLOTS: dict[RosterSlot, int] = dict(
+    Counter(RosterSlot(pos) for i, pos in enumerate(POSITIONS) if i not in BENCH_INDICES)
+)
+
+#: `rosterSettings.lineupSlotCounts`, keyed by ESPN's slot ids and counting the bench too.
 ESPN_SLOT_COUNTS: dict[str, int] = dict(
     Counter(
         str(ESPN_BENCH_SLOT if i in BENCH_INDICES else ESPN_ID_FOR_SLOT[RosterSlot(pos).value])
@@ -95,12 +117,11 @@ def league_config(n_teams: int = len(TEAM_IDS), *, name: str = "midseason_test")
     return LeagueConfig(
         name=name,
         n_teams=n_teams,
-        roster_slots={
-            RosterSlot.QB: 1,
-            RosterSlot.RB: 2,
-            RosterSlot.WR: 2,
-            RosterSlot.TE: 1,
-        },
+        # DERIVED from the same roster the payload builds, like `ESPN_SLOT_COUNTS`. Spelled
+        # out here it said 2 RB / 2 WR while the payload seated 1 of each -- so a test handing
+        # both to the same pipeline was describing two different leagues, which is the defect
+        # deriving `ESPN_SLOT_COUNTS` was meant to remove, relocated one declaration over.
+        roster_slots=STARTING_SLOTS,
         ruleset=Ruleset.espn_half(),
     )
 

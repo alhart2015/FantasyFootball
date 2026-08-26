@@ -23,8 +23,8 @@ def display_str(value: object) -> str:
     Lives beside `_PYARROW_STR` because that dtype is what makes it necessary: a nullable
     string column yields `pd.NA`, and the natural idiom for a fallback -- `value or default` --
     evaluates `bool(pd.NA)`, which RAISES. One missing name then takes down a whole page rather
-    than blanking one cell. It had four near-copies across the ingest, midseason and web layers
-    before this existed.
+    than blanking one cell. It had four near-copies across the midseason and web layers before
+    this existed.
     """
     if value is None or (not isinstance(value, str) and pd.isna(value)):
         return ""

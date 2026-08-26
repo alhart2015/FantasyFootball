@@ -105,7 +105,12 @@ def build_my_team(
     # NFL games left, not fantasy weeks left -- the same horizon `project_league_standings`
     # passes, and the distinction has bitten this repo twice. It scales the near-zero cutoff,
     # which is compared against a remaining total.
-    ros, diagnostics = remaining_totals(pool, scored, games_remaining=SEASON_GAMES - (week - 1))
+    # `max(..., 0)`, exactly as `project_league_standings` clamps it. `first_unplayed_week`
+    # returns `reg_weeks + 1`, so a league whose regular season runs to 17 weeks or more yields
+    # a negative horizon -- which `remaining_totals` reads as "nothing left to play".
+    ros, diagnostics = remaining_totals(
+        pool, scored, games_remaining=max(SEASON_GAMES - (week - 1), 0)
+    )
 
     notes = _notes(unresolved, weekly_stats, week, diagnostics)
     return MyTeamRun(
@@ -130,7 +135,24 @@ def _require_one_season(weekly_stats: pd.DataFrame, season: int) -> None:
     """
     if weekly_stats.empty or "season" not in weekly_stats.columns:
         return
-    seasons = set(weekly_stats["season"].dropna().astype(int))
+    try:
+        seasons = set(weekly_stats["season"].dropna().astype(int))
+    except (TypeError, ValueError) as exc:
+        # A `season` column that will not read as a year is a broken partition, and a bare
+        # ValueError out of `astype` is not in the route's caught tuple -- so it would have
+        # been a 500 rather than a sentence naming the input.
+        raise ProjectionInputError(
+            f"weekly_stats has a `season` column that is not a year ({exc}). Re-run the "
+            "weekly-stats ingest for this season."
+        ) from exc
+    if not seasons:
+        # `dropna()` emptied it, so every row is NA. `set() - {season}` is empty, which would
+        # have passed as though the partition were verified -- the exact case this guard is
+        # for, sailing through it.
+        raise ProjectionInputError(
+            "weekly_stats has no season on any row, so it cannot be checked against the "
+            f"{season} page. Re-run the weekly-stats ingest."
+        )
     if seasons - {season}:
         raise ProjectionInputError(
             f"weekly_stats holds season(s) {sorted(seasons)} but this page is showing "
@@ -186,10 +208,18 @@ def _one_row_per_player(ytd: pd.DataFrame) -> pd.DataFrame:
     would call him.
     """
     columns = ["gsis_id", "position", "actual_total"]
+    missing = [name for name in columns if name not in ytd.columns]
+    if missing:
+        # A bare KeyError out of `ytd[columns]` is not in the route's caught tuple, so it would
+        # be a 500 rather than a sentence naming what changed upstream.
+        raise ProjectionInputError(
+            f"actual_season_total no longer produces {missing}; the My Team page reads {columns}."
+        )
     if ytd.empty or not ytd["gsis_id"].duplicated().any():
-        # The same three columns either way. Returning `ytd` untouched made the frame's shape
-        # depend on whether anyone happened to be reclassified, which is not a contract.
-        return ytd[columns]
+        # The same three columns either way, and a copy either way. Returning `ytd` untouched
+        # made the frame's shape depend on whether anyone happened to be reclassified, and a
+        # bare slice would alias the caller's frame.
+        return ytd[columns].copy()
     # `kind="stable"`, because the default quicksort would make the position tiebreak arbitrary
     # for a player who scored identically at two positions -- and a fixture that reproduces it
     # would pass or fail by luck.

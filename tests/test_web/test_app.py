@@ -111,10 +111,16 @@ def test_routes_do_not_grow_into_a_god_module() -> None:
     assert not too_long, f"route modules should stay thin; move logic to views: {too_long}"
 
 
-def test_no_page_reaches_the_network_during_tests(
+def test_every_page_fetches_through_a_patchable_client(
     client: FlaskClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A test must never call the real ESPN API.
+    """Every page's ESPN call must go through a name a test can patch.
+
+    Named for what it checks. It cannot be "no page reaches the network", because it proves
+    that by making every page reach the SPY -- the standing guarantee is the autouse fixture in
+    `conftest.py`, which strips the credentials so a real call cannot authenticate.
+
+    The history is why it is worth having.
 
     `EspnCredentials.resolve` reads ESPN_SWID/ESPN_S2 from the environment BEFORE the file, so
     pointing the fixture at tmp_path is not enough: on a machine with those exported --

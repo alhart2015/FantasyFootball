@@ -16,10 +16,9 @@ from projections.draft.league_config import LeagueConfig
 from projections.ingest.espn_league import EspnCredentials, EspnLeagueError, fetch_league_payload
 from projections.midseason.my_team import build_my_team
 from projections.midseason.standings import ProjectionInputError
-from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
 from projections.store import read_partition
 from projections.web.app import DashboardConfig, dashboard_config
-from projections.web.inputs import missing_inputs, pool_and_id_map
+from projections.web.inputs import load_id_map, load_pool, missing_inputs, pool_and_id_map
 from projections.web.views.team_view import TeamPage, build_team_page, empty_team_page
 
 bp = Blueprint("team", __name__)
@@ -66,13 +65,10 @@ def _build(config: DashboardConfig, my_team_id: int) -> TeamPage:
     creds = EspnCredentials.resolve(config.credentials_path)
     payload = fetch_league_payload(config.league_id, config.season, creds=creds)
 
-    pool = pd.read_parquet(config.pool_path)
-    pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
-
     run = build_my_team(
         payload,
-        VorpTableSchema.validate(pool),
-        IdMapSchema.validate(pd.read_parquet(config.data_root / "raw" / "id_map.parquet")),
+        load_pool(config),
+        load_id_map(config),
         _weekly_stats(config),
         LeagueConfig.model_validate_json((config.league_dir / "league_config.json").read_text()),
         my_team_id=my_team_id,

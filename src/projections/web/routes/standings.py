@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
-import pandas as pd
 from flask import Blueprint, current_app, render_template
 from pandera.errors import SchemaError
 
@@ -18,9 +17,14 @@ from projections.midseason.standings import (
     StandingsRun,
     project_league_standings,
 )
-from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
 from projections.web.app import DashboardConfig, dashboard_config
-from projections.web.inputs import VARIANCE_PARAMS, missing_inputs, pool_and_id_map
+from projections.web.inputs import (
+    VARIANCE_PARAMS,
+    load_id_map,
+    load_pool,
+    missing_inputs,
+    pool_and_id_map,
+)
 from projections.web.views.standings_view import build_standings_page, empty_standings_page
 
 bp = Blueprint("standings", __name__)
@@ -74,18 +78,11 @@ def _run_projection(config: DashboardConfig, notes: list[str]) -> StandingsRun:
     creds = EspnCredentials.resolve(config.credentials_path)
     payload = fetch_league_payload(config.league_id, config.season, creds=creds)
 
-    pool = pd.read_parquet(config.pool_path)
-    pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
-    pool = attach_is_rookie(
-        VorpTableSchema.validate(pool), season=config.season, data_root=config.data_root
-    )
+    pool = attach_is_rookie(load_pool(config), season=config.season, data_root=config.data_root)
     return project_league_standings(
         payload,
         pool,
-        # Validated, as the team route does. The two pages read the SAME file, so a page
-        # that skips the check surfaces a drifted id_map as a traceback while the other
-        # names it -- the divergence `web/inputs.py` exists to remove, one layer down.
-        IdMapSchema.validate(pd.read_parquet(config.data_root / "raw" / "id_map.parquet")),
+        load_id_map(config),
         load_store_availability(
             pool, season=config.season, data_root=config.data_root, notes=notes
         ),

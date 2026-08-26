@@ -97,14 +97,17 @@ def build_standings_page(
 
     # `require_every_key` above raises when a registry key is absent, so the per-column
     # membership test the previous version carried here could no longer be false.
-    # One walk of the frame. The previous version walked it twice and kept the two passes in
-    # step by a positional index, which is a coupling with nothing enforcing it.
-    values = []
-    team_ids = []
-    for _, row in display.iterrows():
-        values.append({column.key: _cell_value(row, column) for column in STANDINGS_COLUMNS})
-        team_ids.append(int(row["team_id"]))
-    scales = column_intensities(values, STANDINGS_COLUMNS)
+    # One walk of the frame, and the team id travels WITH its values rather than in a parallel
+    # list kept in step by a positional index. The intensity scales are still keyed by position
+    # because they are computed per column across all rows, which is what they are.
+    rendered_rows = [
+        (
+            int(row["team_id"]),
+            {column.key: _cell_value(row, column) for column in STANDINGS_COLUMNS},
+        )
+        for _, row in display.iterrows()
+    ]
+    scales = column_intensities([values for _, values in rendered_rows], STANDINGS_COLUMNS)
 
     rows = tuple(
         TeamRow(
@@ -112,7 +115,7 @@ def build_standings_page(
             is_mine=my_team_id is not None and team_id == my_team_id,
             cells=tuple(
                 Cell(
-                    text=column.format(values[i][column.key]),
+                    text=column.format(values[column.key]),
                     intensity=scales[column.key][i],
                     numeric=column.numeric,
                     is_label=column.is_label,
@@ -120,7 +123,7 @@ def build_standings_page(
                 for column in STANDINGS_COLUMNS
             ),
         )
-        for i, team_id in enumerate(team_ids)
+        for i, (team_id, values) in enumerate(rendered_rows)
     )
 
     notes: list[str] = []

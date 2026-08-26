@@ -15,23 +15,47 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+import pandas as pd
+
 from projections.draft.assistant.performance_variance import DEFAULT_PARAMS_PATH
 from projections.ingest.espn_league import EspnCredentials
+from projections.schemas import _PYARROW_STR, IdMapSchema, VorpTableSchema
 from projections.web.app import DashboardConfig
 
 #: `(path, how to produce it)` per named input.
 Required = Mapping[str, tuple[Path, str]]
 
 
+def id_map_path(config: DashboardConfig) -> Path:
+    """One spelling of the path. It was written out in the pre-check and again in each route,
+    so changing it in the pre-check would have named a file the routes do not read."""
+    return config.data_root / "raw" / "id_map.parquet"
+
+
 def pool_and_id_map(config: DashboardConfig) -> Required:
     """The two inputs every page needs."""
     return {
         "the VORP pool": (config.pool_path, "scripts/generate_league_vorp_table.py"),
-        "the id_map": (
-            config.data_root / "raw" / "id_map.parquet",
-            "projections.ingest.id_map.build_id_map",
-        ),
+        "the id_map": (id_map_path(config), "projections.ingest.id_map.build_id_map"),
     }
+
+
+def load_pool(config: DashboardConfig) -> pd.DataFrame:
+    """The VORP pool, validated. Beside the declaration of its path, and shared, because the
+    two routes had a copy each -- including the `astype` that makes the schema pass."""
+    pool = pd.read_parquet(config.pool_path)
+    pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
+    return VorpTableSchema.validate(pool)
+
+
+def load_id_map(config: DashboardConfig) -> pd.DataFrame:
+    """The id_map, validated.
+
+    Validated on BOTH pages. They read the same file, so a page that skipped the check
+    surfaced a drifted id_map as a traceback while the other named it -- the divergence this
+    module exists to remove, one layer down.
+    """
+    return IdMapSchema.validate(pd.read_parquet(id_map_path(config)))
 
 
 def missing_inputs(config: DashboardConfig, required: Required, *, action: str) -> str | None:

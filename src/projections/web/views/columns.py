@@ -235,13 +235,10 @@ def column_intensities(
             out[column.key] = [None] * len(values)
             continue
         numbers = [float(v) for v in values if isinstance(v, int | float)]
-        if not numbers:
+        if not numbers or min(numbers) == max(numbers):
             out[column.key] = [None] * len(values)
             continue
         low, high = min(numbers), max(numbers)
-        if low == high:
-            out[column.key] = [None] * len(values)
-            continue
         scaled: list[float | None] = []
         for value in values:
             if not isinstance(value, int | float):

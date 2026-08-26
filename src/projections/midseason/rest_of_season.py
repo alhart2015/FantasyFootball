@@ -55,6 +55,11 @@ class RosDiagnostics:
     #: zero while the whole pool is quietly near-zeroed.
     n_near_zero: int = 0
     clamped_examples: tuple[str, ...] = field(default_factory=tuple)
+    #: The cutoff `n_near_zero` was counted against. Carried rather than re-derived in the
+    #: message, which quoted the unscaled constant while the code applied
+    #: `_IMPLAUSIBLY_SMALL_ROS * games_remaining / SEASON_GAMES` -- so at week 10 the note said
+    #: "under 1 points" about a check that used 0.47.
+    near_zero_cutoff: float = _IMPLAUSIBLY_SMALL_ROS
     #: The projection that was subtracted from is a PRESEASON one rather than a fresh
     #: mid-season pull. It changes what a wholesale clamp means -- see `warning()`.
     projection_is_preseason: bool = False
@@ -83,7 +88,7 @@ class RosDiagnostics:
         if self.n_near_zero:
             parts.append(
                 f"{self.n_near_zero} of {self.n_players} players project implausibly near "
-                f"zero for the rest of the season (under {_IMPLAUSIBLY_SMALL_ROS:g} points) "
+                f"zero for the rest of the season (under {self.near_zero_cutoff:.2g} points) "
                 "without clamping"
             )
         if self.n_fallback:
@@ -270,6 +275,7 @@ def _remaining(
         n_clamped=len(clamped),
         n_fallback=n_fallback,
         n_near_zero=n_near_zero,
+        near_zero_cutoff=near_zero_cutoff,
         clamped_examples=tuple(clamped[:5]),
         projection_is_preseason=projection_is_preseason,
     )
@@ -313,10 +319,30 @@ def remaining_totals(
     """
     out = pool.copy()
     if games_remaining <= 0:
+        # Every cell renders 0.0 and the roster total with it, which looks like a bad team
+        # rather than an exhausted season -- so it is counted as a wholesale clamp, which is
+        # what makes `warning()` say something. Reachable in a league whose regular season runs
+        # to 17 weeks or more, where `first_unplayed_week` returns `reg_weeks + 1`.
         out["season_mean_fpts"] = 0.0
-        return _validated(out), RosDiagnostics(n_players=len(out))
+        return _validated(out), RosDiagnostics(
+            n_players=len(out),
+            n_clamped=len(out),
+            clamped_examples=tuple(str(g) for g in out["gsis_id"].head(5)),
+            projection_is_preseason=True,
+        )
     # Each player is measured against his own whole-season projection, so `fresh` IS the pool
     # and nothing is ever prorated -- `used_fallback` cannot be set from here.
+    #
+    # `VorpTableSchema` marks `gsis_id` unique, but this function is public and `_remaining`
+    # runs BEFORE the validate on the way out, so a caller handing over an unvalidated pool
+    # would have had both of a duplicated player's rows scored against whichever came last.
+    # Checked rather than assumed, because the symptom is a plausible wrong number.
+    duplicated = out["gsis_id"].astype(str).duplicated()
+    if duplicated.any():
+        raise ValueError(
+            f"pool holds duplicate gsis_id(s) {sorted(set(out.loc[duplicated, 'gsis_id']))}; "
+            "each player must appear once or his remaining points are ambiguous"
+        )
     fresh = {str(row.gsis_id): float(row.season_mean_fpts) for row in out.itertuples()}
     totals, diagnostics = _remaining(
         out,

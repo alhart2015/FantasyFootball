@@ -37,13 +37,16 @@ from projections.web.views.columns import (
 #: An unrecognised ESPN slot id becomes `""` there, which is in neither set.
 _BENCH_SLOTS = frozenset({RosterSlot.BENCH, RosterSlot.IR})
 
-#: The column keys `_row_values` fills. Checked against the registry once, at import, rather
-#: than per player per request: these keys are literals in the source, so what the check is
-#: worth is catching a registry that gained a column nothing fills -- and it should catch that
-#: whether or not a roster happens to be non-empty.
+#: The column keys `_row_values` fills.
+#:
+#: Checked against the registry at import, so a column nothing fills is caught whether or not a
+#: roster happens to be non-empty -- and checked against a REAL row in `build_team_page`, once,
+#: because on its own this is a literal compared to another literal and would not notice
+#: `_row_values` drifting away from both.
 _ROW_KEYS: frozenset[str] = frozenset(
     {"slot", "player", "position", "ytd_points", "ytd_rank", "ros_points", "ros_rank"}
 )
+require_every_key(_ROW_KEYS, TEAM_COLUMNS, source="the assembled player row")
 
 
 @dataclass(frozen=True)
@@ -129,6 +132,13 @@ def build_team_page(run: MyTeamRun, *, season: int) -> TeamPage:
         _row_values(player, ytd_by_id, ytd_rank_by_id, ros_by_id)
         for _, player in run.roster.iterrows()
     ]
+    if rows:
+        # Against the row the function actually built, not against `_ROW_KEYS`. The import-time
+        # check compares two literals to each other and would miss a rename inside
+        # `_row_values` -- which then raises a bare KeyError per request, and a KeyError is not
+        # in the route's caught tuple, so it is a 500 rather than an empty state.
+        require_every_key(rows[0].values, TEAM_COLUMNS, source="the assembled player row")
+
     roster_ytd = sum(_number(row.values["ytd_points"]) for row in rows)
     starter_ros = sum(_number(row.values["ros_points"]) for row in rows if row.is_starter)
 
@@ -171,9 +181,6 @@ def build_team_page(run: MyTeamRun, *, season: int) -> TeamPage:
         starter_ros=starter_ros,
         notes=run.notes + _blank_column_notes(run, ros_by_id),
     )
-
-
-require_every_key(_ROW_KEYS, TEAM_COLUMNS, source="the assembled player row")
 
 
 def empty_team_page(message: str, *, season: int) -> TeamPage:
@@ -282,16 +289,15 @@ def _blank_column_notes(run: MyTeamRun, ros_by_id: pd.DataFrame) -> tuple[str, .
             "No weekly stats for this season yet, so year-to-date columns are empty. They "
             "fill in once Week 1 has been played."
         )
-    # Players the id_map could not resolve are skipped: `build_my_team` already names them,
-    # under the reason that actually applies. Counting them here too listed the same player
-    # twice, the second time miscategorising a just-signed WR as someone the pool does not
-    # cover.
-    unprojected = [
-        display_str(player.get("player")) or display_str(player.get("gsis_id"))
-        for _, player in run.roster.iterrows()
-        if display_str(player.get("gsis_id"))
-        and display_str(player.get("gsis_id")) not in ros_by_id.index
-    ]
+    unprojected: list[str] = []
+    for _, player in run.roster.iterrows():
+        gsis = display_str(player.get("gsis_id"))
+        # Players the id_map could not resolve are skipped: `build_my_team` already names them,
+        # under the reason that actually applies. Counting them here too listed the same player
+        # twice, the second time miscategorising a just-signed WR as someone the pool does not
+        # cover.
+        if gsis and gsis not in ros_by_id.index:
+            unprojected.append(display_str(player.get("player")) or gsis)
     if unprojected:
         shown = ", ".join(unprojected[:5])
         notes.append(
