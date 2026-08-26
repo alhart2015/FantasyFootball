@@ -6,6 +6,34 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Season web UI shipped — Flask, and the untested code held the bugs (2026-08-26, branch `feat/season-web-ui`)
+
+**Two read-only pages over what the repo already computes.** Spec: `docs/superpowers/specs/2026-08-26-season-web-ui-design.md` (§10 records what was cut and why). Standings — current record beside projected finish for all 16 teams, plus my remaining fixtures with a win probability each. My Team — roster with YTD points and rank beside rest-of-season points and rank. `python scripts/run_season_dashboard.py`, localhost, no auth, no writes.
+
+**Flask + Jinja, not Streamlit, deliberately.** The repo keeps two Streamlit apps (`draft_board.py`, `auction_board.py`) and they stay. Those are *interactive session* tools; this is a *dashboard over batch-computed data*, and both pages are dense tables wanting per-cell affordances — a colour scale keyed to each column's own range — which is the thing `st.dataframe` is worst at. Modelled on the Flask UI in the FantasyBaseball repo, including what not to copy from it.
+
+**Three layers, enforced by a test that parses the source.** Domain → view models (frozen dataclasses, pure functions) → thin Blueprint routes. `test_no_view_model_imports_flask` walks the AST of every module under `views/`, so the rule the architecture rests on is checked rather than trusted. The route-length smoke alarm is there for the same reason: the model repo has ~30 handlers inside one 2,307-line function, which puts their helpers out of reach of every test that is not an HTTP request.
+
+**YTD points come from our own scoring, not ESPN's** (user's call). `weekly_stats` run through the league `Ruleset` via `actual_season_total`. One number everywhere; ESPN's per-matchup data covers only rostered players, so league-wide ranks are impossible from it anyway.
+
+**Columns are declared once, and the stylesheet turned out to be a fourth place they could be re-declared.** `views/columns.py` holds key, label, tooltip, precision, direction; templates iterate it and never name a column. Two tests pin that — one over keys, one over labels. The CSS was accenting the name cell with `nth-child(2)`, hard-coding an ordering only the registry owns, so a reordered table would have highlighted the wrong cell silently. Columns carry `is_label`; the CSS targets a class.
+
+**The one real bug the pages could have shipped with: ROS was not ROS.** The pool's `season_mean_fpts` is a FULL-SEASON figure, and it was going straight onto the page under "projected points for the rest of the season" — roughly double the truth at week 10, with `ros_rank` inheriting it and the two pages disagreeing about the same player. `remaining_points` subtracts what he has already scored. Note it is deliberately **not** `rest_of_season_pool`: that converts to a full-season-equivalent PACE because the variance model divides by a fixed `SEASON_GAMES`. A pace is right for the simulator and wrong to print. Same input, two callers, two different correct answers.
+
+**And a subtler one: the two rank columns were counting different players.** `weekly_stats` is NFL-wide — every practice-squad back who took a carry — while the projection pool is not. Ranking YTD over one and ROS over the other put a bigger denominator under one column than the other, so a player's YTD rank read worse for no reason but the universe, while the two columns sit adjacent under near-identical tooltips inviting exactly that subtraction. Both now rank over the pool. Points still come from the full frame: a kicker has no rank but really did score.
+
+**The lesson worth keeping: the only code on the branch without a view-model test held eight of the review's findings.** The My Team assembly lived inline in `routes/team.py`, reachable only through an HTTP request that first made a live ESPN call — so nothing tested it, and every defect in it was invisible. Lifting it into `assemble_team_page` was the first fix and the one the rest depended on. This is the second time on this project that "untestable" and "wrong" turned out to be the same set of lines.
+
+**Two test-harness holes closed while we were in there.** The web suite was making live ESPN calls to league 856974 on this machine: `EspnCredentials.resolve` reads `ESPN_SWID`/`ESPN_S2` *before* the file, so pointing the fixture at `tmp_path` did not stop it — and it passed either way, because a failed call becomes an empty page and a 200. Autouse env-scrubbing plus a spy test now. And `tests/test_web/conftest.py` claimed it duplicated constants to avoid importing across suites, while three modules beside it imported from `tests/test_midseason/conftest.py`; the import is the intended arrangement (the dashboard renders that league) and the duplicate `17` is gone.
+
+**Cut from the spec, recorded there:** the rank badge (cannot be verified without a browser, and until Week 1 the whole page is verified by tests), the YTD/ROS/Total basis toggle (spec already called it an enhancement), and an undefined `Δ` column (rank-change against what? needs a stored history the repo does not keep).
+
+**Verified only as far as it can be before Week 1.** There is no 2026 `weekly_stats` partition and the draft has not happened, so both pages render their empty states against live data. That is the expected state, and it is why the view-model tests carry the weight.
+
+**Next:** after Week 1, look at the pages with real data — that is when the rank badge and the basis toggle are worth reconsidering, and when the styling gets its second pass. Then #104 53a (waiver/FA recommender) and #154 (trade analyzer).
+
+---
+
 ## Projected standings and matchup odds built (2026-08-25, branch `feat/projected-standings`)
 
 **#104 53b + 53c, spec'd then built in five steps.** Spec: `docs/superpowers/specs/2026-08-25-projected-standings-design.md`. The Monte-Carlo season engine already existed; three things made it wrong for in-season use, and the work was mostly those.

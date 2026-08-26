@@ -1,6 +1,7 @@
 # Season web UI — design
 
-**Status:** design, not yet implemented
+**Status:** implemented on `feat/season-web-ui` (2026-08-26). See §10 for what was cut
+and what was learned building it.
 **Branch:** `feat/season-web-ui`
 **Date:** 2026-08-26
 **Model:** the Flask UI in `C:\Users\HartAlden\FantasyBaseball` (studied 2026-08-26)
@@ -171,3 +172,66 @@ Three levels, mirroring the baseball repo's, which is the strongest thing about 
 
 Each step is its own commit. Steps 1–3 are independently useful: a working standings page is
 worth having before the team page exists.
+
+
+---
+
+## 10. What was actually built (2026-08-26)
+
+The plan in §9 was followed step for step. Three things in this spec did **not** get built, and
+one thing it did not anticipate turned out to matter more than anything it did.
+
+### Cut: the rank badge (§4)
+
+Ranks are their own columns (`YTD rk`, `ROS rk`), not badges beside the stat with the other
+basis on hover. Two reasons. A badge with a hover affordance is the one piece of this design
+that cannot be checked without a browser, and until Week 1 there is nothing to look at — the
+whole page is verified by tests, so a feature that tests cannot see is a feature nobody can
+see. And the table is seven columns wide; it has room. Worth revisiting once there is real
+data on the page and the table is being read rather than asserted on.
+
+### Cut: the YTD / ROS / Total basis toggle (§4)
+
+The spec already called this "an enhancement, not the feature", and the columns show YTD and
+ROS side by side as it predicted. Deferred as written. There is no partial-render route and no
+`history.replaceState`; adding them later touches only `team.html` and one route.
+
+### Cut: the Δ column (§4)
+
+The header row in §4 ends with `Δ`, which the body of the spec never defines. Rank-change
+against what — last week? draft day? Both need a stored history the repo does not keep, which
+is a snapshot feature, not a column. Dropped rather than guessed at.
+
+### Added: rest-of-season means rest-of-season
+
+Not in the spec at all, and the single most consequential thing on the branch. The pool's
+`season_mean_fpts` is a FULL-SEASON figure; printing it under "projected points for the rest
+of the season" overstates by roughly the fraction of the season already played — about double
+at week 10. `remaining_points` subtracts what a player has already scored.
+
+Note it is deliberately NOT `rest_of_season_pool`, which the simulator uses: that converts to a
+full-season-equivalent PACE, because the variance model divides by a fixed `SEASON_GAMES`. A
+pace is right for the simulator and wrong to print. The two callers want different things from
+the same input, which is exactly the sort of thing worth writing down.
+
+### Added: both rank columns count the same players
+
+`weekly_stats` is NFL-wide; the projection pool is not. Ranking YTD over one and ROS over the
+other put a bigger denominator under one column than the other, so a player's YTD rank read
+worse than his ROS rank for no reason but the universe — while the two columns sit adjacent
+under near-identical tooltips, inviting exactly that subtraction. Both rank over the pool.
+
+### Confirmed: §5 was the right call
+
+The column registry paid for itself. `test_no_template_re_declares_a_column` and its sibling
+checking labels both caught real re-declarations during the review, and the stylesheet turned
+out to be a fourth place columns could be re-declared — `nth-child(2)` hard-coded which column
+holds the name. Columns carry `is_label`; the CSS targets a class.
+
+### Confirmed: §7 was the right call, for a reason it did not give
+
+"These pages can be tested, not eyeballed" was written as a constraint. It behaved like one:
+the only code on the branch without a view-model test — the My Team assembly, which lived
+inline in a route and so was reachable only through an HTTP request that first made a live
+ESPN call — held eight of the defects the review found. Lifting it into `assemble_team_page`
+was the first fix of the loop and the one the rest depended on.
