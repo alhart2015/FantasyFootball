@@ -11,7 +11,7 @@ knows what the columns *are*.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -23,6 +23,27 @@ Sense = Literal["higher-better", "lower-better", "neutral"]
 #: What a cell can hold. `None` is a real value here -- it means "no number", which is
 #: distinct from zero and renders as an em dash.
 CellValue = float | int | str | None
+
+
+@dataclass(frozen=True)
+class Cell:
+    """One rendered table cell: its text, and how strongly it reads as good or bad.
+
+    Lives here rather than in a page's view model because both pages render one. It was
+    declared in `standings_view` and imported across into `team_view`, which made the standings
+    page a dependency of the team page for a type neither owns -- and put the shared rendering
+    contract in the module least likely to be read when changing the other table.
+
+    `intensity` is a signed share in [-1, 1] which the template emits as a CSS custom property
+    so the stylesheet does the colour mixing. `None` means no colour at all -- used for columns
+    with no direction, and for a column where every row is tied.
+    """
+
+    text: str
+    intensity: float | None = None
+    numeric: bool = True
+    #: The cell naming the row's subject. Styled by class, not by position.
+    is_label: bool = False
 
 
 @dataclass(frozen=True)
@@ -158,6 +179,26 @@ TEAM_COLUMNS: tuple[Column, ...] = (
         sense="lower-better",
     ),
 )
+
+
+def require_every_key(
+    available: Iterable[str], columns: tuple[Column, ...], *, source: str
+) -> None:
+    """Every column must have somewhere to read its value from.
+
+    Without this a column key that no longer exists on the frame -- renamed upstream, dropped
+    by a schema's `strict="filter"` -- renders as an em dash in every row. That is the same
+    glyph this page uses for "he has not played", so a whole column of missing DATA is
+    indistinguishable from a whole column of missing PLAYERS, and neither the tests nor the
+    page say anything.
+    """
+    missing = [column.key for column in columns if column.key not in set(available)]
+    if missing:
+        raise KeyError(
+            f"{source} has no column for {missing}; every entry in the column registry must "
+            "have a value to read, or its cells silently render as em dashes"
+        )
+
 
 COLUMNS: Mapping[str, tuple[Column, ...]] = {
     "standings": STANDINGS_COLUMNS,

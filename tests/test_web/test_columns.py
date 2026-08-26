@@ -8,11 +8,18 @@ page renders fine, it is just missing a column — so it is checked against the 
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
-from projections.web.views.columns import COLUMNS, STANDINGS_COLUMNS, TEAM_COLUMNS, Column
+from projections.web.views.columns import (
+    COLUMNS,
+    STANDINGS_COLUMNS,
+    TEAM_COLUMNS,
+    Column,
+    require_every_key,
+)
 
 _TEMPLATES = Path(__file__).resolve().parents[2] / "src" / "projections" / "web" / "templates"
 
@@ -99,6 +106,55 @@ def test_no_template_re_declares_a_column() -> None:
     )
 
 
+def test_no_template_hardcodes_a_column_header() -> None:
+    """The other half of the same invariant, and the half a key-grep misses.
+
+    A template writing `<th>Playoff</th>` re-declares the column just as surely as one writing
+    `"champ_pct"`, and nothing above would have seen it: the label is the human string, not the
+    key. The registry is then no longer the single place a header can be changed, which is the
+    whole reason it exists.
+
+    Literal `<th>`s are still allowed for tables the registry does not drive -- the remaining-
+    games table is hand-written because its rows are fixtures, not rows of a projection frame.
+    What is not allowed is a literal header that duplicates a registry LABEL.
+    """
+    labels = {column.label.strip().lower() for columns in COLUMNS.values() for column in columns}
+    offenders: dict[str, list[str]] = {}
+    for template in _TEMPLATES.rglob("*.html"):
+        text = template.read_text(encoding="utf-8")
+        literal = [
+            header.strip()
+            for header in re.findall(r"<th[^>]*>([^<{]*?)</th>", text)
+            if header.strip().lower() in labels
+        ]
+        if literal:
+            offenders[template.name] = sorted(literal)
+    assert not offenders, (
+        f"these headers duplicate a registry label: {offenders}. Render them from "
+        "`page.columns` so the label lives in one place."
+    )
+
+
+def test_the_shared_table_macros_are_the_only_copy() -> None:
+    """Both pages draw the same table. Each used to carry its own copy of the scroll wrapper
+    with its accessibility attributes, the header loop, and the four-line whitespace-controlled
+    cell loop that emits the colour-scale property.
+
+    Two copies of an a11y contract is one copy that goes stale without anything failing, so the
+    markup lives in `_table.html` and the pages call it.
+    """
+    pages = [t for t in _TEMPLATES.rglob("*.html") if not t.name.startswith("_")]
+    offenders = {
+        template.name: marker
+        for template in pages
+        for marker in ("table-scroll", "cell.intensity")
+        if marker in template.read_text(encoding="utf-8")
+    }
+    assert not offenders, (
+        f"{offenders} re-implements shared table markup; call the macros in _table.html"
+    )
+
+
 def test_a_string_in_a_numeric_column_is_a_loud_wiring_error() -> None:
     """The registry says which columns hold numbers. A string arriving at one means a view
     model handed over the wrong field, and `float("6-1-1")` would otherwise surface as a
@@ -131,3 +187,23 @@ def test_no_stylesheet_rule_targets_a_column_by_position() -> None:
     ).read_text(encoding="utf-8")
     offenders = [line.strip() for line in css.splitlines() if "nth-child" in line and "td" in line]
     assert not offenders, f"style these by semantic class, not position: {offenders}"
+
+
+def test_a_column_with_nowhere_to_read_from_is_an_error_not_an_em_dash() -> None:
+    """A column key the row does not carry renders an em dash in EVERY row -- the same glyph
+    the page uses for "he has not played". A whole column of missing DATA then looks exactly
+    like a whole column of missing PLAYERS, and neither the page nor the tests say anything.
+
+    The realistic cause is a rename upstream, or a pandera schema's `strict="filter"` dropping
+    a column the registry still asks for.
+    """
+    with pytest.raises(KeyError, match="champ_pct"):
+        require_every_key(
+            [c.key for c in STANDINGS_COLUMNS if c.key != "champ_pct"],
+            STANDINGS_COLUMNS,
+            source="a frame missing a column",
+        )
+
+
+def test_every_key_present_passes_quietly() -> None:
+    require_every_key([c.key for c in TEAM_COLUMNS], TEAM_COLUMNS, source="the team row")

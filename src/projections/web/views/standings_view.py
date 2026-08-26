@@ -15,23 +15,13 @@ from dataclasses import dataclass
 import pandas as pd
 
 from projections.midseason.standings import StandingsRun
-from projections.web.views.columns import STANDINGS_COLUMNS, CellValue, Column
-
-
-@dataclass(frozen=True)
-class Cell:
-    """One rendered table cell: its text, and how strongly it reads as good or bad.
-
-    `intensity` is a signed share in [-1, 1] which the template emits as a CSS custom property
-    so the stylesheet does the colour mixing. `None` means no colour at all — used for columns
-    with no direction, and for a column where every team is tied.
-    """
-
-    text: str
-    intensity: float | None = None
-    numeric: bool = True
-    #: The cell naming the row's subject. Styled by class, not by position.
-    is_label: bool = False
+from projections.web.views.columns import (
+    STANDINGS_COLUMNS,
+    Cell,
+    CellValue,
+    Column,
+    require_every_key,
+)
 
 
 @dataclass(frozen=True)
@@ -124,6 +114,8 @@ def build_standings_page(
         rank=range(1, len(frame) + 1),
         record=[_record(row) for _, row in frame.iterrows()],
     )
+
+    require_every_key(display.columns, STANDINGS_COLUMNS, source="the standings frame")
 
     intensities = {
         column.key: _intensity(display[column.key], column.sense)

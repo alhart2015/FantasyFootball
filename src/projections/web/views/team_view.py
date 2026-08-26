@@ -24,8 +24,13 @@ from projections.midseason.standings import ProjectionInputError, first_unplayed
 from projections.rankings import rank_within_position
 from projections.schemas import _PYARROW_STR, RosterSlot
 from projections.scoring.actuals import actual_season_total
-from projections.web.views.columns import TEAM_COLUMNS, CellValue, Column
-from projections.web.views.standings_view import Cell
+from projections.web.views.columns import (
+    TEAM_COLUMNS,
+    Cell,
+    CellValue,
+    Column,
+    require_every_key,
+)
 
 #: Slots that do not start. `RosterSlot` values rather than the strings they wrap, per
 #: CLAUDE.md -- `parse_rosters` produces these FROM `ESPN_LINEUP_SLOTS`, which is keyed on the
@@ -128,6 +133,7 @@ def build_team_page(
             "ros_points": ros_points,
             "ros_rank": _lookup_rank(ros_by_id, gsis, "ros_rank"),
         }
+        require_every_key(values, TEAM_COLUMNS, source="the assembled player row")
         rows.append(
             PlayerRow(
                 gsis_id=gsis,

@@ -7,6 +7,7 @@ actually true of the source -- the last of which no HTTP test can tell you.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -67,12 +68,27 @@ def test_no_view_model_imports_flask() -> None:
     Checked against the source because it is exactly the kind of rule that holds until someone
     reaches for `flask.url_for` inside a formatter, and no HTTP test would notice.
     """
-    offenders = [
-        path.name
-        for path in (_WEB_ROOT / "views").glob("*.py")
-        if "flask" in path.read_text(encoding="utf-8")
-    ]
+    offenders = [path.name for path in (_WEB_ROOT / "views").glob("*.py") if _imports_flask(path)]
     assert not offenders, f"view models must not import flask: {offenders}"
+
+
+def _imports_flask(path: Path) -> bool:
+    """Parsed rather than grepped.
+
+    A substring search for "flask" over the whole file is wrong in both directions: it fires on
+    a docstring saying "no Flask import belongs here" -- which these modules say, because the
+    rule is worth writing down -- and it would keep firing after the offending import was
+    removed as long as the sentence stayed. Import statements are the thing being ruled on.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name.split(".")[0] == "flask" for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] == "flask":
+                return True
+    return False
 
 
 def test_routes_do_not_grow_into_a_god_module() -> None:
