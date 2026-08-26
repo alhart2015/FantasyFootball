@@ -38,7 +38,12 @@
             {% endif %}
             <tr {% if not row.is_starter %}class="bench"{% endif %}>
               {% for cell in row.cells %}
-                <td class="{{ 'num' if cell.numeric else '' }}">{{ cell.text }}</td>
+                <td class="{{ 'num' if cell.numeric else '' }}"
+                    {%- if cell.intensity is not none %}
+                      {%- if cell.intensity > 0 %} style="--pos: {{ cell.intensity|round(3) }}"
+                      {%- elif cell.intensity < 0 %} style="--neg: {{ (-cell.intensity)|round(3) }}"
+                      {%- endif %}
+                    {%- endif %}>{{ cell.text }}</td>
               {% endfor %}
             </tr>
           {% endfor %}

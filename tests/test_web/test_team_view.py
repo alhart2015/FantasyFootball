@@ -219,3 +219,46 @@ def test_the_template_renders_the_empty_state(app: Flask) -> None:
         html = render_template("team.html", page=empty_team_page("Nothing yet.", season=2026))
     assert "Nothing yet." in html
     assert "<tbody>" not in html
+
+
+def test_the_team_table_carries_the_colour_scale() -> None:
+    """`sense` on TEAM_COLUMNS was dead configuration: every cell was built with the default
+    intensity and the template emitted nothing, so `test_rank_columns_are_lower_better`
+    asserted a property with no consumer. The scale is the affordance the spec used to justify
+    choosing Flask over Streamlit, so it should actually be there."""
+    page = _page()
+    ros_index = next(i for i, c in enumerate(page.columns) if c.key == "ros_points")
+    values = [row.cells[ros_index].intensity for row in page.rows]
+    assert any(v is not None for v in values), "a directional column must carry intensity"
+
+
+def test_a_rank_column_reads_rank_one_as_good() -> None:
+    """Rank is lower-better. Colouring it like points would paint the best player at each
+    position as the worst."""
+    page = _page()
+    rank_index = next(i for i, c in enumerate(page.columns) if c.key == "ros_rank")
+    ranks = [
+        (float(row.cells[rank_index].text), row.cells[rank_index].intensity)
+        for row in page.rows
+        if row.cells[rank_index].text != "—"
+    ]
+    best = min(ranks, key=lambda pair: pair[0])
+    worst = max(ranks, key=lambda pair: pair[0])
+    assert best[1] is not None and worst[1] is not None
+    assert best[1] > worst[1], "the best rank must read as the most positive"
+
+
+def test_a_neutral_column_carries_no_intensity() -> None:
+    page = _page()
+    for index, column in enumerate(page.columns):
+        if column.sense == "neutral":
+            assert all(row.cells[index].intensity is None for row in page.rows), column.key
+
+
+def test_the_sort_reads_the_value_not_the_formatted_string() -> None:
+    """At precision=1, 150.04 and 149.96 both render "150.0" and would tie if the sort parsed
+    the cell text back out."""
+    roster = _roster([("00-0000001", "A", "RB", "RB"), ("00-0000002", "B", "RB", "RB")])
+    ros = _ros([("00-0000001", "RB", 149.96), ("00-0000002", "RB", 150.04)])
+    page = _page(roster=roster, ros=ros)
+    assert page.rows[0].gsis_id == "00-0000002", "the genuinely larger value sorts first"

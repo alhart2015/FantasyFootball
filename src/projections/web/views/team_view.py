@@ -12,7 +12,7 @@ the I/O (reading `weekly_stats`, pulling the roster) stays in the route.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import pandas as pd
@@ -34,10 +34,15 @@ _BENCH_SLOTS = frozenset({"BENCH", "IR"})
 @dataclass(frozen=True)
 class PlayerRow:
     gsis_id: str
-    cells: tuple[Cell, ...]
     #: Starters and bench are visually separated; a bench player outscoring a starter is the
     #: single most actionable thing this page can show.
     is_starter: bool = True
+    #: Rest-of-season points, carried so the sort reads the VALUE rather than parsing it back
+    #: out of the formatted cell. None sorts last -- his cell holds an em dash, not a number.
+    sort_value: float | None = None
+    #: The raw values behind the cells, kept so the colour scale can range over the column.
+    values: Mapping[str, CellValue] = field(default_factory=dict)
+    cells: tuple[Cell, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -120,24 +125,48 @@ def build_team_page(
             PlayerRow(
                 gsis_id=gsis,
                 is_starter=is_starter,
-                cells=tuple(
-                    Cell(text=column.format(values[column.key]), numeric=column.numeric)
-                    for column in TEAM_COLUMNS
-                ),
+                sort_value=ros_points,
+                values=values,
             )
         )
 
     # Starters first, then bench, each by rest-of-season projection. A bench player above a
     # starter in the same position block is the page's most actionable signal, and burying it
-    # under ESPN's slot ordering would hide it.
-    rows.sort(key=lambda row: (not row.is_starter, _sort_key(row)))
+    # under ESPN's slot ordering would hide it. Sorted on the VALUE, not on the formatted
+    # string: at precision=1, 150.04 and 149.96 both render "150.0" and would tie.
+    rows.sort(key=lambda row: (not row.is_starter, -(row.sort_value or float("-inf"))))
+
+    # Colour every directional column against the ROSTER's own range, so a reader can see at a
+    # glance which of his players are carrying the team. Ranks invert, since rank 1 is best.
+    intensities = {
+        column.key: _intensity([r.values.get(column.key) for r in rows], column.sense)
+        for column in TEAM_COLUMNS
+        if column.sense != "neutral"
+    }
+    rendered = tuple(
+        PlayerRow(
+            gsis_id=row.gsis_id,
+            is_starter=row.is_starter,
+            sort_value=row.sort_value,
+            values=row.values,
+            cells=tuple(
+                Cell(
+                    text=column.format(row.values[column.key]),
+                    intensity=intensities.get(column.key, [None] * len(rows))[i],
+                    numeric=column.numeric,
+                )
+                for column in TEAM_COLUMNS
+            ),
+        )
+        for i, row in enumerate(rows)
+    )
 
     return TeamPage(
         team_name=team_name,
         season=season,
         week=week,
         columns=TEAM_COLUMNS,
-        rows=tuple(rows),
+        rows=rendered,
         roster_ytd=roster_ytd,
         starter_ros=starter_ros,
         notes=_notes(roster, ytd_by_id, ros_by_id),
@@ -192,15 +221,25 @@ def _lookup_rank(frame: pd.DataFrame, gsis: str, column: str) -> int | None:
     return None if pd.isna(value) else int(value)
 
 
-def _sort_key(row: PlayerRow) -> float:
-    """Rest-of-season points for ordering, with an unprojected player sorting last rather than
-    first — the cell holds an em dash, not a number."""
-    ros_index = next(i for i, column in enumerate(TEAM_COLUMNS) if column.key == "ros_points")
-    text = row.cells[ros_index].text
-    try:
-        return -float(text)
-    except ValueError:
-        return float("inf")
+def _intensity(values: list[CellValue], sense: str) -> list[float | None]:
+    """Signed [-1, 1] position within the column's own range, or all-None when tied.
+
+    Same rule as the standings scale: a column where every value is identical carries no
+    colour rather than every cell painted at the midpoint, and a missing value is uncoloured
+    rather than treated as zero.
+    """
+    numbers = [v for v in values if isinstance(v, int | float)]
+    if not numbers or max(numbers) == min(numbers):
+        return [None] * len(values)
+    low, high = min(numbers), max(numbers)
+    out: list[float | None] = []
+    for value in values:
+        if not isinstance(value, int | float):
+            out.append(None)
+            continue
+        scaled = 2 * ((float(value) - low) / (high - low)) - 1
+        out.append(-scaled if sense == "lower-better" else scaled)
+    return out
 
 
 def _notes(roster: pd.DataFrame, ytd: pd.DataFrame, ros: pd.DataFrame) -> tuple[str, ...]:
