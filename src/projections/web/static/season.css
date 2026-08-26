@@ -1,0 +1,32 @@
+/* Design tokens first, everything else in terms of them. Page theming lives here, not in
+   inline style attributes -- the model repo documented that boundary and then leaked across
+   it in a dozen templates. */
+:root {
+  --bg: #12151a;
+  --surface: #1a1f27;
+  --ink: #e6e9ef;
+  --muted: #8b94a3;
+  --line: #2a313c;
+  --accent: #d9a441;
+  --good: #4fb358;
+  --bad: #c4553d;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+}
+.nav {
+  display: flex; align-items: baseline; gap: 1.25rem;
+  padding: 0.85rem 1.25rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.nav-brand { font-weight: 600; color: var(--accent); text-decoration: none; }
+.nav-link { color: var(--muted); text-decoration: none; }
+.nav-link:hover { color: var(--ink); }
+.content { padding: 1.25rem; max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+.muted { color: var(--muted); }
