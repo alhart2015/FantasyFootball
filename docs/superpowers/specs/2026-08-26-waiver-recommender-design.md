@@ -190,49 +190,114 @@ too long. §5.3 is how the tool compensates for not knowing.
 
 ---
 
-## 5. The recommendation
+## 5. The objective: change in expected season wins
 
-`src/projections/midseason/waivers.py`, one entry point per horizon.
+**One number, and it is not points.**
 
-### 5.1 Rest of season — "should I drop him and add this guy"
+A move that lifts your odds 20% next week while costing 2.5 expected wins over the rest of the
+year is a bad move. One that lifts them 20% at no future cost is free. Points cannot express
+that trade — this week's points and the rest of the season's points are different currencies,
+and a table with a column of each makes the reader do the conversion by eye.
 
-```python
-def recommend_swaps(run: MyTeamRun, free_agents, *, config, id_map, min_gain=...) -> list[Swap]
+Expected wins is the conversion. Twenty percent for one week **is** 0.2 expected wins. The
+drop's future cost and the add's near-term gain land on the same scale automatically, and the
+sign of their sum is the recommendation.
+
+```
+Δ wins = E[season wins | roster with the swap] − E[season wins | roster as it stands]
 ```
 
-`MyTeamRun` already carries the roster, the pool with `season_mean_fpts` rewritten to remaining
-points, and the week. Free agents are scored through **the same `remaining_totals` call as my
-roster** — one code path, so a free agent and a rostered player can never be measured
-differently. That is why this takes a `MyTeamRun` rather than re-deriving one.
+Both terms come from `project_league_standings`, which already exists and already returns
+projected wins, playoff %, bye % and title %. **The swap is simulated as permanent**, which is
+the honest model: dropping a player really is irreversible, and a streamer really does occupy
+the spot until the next stream displaces him.
 
-**Swaps are compared within position**, flex-aware from `config.roster_slots`. A WR who
-out-projects my worst RB is not a move I can make.
+### 5.1 The paired-simulation rule, which is load-bearing
 
-**The drop candidate is my worst player at that position**, by adjusted rest-of-season points,
-from the bench and IR first. It will recommend dropping a starter when that is right, but not
-because a bench player sorted oddly.
+Two independent 2,000-sim runs of the same league differ by simulation noise alone, and that
+noise is plausibly the same size as the effect being measured — a stream worth five points in
+one week out of eight moves expected wins by something like 0.05.
 
-Each `Swap` reports drop, add, rest-of-season gain, waivers-vs-free-agent, percent rostered, and
-— when an injury adjustment drove it — the status and the write-up (§5.3).
+So: **one baseline, computed once, and every candidate simulated against the same seeded
+`rng`.** Common random numbers — the difference between two runs sharing draws is far more
+precise than either estimate is on its own.
 
-### 5.2 This week — "who do I start, and is there a better option on the wire"
+This is the single most likely way for this tool to produce a confident wrong answer, so it
+gets two tests: a no-op swap must report **exactly** 0.0, and the same candidate simulated
+twice must report the same number to the bit.
 
-```python
-def rank_this_week(run: MyTeamRun, free_agents, *, week, config, id_map) -> list[WeeklyRow]
+**Whether the effect clears the noise at all is an empirical question**, and it is not settled
+by writing it down. Step 6 of the plan measures the standard error of Δ wins across repeated
+seeds before any recommendation is printed. If a real stream is not distinguishable from zero
+at 2,000 sims, the number of sims goes up or the tool reports an interval rather than a point
+estimate. It does not print a false precision.
+
+### 5.2 Two stages, because 50 simulations is minutes
+
+Stage 1 is a filter, not a headline. Stage 2 is the answer.
+
+**Stage 1 — does he crack the lineup at all?** `weekly_lineup_points` (already in
+`draft/backtest/lineup.py`) sets the best startable lineup by projection. For each free agent:
+
+```
+lineup_gain = best_lineup(roster + FA, week) − best_lineup(roster, week)
 ```
 
-Same roster, different number: this week's projection with the §4.5 weekly multiplier. This is
-where 0.86 earns its keep — a 14% cut on one week is the size that decides a close start/sit, and
-it is the case that motivated measuring any of this.
+This is cheap, and in a 16-team league with seven starters and five bench spots it eliminates
+most candidates immediately — **a genuinely good free agent who still would not start scores
+exactly 0.0, which is the truthful answer most weeks.** It also handles for free the things
+that actually drive streaming:
 
-Weekly projections come from `refresh_espn_weekly_projections`, which already exists and already
-writes to the store. **The `Out` double-discount guard (§4.3) lives here**, with a test: an `Out`
-player must not be zeroed twice.
+- **Byes.** A player on bye has no weekly projection, so he is unstartable and the hole in the
+  lineup appears by itself. `parse_espn_weekly` already returns `None` for these.
+- **FLEX.** A WR who beats your RB2 into the flex counts; one who does not, does not.
+- **Positional scarcity**, without a hand-written rule about it.
 
-### 5.3 What the tool shows instead of pretending to know
+Candidates with `lineup_gain <= 0` never reach stage 2. Nothing that cannot play cannot help.
 
-For any player on IR or carrying a multi-week absence, the numeric adjustment is a guess (§4.5)
-and the write-up is not. ESPN's public athlete endpoint carries it, no auth:
+**Stage 2 — what is it worth in wins?** Survivors (expected: a handful) go through the paired
+simulation of §5.1. That is the reported number.
+
+### 5.3 Choosing the drop
+
+**The cheapest player not in the optimal lineup**, by rest-of-season value.
+
+Compute the best lineup *including* the free agent; whoever is left over is droppable; drop the
+one with the lowest remaining projection. This never suggests dropping the player the add just
+displaced into the lineup, and it makes the cost visible rather than assumed.
+
+An open bench or IR slot is used first and costs nothing — which is why the first thing the
+tool should tell you, before any swap, is whether you have a free spot.
+
+### 5.4 What the row says
+
+```
+ADD                DROP              LINEUP    Δ WINS   Δ PLAYOFF
+Jauan Jennings  →  (IR slot open)     +6.2     +0.11      +2.4%
+Tyler Boyd      →  R. Johnson         +4.8     +0.07      +1.6%
+Rome Odunze     →  B. Corum           +5.1     −0.19      −4.1%
+```
+
+`LINEUP` is stage 1 — this week's starting-lineup gain, kept because it is the thing you can
+verify by looking at your own roster, and because a Δ wins figure with no visible mechanism is
+hard to trust. `Δ WINS` is the recommendation. When they disagree in sign, the third row above,
+the drop is what costs you and the tool says so.
+
+---
+
+## 6. Injury status, and what the tool shows instead of pretending to know
+
+§4 measured what a designation costs. Where it lands:
+
+- **Stage 1** uses the weekly multiplier (§4.5): Questionable × 0.86 on a single week is a 14%
+  cut, exactly the size that decides a close start/sit. **The `Out` double-discount guard lives
+  here**, with a test — ESPN's weekly feed already zeroes `Out` players, and multiplying that by
+  zero again is a plausible-looking wrong number.
+- **Stage 2** uses expected games missed (§4.5) inside the rest-of-season projection the
+  simulator consumes.
+
+For any player on IR or carrying a multi-week absence, the numeric adjustment is a guess and the
+write-up is not. ESPN's public athlete endpoint carries it, no auth:
 
 ```
 status:       Questionable
@@ -246,31 +311,12 @@ Body part, severity, a beat reporter's read, and a date so staleness is visible.
 
 **The text is shown, never parsed.** A regex for "four to six weeks" is wrong whenever the
 sentence is about practice rather than games, or about a different player — and the error would
-land inside a projection, where nobody can see it. The number says what it assumed; the text lets
-you overrule it.
+land inside a projection, where nobody can see it. The number says what it assumed; the text
+lets you overrule it.
 
 **Cost and caching.** One call per player, and the league-wide feed is 403. Fetched only for
-players whose fantasy status is not Active, cached by player and date. A handful of calls, not a
-hundred.
-
----
-
-## 6. Wins, for the shortlist only
-
-Points answer "is he better". Wins answer "does this help me win the league", and those come
-apart: a bench upgrade at a position I already start two good players at is worth real points and
-almost no wins.
-
-So the top `k` swaps by rest-of-season gain (default 3) are re-run through
-`project_league_standings` with the swap applied, reporting Δ projected wins, Δ playoff %, Δ
-title %. **Only the shortlist**, because each is a full Monte-Carlo season and the point of §5.1
-is that it returns in seconds.
-
-The baseline is a single run with no swap, shared across all candidates at the same `rng` seed —
-two runs at different seeds differ by simulation noise alone, and at 2000 sims that noise is
-comparable to the effect being measured. **Same seed, one baseline, differences only.** This is
-the failure mode most likely to produce a confident wrong answer here, so it gets a test
-asserting a no-op swap reports exactly zero.
+players whose fantasy status is not Active, cached by player and date. A handful of calls, not
+a hundred.
 
 ---
 
@@ -302,18 +348,21 @@ that work is done.
 
 1. `InjuryStatus` enum + `parse_rosters` carries it. Smallest change, unblocks the rest.
 2. `fetch_free_agents` / `parse_free_agents`, with the truncation report.
-3. The §4.5 tables and both adjustments, with the `Out` double-discount guard and its test.
-4. `recommend_swaps` — rest of season, positional, min-gain filtered.
-5. The injury write-up fetch (§5.3), cached, non-Active players only.
-6. `scripts/waiver_recommender.py`, run live against league 856974.
-7. `rank_this_week` — the weekly horizon.
-8. The wins shortlist: top 3 swaps re-simulated, one shared baseline, one seed.
-9. The dashboard page.
+3. `scripts/measure_injury_impact.py` — the §4 measurement, kept as code so the tables can be
+   re-measured when 2026 adds a season. Produces the constants step 4 consumes.
+4. The §4.5 tables and both adjustments, with the `Out` double-discount guard and its test.
+5. **Stage 1**: `lineup_gain` over `weekly_lineup_points`, plus the drop rule (§5.3).
+6. **Measure the noise floor** (§5.1) before printing any Δ wins: standard error of Δ wins
+   across repeated seeds, paired and unpaired, at 2,000 sims. This decides whether stage 2
+   reports a point estimate or an interval, and it is a gate on step 7 rather than a nicety.
+7. **Stage 2**: the paired simulation, one shared baseline, one seed.
+8. The injury write-up fetch (§6), cached, non-Active players only.
+9. `scripts/waiver_recommender.py`, run live against league 856974.
+10. The dashboard page.
 
-Steps 1-6 give a terminal tool that answers the Tuesday-morning question. 7 is the Sunday-morning
-one. 8 and 9 are upgrades to both.
-
----
+Steps 1-9 give the terminal tool. Step 6 is the one that can change the design: if Δ wins does
+not clear its own noise at a tolerable number of sims, stage 1 becomes the headline and stage 2
+becomes a range.
 
 ## 10. Findings worth keeping regardless of this tool
 
@@ -329,3 +378,6 @@ Recorded here because they outlive the feature and were expensive to establish:
 - **The scripts that produced these numbers are worth keeping**, not just their outputs — see
   `scripts/measure_injury_impact.py` (step 3), so the tables can be re-measured when the 2026
   season adds a year of data.
+- **Points across different horizons are not a common currency; expected wins is.** This is why
+  §5 reports Δ wins rather than a this-week column beside a rest-of-season column. The reader
+  should not have to convert by eye, and the conversion rate is not obvious.
