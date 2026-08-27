@@ -41,7 +41,14 @@ import pandas as pd
 
 from projections.draft.league_calendar import usable_int
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset, Team, normalize_team_code
+from projections.schemas import (
+    _PYARROW_STR,
+    RosterSlot,
+    Ruleset,
+    Team,
+    normalize_team_code,
+    parse_injury_status,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -302,6 +309,143 @@ def fetch_league_payload(
 # ---------------------------------------------------------------------------
 # Pure parsers
 # ---------------------------------------------------------------------------
+
+
+#: ESPN `status` values for a player nobody rosters. `FREEAGENT` can be added immediately;
+#: `WAIVERS` is on a claim until the league's waiver period runs. They differ in how you
+#: acquire him, not in whether he would help, so both are returned and the distinction is
+#: carried -- a recommendation that drops it sends you to click "Add" on a player you cannot
+#: have until Wednesday.
+FREE_AGENT_STATUSES: tuple[str, ...] = ("FREEAGENT", "WAIVERS")
+
+#: Lineup slot ids worth asking for. The pool carries no kickers or defenses, so ranking them
+#: is impossible and requesting them only makes the response bigger.
+_SKILL_SLOT_IDS: tuple[int, ...] = (0, 2, 4, 6, 23)
+
+#: How many free agents to request. Sorted by percent-owned descending, so a cap keeps the
+#: players anyone would plausibly add and drops the long tail of never-rostered names.
+DEFAULT_FREE_AGENT_LIMIT = 400
+
+
+def fetch_free_agents(
+    league_id: int,
+    season: int,
+    creds: EspnCredentials,
+    *,
+    scoring_period: int | None = None,
+    limit: int = DEFAULT_FREE_AGENT_LIMIT,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    """GET the players nobody in this league rosters.
+
+    **The league endpoint, not `leaguedefaults`.** `external_projections.py` also asks for
+    `kona_player_info`, but against the generic player universe, which has no idea who is
+    rostered *here*. Free agency is a per-league fact, so this goes to the same authenticated
+    URL as every other call in this module.
+
+    The filter is server-side, in the `X-Fantasy-Filter` header, because the unfiltered
+    response is the entire NFL. `scoring_period` narrows the projections ESPN attaches to each
+    player to one week; omitted, it returns season-to-date shape.
+    """
+    payload_filter = {
+        "players": {
+            "filterStatus": {"value": list(FREE_AGENT_STATUSES)},
+            "filterSlotIds": {"value": list(_SKILL_SLOT_IDS)},
+            "limit": int(limit),
+            "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+        }
+    }
+    url = _BASE_URL.format(season=season, league_id=league_id) + "?view=kona_player_info"
+    if scoring_period is not None:
+        url += f"&scoringPeriodId={int(scoring_period)}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _UA,
+            "Cookie": creds.cookie_header(),
+            "Accept": "application/json",
+            "X-Fantasy-Filter": json.dumps(payload_filter),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            raise EspnLeagueError(
+                f"ESPN returned 401 for league {league_id} season {season}: the espn_s2 cookie "
+                "is missing, expired, or belongs to an account outside this league."
+            ) from exc
+        raise EspnLeagueError(
+            f"ESPN HTTP {exc.code} fetching free agents for league {league_id}: {exc.reason}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise EspnLeagueError(f"Could not reach ESPN: {exc.reason}") from exc
+
+    if isinstance(payload, list):
+        payload = payload[0] if payload else {}
+    if not isinstance(payload, dict):
+        raise EspnLeagueError(f"Unexpected ESPN payload shape: {type(payload).__name__}.")
+    return payload
+
+
+def parse_free_agents(
+    payload: dict[str, Any], *, limit: int = DEFAULT_FREE_AGENT_LIMIT
+) -> tuple[pd.DataFrame, str | None]:
+    """`kona_player_info` -> one row per available player, plus a truncation warning or None.
+
+    **The truncation report is not optional.** The response is capped, and a cap that is hit
+    silently reads as "there is nobody better available" -- the one answer this tool must never
+    give wrongly. The caller surfaces the string; it does not decide whether to.
+
+    `on_waivers` separates a player on a claim from one who can be added now. `percent_owned`
+    is carried as a rough read on whether a claim will actually clear.
+    """
+    rows: list[dict[str, Any]] = []
+    for entry in payload.get("players", []) or []:
+        player = entry.get("player", {}) or {}
+        pro_team = pro_team_code(int(player.get("proTeamId", 0) or 0))
+        injury_status, raw_status = parse_injury_status(player.get("injuryStatus"))
+        ownership = player.get("ownership", {}) or {}
+        rows.append(
+            {
+                "player_id": int(player.get("id", entry.get("id", 0)) or 0),
+                "player": str(player.get("fullName", "") or ""),
+                "pos": ESPN_POSITION_NAMES.get(
+                    int(player.get("defaultPositionId", 0) or 0), "UNKNOWN"
+                ),
+                "nfl_team": str(pro_team) if pro_team is not None else "",
+                "injury_status": str(injury_status.value),
+                "injury_status_raw": raw_status,
+                "percent_owned": float(ownership.get("percentOwned", 0.0) or 0.0),
+                "on_waivers": str(entry.get("status", "") or "").upper() == "WAIVERS",
+            }
+        )
+    frame = pd.DataFrame(
+        rows,
+        columns=[
+            "player_id",
+            "player",
+            "pos",
+            "nfl_team",
+            "injury_status",
+            "injury_status_raw",
+            "percent_owned",
+            "on_waivers",
+        ],
+    )
+    for column in ("player", "pos", "nfl_team", "injury_status", "injury_status_raw"):
+        frame[column] = frame[column].astype(_PYARROW_STR)
+
+    warning = None
+    if len(frame) >= limit:
+        warning = (
+            f"ESPN returned {len(frame)} free agents, which is the requested limit of {limit} — "
+            "the list is truncated, so a better player may exist below the cut. It is sorted by "
+            "percent rostered, so what was dropped is what nobody else wants either. Raise "
+            "--free-agent-limit to see further down."
+        )
+    return frame, warning
 
 
 def parse_roster_slots(payload: dict[str, Any]) -> dict[RosterSlot, int]:
@@ -585,6 +729,7 @@ def parse_rosters(payload: dict[str, Any]) -> pd.DataFrame:
         for entry in entries:
             player = (entry.get("playerPoolEntry", {}) or {}).get("player", {}) or {}
             pro_team = pro_team_code(int(player.get("proTeamId", 0) or 0))
+            injury_status, raw_status = parse_injury_status(player.get("injuryStatus"))
             rows.append(
                 {
                     "team_id": team_id,
@@ -598,6 +743,13 @@ def parse_rosters(payload: dict[str, Any]) -> pd.DataFrame:
                         ESPN_LINEUP_SLOTS.get(int(entry.get("lineupSlotId", -1)), "")
                     ),
                     "acquisition_type": str(entry.get("acquisitionType", "") or ""),
+                    # Carried, not discarded. Without it every downstream projection treats a
+                    # player who is on IR as fully healthy, which is exactly the case the
+                    # waiver recommender exists for.
+                    "injury_status": str(injury_status.value),
+                    #: The raw ESPN text, so a status we do not recognise can be reported
+                    #: rather than silently read as healthy.
+                    "injury_status_raw": raw_status,
                 }
             )
     frame = pd.DataFrame(
@@ -610,9 +762,19 @@ def parse_rosters(payload: dict[str, Any]) -> pd.DataFrame:
             "nfl_team",
             "lineup_slot",
             "acquisition_type",
+            "injury_status",
+            "injury_status_raw",
         ],
     )
-    for column in ("player", "pos", "nfl_team", "lineup_slot", "acquisition_type"):
+    for column in (
+        "player",
+        "pos",
+        "nfl_team",
+        "lineup_slot",
+        "acquisition_type",
+        "injury_status",
+        "injury_status_raw",
+    ):
         frame[column] = frame[column].astype(_PYARROW_STR)
     return frame
 

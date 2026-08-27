@@ -24,6 +24,7 @@ from projections.ingest.espn_league import (
     parse_draft_order,
     parse_draft_picks,
     parse_draft_settings,
+    parse_free_agents,
     parse_roster_slots,
     parse_rosters,
     parse_ruleset,
@@ -34,7 +35,13 @@ from projections.ingest.espn_league import (
     team_records,
     write_league_snapshot,
 )
-from projections.schemas import _RULESET_NAME_VALUES, RosterSlot, Team
+from projections.schemas import (
+    _RULESET_NAME_VALUES,
+    InjuryStatus,
+    RosterSlot,
+    Team,
+    parse_injury_status,
+)
 
 _MY_SWID = "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"
 
@@ -834,3 +841,147 @@ def test_the_reported_week_count_is_the_one_used(tmp_path: Path) -> None:
 
     records = pd.read_csv(tmp_path / "records.tsv", sep="	").set_index("team_id")
     assert records.loc[1, "wins"] == 2, "week 14 counts; a bound of 13 would drop it"
+
+
+# --- injury status ------------------------------------------------------------------------------
+
+
+def test_parse_rosters_carries_injury_status() -> None:
+    """Thrown away until now, which meant every downstream projection treated a player on IR
+    as fully healthy -- the exact case the waiver recommender exists for."""
+    payload = _payload()
+    entries = payload["teams"][0]["roster"]["entries"]
+    entries[0]["playerPoolEntry"]["player"]["injuryStatus"] = "INJURY_RESERVE"
+    rosters = parse_rosters(payload)
+    allen = rosters[rosters["player"] == "Josh Allen"].iloc[0]
+    assert allen["injury_status"] == InjuryStatus.INJURY_RESERVE
+    assert allen["injury_status_raw"] == "INJURY_RESERVE"
+
+
+def test_a_player_with_no_injury_field_reads_as_active() -> None:
+    """ESPN omits the field for healthy players, which is the overwhelming majority of rows."""
+    rosters = parse_rosters(_payload())
+    assert set(rosters["injury_status"]) == {InjuryStatus.ACTIVE}
+    assert set(rosters["injury_status_raw"]) == {""}
+
+
+def test_an_unrecognised_status_is_healthy_and_reported_not_swallowed() -> None:
+    """ESPN adds statuses. One we do not know is a gap in our mapping, not evidence about the
+    player -- so inventing an absence from it would quietly move every number he touches. But
+    silently reading it as healthy is how nobody finds the gap, so the raw text is carried."""
+    payload = _payload()
+    payload["teams"][0]["roster"]["entries"][0]["playerPoolEntry"]["player"]["injuryStatus"] = (
+        "PERSONAL_MATTER"
+    )
+    rosters = parse_rosters(payload)
+    allen = rosters[rosters["player"] == "Josh Allen"].iloc[0]
+    assert allen["injury_status"] == InjuryStatus.UNKNOWN
+    assert allen["injury_status_raw"] == "PERSONAL_MATTER", "the reader can be told what we saw"
+    assert InjuryStatus(allen["injury_status"]).is_healthy
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, InjuryStatus.ACTIVE),
+        ("", InjuryStatus.ACTIVE),
+        ("   ", InjuryStatus.ACTIVE),
+        ("questionable", InjuryStatus.QUESTIONABLE),
+        ("OUT", InjuryStatus.OUT),
+        ("Injury_Reserve", InjuryStatus.INJURY_RESERVE),
+        ("WHO_KNOWS", InjuryStatus.UNKNOWN),
+    ],
+)
+def test_parse_injury_status_is_the_only_constructor(raw: object, expected: InjuryStatus) -> None:
+    status, _ = parse_injury_status(raw)
+    assert status is expected
+
+
+def test_parse_injury_status_tolerates_pandas_na() -> None:
+    """The field arrives from a pyarrow-backed frame in some call paths, where absent is NA and
+    `bool(pd.NA)` raises."""
+    status, raw = parse_injury_status(pd.NA)
+    assert status is InjuryStatus.ACTIVE
+    assert raw == ""
+
+
+def test_only_the_designations_that_imply_an_absence_are_unhealthy() -> None:
+    """`is_healthy` is what both adjustment tables key off, so the split is pinned here rather
+    than re-derived at each use."""
+    unhealthy = {s for s in InjuryStatus if not s.is_healthy}
+    assert unhealthy == {
+        InjuryStatus.QUESTIONABLE,
+        InjuryStatus.DOUBTFUL,
+        InjuryStatus.OUT,
+        InjuryStatus.INJURY_RESERVE,
+        InjuryStatus.SUSPENSION,
+    }
+
+
+# --- the free-agent pool -------------------------------------------------------------------------
+
+
+def _free_agent_payload(n: int = 3, *, on_waivers: int = 0) -> dict[str, Any]:
+    """`kona_player_info` shape, trimmed to the fields the parser reads."""
+    players = []
+    for i in range(n):
+        players.append(
+            {
+                "id": 100 + i,
+                "status": "WAIVERS" if i < on_waivers else "FREEAGENT",
+                "player": {
+                    "id": 100 + i,
+                    "fullName": f"Player {i}",
+                    "defaultPositionId": 3,  # WR
+                    "proTeamId": 1,
+                    "injuryStatus": "QUESTIONABLE" if i == 0 else "ACTIVE",
+                    "ownership": {"percentOwned": 90.0 - i},
+                },
+            }
+        )
+    return {"players": players}
+
+
+def test_parse_free_agents_shape() -> None:
+    frame, warning = parse_free_agents(_free_agent_payload(3), limit=50)
+    assert warning is None
+    assert list(frame["player"]) == ["Player 0", "Player 1", "Player 2"]
+    assert set(frame["pos"]) == {"WR"}
+    assert frame.loc[0, "injury_status"] == InjuryStatus.QUESTIONABLE
+    assert frame.loc[0, "percent_owned"] == pytest.approx(90.0)
+
+
+def test_a_waiver_claim_is_distinguished_from_a_straight_add() -> None:
+    """They differ in how you acquire the player, not in whether he helps -- but a
+    recommendation that drops the distinction sends you to click "Add" on someone who is on a
+    claim until the waiver period runs."""
+    frame, _ = parse_free_agents(_free_agent_payload(3, on_waivers=2), limit=50)
+    assert list(frame["on_waivers"]) == [True, True, False]
+
+
+def test_a_truncated_free_agent_list_says_so() -> None:
+    """The response is capped, and a cap hit silently reads as "there is nobody better
+    available" -- the one answer this tool must never give wrongly."""
+    frame, warning = parse_free_agents(_free_agent_payload(10), limit=10)
+    assert len(frame) == 10
+    assert warning is not None
+    assert "truncated" in warning and "10" in warning
+
+
+def test_an_empty_pool_is_typed_not_bare() -> None:
+    """Mid-season a thin wire is normal, and downstream code must not KeyError on it."""
+    frame, warning = parse_free_agents({"players": []}, limit=50)
+    assert frame.empty
+    assert warning is None
+    for column in ("player", "pos", "injury_status", "percent_owned", "on_waivers"):
+        assert column in frame.columns
+
+
+def test_free_agents_and_rosters_describe_injuries_identically() -> None:
+    """Both sides of a swap are compared on this column, so they have to be the same column.
+    Two spellings of the same fact is how the comparison quietly stops being like-for-like."""
+    roster_cols = set(parse_rosters(_payload()).columns)
+    fa_cols = set(parse_free_agents(_free_agent_payload(1), limit=50)[0].columns)
+    shared = {"player", "pos", "nfl_team", "injury_status", "injury_status_raw"}
+    assert shared <= roster_cols
+    assert shared <= fa_cols

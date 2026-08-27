@@ -156,6 +156,79 @@ class RosterSlot(StrEnum):
     IR = "IR"
 
 
+class InjuryStatus(StrEnum):
+    """A player's game-status designation, as ESPN reports it.
+
+    Wrapped rather than passed around as bare strings, per the repo convention -- these values
+    end up in a lookup table that decides how much of a projection a player is expected to
+    deliver, and a typo there is a silently wrong number rather than an error.
+
+    **`UNKNOWN` is a real member, not an error case.** ESPN adds statuses, and a status we do
+    not recognise must not stop a page rendering or a recommendation running. It is treated as
+    healthy, and the raw string is carried alongside so it can be reported rather than
+    swallowed -- see `parse_injury_status`.
+
+    `ACTIVE` and `NORMAL` are distinct in ESPN's payloads and mean the same thing to us.
+    """
+
+    ACTIVE = "ACTIVE"
+    NORMAL = "NORMAL"
+    DAY_TO_DAY = "DAY_TO_DAY"
+    QUESTIONABLE = "QUESTIONABLE"
+    DOUBTFUL = "DOUBTFUL"
+    OUT = "OUT"
+    INJURY_RESERVE = "INJURY_RESERVE"
+    SUSPENSION = "SUSPENSION"
+    #: Reported by ESPN for players not on an active roster; no game-status meaning.
+    FREE_AGENT = "FREE_AGENT"
+    UNKNOWN = "UNKNOWN"
+
+    @property
+    def is_healthy(self) -> bool:
+        """Whether this designation implies no expected absence at all.
+
+        `UNKNOWN` counts as healthy on purpose: an unrecognised status is a gap in our mapping,
+        not evidence about the player, and inventing an absence from it would quietly move
+        every number that depends on him.
+        """
+        return self in _HEALTHY_STATUSES
+
+
+#: Statuses that imply a player is expected to play in full. Declared once, beside the enum,
+#: because both the weekly multiplier and the games-missed table key off "is this healthy".
+_HEALTHY_STATUSES: Final = frozenset(
+    {
+        InjuryStatus.ACTIVE,
+        InjuryStatus.NORMAL,
+        InjuryStatus.DAY_TO_DAY,
+        InjuryStatus.FREE_AGENT,
+        InjuryStatus.UNKNOWN,
+    }
+)
+
+
+def parse_injury_status(raw: object) -> tuple[InjuryStatus, str]:
+    """An untrusted ESPN status string -> `(status, raw_text)`.
+
+    The only sanctioned constructor for this enum from external data, mirroring
+    `validate_gsis_id`'s role for ids. Returns the raw text as well as the parsed value so an
+    unrecognised status can be shown to the reader: "we do not know what SOME_NEW_STATUS means,
+    and treated him as healthy" is actionable, whereas silently mapping it to healthy is the
+    kind of gap nobody finds until a projection is wrong.
+
+    Missing, empty and NA all mean healthy -- ESPN omits the field for uninjured players.
+    """
+    if raw is None or (not isinstance(raw, str) and pd.isna(raw)):
+        return InjuryStatus.ACTIVE, ""
+    text = str(raw).strip()
+    if not text:
+        return InjuryStatus.ACTIVE, ""
+    try:
+        return InjuryStatus(text.upper()), text
+    except ValueError:
+        return InjuryStatus.UNKNOWN, text
+
+
 class DistributionFamily(StrEnum):
     """Backing representation of a `Distribution`."""
 
