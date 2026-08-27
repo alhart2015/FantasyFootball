@@ -1,6 +1,6 @@
 # Waiver / free-agent recommender — design
 
-**Status:** design, not yet implemented (§4 measured 2026-08-26)
+**Status:** steps 1-9 built on `feat/waiver-recommender` (2026-08-26). §4 and §5.1 are measured, not assumed. See §11 for what was cut.
 **Branch:** `feat/waiver-recommender`
 **Date:** 2026-08-26
 **Issue:** #104 53a (the umbrella issue is closed; this is its last unbuilt feature)
@@ -396,3 +396,55 @@ Recorded here because they outlive the feature and were expensive to establish:
 - **Points across different horizons are not a common currency; expected wins is.** This is why
   §5 reports Δ wins rather than a this-week column beside a rest-of-season column. The reader
   should not have to convert by eye, and the conversion rate is not obvious.
+
+---
+
+## 11. What was actually built (2026-08-26)
+
+Steps 1-9 of §9. The tool runs:
+
+```
+python scripts/waiver_recommender.py --league-id 856974 --season 2026 --team-id 17 \
+    --league-dir data/leagues/critts_2025_2026 \
+    --pool data/vorp_2026/critts_half16_snake.parquet [--wins]
+```
+
+### Deferred: the dashboard page (step 10)
+
+Not built. The CLI is the thing that answers the question at 7am on a Tuesday, and the page is
+a presentation of the same `Candidate` and `SwapImpact` objects over the column registry and
+table macros the season UI already has — a thin add, and one that cannot be looked at until
+there is a roster to run it against. Worth doing once the season starts and the output has been
+read a few times in the terminal, because that is what will say which columns matter.
+
+### What the measurements changed
+
+Three things in this spec were guesses when it was written and are numbers now, and each one
+changed a decision rather than merely decorating it:
+
+1. **A Questionable starter plays** (§4.1) — 99.4% at 10-15 projected points, against 11% for a
+   player projected under 2. The unconditioned "54%" was going to become a half-game penalty.
+2. **He still plays 14% worse** (§4.2) — so the designation is informative even when it does not
+   keep him off the field, which is what makes 0.86 worth applying at all.
+3. **A swap clears simulation noise** (§5.1) — but pairing is worth 2x, not the order of
+   magnitude claimed. Both are recorded; the second is a correction of this document.
+
+### What the code found that the spec did not anticipate
+
+- **IR slots are not open roster spots.** Counting them made a full roster look like it had two
+  spaces going spare, so every recommendation came back free and no drop was ever named.
+- **Lineup gain cascades.** A receiver who beats WR2 by 0.2 pushes WR2 into the flex, which
+  pushes the flex RB out — the lineup gains 1.2, not 0.2. Comparing an add against the man he
+  directly replaces understates every recommendation.
+- **Roster order reaches the simulator.** Appending an added player rather than putting him in
+  the dropped player's place shifted every subsequent player onto a different draw, and the
+  paired comparison silently became unpaired. A no-op swap read 0.05 wins until this was fixed;
+  only an exact-zero assertion catches it.
+
+### Verified as far as it can be pre-draft
+
+`--team-id 17` reports "No rosters yet — the draft has not happened" and exits cleanly, which is
+the correct answer on 2026-08-26. The ingest half that can run was checked live: 60 free agents,
+every one with a week-1 projection, scored at 0.5 per reception, with Nacua, Chase and
+McCaffrey arriving as `QUESTIONABLE`. The recommendation half is covered by tests that drive it
+from ESPN-shaped payloads through the real parsers.
