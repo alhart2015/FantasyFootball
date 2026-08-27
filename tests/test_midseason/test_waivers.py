@@ -606,20 +606,22 @@ def test_a_drop_cost_is_discounted_by_the_injury_that_makes_him_droppable() -> N
     """The whole point of the column: you are looking for a drop BECAUSE somebody is hurt, and
     a player on IR is worth less for the rest of the season than his projection says."""
     remaining = remaining_points_by_espn_id(
-        _run_state(ir_player="INJURY_RESERVE"), _small_id_map(), week=5
+        _run_state(week=5, ir_player="INJURY_RESERVE"), _small_id_map()
     )
     assert remaining["1"] == pytest.approx(100.0)
     # 13 games left, 4 missed: 9/13 of his projection.
     assert remaining["2"] == pytest.approx(100.0 * 9 / 13)
 
 
-def test_the_horizon_follows_the_week_the_caller_asked_for() -> None:
-    """It used to be derived from `run.week` while everything else used the `--week` override,
-    so a `--week 12` run applied the adjustment over fifteen games instead of six."""
-    early = remaining_points_by_espn_id(
-        _run_state(week=2, ir_player="INJURY_RESERVE"), _small_id_map(), week=12
+def test_the_horizon_is_the_one_the_ros_frame_was_built_over() -> None:
+    """`run.ros` holds remaining points as of `run.week`, so the multiplier has to use the same
+    week. Scaling that total by a discount derived from a DIFFERENT week applies it over a
+    denominator the numerator was never built for -- which an earlier version did, in the name
+    of making a `--week` override move "everything"."""
+    late = remaining_points_by_espn_id(
+        _run_state(week=12, ir_player="INJURY_RESERVE"), _small_id_map()
     )
-    assert early["2"] == pytest.approx(100.0 * 2 / 6), "six games left at week 12, four missed"
+    assert late["2"] == pytest.approx(100.0 * 2 / 6), "six games left at week 12, four missed"
 
 
 def test_a_player_the_pool_cannot_price_is_absent_from_the_mapping() -> None:
@@ -627,5 +629,25 @@ def test_a_player_the_pool_cannot_price_is_absent_from_the_mapping() -> None:
     worthless", which is what stops a kicker being recommended as a free drop."""
     state = _run_state()
     state.ros = state.ros.iloc[:1]
-    remaining = remaining_points_by_espn_id(state, _small_id_map(), week=5)
+    remaining = remaining_points_by_espn_id(state, _small_id_map())
     assert set(remaining) == {"1"}
+
+
+def test_a_player_on_ir_is_never_the_recommended_drop() -> None:
+    """The third place `is_on_ir` says needs it, and the one an earlier version left out.
+
+    Dropping an IR player frees an IR slot, not the ACTIVE spot the add needs -- so the move
+    does not fit and the recommendation is unactionable. He is also the likeliest player to be
+    named: his projection is forced to `None` so he is a permanent leftover, and his cost is
+    injury-discounted so he is often the cheapest one on the roster.
+    """
+    roster = _roster_with_ir()
+    # Fill the last active spot so a drop is genuinely required.
+    roster = pd.concat(
+        [roster, _players([(30, "Bench4", "WR", "ACTIVE", "BENCH")])], ignore_index=True
+    )
+    remaining = {**BASE_REMAINING, "20": 1.0, "30": 40.0}
+    agents = _players([(99, "Stud WR", "WR", "ACTIVE")])
+    [candidate] = _rank(agents, projections={"99": 20.0}, remaining=remaining, roster=roster)
+    assert not candidate.is_free, "the active roster is full"
+    assert candidate.drop_player != "Hurt WR", "dropping him frees an IR slot, not an active one"

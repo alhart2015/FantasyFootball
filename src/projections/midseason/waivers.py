@@ -107,6 +107,10 @@ class _LineupRow:
     player: str
     position: str
     projected: float | None
+    #: Parked in an IR slot. He cannot start, and dropping him frees no ACTIVE roster spot, so
+    #: he is not a drop candidate either -- which is the third place `is_on_ir` says needs it
+    #: and the one an earlier version left out.
+    on_ir: bool = False
 
 
 def player_id(player: Mapping[str, object]) -> int:
@@ -130,12 +134,14 @@ def player_id(player: Mapping[str, object]) -> int:
 def is_on_ir(player: Mapping[str, object]) -> bool:
     """Whether this roster row is parked in an IR slot.
 
-    **One definition, because three places need it and they disagreed.** An IR player does not
-    occupy an active roster spot, cannot be started, and is not a drop candidate that frees an
-    active spot. Each of those was got wrong separately: the headcount charged him against
-    active capacity, the lineup let him hold a starting slot, and the two facts together meant
-    the morning after an injury the tool reported "nothing on the wire would change your
-    lineup" -- the one case it exists for.
+    **One definition, and all three places read it.** An IR player does not occupy an active
+    roster spot, cannot be started, and is not a drop candidate — dropping him frees an IR slot,
+    not the active one an add needs. Each was got wrong separately: the headcount charged him
+    against active capacity, the lineup let him hold a starting slot, and `_drop_candidate`
+    named him (his forced-`None` projection makes him a permanent leftover and his discounted
+    cost makes him the cheapest). The first two together meant that the morning after an injury
+    the tool reported "nothing on the wire would change your lineup" — the one case it exists
+    for.
     """
     return display_str(player.get("lineup_slot")) == RosterSlot.IR
 
@@ -149,6 +155,7 @@ def _row(player: Mapping[str, object], projected: float | None) -> _LineupRow:
         # 0.0 because that is the value `choose_starters` reads as unstartable, and 0.0 can
         # still fill a slot nobody else is eligible for.
         projected=None if is_on_ir(player) else projected,
+        on_ir=is_on_ir(player),
     )
 
 
@@ -312,6 +319,12 @@ def _drop_candidate(
     for index, row in enumerate(rows):
         if index in starters or index == skip_index:
             continue
+        if row.on_ir:
+            # Dropping him frees an IR slot, not the ACTIVE spot the add needs -- so the move
+            # does not fit and the recommendation is unactionable. He is also the likeliest
+            # player to be named: his projection is forced to None so he is always a leftover,
+            # and his cost is injury-discounted so he is often the cheapest one.
+            continue
         cost = remaining_points.get(str(row.player_id))
         if cost is None:
             # **Not 0.0.** A player the pool cannot price -- a kicker, a defense, a just-signed
@@ -354,6 +367,12 @@ def weekly_projections_by_espn_id(
     parsed = parse_espn_weekly(
         dict(payload), season=0, week=week, ruleset=ruleset, skill_positions_only=False
     )
+    if parsed.empty:
+        # `parse_espn_weekly` returns a COLUMN-LESS frame for an empty payload, so the lookup
+        # below would raise `KeyError: 'projected_points'` -- out through the CLI's caught
+        # tuple and into a traceback. An empty response is an ordinary answer (a filter that
+        # matched nobody, a pre-publication week), and an empty mapping is what it means.
+        return {}
     projected = parsed[parsed["projected_points"].notna()]
     return {
         str(espn_id): float(points)
@@ -361,18 +380,18 @@ def weekly_projections_by_espn_id(
     }
 
 
-def remaining_points_by_espn_id(
-    run: MyTeamRun, id_map: pd.DataFrame, *, week: int
-) -> dict[str, float]:
+def remaining_points_by_espn_id(run: MyTeamRun, id_map: pd.DataFrame) -> dict[str, float]:
     """Rest-of-season points per ESPN id — the cost side of a drop.
 
     Injury-adjusted, because the point of this number is deciding who to let go: a player on IR
     is worth less for the rest of the season than his projection says, and that is exactly the
     situation in which you are looking for a drop candidate.
 
-    `week` rather than `run.week`, so a `--week` override moves the horizon with everything
-    else. Deriving it from `run.week` while the rest of the tool used the override applied the
-    adjustment over the wrong number of games.
+    The horizon is `run.week`, NOT a caller-supplied week, because `run.ros` already holds
+    remaining points *as of* `run.week` — scaling that total by a multiplier derived from a
+    different week applies the discount over a denominator the numerator was never built for.
+    An earlier version took the caller's `week` to make a `--week` override move "everything",
+    which moved this one thing out of step with the frame it operates on.
 
     A player the pool cannot price is ABSENT, not zero. `_drop_candidate` reads that absence as
     "cannot price him" rather than "he is worthless", which is what stops a kicker being
@@ -391,7 +410,7 @@ def remaining_points_by_espn_id(
         for _, player in run.roster.iterrows()
         if display_str(player.get("gsis_id"))
     }
-    games_left = max(SEASON_GAMES - (week - 1), 0)
+    games_left = max(SEASON_GAMES - (run.week - 1), 0)
     out: dict[str, float] = {}
     for espn_id, gsis in crosswalk.items():
         points = by_gsis.get(gsis)

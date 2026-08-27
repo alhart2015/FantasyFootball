@@ -15,7 +15,7 @@ import pytest
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.midseason.standings import ProjectionInputError
-from projections.midseason.swap_impact import simulate_swaps
+from projections.midseason.swap_impact import SwapImpact, simulate_swaps
 from projections.midseason.waivers import Candidate
 from projections.schemas import _PYARROW_STR, InjuryStatus, VorpTableSchema
 from tests.test_midseason.conftest import (
@@ -84,6 +84,9 @@ def _sim_inputs() -> dict[str, object]:
 def _candidate(
     player_id: int, name: str, *, drop_id: int | None = None, position: str = "RB"
 ) -> Candidate:
+    """`drop_id=None` means a FREE add -- a spot is open -- which is what `needs_no_drop` says.
+    The third state (roster full, nothing priceable to drop) is built explicitly in the test
+    that is about it."""
     return Candidate(
         player_id=player_id,
         player=name,
@@ -94,6 +97,7 @@ def _candidate(
         injury_status=InjuryStatus.ACTIVE,
         on_waivers=False,
         percent_owned=40.0,
+        needs_no_drop=drop_id is None,
         drop_player_id=drop_id,
         drop_player="" if drop_id is None else f"Player {drop_id}",
         drop_cost=10.0,
@@ -218,24 +222,68 @@ def test_impacts_come_back_best_first() -> None:
 # --- the objective, and the pairing it rests on ------------------------------------------------
 
 
-def test_a_free_add_is_paired_too() -> None:
-    """A free add GROWS the roster, and roster size reaches the simulator -- so comparing it
-    against the unpadded baseline made every free-spot recommendation an unpaired comparison,
-    carrying roughly twice the noise while being printed against the paired threshold.
+def test_a_free_add_is_reported_as_unpaired() -> None:
+    """A free add GROWS the roster, so the two runs simulate different-sized teams and the draws
+    stop lining up -- it is genuinely a noisier estimate than a swap.
 
-    The baseline for a free add is a roster of the same size with an inert filler in the spot.
-    A free add of a player already on the roster is therefore still a change of nothing.
+    An earlier version padded the baseline with an inert filler to fix that. The filler
+    resolved to no gsis and `rosters_to_slots` dropped it before the draw, so the padded
+    baseline was bit-identical to the plain one: the fix changed nothing and cost one extra
+    full simulation per candidate. Saying the delta is noisier is honest; pretending it is
+    paired was not, and it marked noise as signal on exactly the recommendations that need no
+    justification to act on.
     """
     inputs = _sim_inputs()
-    mine = espn_player_id(MY_TEAM_ID, 0)
-    [impact] = simulate_swaps(
-        candidates=[_candidate(mine, "Player 17-0", drop_id=None, position=POSITIONS[0])],
+    my_bench_wr = espn_player_id(MY_TEAM_ID, 4)
+    [swap] = simulate_swaps(
+        candidates=[
+            _candidate(FREE_AGENT_ESPN_ID, "Waiver Stud", drop_id=my_bench_wr, position="WR")
+        ],
         **inputs,  # type: ignore[arg-type]
     )
-    assert impact.simulated
-    # He is already on the roster, so the padded baseline and the swapped payload differ only
-    # in that the filler became a duplicate of a player the crosswalk already resolved.
-    assert abs(impact.delta_wins) < 0.5, impact.delta_wins
+    [free] = simulate_swaps(
+        candidates=[_candidate(FREE_AGENT_ESPN_ID, "Waiver Stud", drop_id=None, position="WR")],
+        **inputs,  # type: ignore[arg-type]
+    )
+    assert swap.paired, "a swap replaces in place, so the rosters stay the same size"
+    assert not free.paired, "a free add grows the roster, so the draws stop lining up"
+    # And the wider bar is actually applied: a delta between the two floors counts for a swap
+    # and does not for a free add.
+    between = SwapImpact(
+        candidate=free.candidate, delta_wins=0.09, delta_playoff_pct=0.0, delta_title_pct=0.0
+    )
+    assert SwapImpact(**{**between.__dict__, "paired": True}).beats_noise
+    assert not SwapImpact(**{**between.__dict__, "paired": False}).beats_noise
+
+
+def test_an_injury_does_not_leak_into_every_candidates_delta() -> None:
+    """The bug three reviewers found independently, and the one an inequality assertion cannot.
+
+    The baseline read the injury-adjusted pool and the swapped run read the raw one, so every
+    delta carried "+ the value of un-injuring my whole league" as a constant offset. Relative
+    ORDER survived; the sign, the magnitude, `helps` and `beats_noise` did not -- and on the
+    motivating case (my starter got hurt) every candidate came back large and positive.
+
+    The test that catches it compares the SAME swap on a healthy payload and an injured one and
+    asserts the difference is small, not merely non-zero: an injury to a player neither side of
+    the swap touches should barely move what the swap is worth.
+    """
+    healthy = _sim_inputs()
+    hurt = _sim_inputs()
+    payload = cast("dict[str, Any]", hurt["payload"])
+    my_team = next(t for t in payload["teams"] if t["id"] == MY_TEAM_ID)
+    # A player who is neither added nor dropped by the swap under test.
+    my_team["roster"]["entries"][0]["playerPoolEntry"]["player"]["injuryStatus"] = "INJURY_RESERVE"
+
+    my_bench_wr = espn_player_id(MY_TEAM_ID, 4)
+    swap = _candidate(FREE_AGENT_ESPN_ID, "Waiver Stud", drop_id=my_bench_wr, position="WR")
+    [fit] = simulate_swaps(candidates=[swap], week=5, **healthy)  # type: ignore[arg-type]
+    [injured] = simulate_swaps(candidates=[swap], week=5, **hurt)  # type: ignore[arg-type]
+    assert abs(fit.delta_wins - injured.delta_wins) < 0.15, (
+        f"an unrelated injury moved this swap's value from {fit.delta_wins:.3f} to "
+        f"{injured.delta_wins:.3f} -- the discount is leaking into the delta instead of "
+        "cancelling between the two runs"
+    )
 
 
 def test_an_injured_player_is_worth_less_to_the_simulator() -> None:
@@ -262,13 +310,19 @@ def test_an_injured_player_is_worth_less_to_the_simulator() -> None:
 
 
 def test_no_injury_adjustment_without_a_week_to_apply_it_over() -> None:
-    """`season_multiplier` needs a horizon. Omitting `week` means no adjustment rather than an
-    adjustment over a guessed number of games."""
-    inputs = _sim_inputs()
+    """`season_multiplier` needs a horizon. Omitting `week` means NO adjustment rather than an
+    adjustment over a guessed number of games -- asserted by showing that an injured payload
+    then behaves exactly like a healthy one."""
+    healthy = _sim_inputs()
+    hurt = _sim_inputs()
+    payload = cast("dict[str, Any]", hurt["payload"])
+    my_team = next(t for t in payload["teams"] if t["id"] == MY_TEAM_ID)
+    my_team["roster"]["entries"][0]["playerPoolEntry"]["player"]["injuryStatus"] = "INJURY_RESERVE"
     my_bench_wr = espn_player_id(MY_TEAM_ID, 4)
     swap = _candidate(FREE_AGENT_ESPN_ID, "Waiver Stud", drop_id=my_bench_wr, position="WR")
-    [without] = simulate_swaps(candidates=[swap], **inputs)  # type: ignore[arg-type]
-    assert without.simulated
+    [fit] = simulate_swaps(candidates=[swap], **healthy)  # type: ignore[arg-type]
+    [injured] = simulate_swaps(candidates=[swap], **hurt)  # type: ignore[arg-type]
+    assert fit.delta_wins == injured.delta_wins, "no week, no adjustment, no difference"
 
 
 def test_a_swap_that_cannot_be_placed_is_refused_not_absorbed() -> None:
@@ -293,3 +347,26 @@ def test_helps_and_beats_noise_are_honest_about_what_is_known() -> None:
         **inputs,  # type: ignore[arg-type]
     )
     assert good.simulated and good.helps and good.beats_noise
+
+
+def test_an_impossible_move_is_never_simulated() -> None:
+    """Roster full, nothing droppable could be priced. There is no legal way to make this add,
+    so reporting a delta for it -- which the old `drop_player_id is None` branch did, as though
+    it were free -- put the value of an overfilled roster under a line saying NO DROP FOUND."""
+    inputs = _sim_inputs()
+    stuck = Candidate(
+        player_id=FREE_AGENT_ESPN_ID,
+        player="Waiver Stud",
+        position="WR",
+        nfl_team="KC",
+        lineup_gain=5.0,
+        projected=15.0,
+        injury_status=InjuryStatus.ACTIVE,
+        on_waivers=False,
+        percent_owned=40.0,
+        needs_no_drop=False,
+        drop_player_id=None,
+    )
+    [impact] = simulate_swaps(candidates=[stuck], **inputs)  # type: ignore[arg-type]
+    assert not impact.simulated
+    assert impact.delta_wins == 0.0

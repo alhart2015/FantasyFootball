@@ -27,15 +27,19 @@ import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.performance_variance import SEASON_GAMES, VarianceParams
-from projections.ingest.espn_league import ESPN_POSITION_IDS, espn_gsis_crosswalk
+from projections.ingest.espn_league import (
+    ESPN_POSITION_IDS,
+    espn_gsis_crosswalk,
+    parse_rosters,
+)
 from projections.midseason.injuries import season_multiplier
 from projections.midseason.standings import (
     ProjectionInputError,
     StandingsRun,
     project_league_standings,
 )
-from projections.midseason.waivers import Candidate
-from projections.schemas import InjuryStatus, parse_injury_status
+from projections.midseason.waivers import Candidate, player_id
+from projections.schemas import parse_injury_status
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,11 @@ class SwapImpact:
     #: pool, so there is nothing to put on the roster. The deltas are then zero and MEAN
     #: nothing, which is a different fact from a simulated zero and must not print the same.
     simulated: bool = True
+    #: False for a free add, which grows the roster: the two runs then simulate different-sized
+    #: teams, the draws stop lining up, and the delta carries the unpaired error rather than
+    #: the paired one. It is still the best estimate available; it is just less certain, and
+    #: `beats_noise` holds it to the wider bar.
+    paired: bool = True
 
     @property
     def helps(self) -> bool:
@@ -71,10 +80,15 @@ class SwapImpact:
         """Whether the delta is bigger than the simulation noise on it.
 
         A tool that prints 0.03 wins to two decimals when its own measured spread is 0.062 is
-        inventing precision. `scripts/measure_swap_noise.py` is the gate that established the
-        number and re-establishes it if the simulator changes.
+        inventing precision. `scripts/measure_swap_noise.py` is the gate that established both
+        numbers and re-establishes them if the simulator changes.
+
+        An UNPAIRED delta -- a free add, which grows the roster so the draws stop lining up --
+        is held to the wider unpaired bar. Printing it against the paired one would mark noise
+        as signal on exactly the recommendations that need no justification to act on.
         """
-        return self.simulated and abs(self.delta_wins) > PAIRED_DELTA_NOISE
+        floor = PAIRED_DELTA_NOISE if self.paired else UNPAIRED_DELTA_NOISE
+        return self.simulated and abs(self.delta_wins) > floor
 
 
 #: Standard DEVIATION of a paired delta at 2,000 sims, measured by
@@ -86,6 +100,11 @@ class SwapImpact:
 #: Deltas smaller than this are not distinguishable from simulation noise, and a caller
 #: printing them to two decimals is inventing precision.
 PAIRED_DELTA_NOISE = 0.062
+
+#: The same spread when the two runs do NOT share their draws -- measured at 0.127, which is
+#: roughly `sd * sqrt(2)` as independent errors compose. A free add is in this regime because it
+#: changes the roster size.
+UNPAIRED_DELTA_NOISE = 0.127
 
 
 def simulate_swaps(
@@ -143,12 +162,16 @@ def simulate_swaps(
 
     projectable = set(adjusted["gsis_id"].astype(str))
     espn_to_gsis = espn_gsis_crosswalk(id_map)
-    padded = _payload_with_filler(payload, my_team_id=my_team_id)
 
     impacts: list[SwapImpact] = []
     for candidate in candidates:
         gsis = espn_to_gsis.get(str(candidate.player_id))
-        if gsis is None or gsis not in projectable:
+        # An impossible move: the roster is full and nothing droppable could be priced, so
+        # there is no legal way to make this add. Simulating it as a free one -- which the
+        # earlier `drop_player_id is None` branch did -- reported the value of an overfilled
+        # roster as the objective, directly under a line saying NO DROP FOUND.
+        impossible = candidate.drop_player_id is None and not candidate.needs_no_drop
+        if impossible or gsis is None or gsis not in projectable:
             impacts.append(
                 SwapImpact(
                     candidate=candidate,
@@ -159,45 +182,23 @@ def simulate_swaps(
                 )
             )
             continue
-        # A free add GROWS the roster, and roster size reaches the simulator -- so the honest
-        # baseline for one is a roster of the same size with an inert filler in the spot. Using
-        # the unpadded baseline made every free add an unpaired comparison, carrying roughly
-        # twice the noise while being printed against the paired threshold.
-        base = (
-            baseline
-            if candidate.drop_player_id is not None
-            else _standings_row(
-                project_league_standings(
-                    padded,
-                    adjusted,
-                    id_map,
-                    availability,
-                    params,
-                    season=season,
-                    n_sims=n_sims,
-                    rng=np.random.default_rng(seed),
-                ),
-                my_team_id,
-            )
-        )
-        swapped = _payload_with_swap(
-            payload if candidate.drop_player_id is not None else padded,
-            candidate,
-            my_team_id=my_team_id,
-        )
+        swapped = _payload_with_swap(payload, candidate, my_team_id=my_team_id)
         after = _standings_row(
             project_league_standings(
                 swapped,
-                pool,
+                # `adjusted`, NOT `pool`. Reading the raw pool here while the baseline read the
+                # adjusted one put the whole league's injury discount into every delta as an
+                # offset instead of cancelling -- which is worse than the health-blindness it
+                # was meant to fix, because health-blind is at least unbiased.
+                adjusted,
                 id_map,
                 availability,
                 params,
                 season=season,
                 n_sims=n_sims,
                 # A FRESH generator at the SAME seed, not the one the baseline consumed.
-                # Reusing a spent generator makes every candidate share a different draw
-                # sequence from the baseline, which is the unpaired case wearing paired
-                # clothing.
+                # Reusing a spent generator gives every candidate a different draw sequence
+                # from the baseline, which is the unpaired case wearing paired clothing.
                 rng=np.random.default_rng(seed),
             ),
             my_team_id,
@@ -205,16 +206,41 @@ def simulate_swaps(
         impacts.append(
             SwapImpact(
                 candidate=candidate,
-                delta_wins=after["projected_wins"] - base["projected_wins"],
-                delta_playoff_pct=after["make_playoffs_pct"] - base["make_playoffs_pct"],
-                delta_title_pct=after["champ_pct"] - base["champ_pct"],
+                delta_wins=after["projected_wins"] - baseline["projected_wins"],
+                delta_playoff_pct=after["make_playoffs_pct"] - baseline["make_playoffs_pct"],
+                delta_title_pct=after["champ_pct"] - baseline["champ_pct"],
+                # A free add GROWS my roster, so the two runs simulate different-sized teams
+                # and the draws stop lining up. Keyed on the SAME fact `_payload_with_swap`
+                # keys on -- whether a drop is applied -- because a `paired` flag that
+                # disagrees with the payload it describes is worse than no flag.
+                #
+                # An earlier version padded the baseline with an inert filler instead. The
+                # filler resolved to no gsis and `rosters_to_slots` dropped it before the
+                # draw, so the padded baseline was bit-identical to the plain one: the fix
+                # changed nothing and cost an extra Monte-Carlo season per candidate. Saying
+                # the delta is noisier is honest; pretending it is paired was not.
+                paired=candidate.drop_player_id is not None,
             )
         )
 
-    # Simulated candidates first, best delta first. An unsimulated one has no delta to rank on,
-    # so it sorts last on its lineup gain rather than being interleaved at a fictitious zero.
     impacts.sort(key=lambda i: (not i.simulated, -i.delta_wins, -i.candidate.lineup_gain))
     return impacts
+
+
+def _standings_row(run: StandingsRun, my_team_id: int) -> dict[str, float]:
+    """My row of a `StandingsRun`, as plain floats."""
+    mine = run.standings[run.standings["team_id"] == my_team_id]
+    if mine.empty:
+        raise ProjectionInputError(
+            f"team {my_team_id} is not in the projected standings; it cannot be compared "
+            "against itself."
+        )
+    row = mine.iloc[0]
+    return {
+        "projected_wins": float(row["projected_wins"]),
+        "make_playoffs_pct": float(row["make_playoffs_pct"]),
+        "champ_pct": float(row["champ_pct"]),
+    }
 
 
 def _injury_adjusted_pool(
@@ -232,20 +258,16 @@ def _injury_adjusted_pool(
     projection in stage 1, over a horizon of one week, and applying it again here would
     double-count.
     """
-    from projections.ingest.espn_league import parse_rosters
-
     rosters = parse_rosters(dict(payload))
-    if rosters.empty:
-        return pool
     crosswalk = espn_gsis_crosswalk(id_map)
     games_left = max(SEASON_GAMES - (week - 1), 0)
     factors: dict[str, float] = {}
     for _, player in rosters.iterrows():
-        gsis = crosswalk.get(str(_entry_id(player)))
+        gsis = crosswalk.get(str(player_id(player)))
         if gsis is None:
             continue
         status, _ = parse_injury_status(player.get("injury_status"))
-        if status is InjuryStatus.ACTIVE or status.is_healthy:
+        if status.is_healthy:
             continue
         factors[gsis] = season_multiplier(status, games_remaining=games_left)
     if not factors:
@@ -254,60 +276,6 @@ def _injury_adjusted_pool(
     scale = out["gsis_id"].astype(str).map(factors).fillna(1.0)
     out["season_mean_fpts"] = out["season_mean_fpts"] * scale
     return out
-
-
-def _entry_id(player: Mapping[str, Any]) -> int:
-    raw = player.get("player_id", 0)
-    return 0 if raw is None or pd.isna(raw) else int(float(raw))
-
-
-def _payload_with_filler(payload: Mapping[str, Any], *, my_team_id: int) -> dict[str, Any]:
-    """The payload with one inert extra player on my roster.
-
-    The baseline for a FREE add, so both sides of that comparison have the same roster size.
-    The filler resolves to no gsis, so `rosters_to_slots` drops him and he contributes nothing
-    -- he exists only to keep the draw sequence aligned.
-    """
-    padded = copy.deepcopy(dict(payload))
-    for team in padded.get("teams", []) or []:
-        if int(team.get("id", 0) or 0) != my_team_id:
-            continue
-        roster = team.setdefault("roster", {}).setdefault("entries", [])
-        roster.append(
-            {
-                "lineupSlotId": 20,
-                "playerId": _FILLER_PLAYER_ID,
-                "playerPoolEntry": {
-                    "player": {
-                        "id": _FILLER_PLAYER_ID,
-                        "fullName": "(open roster spot)",
-                        "defaultPositionId": 3,
-                        "proTeamId": 0,
-                    }
-                },
-            }
-        )
-    return padded
-
-
-#: An ESPN id no real player has, so the filler cannot resolve through the id_map.
-_FILLER_PLAYER_ID = -1
-
-
-def _standings_row(run: StandingsRun, my_team_id: int) -> dict[str, float]:
-    """My row of a `StandingsRun`, as plain floats."""
-    mine = run.standings[run.standings["team_id"] == my_team_id]
-    if mine.empty:
-        raise ProjectionInputError(
-            f"team {my_team_id} is not in the projected standings; it cannot be compared "
-            "against itself."
-        )
-    row = mine.iloc[0]
-    return {
-        "projected_wins": float(row["projected_wins"]),
-        "make_playoffs_pct": float(row["make_playoffs_pct"]),
-        "champ_pct": float(row["champ_pct"]),
-    }
 
 
 def _payload_with_swap(
@@ -332,14 +300,13 @@ def _payload_with_swap(
         roster = team.setdefault("roster", {}).setdefault("entries", [])
         entry = _roster_entry(candidate)
         replaced = False
-        # A free add replaces the FILLER that `_payload_with_filler` put in the open spot, so
-        # the roster is the same size on both sides of the comparison and the draw sequence
-        # stays aligned. Appending is what made every free add an unpaired comparison.
-        target = (
-            candidate.drop_player_id if candidate.drop_player_id is not None else _FILLER_PLAYER_ID
-        )
+        # A free add legitimately grows the roster; anything else replaces in place, so the
+        # draw sequence stays aligned for the case where pairing is achievable.
+        if candidate.drop_player_id is None:
+            roster.append(entry)
+            continue
         for index, existing in enumerate(roster):
-            if _entry_player_id(existing) == target:
+            if _entry_player_id(existing) == candidate.drop_player_id:
                 # In place, and inheriting the slot: the simulator sets its own lineup, but
                 # keeping the slot means a bench-for-bench swap leaves the payload otherwise
                 # identical.
@@ -348,13 +315,12 @@ def _payload_with_swap(
                 replaced = True
                 break
         if not replaced:
-            # Nothing to replace means the caller passed a drop that is not on the roster, or a
-            # free add without the padded baseline. Appending would change the roster size and
-            # silently unpair the comparison, which is the failure a no-op swap reading 0.05
-            # wins exposed -- so it is refused rather than absorbed.
+            # A named drop who is not on the roster is a caller error. Appending anyway would
+            # change the roster size and silently unpair the comparison -- the failure a no-op
+            # swap reading 0.05 wins exposed -- so it is refused rather than absorbed.
             raise ProjectionInputError(
-                f"cannot place {candidate.player}: player {target} is not on team "
-                f"{my_team_id}'s roster, so the swap has no slot to occupy and the paired "
+                f"cannot place {candidate.player}: player {candidate.drop_player_id} is not "
+                f"on team {my_team_id}'s roster, so the swap has no slot to occupy and the "
                 "comparison would be against a different-sized roster."
             )
     return swapped

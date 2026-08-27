@@ -194,7 +194,7 @@ def run(args: argparse.Namespace) -> int:
         print(f"  ! your own roster may be incompletely priced: {mine_truncated}")
     projections.update(weekly_projections_by_espn_id(mine_payload, week, config.ruleset))
 
-    remaining = remaining_points_by_espn_id(run_state, id_map, week=week)
+    remaining = remaining_points_by_espn_id(run_state, id_map)
     roster = parse_rosters(payload)
     roster = roster[roster["team_id"] == my_team_id]
 
