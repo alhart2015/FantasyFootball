@@ -905,17 +905,23 @@ def test_parse_injury_status_tolerates_pandas_na() -> None:
     assert raw == ""
 
 
-def test_only_the_designations_that_imply_an_absence_are_unhealthy() -> None:
-    """`is_healthy` is what both adjustment tables key off, so the split is pinned here rather
-    than re-derived at each use."""
-    unhealthy = {s for s in InjuryStatus if not s.is_healthy}
-    assert unhealthy == {
-        InjuryStatus.QUESTIONABLE,
-        InjuryStatus.DOUBTFUL,
-        InjuryStatus.OUT,
-        InjuryStatus.INJURY_RESERVE,
-        InjuryStatus.SUSPENSION,
-    }
+def test_is_healthy_agrees_with_the_tables_that_key_off_it() -> None:
+    """Asserted against the ADJUSTMENT TABLES rather than against a hand-written set literal.
+
+    The literal form mirrored `_HEALTHY_STATUSES`, so any edit to the enum needed a matching
+    edit here and nothing was verified in between. What actually matters is that "healthy"
+    means "costs nothing": every status the multiplier table prices must be unhealthy, and
+    every status it does not must be healthy.
+    """
+    from projections.midseason.injuries import WEEKLY_MULTIPLIER, weekly_multiplier
+
+    for status in InjuryStatus:
+        if status.is_healthy:
+            assert weekly_multiplier(status) == 1.0, f"{status} is healthy but is discounted"
+            assert status not in WEEKLY_MULTIPLIER, f"{status} is healthy but is priced"
+        else:
+            assert status in WEEKLY_MULTIPLIER, f"{status} is unhealthy but has no multiplier"
+            assert weekly_multiplier(status) < 1.0, f"{status} is unhealthy but costs nothing"
 
 
 # --- the free-agent pool -------------------------------------------------------------------------

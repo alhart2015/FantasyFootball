@@ -16,7 +16,7 @@ from projections.ingest.injury_news import (
     InjuryNote,
     fetch_injury_note,
     fetch_injury_notes,
-    parse_injury_notes,
+    parse_athlete_injury,
 )
 from projections.schemas import InjuryStatus
 
@@ -64,7 +64,7 @@ HEALTHY: dict[str, Any] = {"athlete": {"id": "4429795", "injuries": []}}
 def test_the_write_up_survives_the_parse() -> None:
     """The whole reason this module exists: the one-word status is a guess multiplier, and the
     sentence underneath it is what lets a reader overrule the guess."""
-    note = parse_injury_notes(NACUA, 4426515)
+    note = parse_athlete_injury(NACUA, 4426515)
     assert note is not None
     assert note.status is InjuryStatus.QUESTIONABLE
     assert note.injury_type == "Groin"
@@ -76,21 +76,21 @@ def test_the_write_up_survives_the_parse() -> None:
 def test_the_summary_line_carries_body_part_severity_and_a_date() -> None:
     """Staleness is the first thing to check about injury news, so the date is in the one-line
     form rather than only in the full record."""
-    note = parse_injury_notes(NACUA, 4426515)
+    note = parse_athlete_injury(NACUA, 4426515)
     assert note is not None
     assert note.summary() == "Groin · Soreness · 2026-08-24"
 
 
 def test_a_healthy_player_has_no_note() -> None:
-    assert parse_injury_notes(HEALTHY, 4429795) is None
+    assert parse_athlete_injury(HEALTHY, 4429795) is None
 
 
 def test_a_payload_with_no_athlete_is_not_an_error() -> None:
     """ESPN returns odd shapes for retired and practice-squad players. An absent note is the
     right answer; an exception would take down a page over a missing footnote."""
-    assert parse_injury_notes({}, 1) is None
-    assert parse_injury_notes({"athlete": {}}, 1) is None
-    assert parse_injury_notes({"athlete": {"injuries": None}}, 1) is None
+    assert parse_athlete_injury({}, 1) is None
+    assert parse_athlete_injury({"athlete": {}}, 1) is None
+    assert parse_athlete_injury({"athlete": {"injuries": None}}, 1) is None
 
 
 def test_the_fantasy_status_wins_over_the_prose_one() -> None:
@@ -99,7 +99,7 @@ def test_the_fantasy_status_wins_over_the_prose_one() -> None:
     with the one `parse_rosters` produces."""
     payload = json.loads(json.dumps(NACUA))
     payload["athlete"]["injuries"][0]["status"] = "Out"
-    note = parse_injury_notes(payload, 4426515)
+    note = parse_athlete_injury(payload, 4426515)
     assert note is not None
     assert note.status is InjuryStatus.QUESTIONABLE
 
@@ -107,7 +107,7 @@ def test_the_fantasy_status_wins_over_the_prose_one() -> None:
 def test_prose_status_is_used_when_there_is_no_fantasy_status() -> None:
     payload = json.loads(json.dumps(NACUA))
     del payload["athlete"]["injuries"][0]["details"]["fantasyStatus"]
-    note = parse_injury_notes(payload, 4426515)
+    note = parse_athlete_injury(payload, 4426515)
     assert note is not None
     assert note.status is InjuryStatus.QUESTIONABLE
 
@@ -119,7 +119,7 @@ def test_only_the_most_recent_injury_is_kept() -> None:
     older = json.loads(json.dumps(payload["athlete"]["injuries"][0]))
     older["details"]["type"] = "Ankle"
     payload["athlete"]["injuries"].append(older)
-    note = parse_injury_notes(payload, 4426515)
+    note = parse_athlete_injury(payload, 4426515)
     assert note is not None
     assert note.injury_type == "Groin"
 

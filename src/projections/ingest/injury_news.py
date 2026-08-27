@@ -72,7 +72,7 @@ class InjuryNote:
         return head
 
 
-def parse_injury_notes(payload: Mapping[str, Any], player_id: int) -> InjuryNote | None:
+def parse_athlete_injury(payload: Mapping[str, Any], player_id: int) -> InjuryNote | None:
     """The athlete payload -> its most recent injury note, or None when he is healthy.
 
     ESPN returns `injuries` as a list; a player with nothing wrong has an empty one. Only the
@@ -116,7 +116,7 @@ def fetch_injury_note(player_id: int, *, timeout: float = 15.0) -> InjuryNote | 
         return None
     if not isinstance(payload, dict):
         return None
-    return parse_injury_notes(payload, player_id)
+    return parse_athlete_injury(payload, player_id)
 
 
 def fetch_injury_notes(
@@ -126,8 +126,11 @@ def fetch_injury_notes(
 
     **Call this only for players whose fantasy status is not Active.** It is one request per
     player and the league-wide feed is 403, so a naive sweep of a 400-player free-agent list is
-    400 requests for information about the ~15 who are hurt. `midseason.injuries.is_multi_week`
-    narrows it further, to the players whose adjustment is the guessed one.
+    400 requests for information about the ~15 who are hurt.
+
+    (`midseason.injuries.is_multi_week` does NOT narrow this set -- the CLI uses it to decide
+    whether to print the long write-up, which is a different question. An earlier version of
+    this paragraph said otherwise.)
     """
     notes: dict[int, InjuryNote] = {}
     for player_id in player_ids:

@@ -73,8 +73,16 @@ an `on_waivers` flag. They differ in how you acquire the player, not in whether 
 and a recommendation that ignores the distinction sends you to click "Add" on a player who is
 actually on a waiver claim until Wednesday.
 
-Columns: `espn_id`, `player`, `pos`, `nfl_team`, `injury_status`, `percent_owned`,
-`on_waivers`.
+Columns, as built: `player_id`, `player`, `pos`, `nfl_team`, `injury_status`,
+`injury_status_raw`, `percent_owned`, `on_waivers`. (`player_id` rather than `espn_id`, matching
+`parse_rosters`, so both sides of a swap carry the same column name; `injury_status_raw` so a
+status we do not recognise can be reported rather than swallowed.)
+
+The slot filter as built is `[0, 2, 4, 6, 23, 16, 17]` — the four skill slots plus FLEX, plus
+**K and D/ST**. The pool holds neither, so neither can be ranked as an add; they are here
+because this same call prices MY roster through `statuses=("ONTEAM",)`, and a kicker the tool
+cannot price is a kicker it treats as unstartable, which leaves a hole in the baseline lineup
+and inflates every candidate's gain.
 
 ---
 
@@ -127,8 +135,10 @@ Share of ESPN's weekly projection delivered, restricted to players projected for
 | Healthy | 13,960 | 96.5% | 84.6% |
 | Questionable | 846 | **83.4%** | 72.7% |
 
-Conditional on playing at all: healthy 100.3%, Questionable 89.2%. So most of the gap is "played
-hurt and produced less", not "sat".
+Conditional on playing at all: healthy 100.3%, Questionable 89.2% — so most of the gap is
+"played hurt and produced less", not "sat". (Those two figures came from an exploratory run and
+are **not** printed by `measure_injury_impact.py`, which reports the unconditional table. The
+headline 83.4% / 96.5% is section 3 of that script's output.)
 
 **Multiplier: 0.86.**
 
@@ -142,8 +152,11 @@ Test: a player's projection in his Questionable weeks against his own median hea
 projection. Result: **100.4%** (n=843). ESPN does not discount Questionable. The 0.86 is ours to
 apply.
 
-**It does discount `Out`**: of 1,475 `Out` designations reaching the projection feed, exactly one
-carries a projection of 5+ points. ESPN zeroes them. **So a weekly view must not apply an `Out`
+**It does discount `Out`**: of the `Out` designations reaching the projection feed, exactly one
+carries a projection of 5+ points — which is why section 3 of the script shows `Out` at n=1 while
+section 1 shows it at n=1,661. Those are different populations (projected-5+ versus all
+designations), not a contradiction, and the script prints both so the gap is visible. ESPN zeroes
+them. **So a weekly view must not apply an `Out`
 multiplier on top of an ESPN weekly projection** — that is a double-discount, and its symptom is
 a plausible-looking number.
 
@@ -179,7 +192,7 @@ Applied only when the source projection is **not** already injury-aware (§4.3).
 |---|---|---|
 | Active / day-to-day / unknown | 0 | — |
 | Questionable | 0.14 | 1 − 0.86, one week |
-| Doubtful | 1 | measured |
+| Doubtful | 0.96 | measured (1 − the 0.04 weekly multiplier; tabulated as 1 in an earlier draft, which made the two tables disagree at a one-week horizon) |
 | Out | 1 | measured; ESPN re-reports weekly |
 | Suspension | 1 | assumed — same shape, known absence, unknown length |
 | **Injured Reserve** | **4** | **guess.** NFL minimum. Not measurable from the injury report, which carries game status, not roster designation |
@@ -216,8 +229,9 @@ the spot until the next stream displaces him.
 
 Two independent 2,000-sim runs of the same league differ by simulation noise alone, so the
 recommendation depends on that noise being smaller than the effect. `scripts/measure_swap_noise.py`
-measures it rather than assuming; run 2026-08-26 on a synthetic 16-team league at 2,000 sims,
-six seeds:
+measures it rather than assuming. Run 2026-08-26 on a synthetic 16-team league at 2,000 sims
+with `--repeats 6` (the script defaults to 8; the table below is four invocations, one per swap
+size):
 
 | | |
 |---|---|
@@ -329,9 +343,14 @@ sentence is about practice rather than games, or about a different player — an
 land inside a projection, where nobody can see it. The number says what it assumed; the text
 lets you overrule it.
 
-**Cost and caching.** One call per player, and the league-wide feed is 403. Fetched only for
-players whose fantasy status is not Active, cached by player and date. A handful of calls, not
-a hundred.
+**Cost.** One call per player, and the league-wide feed is 403. Fetched only for players
+whose fantasy status is not Active — my own roster and the shortlist, so a handful of calls
+rather than one per free agent.
+
+**Caching was specified and is not built.** An earlier draft of this paragraph said "cached by
+player and date" as though it were. With the fetch narrowed to non-Active players it is a
+handful of requests per run, so the cache buys little; it becomes worth building if this ever
+runs per-page rather than per-invocation.
 
 ---
 
@@ -448,3 +467,39 @@ the correct answer on 2026-08-26. The ingest half that can run was checked live:
 every one with a week-1 projection, scored at 0.5 per reception, with Nacua, Chase and
 McCaffrey arriving as `QUESTIONABLE`. The recommendation half is covered by tests that drive it
 from ESPN-shaped payloads through the real parsers.
+
+---
+
+## 12. What the review changed (2026-08-27)
+
+`/loop-review` on PR #158 found 40 findings, two of them critical, and both criticals were the
+same shape: **a thing this spec asserts, that the code did not do.**
+
+1. **Expected wins was not the objective.** §5 says "Δ WINS is the recommendation". The code
+   ranked and shortlisted by lineup gain, discarded `simulate_swaps`' own ordering, made the
+   wins column opt-in, and never read `helps` — so the third row of §5.4's worked example, a
+   big lineup gain with a negative delta, printed exactly like the good ones. Simulation is
+   now the default and the objective is the order.
+
+2. **Stage 2 was injury-blind.** §6 says it "uses expected games missed inside the rest-of-season
+   projection the simulator consumes". It did not: `project_league_standings` received the raw
+   pool, so dropping a player on IR simulated identically to dropping him healthy — on the
+   branch whose motivating case is an injury replacement.
+
+Three more the spec had not anticipated, all of the plausible-wrong-answer kind:
+
+- **A free add was never paired.** It grows the roster, roster size reaches the simulator, and
+  the comparison ran against the unpadded baseline — so exactly the recommendations that need
+  no drop carried roughly twice the noise while being printed against the paired threshold.
+- **IR players were counted twice over.** They occupied active roster spots in the headcount AND
+  held starting slots in the baseline lineup, so the morning after your WR1 went on IR the tool
+  reported "nothing on the wire would change your starting lineup".
+- **A player the pool could not price was priced at zero**, which made kickers, defenses and
+  just-signed backs the cheapest leftover by construction and got them recommended as free
+  drops.
+
+And one finding **declined**, recorded because the reasoning outlives it: rounding
+`EXPECTED_GAMES_MISSED[DOUBTFUL]` from 0.96 to 1.0 to match §4.5's table. `is_multi_week` is
+False for `OUT` at exactly 1.0 as well, and that is correct — a game status covers one game.
+Rounding would have made the two tables disagree at a one-week horizon to fix a boundary that
+was never wrong. §4.5 now carries the precise number instead.

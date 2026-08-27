@@ -39,7 +39,16 @@ WEEKLY_MULTIPLIER: dict[InjuryStatus, float] = {
 #: NFL games a player is expected to miss, given a designation.
 #:
 #: Everything except `INJURY_RESERVE` follows from `WEEKLY_MULTIPLIER` and the fact that a game
-#: status covers exactly one week — ESPN re-reports it weekly.
+#: status covers exactly one week — ESPN re-reports it weekly. So the two tables agree at a
+#: one-game horizon by construction, which is the property `test_a_one_week_designation_costs_
+#: the_same_on_both_horizons` pins.
+#:
+#: (A review finding proposed rounding `DOUBTFUL` up from 0.96 to 1.0 on the grounds that the
+#: spec tabulates it as 1 and that 0.96 stops `is_multi_week` firing. Declined, and the reason
+#: is worth keeping: `is_multi_week` is False for `OUT` at exactly 1.0 as well, and that is
+#: correct -- a GAME status covers one game, so neither should print a multi-week write-up.
+#: Rounding would have made the two tables disagree at a one-week horizon to fix a boundary
+#: that was never wrong. The spec's table is the one that is imprecise; §4.5 now says so.)
 EXPECTED_GAMES_MISSED: dict[InjuryStatus, float] = {
     InjuryStatus.QUESTIONABLE: 1.0 - WEEKLY_MULTIPLIER[InjuryStatus.QUESTIONABLE],
     InjuryStatus.DOUBTFUL: 1.0 - WEEKLY_MULTIPLIER[InjuryStatus.DOUBTFUL],
@@ -109,7 +118,11 @@ def is_multi_week(status: InjuryStatus) -> bool:
     """Whether this designation implies an absence longer than the coming week.
 
     The line between "the number is measured and small" and "the number is a guess and large".
-    A caller showing the injury write-up (§5.3) should show it for these, because the text is
-    the only real information about how long the absence runs.
+    A caller showing the injury write-up (§6) should show it for these, because the text is the
+    only real information about how long the absence runs.
+
+    True for `INJURY_RESERVE` and nothing else today, which is right: every other designation
+    here is a GAME status, and ESPN re-reports those weekly, so none of them tells you anything
+    about next week. `OUT` sits at exactly 1.0 and is correctly excluded.
     """
     return expected_games_missed(status) > 1.0

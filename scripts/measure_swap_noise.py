@@ -14,9 +14,13 @@ Three questions, in order:
    spread of projected wins for one team. That is the floor an unpaired comparison has to clear.
 
 2. **Does pairing help, and by how much?** Simulate baseline and swapped rosters at the SAME
-   seed, take the difference, repeat across seeds. Common random numbers should shrink the
-   error on the difference far below the error on either estimate, because the two runs share
-   their draws and most of the noise cancels.
+   seed, take the difference, repeat across seeds. Common random numbers shrink the error on the
+   difference, because the two runs share their draws and some of the noise cancels.
+
+   **Measured at about 2x, not the order of magnitude textbook CRN suggests** --
+   `project_league_standings` reseeds internally, so a roster change perturbs the draw sequence
+   and only part of the noise cancels. An earlier version of this docstring claimed "far below
+   the error on either estimate", which is not what 2x means.
 
 3. **Is a realistic swap visible?** Apply a swap worth roughly what a real waiver add is worth
    -- a few points a week -- and see whether the measured Δ wins is several times its own

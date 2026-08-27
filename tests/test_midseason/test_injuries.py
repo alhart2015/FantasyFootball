@@ -9,7 +9,6 @@ from __future__ import annotations
 import pytest
 
 from projections.midseason.injuries import (
-    EXPECTED_GAMES_MISSED,
     WEEKLY_MULTIPLIER,
     expected_games_missed,
     is_multi_week,
@@ -112,11 +111,28 @@ def test_every_multiplier_is_a_share() -> None:
         assert 0.0 <= value <= 1.0, f"{status} multiplier {value} is not a share"
 
 
-def test_the_two_tables_agree_about_one_week_statuses() -> None:
-    """`EXPECTED_GAMES_MISSED` is derived from `WEEKLY_MULTIPLIER` for everything a game status
-    covers, so the two cannot drift. IR is the exception, and is exempt by name rather than by
-    the check happening to skip it."""
-    for status, missed in EXPECTED_GAMES_MISSED.items():
-        if status is InjuryStatus.INJURY_RESERVE:
-            continue
-        assert missed == pytest.approx(1.0 - WEEKLY_MULTIPLIER[status]), status
+def test_a_one_week_designation_costs_the_same_on_both_horizons() -> None:
+    """The BEHAVIOUR the two tables are supposed to share, rather than the arithmetic that
+    happens to produce one from the other.
+
+    With exactly one game left, "what share of a rest-of-season total does he deliver" and
+    "what share of this week's projection" are the same question, so the two tables must give
+    the same answer. An earlier version of this test asserted
+    `EXPECTED_GAMES_MISSED[s] == 1 - WEEKLY_MULTIPLIER[s]`, which for two of the four statuses
+    re-executed the line that defines it and for the other two compared two literals that
+    happen to agree -- it could not fail for the reason its docstring gave.
+    """
+    for status in (InjuryStatus.QUESTIONABLE, InjuryStatus.DOUBTFUL, InjuryStatus.OUT):
+        assert season_multiplier(status, games_remaining=1) == pytest.approx(
+            weekly_multiplier(status)
+        ), status
+
+
+def test_injured_reserve_is_the_one_designation_that_outlasts_a_week() -> None:
+    """Which is what `is_multi_week` reports, and what decides whether the CLI prints the beat
+    reporter's write-up -- the text that exists because this number is a guess."""
+    assert (
+        season_multiplier(InjuryStatus.INJURY_RESERVE, games_remaining=1)
+        < weekly_multiplier(InjuryStatus.INJURY_RESERVE)
+        or expected_games_missed(InjuryStatus.INJURY_RESERVE) > 1.0
+    )
