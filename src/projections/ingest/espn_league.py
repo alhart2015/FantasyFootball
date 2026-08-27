@@ -295,9 +295,17 @@ def fetch_league_payload(
 #: have until Wednesday.
 FREE_AGENT_STATUSES: tuple[str, ...] = ("FREEAGENT", "WAIVERS")
 
-#: Lineup slot ids worth asking for. The pool carries no kickers or defenses, so ranking them
-#: is impossible and requesting them only makes the response bigger.
-_SKILL_SLOT_IDS: tuple[int, ...] = (0, 2, 4, 6, 23)
+#: Lineup slot ids worth asking for: QB, RB, WR, TE, FLEX, D/ST, K.
+#:
+#: FLEX (23) admits nobody the position slots do not, but ESPN indexes some players only by
+#: their flex eligibility, so asking costs nothing and omitting it can silently lose one.
+#:
+#: **K and D/ST are included even though the VORP pool holds neither.** They cannot be RANKED
+#: as adds, and `rank_free_agents` will not surface them because they have no rest-of-season
+#: number -- but this same call prices MY roster, and a kicker the tool cannot price is a
+#: kicker it treats as unstartable, leaving a hole in the baseline lineup and inflating every
+#: candidate's gain. Latent for Critts, which starts neither.
+_SKILL_SLOT_IDS: tuple[int, ...] = (0, 2, 4, 6, 23, 16, 17)
 
 #: How many free agents to request. Sorted by percent-owned descending, so a cap keeps the
 #: players anyone would plausibly add and drops the long tail of never-rostered names.

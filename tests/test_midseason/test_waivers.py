@@ -7,6 +7,7 @@ that is worse than no recommender.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -14,7 +15,12 @@ import pytest
 
 from projections.draft.league_config import LeagueConfig
 from projections.ingest.espn_league import parse_free_agents, parse_rosters
-from projections.midseason.waivers import Candidate, rank_free_agents
+from projections.midseason.waivers import (
+    Candidate,
+    rank_free_agents,
+    remaining_points_by_espn_id,
+    weekly_projections_by_espn_id,
+)
 from projections.schemas import (
     _PYARROW_STR,
     InjuryStatus,
@@ -514,3 +520,112 @@ def test_a_float_player_id_column_does_not_crash() -> None:
     agents["player_id"] = agents["player_id"].astype("float64")
     [candidate] = _rank(agents, projections={"99": 20.0})
     assert candidate.player_id == 99
+
+
+# --- the two inputs, now in src and therefore testable -----------------------------------------
+
+
+def _kona(rows: list[tuple[int, int, dict[str, float] | None]]) -> dict[str, Any]:
+    """`(espn_id, defaultPositionId, week-1 raw stats or None)` -> a kona_player_info payload."""
+    players = []
+    for espn_id, position_id, stats in rows:
+        player: dict[str, Any] = {
+            "id": espn_id,
+            "fullName": f"Player {espn_id}",
+            "defaultPositionId": position_id,
+            "proTeamId": 1,
+        }
+        if stats is not None:
+            player["stats"] = [
+                {
+                    "scoringPeriodId": 1,
+                    "statSourceId": 1,
+                    "statSplitTypeId": 1,
+                    "stats": stats,
+                }
+            ]
+        players.append({"id": espn_id, "status": "FREEAGENT", "player": player})
+    return {"players": players}
+
+
+def test_weekly_projections_are_scored_under_the_league_ruleset() -> None:
+    """Not read off ESPN's `appliedTotal`. A free agent and a rostered player have to be valued
+    the same way, and the same way the rest of this repo values anybody."""
+    # statId 42 is receiving yards, 53 is receptions. Half-PPR: 100 yards + 4 catches = 12.0.
+    payload = _kona([(1, 3, {"42": 100.0, "53": 4.0})])
+    projections = weekly_projections_by_espn_id(payload, 1, Ruleset.espn_half())
+    assert projections["1"] == pytest.approx(12.0)
+
+
+def test_a_player_with_no_projection_is_absent_rather_than_zero() -> None:
+    """That absence is what makes him unstartable downstream -- which is how bye weeks work
+    without anything in this repo having a rule about bye weeks."""
+    payload = _kona([(1, 3, {"42": 100.0}), (2, 3, None)])
+    projections = weekly_projections_by_espn_id(payload, 1, Ruleset.espn_half())
+    assert "1" in projections
+    assert "2" not in projections
+
+
+def test_kickers_and_defenses_are_priced_even_though_they_cannot_be_ranked() -> None:
+    """This feed prices MY roster as well as the wire. A kicker the tool cannot price is a
+    kicker it treats as unstartable, leaving a hole in the baseline lineup and inflating every
+    candidate's gain."""
+    payload = _kona([(1, 5, {"42": 0.0}), (2, 16, {"42": 0.0})])  # K, DST
+    projections = weekly_projections_by_espn_id(payload, 1, Ruleset.espn_half())
+    assert set(projections) == {"1", "2"}
+
+
+def _run_state(week: int = 5, *, ir_player: str | None = None) -> Any:
+    """A minimal `MyTeamRun`-shaped object: `remaining_points_by_espn_id` reads two frames."""
+    roster = pd.DataFrame(
+        {
+            "gsis_id": pd.Series(["00-0000001", "00-0000002"], dtype=_PYARROW_STR),
+            "player": pd.Series(["Fit RB", "Hurt RB"], dtype=_PYARROW_STR),
+            "injury_status": pd.Series(["ACTIVE", ir_player or "ACTIVE"], dtype=_PYARROW_STR),
+        }
+    )
+    ros = pd.DataFrame(
+        {
+            "gsis_id": pd.Series(["00-0000001", "00-0000002"], dtype=_PYARROW_STR),
+            "season_mean_fpts": [100.0, 100.0],
+        }
+    )
+    return SimpleNamespace(roster=roster, ros=ros, week=week)
+
+
+def _small_id_map() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "espn_id": pd.Series(["1", "2"], dtype=_PYARROW_STR),
+            "gsis_id": pd.Series(["00-0000001", "00-0000002"], dtype=_PYARROW_STR),
+        }
+    )
+
+
+def test_a_drop_cost_is_discounted_by_the_injury_that_makes_him_droppable() -> None:
+    """The whole point of the column: you are looking for a drop BECAUSE somebody is hurt, and
+    a player on IR is worth less for the rest of the season than his projection says."""
+    remaining = remaining_points_by_espn_id(
+        _run_state(ir_player="INJURY_RESERVE"), _small_id_map(), week=5
+    )
+    assert remaining["1"] == pytest.approx(100.0)
+    # 13 games left, 4 missed: 9/13 of his projection.
+    assert remaining["2"] == pytest.approx(100.0 * 9 / 13)
+
+
+def test_the_horizon_follows_the_week_the_caller_asked_for() -> None:
+    """It used to be derived from `run.week` while everything else used the `--week` override,
+    so a `--week 12` run applied the adjustment over fifteen games instead of six."""
+    early = remaining_points_by_espn_id(
+        _run_state(week=2, ir_player="INJURY_RESERVE"), _small_id_map(), week=12
+    )
+    assert early["2"] == pytest.approx(100.0 * 2 / 6), "six games left at week 12, four missed"
+
+
+def test_a_player_the_pool_cannot_price_is_absent_from_the_mapping() -> None:
+    """Not zero. `_drop_candidate` reads the absence as "cannot price him" rather than "he is
+    worthless", which is what stops a kicker being recommended as a free drop."""
+    state = _run_state()
+    state.ros = state.ros.iloc[:1]
+    remaining = remaining_points_by_espn_id(state, _small_id_map(), week=5)
+    assert set(remaining) == {"1"}

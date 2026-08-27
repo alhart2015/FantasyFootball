@@ -28,13 +28,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 
+from projections.draft.assistant.performance_variance import SEASON_GAMES
+from projections.draft.backtest.espn_weekly import parse_espn_weekly
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import choose_starters
-from projections.midseason.injuries import weekly_multiplier
-from projections.schemas import InjuryStatus, RosterSlot, display_str, parse_injury_status
+from projections.ingest.espn_league import espn_gsis_crosswalk
+from projections.midseason.injuries import season_multiplier, weekly_multiplier
+from projections.midseason.my_team import MyTeamRun
+from projections.schemas import InjuryStatus, RosterSlot, Ruleset, display_str, parse_injury_status
 
 
 @dataclass(frozen=True)
@@ -318,3 +323,80 @@ def _drop_candidate(
         if cheapest is None or cost < cheapest.cost:
             cheapest = _Drop(player_id=row.player_id, player=row.player, cost=float(cost))
     return cheapest
+
+
+# ---------------------------------------------------------------------------------------------
+# The two inputs `rank_free_agents` needs, built from what ESPN and the pool give us.
+# ---------------------------------------------------------------------------------------------
+
+
+def weekly_projections_by_espn_id(
+    payload: Mapping[str, Any], week: int, ruleset: Ruleset
+) -> dict[str, float]:
+    """ESPN's weekly projections out of a `kona_player_info` payload, keyed by ESPN id.
+
+    **Keyed by ESPN id, not gsis.** `refresh_espn_weekly_projections` crosswalks through the
+    id_map and drops whoever it cannot resolve, which is exactly the just-signed player a waiver
+    tool exists to find. Rosters and free agents both arrive from ESPN, so the ESPN id is the
+    key both sides already share.
+
+    Scored under the league's own ruleset rather than read from ESPN's `appliedTotal`, so a free
+    agent and a rostered player are valued the same way — and the same way the rest of this repo
+    values anybody.
+
+    A player with no projection for the week is ABSENT from the mapping rather than present at
+    zero. That is what makes him unstartable downstream, which is how bye weeks work without a
+    rule about bye weeks.
+
+    Kickers and defenses are kept (`skill_positions_only=False`) because this also prices MY
+    roster, and a starter the tool cannot price is a starter it silently treats as unstartable.
+    """
+    parsed = parse_espn_weekly(
+        dict(payload), season=0, week=week, ruleset=ruleset, skill_positions_only=False
+    )
+    projected = parsed[parsed["projected_points"].notna()]
+    return {
+        str(espn_id): float(points)
+        for espn_id, points in zip(projected["espn_id"], projected["projected_points"], strict=True)
+    }
+
+
+def remaining_points_by_espn_id(
+    run: MyTeamRun, id_map: pd.DataFrame, *, week: int
+) -> dict[str, float]:
+    """Rest-of-season points per ESPN id — the cost side of a drop.
+
+    Injury-adjusted, because the point of this number is deciding who to let go: a player on IR
+    is worth less for the rest of the season than his projection says, and that is exactly the
+    situation in which you are looking for a drop candidate.
+
+    `week` rather than `run.week`, so a `--week` override moves the horizon with everything
+    else. Deriving it from `run.week` while the rest of the tool used the override applied the
+    adjustment over the wrong number of games.
+
+    A player the pool cannot price is ABSENT, not zero. `_drop_candidate` reads that absence as
+    "cannot price him" rather than "he is worthless", which is what stops a kicker being
+    recommended as a free drop.
+    """
+    crosswalk = espn_gsis_crosswalk(id_map)
+    by_gsis = dict(
+        zip(
+            run.ros["gsis_id"].astype(str),
+            run.ros["season_mean_fpts"].astype(float),
+            strict=True,
+        )
+    )
+    status_by_gsis = {
+        display_str(player.get("gsis_id")): parse_injury_status(player.get("injury_status"))[0]
+        for _, player in run.roster.iterrows()
+        if display_str(player.get("gsis_id"))
+    }
+    games_left = max(SEASON_GAMES - (week - 1), 0)
+    out: dict[str, float] = {}
+    for espn_id, gsis in crosswalk.items():
+        points = by_gsis.get(gsis)
+        if points is None:
+            continue
+        status = status_by_gsis.get(gsis, InjuryStatus.ACTIVE)
+        out[espn_id] = points * season_multiplier(status, games_remaining=games_left)
+    return out
