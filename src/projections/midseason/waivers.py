@@ -18,31 +18,22 @@ handles for free the three things that actually drive streaming, none of which n
 - **FLEX.** A receiver who beats my RB2 into the flex counts; one who does not, does not.
 - **Positional scarcity**, without anyone hand-writing what scarce means.
 
-Stage 2 — what the swap is worth in expected wins — is a separate, much more expensive
-calculation. See §5 of `docs/superpowers/specs/2026-08-26-waiver-recommender-design.md`. This
-module exists to make sure it only ever runs on candidates that could possibly matter.
+Stage 2 — what the swap is worth in expected wins, which is the OBJECTIVE — lives in
+`midseason.swap_impact`. It is a full Monte-Carlo season per candidate, and this module exists
+to make sure it only ever runs on candidates that could possibly matter. See §5 of
+`docs/superpowers/specs/2026-08-26-waiver-recommender-design.md`.
 """
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
 
-import numpy as np
 import pandas as pd
 
-from projections.draft.assistant.availability import PlayerAvailability
-from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.league_config import LeagueConfig
 from projections.draft.roster_eligibility import choose_starters
 from projections.midseason.injuries import weekly_multiplier
-from projections.midseason.standings import (
-    ProjectionInputError,
-    StandingsRun,
-    project_league_standings,
-)
 from projections.schemas import InjuryStatus, RosterSlot, display_str, parse_injury_status
 
 
@@ -113,7 +104,7 @@ class _LineupRow:
     projected: float | None
 
 
-def _player_id(player: Mapping[str, object]) -> int:
+def player_id(player: Mapping[str, object]) -> int:
     """An ESPN player id out of a pandas row.
 
     `float()` first, then `int()`. The column arrives as int64 normally, but any frame that has
@@ -146,7 +137,7 @@ def is_on_ir(player: Mapping[str, object]) -> bool:
 
 def _row(player: Mapping[str, object], projected: float | None) -> _LineupRow:
     return _LineupRow(
-        player_id=_player_id(player),
+        player_id=player_id(player),
         player=display_str(player.get("player")),
         position=display_str(player.get("pos")),
         # An IR player cannot legally start, whatever ESPN projects for him. `None` rather than
@@ -221,7 +212,7 @@ def rank_free_agents(
         _row(
             player,
             adjusted_weekly_points(
-                weekly_projections.get(str(_player_id(player))),
+                weekly_projections.get(str(player_id(player))),
                 _status(player),
                 source_is_injury_aware=source_is_injury_aware,
             ),
@@ -233,7 +224,7 @@ def rank_free_agents(
 
     candidates: list[Candidate] = []
     for _, agent in free_agents.iterrows():
-        espn_id = _player_id(agent)
+        espn_id = player_id(agent)
         status = _status(agent)
         projected = adjusted_weekly_points(
             weekly_projections.get(str(espn_id)),
@@ -327,213 +318,3 @@ def _drop_candidate(
         if cheapest is None or cost < cheapest.cost:
             cheapest = _Drop(player_id=row.player_id, player=row.player, cost=float(cost))
     return cheapest
-
-
-# ---------------------------------------------------------------------------------------------
-# Stage 2: what is the swap worth in expected wins?
-# ---------------------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class SwapImpact:
-    """A candidate, re-simulated with the swap applied.
-
-    The deltas are against a baseline computed once at the same seed — see `simulate_swaps`.
-    """
-
-    candidate: Candidate
-    delta_wins: float
-    delta_playoff_pct: float
-    delta_title_pct: float
-
-    @property
-    def helps(self) -> bool:
-        """Whether the move is worth making at all.
-
-        Expected wins is the whole point of stage 2: it is the only currency in which "better
-        this week" and "worse for the rest of the season" are the same unit, so a candidate
-        with a big lineup gain and a negative delta is a candidate the drop ruins.
-        """
-        return self.delta_wins > 0.0
-
-
-#: Standard error of a paired delta at 2,000 sims, measured by `scripts/measure_swap_noise.py`
-#: on a synthetic 16-team league. Deltas smaller than this are not distinguishable from
-#: simulation noise, and a caller printing them to three decimals is inventing precision.
-PAIRED_DELTA_NOISE = 0.062
-
-
-def simulate_swaps(
-    payload: Mapping[str, Any],
-    pool: pd.DataFrame,
-    id_map: pd.DataFrame,
-    availability: PlayerAvailability,
-    params: VarianceParams,
-    candidates: Sequence[Candidate],
-    *,
-    season: int,
-    my_team_id: int,
-    n_sims: int = 2000,
-    seed: int = 0,
-) -> list[SwapImpact]:
-    """Re-simulate the season with each swap applied. Expensive; run it on a shortlist.
-
-    **One baseline, one seed, differences only.** Two independent runs of the same league
-    differ by simulation noise alone, and at 2,000 sims that noise (sd 0.090 wins) is larger
-    than a realistic swap is worth. Every run here — the baseline and every candidate — starts
-    from `np.random.default_rng(seed)`, so the two sides share their draws and most of the
-    noise cancels. Measured: the paired difference carries sd 0.062 against 0.127 unpaired.
-
-    That is a 2x reduction rather than the order of magnitude common random numbers can give,
-    because `project_league_standings` reseeds internally and a roster change perturbs the draw
-    sequence. It is enough: a 10-point season swap reads at 3.7x its own noise. See
-    `scripts/measure_swap_noise.py`, which is the gate that established this and exits non-zero
-    if it stops holding.
-
-    Candidates whose player is not in the pool are skipped rather than simulated as a zero —
-    a free agent nobody projects would otherwise look like a roster downgrade, which is a
-    confident wrong answer rather than an absence of one.
-    """
-    baseline = _standings_row(
-        project_league_standings(
-            payload,
-            pool,
-            id_map,
-            availability,
-            params,
-            season=season,
-            n_sims=n_sims,
-            rng=np.random.default_rng(seed),
-        ),
-        my_team_id,
-    )
-
-    projectable = set(pool["gsis_id"].astype(str))
-    espn_to_gsis = _espn_to_gsis(id_map)
-
-    impacts: list[SwapImpact] = []
-    for candidate in candidates:
-        gsis = espn_to_gsis.get(str(candidate.player_id))
-        if gsis is None or gsis not in projectable:
-            continue
-        swapped = _payload_with_swap(payload, candidate, my_team_id=my_team_id)
-        after = _standings_row(
-            project_league_standings(
-                swapped,
-                pool,
-                id_map,
-                availability,
-                params,
-                season=season,
-                n_sims=n_sims,
-                # A FRESH generator at the SAME seed, not the one the baseline consumed.
-                # Reusing a spent generator makes every candidate share a different draw
-                # sequence from the baseline, which is the unpaired case wearing paired
-                # clothing.
-                rng=np.random.default_rng(seed),
-            ),
-            my_team_id,
-        )
-        impacts.append(
-            SwapImpact(
-                candidate=candidate,
-                delta_wins=after["projected_wins"] - baseline["projected_wins"],
-                delta_playoff_pct=after["make_playoffs_pct"] - baseline["make_playoffs_pct"],
-                delta_title_pct=after["champ_pct"] - baseline["champ_pct"],
-            )
-        )
-
-    impacts.sort(key=lambda impact: -impact.delta_wins)
-    return impacts
-
-
-def _standings_row(run: StandingsRun, my_team_id: int) -> dict[str, float]:
-    """My row of a `StandingsRun`, as plain floats."""
-    mine = run.standings[run.standings["team_id"] == my_team_id]
-    if mine.empty:
-        raise ProjectionInputError(
-            f"team {my_team_id} is not in the projected standings; it cannot be compared "
-            "against itself."
-        )
-    row = mine.iloc[0]
-    return {
-        "projected_wins": float(row["projected_wins"]),
-        "make_playoffs_pct": float(row["make_playoffs_pct"]),
-        "champ_pct": float(row["champ_pct"]),
-    }
-
-
-def _espn_to_gsis(id_map: pd.DataFrame) -> dict[str, str]:
-    """ESPN id -> gsis, deduplicated on the ESPN side.
-
-    `IdMapSchema` marks only `gsis_id` unique, and the live id_map holds ESPN ids that map to
-    two different players. Same dedup rule as `espn_league.espn_to_gsis`, which is where the
-    reasoning lives.
-    """
-    cross = id_map[["espn_id", "gsis_id"]].dropna().astype({"espn_id": str})
-    cross = cross.drop_duplicates("espn_id")
-    return dict(zip(cross["espn_id"].astype(str), cross["gsis_id"].astype(str), strict=True))
-
-
-def _payload_with_swap(
-    payload: Mapping[str, Any], candidate: Candidate, *, my_team_id: int
-) -> dict[str, Any]:
-    """A copy of the payload with the candidate added to my roster and the drop removed.
-
-    **The add takes the dropped player's place in the list, rather than being appended.**
-    Roster order reaches the simulator, which draws per player in that order, so appending
-    shifts every subsequent player onto a different draw and the paired comparison silently
-    becomes an unpaired one. Caught by `test_a_no_op_swap_reports_exactly_zero`, which read
-    0.05 wins for dropping a player and adding the same player back.
-
-    **Deep-copied.** Mutating the caller's payload would make the baseline and every subsequent
-    candidate compare against a roster that has been silently accumulating adds, and the
-    resulting deltas would look plausible.
-    """
-    swapped = copy.deepcopy(dict(payload))
-    for team in swapped.get("teams", []) or []:
-        if int(team.get("id", 0) or 0) != my_team_id:
-            continue
-        roster = team.setdefault("roster", {}).setdefault("entries", [])
-        entry = _roster_entry(candidate)
-        replaced = False
-        if candidate.drop_player_id is not None:
-            for index, existing in enumerate(roster):
-                if _entry_player_id(existing) == candidate.drop_player_id:
-                    # In place, and inheriting the slot: the simulator sets its own lineup, but
-                    # keeping the slot means a bench-for-bench swap leaves the payload
-                    # otherwise identical.
-                    entry["lineupSlotId"] = existing.get("lineupSlotId", 20)
-                    roster[index] = entry
-                    replaced = True
-                    break
-        if not replaced:
-            roster.append(entry)
-    return swapped
-
-
-def _roster_entry(candidate: Candidate) -> dict[str, Any]:
-    """A `teams[].roster.entries` entry for a player who was not on the roster."""
-    return {
-        #: BENCH by default. The simulator fills its own lineup from projections, so the slot
-        #: only has to be one that counts toward the roster rather than the right one.
-        "lineupSlotId": 20,
-        "playerId": candidate.player_id,
-        "playerPoolEntry": {
-            "player": {
-                "id": candidate.player_id,
-                "fullName": candidate.player,
-                "defaultPositionId": _ESPN_POSITION_IDS.get(candidate.position, 3),
-                "proTeamId": 0,
-            }
-        },
-    }
-
-
-#: Position name -> ESPN `defaultPositionId`, for writing a synthetic roster entry back.
-_ESPN_POSITION_IDS: dict[str, int] = {"QB": 1, "RB": 2, "WR": 3, "TE": 4, "K": 5, "DST": 16}
-
-
-def _entry_player_id(entry: Mapping[str, Any]) -> int:
-    player = (entry.get("playerPoolEntry", {}) or {}).get("player", {}) or {}
-    return int(player.get("id", entry.get("playerId", 0)) or 0)

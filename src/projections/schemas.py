@@ -218,9 +218,7 @@ def parse_injury_status(raw: object) -> tuple[InjuryStatus, str]:
 
     Missing, empty and NA all mean healthy -- ESPN omits the field for uninjured players.
     """
-    if raw is None or (not isinstance(raw, str) and pd.isna(raw)):
-        return InjuryStatus.ACTIVE, ""
-    text = str(raw).strip()
+    text = display_str(raw).strip()
     if not text:
         return InjuryStatus.ACTIVE, ""
     try:

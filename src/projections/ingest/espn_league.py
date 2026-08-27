@@ -184,6 +184,11 @@ ESPN_LINEUP_SLOTS: dict[int, RosterSlot] = {
 #: because `Position` covers skill positions only and rosters include K and D/ST.
 ESPN_POSITION_NAMES: dict[int, str] = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "DST"}
 
+#: The inverse. Derived rather than re-spelled -- a hand-written copy is a fourth place the
+#: same mapping can go stale, and this one is used to write synthetic roster entries back into
+#: a payload, where a wrong id is a plausible player at the wrong position.
+ESPN_POSITION_IDS: dict[str, int] = {name: id_ for id_, name in ESPN_POSITION_NAMES.items()}
+
 #: ESPN proTeamId -> NFL team code. Id 0 means "no pro team" (free agent).
 ESPN_PRO_TEAMS: dict[int, str] = {
     1: "ATL",
@@ -275,35 +280,7 @@ def fetch_league_payload(
         f"{url}?{query}",
         headers={"User-Agent": _UA, "Cookie": creds.cookie_header(), "Accept": "application/json"},
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 401:
-            raise EspnLeagueError(
-                f"ESPN returned 401 for league {league_id} season {season}: the espn_s2 cookie "
-                "is missing, expired, or belongs to an account that is not in this league. "
-                "SWID is not the problem — ESPN does not check it. Log in at fantasy.espn.com "
-                "and copy espn_s2 again."
-            ) from exc
-        if exc.code == 404:
-            raise EspnLeagueError(
-                f"ESPN has no league {league_id} for season {season} (404). If the league was "
-                "just renewed, the new season may not be published yet."
-            ) from exc
-        raise EspnLeagueError(f"ESPN HTTP {exc.code} for league {league_id}: {exc.reason}") from exc
-    except urllib.error.URLError as exc:
-        raise EspnLeagueError(f"Could not reach ESPN: {exc.reason}") from exc
-
-    # A multi-view read returns an object, but some ESPN endpoints wrap it in a
-    # one-element list. Normalize so the parsers only ever see one shape.
-    if isinstance(payload, list):
-        if not payload:
-            raise EspnLeagueError(f"ESPN returned an empty payload for league {league_id}.")
-        payload = payload[0]
-    if not isinstance(payload, dict):
-        raise EspnLeagueError(f"Unexpected ESPN payload shape: {type(payload).__name__}.")
-    return payload
+    return _get_json(request, timeout=timeout, league_id=league_id, season=season)
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +350,18 @@ def fetch_free_agents(
             "X-Fantasy-Filter": json.dumps(payload_filter),
         },
     )
+    return _get_json(request, timeout=timeout, league_id=league_id, season=season)
+
+
+def _get_json(
+    request: urllib.request.Request, *, timeout: float, league_id: int, season: int
+) -> dict[str, Any]:
+    """Issue an ESPN request and hand back one dict, or raise `EspnLeagueError` saying why.
+
+    Shared by every call in this module. The 401 advice in particular has to be identical
+    everywhere: the two callers had drifted to different wording for the same failure, and a
+    reader who follows one and not the other is being told half the fix.
+    """
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -380,16 +369,25 @@ def fetch_free_agents(
         if exc.code == 401:
             raise EspnLeagueError(
                 f"ESPN returned 401 for league {league_id} season {season}: the espn_s2 cookie "
-                "is missing, expired, or belongs to an account outside this league."
+                "is missing, expired, or belongs to an account that is not in this league. "
+                "SWID is not the problem — ESPN does not check it. Log in at fantasy.espn.com "
+                "and copy espn_s2 again."
             ) from exc
-        raise EspnLeagueError(
-            f"ESPN HTTP {exc.code} fetching free agents for league {league_id}: {exc.reason}"
-        ) from exc
+        if exc.code == 404:
+            raise EspnLeagueError(
+                f"ESPN has no league {league_id} for season {season} (404). If the league was "
+                "just renewed, the new season may not be published yet."
+            ) from exc
+        raise EspnLeagueError(f"ESPN HTTP {exc.code} for league {league_id}: {exc.reason}") from exc
     except urllib.error.URLError as exc:
         raise EspnLeagueError(f"Could not reach ESPN: {exc.reason}") from exc
 
+    # A multi-view read returns an object, but some ESPN endpoints wrap it in a one-element
+    # list. Normalize so the parsers only ever see one shape.
     if isinstance(payload, list):
-        payload = payload[0] if payload else {}
+        if not payload:
+            raise EspnLeagueError(f"ESPN returned an empty payload for league {league_id}.")
+        payload = payload[0]
     if not isinstance(payload, dict):
         raise EspnLeagueError(f"Unexpected ESPN payload shape: {type(payload).__name__}.")
     return payload
@@ -913,6 +911,24 @@ def team_records(schedule: pd.DataFrame, *, through_week: int | None = None) -> 
     return frame.astype({"team_id": int, "wins": int, "losses": int, "ties": int})
 
 
+def espn_gsis_crosswalk(id_map: pd.DataFrame) -> dict[str, str]:
+    """ESPN id -> gsis, deduplicated on the ESPN side. **The one crosswalk.**
+
+    `IdMapSchema` marks only `gsis_id` unique -- `espn_id` is nullable and non-unique, and the
+    live `data/raw/id_map.parquet` holds two ESPN ids that each map to two different players.
+    Left as-is, a join on it fans out: the same player lands on a roster twice, where he can
+    fill two starting slots at once.
+
+    Extracted because that rationale was being copied along with the code. Three modules built
+    this mapping separately -- `midseason.standings`, `midseason.swap_impact` and the waiver
+    CLI -- each reproducing the dedup and the paragraph explaining it, which is exactly how a
+    fix to one misses the other two.
+    """
+    cross = id_map[["espn_id", "gsis_id"]].dropna().astype({"espn_id": str})
+    cross = cross.drop_duplicates("espn_id")
+    return dict(zip(cross["espn_id"].astype(str), cross["gsis_id"].astype(str), strict=True))
+
+
 def espn_to_gsis(rosters: pd.DataFrame, id_map: pd.DataFrame) -> pd.Series:
     """ESPN `player_id` -> `gsis_id`, index-aligned to `rosters`. NA where unmapped.
 
@@ -921,18 +937,12 @@ def espn_to_gsis(rosters: pd.DataFrame, id_map: pd.DataFrame) -> pd.Series:
     each map to two different players. Left as-is, a join on it fans out: the same player lands
     on a roster twice, where he can fill two starting slots at once.
 
-    The one crosswalk. `midseason.standings.rosters_to_slots` and `midseason.my_team` both go
-    through it, so a doubly-mapped ESPN id cannot resolve to one player on the standings page
-    and another on the team page. They previously built it separately, line for line including
-    the dedup rationale, which is how a fix to one would have missed the other.
+    The frame-shaped form of `espn_gsis_crosswalk`, which owns the dedup and the reason for
+    it. `midseason.standings.rosters_to_slots` and `midseason.my_team` both go through this, so
+    a doubly-mapped ESPN id cannot resolve to one player on the standings page and another on
+    the team page.
     """
-    cross = (
-        id_map[["espn_id", "gsis_id"]]
-        .dropna()
-        .astype({"espn_id": str})
-        .drop_duplicates("espn_id")
-        .set_index("espn_id")["gsis_id"]
-    )
+    cross = pd.Series(espn_gsis_crosswalk(id_map), dtype=object)
     return rosters["player_id"].astype(str).map(cross)
 
 
