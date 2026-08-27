@@ -53,15 +53,28 @@ class SwapImpact:
     delta_wins: float
     delta_playoff_pct: float
     delta_title_pct: float
-    #: False when the swap could not be simulated -- the added player is not in the projection
-    #: pool, so there is nothing to put on the roster. The deltas are then zero and MEAN
+    #: False when the swap could not be simulated at all. The deltas are then zero and MEAN
     #: nothing, which is a different fact from a simulated zero and must not print the same.
     simulated: bool = True
-    #: False for a free add, which grows the roster: the two runs then simulate different-sized
-    #: teams, the draws stop lining up, and the delta carries the unpaired error rather than
-    #: the paired one. It is still the best estimate available; it is just less certain, and
-    #: `beats_noise` holds it to the wider bar.
-    paired: bool = True
+    #: Why, when it could not. Two causes -- one about the data (nobody projects him), one
+    #: about the roster (full, and nothing on it can be dropped) -- and they are different
+    #: facts, so a caller that prints only the first asserts something false whenever it was
+    #: the second.
+    not_simulated_because: str = ""
+
+    @property
+    def paired(self) -> bool:
+        """Whether the two runs simulated same-sized rosters.
+
+        False for a free add, which grows the roster: the draws stop lining up and the delta
+        carries the unpaired error rather than the paired one. Still the best estimate
+        available, just less certain, and `beats_noise` holds it to the wider bar.
+
+        **Derived, not stored.** It has to agree with what `_payload_with_swap` actually did,
+        and a stored field can be constructed disagreeing with the candidate it describes --
+        which the default on the unsimulated branch already did.
+        """
+        return self.candidate.drop_player_id is not None
 
     @property
     def helps(self) -> bool:
@@ -80,8 +93,11 @@ class SwapImpact:
         """Whether the delta is bigger than the simulation noise on it.
 
         A tool that prints 0.03 wins to two decimals when its own measured spread is 0.062 is
-        inventing precision. `scripts/measure_swap_noise.py` is the gate that established both
-        numbers and re-establishes them if the simulator changes.
+        inventing precision. `scripts/measure_swap_noise.py` established `PAIRED_DELTA_NOISE`
+        and re-checks that pairing still helps and that runs stay deterministic. It does NOT
+        assert either constant directly, so a simulator change that doubled the noise would
+        leave both stale while the script still exited 0. `UNPAIRED_DELTA_NOISE` is derived
+        rather than measured; see its own comment.
 
         An UNPAIRED delta -- a free add, which grows the roster so the draws stop lining up --
         is held to the wider unpaired bar. Printing it against the paired one would mark noise
@@ -171,7 +187,8 @@ def simulate_swaps(
         # earlier `drop_player_id is None` branch did -- reported the value of an overfilled
         # roster as the objective, directly under a line saying NO DROP FOUND.
         impossible = candidate.drop_player_id is None and not candidate.needs_no_drop
-        if impossible or gsis is None or gsis not in projectable:
+        unprojected = gsis is None or gsis not in projectable
+        if impossible or unprojected:
             impacts.append(
                 SwapImpact(
                     candidate=candidate,
@@ -179,6 +196,11 @@ def simulate_swaps(
                     delta_playoff_pct=0.0,
                     delta_title_pct=0.0,
                     simulated=False,
+                    not_simulated_because=(
+                        "no season projection for him"
+                        if unprojected
+                        else "your active roster is full and nobody on it can be dropped"
+                    ),
                 )
             )
             continue
@@ -209,20 +231,17 @@ def simulate_swaps(
                 delta_wins=after["projected_wins"] - baseline["projected_wins"],
                 delta_playoff_pct=after["make_playoffs_pct"] - baseline["make_playoffs_pct"],
                 delta_title_pct=after["champ_pct"] - baseline["champ_pct"],
-                # A free add GROWS my roster, so the two runs simulate different-sized teams
-                # and the draws stop lining up. Keyed on the SAME fact `_payload_with_swap`
-                # keys on -- whether a drop is applied -- because a `paired` flag that
-                # disagrees with the payload it describes is worse than no flag.
-                #
-                # An earlier version padded the baseline with an inert filler instead. The
-                # filler resolved to no gsis and `rosters_to_slots` dropped it before the
-                # draw, so the padded baseline was bit-identical to the plain one: the fix
-                # changed nothing and cost an extra Monte-Carlo season per candidate. Saying
-                # the delta is noisier is honest; pretending it is paired was not.
-                paired=candidate.drop_player_id is not None,
             )
         )
 
+    # Simulated candidates first, best delta first. An unsimulated one has no delta to rank on,
+    # so it sorts last on its lineup gain rather than being interleaved at a fictitious zero.
+    #
+    # Paired and unpaired deltas ARE ranked against each other, which mixes two precisions: a
+    # free add worth nothing can land at +0.10 from noise alone and outrank a swap genuinely
+    # worth +0.08. Accepted rather than hidden -- each row prints which floor it was judged
+    # against, so a reader can see it. Ranking them apart would need a common scale the two
+    # estimates do not have.
     impacts.sort(key=lambda i: (not i.simulated, -i.delta_wins, -i.candidate.lineup_gain))
     return impacts
 

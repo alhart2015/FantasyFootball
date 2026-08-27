@@ -48,7 +48,12 @@ from projections.ingest.injury_news import InjuryNote, fetch_injury_notes
 from projections.midseason.injuries import is_multi_week
 from projections.midseason.my_team import build_my_team
 from projections.midseason.standings import ProjectionInputError
-from projections.midseason.swap_impact import PAIRED_DELTA_NOISE, SwapImpact, simulate_swaps
+from projections.midseason.swap_impact import (
+    PAIRED_DELTA_NOISE,
+    UNPAIRED_DELTA_NOISE,
+    SwapImpact,
+    simulate_swaps,
+)
 from projections.midseason.waivers import (
     Candidate,
     player_id,
@@ -83,7 +88,10 @@ def _drop_line(candidate: Candidate) -> str:
     if candidate.is_free:
         return "no drop needed"
     if candidate.drop_player_id is None:
-        return "NO DROP FOUND — nobody droppable could be priced"
+        # Deliberately vague about the cause: a leftover can be undroppable because the pool
+        # cannot price him OR because he is on IR (dropping whom frees an IR slot, not the
+        # active one). Naming only the pricing reason was false whenever it was the other.
+        return "NO DROP FOUND — nobody on your bench can be dropped for him"
     return f"drop {candidate.drop_player}"
 
 
@@ -96,14 +104,19 @@ def _print_candidate(
     if impact is None:
         print(f"    +{candidate.lineup_gain:.1f} to this week's lineup")
     elif not impact.simulated:
-        # He is not in the projection pool, so there is nothing to put on the roster. Saying so
-        # matters: a blank here reads as "simulated, and it came to nothing".
+        # WHY it could not be simulated, not just that it could not. The two reasons are
+        # different facts and printing "no season projection for him" under a line that says
+        # his roster spot is the problem asserts something false about the data.
         print(
-            f"    NOT SIMULATED — no season projection for him. "
+            f"    NOT SIMULATED — {impact.not_simulated_because}. "
             f"+{candidate.lineup_gain:.1f} to this week's lineup is all we can say."
         )
     else:
-        certainty = "" if impact.beats_noise else "   (inside simulation noise)"
+        # The floor differs by regime, so the row says which one it was judged against --
+        # otherwise a free add reading "+0.09 (inside simulation noise)" contradicts a footer
+        # quoting 0.06.
+        floor = PAIRED_DELTA_NOISE if impact.paired else UNPAIRED_DELTA_NOISE
+        certainty = "" if impact.beats_noise else f"   (inside noise, floor {floor:.2f})"
         print(
             f"    {impact.delta_wins:+.2f} wins   "
             f"{impact.delta_playoff_pct * 100:+.1f}% playoffs   "
@@ -122,10 +135,11 @@ def _print_candidate(
         # the gap can be reported rather than swallowed, and keying the notice off `is_healthy`
         # alone made it silent. The reader should know we saw something we could not place.
         print("    ! ESPN reported a status we do not recognise; treated as healthy")
-    if impact is not None and impact.simulated and not impact.helps:
-        # `helps` was defined and never read, which is the finding pass 1 raised and pass 2
-        # found still open. This is the row the whole objective exists to catch: a real gain to
-        # this week's lineup that costs more over the season than it buys.
+    if impact is not None and impact.beats_noise and not impact.helps:
+        # Gated on `beats_noise` as well. Without it the line fired on a delta of -0.004 that
+        # the row above had just marked "(inside simulation noise)" -- two statements in two
+        # lines, flatly contradicting each other, on the majority of candidates. A number we
+        # cannot distinguish from zero cannot be said to LOWER anything.
         print("    ! this move LOWERS your expected wins — the drop costs more than the add adds")
     _print_note(note)
 
@@ -290,8 +304,10 @@ def run(args: argparse.Namespace) -> int:
         print("\n  Lineup gain only. Drop --fast to see what each move is worth in wins.")
     else:
         print(
-            f"\n  Δ wins is a paired simulation; anything under {PAIRED_DELTA_NOISE:.2f} is "
-            "inside its own noise. Roughly 140 season points to a win."
+            f"\n  Δ wins is a simulated difference. A swap is paired (same roster size both "
+            f"sides) and its noise floor is {PAIRED_DELTA_NOISE:.2f}; an add into an open spot "
+            f"grows the roster, so it is unpaired and its floor is "
+            f"{UNPAIRED_DELTA_NOISE:.2f}. Roughly 140 season points to a win."
         )
     return 0
 

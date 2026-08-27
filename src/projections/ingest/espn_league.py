@@ -371,7 +371,6 @@ def fetch_free_agents(
         league_id=league_id,
         season=season,
         what=f"fetching {'/'.join(statuses).lower()} players",
-        empty_is_fatal=False,
     )
 
 
@@ -382,7 +381,6 @@ def _get_json(
     league_id: int,
     season: int,
     what: str,
-    empty_is_fatal: bool = True,
 ) -> dict[str, Any]:
     """Issue an ESPN request and hand back one dict, or raise `EspnLeagueError` saying why.
 
@@ -391,10 +389,14 @@ def _get_json(
     reader who follows one and not the other is being told half the fix.
 
     `what` names the call in every message, because three of them go out per waiver run and a
-    bare "ESPN HTTP 500 for league 856974" says nothing about which. `empty_is_fatal=False`
-    keeps the free-agent caller's behaviour: an empty list there means "nobody matched the
-    filter", which is an answer, while for a league payload it means the league did not come
-    back.
+    bare "ESPN HTTP 500 for league 856974" says nothing about which.
+
+    **An empty top-level list is always fatal**, for every caller. A previous version let the
+    free-agent caller treat it as "nobody matched the filter" -- but that is what
+    `{"players": []}` means, and an empty LIST is a malformed response. Swallowing it made a
+    failed request read as an empty wire ("nothing would change your lineup — in a 16-team
+    league that is the usual answer"), and on the roster-pricing call it made my own starters
+    unprojectable, which inflates every candidate's gain with nothing printed to say so.
     """
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -407,7 +409,7 @@ def _get_json(
                 "SWID is not the problem — ESPN does not check it. Log in at fantasy.espn.com "
                 "and copy espn_s2 again."
             ) from exc
-        if exc.code == 404 and empty_is_fatal:
+        if exc.code == 404:
             raise EspnLeagueError(
                 f"ESPN has no league {league_id} for season {season} (404). If the league was "
                 "just renewed, the new season may not be published yet."
@@ -422,9 +424,7 @@ def _get_json(
     # list. Normalize so the parsers only ever see one shape.
     if isinstance(payload, list):
         if not payload:
-            if not empty_is_fatal:
-                return {}
-            raise EspnLeagueError(f"ESPN returned an empty payload for league {league_id}.")
+            raise EspnLeagueError(f"ESPN returned an empty payload {what} for league {league_id}.")
         payload = payload[0]
     if not isinstance(payload, dict):
         raise EspnLeagueError(f"Unexpected ESPN payload shape: {type(payload).__name__}.")

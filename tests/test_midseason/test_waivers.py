@@ -650,4 +650,7 @@ def test_a_player_on_ir_is_never_the_recommended_drop() -> None:
     agents = _players([(99, "Stud WR", "WR", "ACTIVE")])
     [candidate] = _rank(agents, projections={"99": 20.0}, remaining=remaining, roster=roster)
     assert not candidate.is_free, "the active roster is full"
-    assert candidate.drop_player != "Hurt WR", "dropping him frees an IR slot, not an active one"
+    # The POSITIVE assertion. `!= "Hurt WR"` also passes when no drop is found at all, which is
+    # a strictly worse outcome than naming him -- so it would have missed a regression that
+    # broke `_drop_candidate` entirely.
+    assert candidate.drop_player == "Bench0", "the cheapest priceable non-IR leftover"

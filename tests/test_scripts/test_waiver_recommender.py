@@ -5,8 +5,10 @@ are where the tool's honesty lives. Three of pass 1's findings were the CLI clai
 it had not done: an adjustment on a healthy player, "roster spot open" on a full roster, and a
 blank line where "we could not simulate him" belonged.
 
-No network: the printers take objects, and `test_the_whole_run_needs_no_network` drives `run`
-end to end with every fetch and file read patched.
+No network. The printers take objects; `test_a_missing_team_id_is_not_guessed_at` drives `run`
+itself with the league fetch patched, and stops at the team-id branch -- so the fetch surface is
+proven patchable, but the parquet reads, the free-agent calls and the injury-note calls are NOT
+exercised here. `tests/test_midseason/` covers the logic behind them.
 """
 
 from __future__ import annotations
@@ -146,10 +148,30 @@ def test_a_delta_inside_the_noise_is_marked(capsys: pytest.CaptureFixture[str]) 
     module = _module()
     candidate = _candidate()
     module._print_candidate(candidate, None, _impact(candidate, delta_wins=0.03))
-    assert "inside simulation noise" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "inside noise" in out
+    # The row names the floor it was judged against, because a swap and a free add are held to
+    # different ones -- a bare "inside noise" on a 0.09 free add contradicts a footer quoting
+    # the paired 0.06.
+    assert "floor 0.06" in out
 
     module._print_candidate(candidate, None, _impact(candidate, delta_wins=0.30))
-    assert "inside simulation noise" not in capsys.readouterr().out
+    assert "inside noise" not in capsys.readouterr().out
+
+
+def test_a_free_add_is_judged_against_the_wider_floor(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """0.09 wins is signal for a swap and noise for a free add, and the row says which."""
+    module = _module()
+    free = _candidate(needs_no_drop=True, drop_player_id=None, drop_player="", drop_cost=0.0)
+    module._print_candidate(free, None, _impact(free, delta_wins=0.09))
+    out = capsys.readouterr().out
+    assert "inside noise" in out and "floor 0.13" in out
+
+    swap = _candidate()
+    module._print_candidate(swap, None, _impact(swap, delta_wins=0.09))
+    assert "inside noise" not in capsys.readouterr().out
 
 
 # --- the write-up ---------------------------------------------------------------------------------
@@ -231,15 +253,22 @@ def test_a_missing_team_id_is_not_guessed_at(
     fail if `run` starts guessing.
     """
     module = _module()
-    monkeypatch.setattr(module, "fetch_league_payload", lambda *a, **k: _LEAGUE_PAYLOAD)
     monkeypatch.setattr(
         module.EspnCredentials, "resolve", classmethod(lambda cls, path=None: _CREDS)
     )
+    calls: list[str] = []
+
+    def spy(*args: object, **kwargs: object) -> dict[str, Any]:
+        calls.append("league")
+        return _LEAGUE_PAYLOAD
+
+    monkeypatch.setattr(module, "fetch_league_payload", spy)
     args = argparse.Namespace(**{**vars(_parse(module, _MINIMAL)), "team_id": None})
     assert module.run(args) == 2
     out = capsys.readouterr().out
     assert "--team-id is required" in out
     assert "Silence of the Lamb" in out, "it lists what you could pass"
+    assert calls == ["league"], "and it got there through the patched name, not the network"
 
 
 #: A league payload with two teams and nothing else -- enough for `parse_teams`.
@@ -252,26 +281,3 @@ _LEAGUE_PAYLOAD: dict[str, Any] = {
 }
 
 _CREDS = EspnCredentials(swid="{X}", espn_s2="s2")
-
-
-def test_the_whole_run_needs_no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The end-to-end shape: `run` reaches the ESPN calls and nothing else escapes.
-
-    It stops at the missing-team-id branch, which is the one path that needs no data files --
-    but it proves the fetch surface is patchable from a test, which is the property that keeps
-    this suite off the network.
-    """
-    calls: list[str] = []
-
-    def spy(*args: object, **kwargs: object) -> dict[str, Any]:
-        calls.append("league")
-        return _LEAGUE_PAYLOAD
-
-    module = _module()
-    monkeypatch.setattr(module, "fetch_league_payload", spy)
-    monkeypatch.setattr(
-        module.EspnCredentials, "resolve", classmethod(lambda cls, path=None: _CREDS)
-    )
-    args = argparse.Namespace(**{**vars(_parse(module, _MINIMAL)), "team_id": None})
-    assert module.run(args) == 2
-    assert calls == ["league"], "one call, and it went through the patched name"

@@ -165,6 +165,7 @@ def test_a_player_the_pool_cannot_project_comes_back_marked_not_simulated() -> N
     )
     assert not impact.simulated
     assert impact.delta_wins == 0.0, "a placeholder, not a measurement"
+    assert "no season projection" in impact.not_simulated_because
     assert not impact.helps, "an unsimulated candidate cannot be said to help"
     assert not impact.beats_noise
 
@@ -248,12 +249,14 @@ def test_a_free_add_is_reported_as_unpaired() -> None:
     assert swap.paired, "a swap replaces in place, so the rosters stay the same size"
     assert not free.paired, "a free add grows the roster, so the draws stop lining up"
     # And the wider bar is actually applied: a delta between the two floors counts for a swap
-    # and does not for a free add.
-    between = SwapImpact(
+    # and does not for a free add. `paired` is derived from the candidate, so the two cases are
+    # built from the two candidates rather than by overriding a field.
+    assert SwapImpact(
+        candidate=swap.candidate, delta_wins=0.09, delta_playoff_pct=0.0, delta_title_pct=0.0
+    ).beats_noise
+    assert not SwapImpact(
         candidate=free.candidate, delta_wins=0.09, delta_playoff_pct=0.0, delta_title_pct=0.0
-    )
-    assert SwapImpact(**{**between.__dict__, "paired": True}).beats_noise
-    assert not SwapImpact(**{**between.__dict__, "paired": False}).beats_noise
+    ).beats_noise
 
 
 def test_an_injury_does_not_leak_into_every_candidates_delta() -> None:
@@ -370,3 +373,6 @@ def test_an_impossible_move_is_never_simulated() -> None:
     [impact] = simulate_swaps(candidates=[stuck], **inputs)  # type: ignore[arg-type]
     assert not impact.simulated
     assert impact.delta_wins == 0.0
+    # And it says WHY. Printing "no season projection for him" here would assert something
+    # false about the data for a player who has a perfectly good projection.
+    assert "roster is full" in impact.not_simulated_because
