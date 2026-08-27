@@ -15,6 +15,7 @@ import pytest
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.league_config import LeagueConfig
+from projections.ingest.espn_league import parse_free_agents, parse_rosters
 from projections.midseason.waivers import Candidate, rank_free_agents, simulate_swaps
 from projections.schemas import (
     _PYARROW_STR,
@@ -484,3 +485,78 @@ def test_impacts_come_back_best_first() -> None:
     assert len(impacts) == 2
     assert impacts[0].delta_wins >= impacts[1].delta_wins
     assert impacts[0].candidate.player == "Waiver Stud", "best first, whatever order they arrive"
+
+
+# --- end to end, through the real parsers ------------------------------------------------------
+
+
+def _fa_payload(
+    player_id: int, name: str, position_id: int, *, status: str = "ACTIVE"
+) -> dict[str, Any]:
+    """`kona_player_info` shape, as `parse_free_agents` reads it."""
+    return {
+        "players": [
+            {
+                "id": player_id,
+                "status": "FREEAGENT",
+                "player": {
+                    "id": player_id,
+                    "fullName": name,
+                    "defaultPositionId": position_id,
+                    "proTeamId": 1,
+                    "injuryStatus": status,
+                    "ownership": {"percentOwned": 12.0},
+                },
+            }
+        ]
+    }
+
+
+def test_the_pipeline_runs_on_parser_output_not_hand_built_frames() -> None:
+    """The wiring test the web UI taught us to write.
+
+    Every other test here builds its frames by hand, which means none of them would notice
+    `parse_rosters` renaming a column or `parse_free_agents` producing a different id dtype.
+    This one starts from ESPN-shaped payloads and goes through the real parsers, so the seam
+    between ingest and the recommender is covered by something.
+    """
+    payload = espn_payload(played_weeks=0)
+    roster = parse_rosters(payload)
+    roster = roster[roster["team_id"] == MY_TEAM_ID]
+    assert not roster.empty, "the fixture league has rosters"
+
+    free_agents, warning = parse_free_agents(_fa_payload(900_002, "Wire Stud", 3), limit=50)
+    assert warning is None
+
+    # Everyone on my roster projects modestly; the free agent projects far above them, so he
+    # must crack the lineup whatever the fixture's slot layout happens to be.
+    projections = {str(pid): 8.0 for pid in roster["player_id"]}
+    projections["900002"] = 30.0
+    remaining = {str(pid): 50.0 for pid in roster["player_id"]}
+
+    candidates = rank_free_agents(roster, free_agents, projections, remaining, LEAGUE)
+    assert [c.player for c in candidates] == ["Wire Stud"]
+    assert candidates[0].lineup_gain > 0
+    assert candidates[0].position == "WR"
+    assert candidates[0].percent_owned == pytest.approx(12.0)
+
+
+def test_an_injured_free_agent_survives_the_parsers_with_his_status() -> None:
+    """Both sides of a swap are compared on `injury_status`, and it has to reach the
+    recommender from the parser rather than from a fixture that happens to spell it right."""
+    payload = espn_payload(played_weeks=0)
+    roster = parse_rosters(payload)
+    roster = roster[roster["team_id"] == MY_TEAM_ID]
+    free_agents, _ = parse_free_agents(
+        _fa_payload(900_003, "Hurt Stud", 3, status="QUESTIONABLE"), limit=50
+    )
+    projections = {str(pid): 8.0 for pid in roster["player_id"]}
+    projections["900003"] = 30.0
+    remaining = {str(pid): 50.0 for pid in roster["player_id"]}
+
+    [candidate] = rank_free_agents(roster, free_agents, projections, remaining, LEAGUE)
+    assert candidate.injury_status is InjuryStatus.QUESTIONABLE
+    # 30.0 x 0.86 = 25.8, so the gain is smaller than the healthy version would give.
+    healthy, _ = parse_free_agents(_fa_payload(900_003, "Fit Stud", 3), limit=50)
+    [fit] = rank_free_agents(roster, healthy, projections, remaining, LEAGUE)
+    assert candidate.lineup_gain < fit.lineup_gain

@@ -334,9 +334,15 @@ def fetch_free_agents(
     *,
     scoring_period: int | None = None,
     limit: int = DEFAULT_FREE_AGENT_LIMIT,
+    statuses: tuple[str, ...] = FREE_AGENT_STATUSES,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
-    """GET the players nobody in this league rosters.
+    """GET players by roster status, with their projections for one scoring period.
+
+    Defaults to the players nobody rosters, which is what the name is about. `statuses` opens
+    the same call to `("ONTEAM",)` -- the players who ARE rostered -- because the waiver
+    recommender needs both sides priced by one source: comparing a starter to a free agent
+    whose projection came from a different feed, scored a different way, is not a comparison.
 
     **The league endpoint, not `leaguedefaults`.** `external_projections.py` also asks for
     `kona_player_info`, but against the generic player universe, which has no idea who is
@@ -349,7 +355,7 @@ def fetch_free_agents(
     """
     payload_filter = {
         "players": {
-            "filterStatus": {"value": list(FREE_AGENT_STATUSES)},
+            "filterStatus": {"value": list(statuses)},
             "filterSlotIds": {"value": list(_SKILL_SLOT_IDS)},
             "limit": int(limit),
             "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
