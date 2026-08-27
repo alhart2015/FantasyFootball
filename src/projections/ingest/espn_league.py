@@ -280,7 +280,9 @@ def fetch_league_payload(
         f"{url}?{query}",
         headers={"User-Agent": _UA, "Cookie": creds.cookie_header(), "Accept": "application/json"},
     )
-    return _get_json(request, timeout=timeout, league_id=league_id, season=season)
+    return _get_json(
+        request, timeout=timeout, league_id=league_id, season=season, what="fetching the league"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -300,11 +302,16 @@ FREE_AGENT_STATUSES: tuple[str, ...] = ("FREEAGENT", "WAIVERS")
 #: FLEX (23) admits nobody the position slots do not, but ESPN indexes some players only by
 #: their flex eligibility, so asking costs nothing and omitting it can silently lose one.
 #:
-#: **K and D/ST are included even though the VORP pool holds neither.** They cannot be RANKED
-#: as adds, and `rank_free_agents` will not surface them because they have no rest-of-season
-#: number -- but this same call prices MY roster, and a kicker the tool cannot price is a
-#: kicker it treats as unstartable, leaving a hole in the baseline lineup and inflating every
-#: candidate's gain. Latent for Critts, which starts neither.
+#: **K and D/ST are included because this same call prices MY roster** (via
+#: `statuses=("ONTEAM",)`), and a kicker the tool cannot price is a kicker it treats as
+#: unstartable -- leaving a hole in the baseline lineup and inflating every candidate's gain.
+#:
+#: They are NOT filtered out of the free-agent side, and in a league with a K or D/ST starting
+#: slot a free-agent kicker with a weekly projection will therefore be ranked as an add and come
+#: back `simulated=False` from stage 2, because the pool holds no rest-of-season number for him.
+#: (An earlier comment claimed `rank_free_agents` would not surface him -- it gates on
+#: `lineup_gain`, not on `remaining_points`.) Latent for Critts, which starts neither; the fix
+#: when it stops being latent is a separate slot set per call, not a filter after the fact.
 _SKILL_SLOT_IDS: tuple[int, ...] = (0, 2, 4, 6, 23, 16, 17)
 
 #: How many free agents to request. Sorted by percent-owned descending, so a cap keeps the
@@ -358,17 +365,36 @@ def fetch_free_agents(
             "X-Fantasy-Filter": json.dumps(payload_filter),
         },
     )
-    return _get_json(request, timeout=timeout, league_id=league_id, season=season)
+    return _get_json(
+        request,
+        timeout=timeout,
+        league_id=league_id,
+        season=season,
+        what=f"fetching {'/'.join(statuses).lower()} players",
+        empty_is_fatal=False,
+    )
 
 
 def _get_json(
-    request: urllib.request.Request, *, timeout: float, league_id: int, season: int
+    request: urllib.request.Request,
+    *,
+    timeout: float,
+    league_id: int,
+    season: int,
+    what: str,
+    empty_is_fatal: bool = True,
 ) -> dict[str, Any]:
     """Issue an ESPN request and hand back one dict, or raise `EspnLeagueError` saying why.
 
     Shared by every call in this module. The 401 advice in particular has to be identical
     everywhere: the two callers had drifted to different wording for the same failure, and a
     reader who follows one and not the other is being told half the fix.
+
+    `what` names the call in every message, because three of them go out per waiver run and a
+    bare "ESPN HTTP 500 for league 856974" says nothing about which. `empty_is_fatal=False`
+    keeps the free-agent caller's behaviour: an empty list there means "nobody matched the
+    filter", which is an answer, while for a league payload it means the league did not come
+    back.
     """
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -381,19 +407,23 @@ def _get_json(
                 "SWID is not the problem — ESPN does not check it. Log in at fantasy.espn.com "
                 "and copy espn_s2 again."
             ) from exc
-        if exc.code == 404:
+        if exc.code == 404 and empty_is_fatal:
             raise EspnLeagueError(
                 f"ESPN has no league {league_id} for season {season} (404). If the league was "
                 "just renewed, the new season may not be published yet."
             ) from exc
-        raise EspnLeagueError(f"ESPN HTTP {exc.code} for league {league_id}: {exc.reason}") from exc
+        raise EspnLeagueError(
+            f"ESPN HTTP {exc.code} {what} for league {league_id}: {exc.reason}"
+        ) from exc
     except urllib.error.URLError as exc:
-        raise EspnLeagueError(f"Could not reach ESPN: {exc.reason}") from exc
+        raise EspnLeagueError(f"Could not reach ESPN {what}: {exc.reason}") from exc
 
     # A multi-view read returns an object, but some ESPN endpoints wrap it in a one-element
     # list. Normalize so the parsers only ever see one shape.
     if isinstance(payload, list):
         if not payload:
+            if not empty_is_fatal:
+                return {}
             raise EspnLeagueError(f"ESPN returned an empty payload for league {league_id}.")
         payload = payload[0]
     if not isinstance(payload, dict):
@@ -951,7 +981,11 @@ def espn_to_gsis(rosters: pd.DataFrame, id_map: pd.DataFrame) -> pd.Series:
     the team page.
     """
     cross = pd.Series(espn_gsis_crosswalk(id_map), dtype=object)
-    return rosters["player_id"].astype(str).map(cross)
+    # Back to the nullable string dtype the id_map carries. `pd.Series(dict, dtype=object)`
+    # makes `.map` produce object/NaN, and CLAUDE.md is explicit that object-plus-NaN is the
+    # shape that quietly loses data downstream -- the previous `.set_index()` form preserved it
+    # by accident, and one caller (`standings.rosters_to_slots`) never re-casts.
+    return rosters["player_id"].astype(str).map(cross).astype(_PYARROW_STR)
 
 
 def parse_draft_picks(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFrame:

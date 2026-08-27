@@ -58,6 +58,7 @@ from projections.midseason.waivers import (
 )
 from projections.schemas import (
     _PYARROW_STR,
+    InjuryStatus,
     VorpTableSchema,
     display_str,
     parse_injury_status,
@@ -115,6 +116,17 @@ def _print_candidate(
     # test claimed an adjustment on players nothing was adjusted for.
     if not candidate.injury_status.is_healthy:
         print(f"    ! {candidate.injury_status.value} — adjusted for this")
+    elif candidate.injury_status is InjuryStatus.UNKNOWN:
+        # `UNKNOWN` counts as healthy on purpose -- an unrecognised status is a gap in our
+        # mapping, not evidence about the player. But `injury_status_raw` exists precisely so
+        # the gap can be reported rather than swallowed, and keying the notice off `is_healthy`
+        # alone made it silent. The reader should know we saw something we could not place.
+        print("    ! ESPN reported a status we do not recognise; treated as healthy")
+    if impact is not None and impact.simulated and not impact.helps:
+        # `helps` was defined and never read, which is the finding pass 1 raised and pass 2
+        # found still open. This is the row the whole objective exists to catch: a real gain to
+        # this week's lineup that costs more over the season than it buys.
+        print("    ! this move LOWERS your expected wins — the drop costs more than the add adds")
     _print_note(note)
 
 
@@ -255,12 +267,16 @@ def run(args: argparse.Namespace) -> int:
     hurt = [int(c.player_id) for c in shortlist if not c.injury_status.is_healthy]
     notes = fetch_injury_notes([*mine_hurt, *hurt]) if (mine_hurt or hurt) else {}
 
-    if mine_hurt:
+    # Gated on there being something to SHOW, not on there being someone hurt: ESPN has no
+    # write-up for plenty of designated players, and the header printed above an empty section.
+    shown = [
+        (player, notes[player_id(player)])
+        for _, player in roster.iterrows()
+        if player_id(player) in notes
+    ]
+    if shown:
         print("\n  on your roster:")
-        for _, player in roster.iterrows():
-            note = notes.get(player_id(player))
-            if note is None:
-                continue
+        for player, note in shown:
             status, _ = parse_injury_status(player.get("injury_status"))
             print(f"    {display_str(player.get('player'))} — {status.value}")
             _print_note(note, indent="      ")

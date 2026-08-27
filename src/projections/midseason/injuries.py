@@ -73,8 +73,8 @@ def weekly_multiplier(status: InjuryStatus, *, source_is_injury_aware: bool = Fa
     """What share of ONE week's projection this player is expected to deliver.
 
     `source_is_injury_aware` is the double-discount guard, and it is not optional politeness.
-    ESPN's weekly feed already zeroes players it lists as `Out` — of 1,475 such designations
-    reaching the feed, exactly one carried a projection above five points. Multiplying an
+    ESPN's weekly feed already zeroes players it lists as `Out` — of the 1,661 such
+    designations measured, exactly one carried a projection above five points. Multiplying an
     already-zeroed projection by zero again is arithmetically harmless; multiplying an already
     *reduced* one by 0.04 is not, and either way the resulting number looks perfectly
     plausible, which is what makes it dangerous.

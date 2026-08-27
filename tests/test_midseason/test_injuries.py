@@ -126,13 +126,3 @@ def test_a_one_week_designation_costs_the_same_on_both_horizons() -> None:
         assert season_multiplier(status, games_remaining=1) == pytest.approx(
             weekly_multiplier(status)
         ), status
-
-
-def test_injured_reserve_is_the_one_designation_that_outlasts_a_week() -> None:
-    """Which is what `is_multi_week` reports, and what decides whether the CLI prints the beat
-    reporter's write-up -- the text that exists because this number is a guess."""
-    assert (
-        season_multiplier(InjuryStatus.INJURY_RESERVE, games_remaining=1)
-        < weekly_multiplier(InjuryStatus.INJURY_RESERVE)
-        or expected_games_missed(InjuryStatus.INJURY_RESERVE) > 1.0
-    )

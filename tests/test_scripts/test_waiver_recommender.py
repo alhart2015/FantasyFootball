@@ -5,8 +5,8 @@ are where the tool's honesty lives. Three of pass 1's findings were the CLI clai
 it had not done: an adjustment on a healthy player, "roster spot open" on a full roster, and a
 blank line where "we could not simulate him" belonged.
 
-No network: the printers take objects, and the one end-to-end check drives `main` with every
-fetch monkeypatched.
+No network: the printers take objects, and `test_the_whole_run_needs_no_network` drives `run`
+end to end with every fetch and file read patched.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from projections.ingest.espn_league import EspnCredentials
 from projections.ingest.injury_news import InjuryNote
 from projections.midseason.swap_impact import SwapImpact
 from projections.midseason.waivers import Candidate
@@ -220,7 +221,57 @@ def test_fast_is_available_for_when_seconds_matter() -> None:
     assert _parse(_module(), [*_MINIMAL, "--fast"]).fast is True
 
 
-def test_a_missing_team_id_is_not_guessed_at() -> None:
+def test_a_missing_team_id_is_not_guessed_at(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """`run` lists the league's teams and exits 2 rather than picking one. Choosing a team for
-    the user is the one thing this tool must never do."""
-    assert _parse(_module(), _MINIMAL).team_id is None
+    the user is the one thing this tool must never do.
+
+    Drives `run` itself -- asserting on the PARSED ARGUMENTS, as an earlier version did, cannot
+    fail if `run` starts guessing.
+    """
+    module = _module()
+    monkeypatch.setattr(module, "fetch_league_payload", lambda *a, **k: _LEAGUE_PAYLOAD)
+    monkeypatch.setattr(
+        module.EspnCredentials, "resolve", classmethod(lambda cls, path=None: _CREDS)
+    )
+    args = argparse.Namespace(**{**vars(_parse(module, _MINIMAL)), "team_id": None})
+    assert module.run(args) == 2
+    out = capsys.readouterr().out
+    assert "--team-id is required" in out
+    assert "Silence of the Lamb" in out, "it lists what you could pass"
+
+
+#: A league payload with two teams and nothing else -- enough for `parse_teams`.
+_LEAGUE_PAYLOAD: dict[str, Any] = {
+    "teams": [
+        {"id": 17, "name": "Silence of the Lamb", "owners": []},
+        {"id": 3, "name": "HTTRedhogs", "owners": []},
+    ],
+    "members": [],
+}
+
+_CREDS = EspnCredentials(swid="{X}", espn_s2="s2")
+
+
+def test_the_whole_run_needs_no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The end-to-end shape: `run` reaches the ESPN calls and nothing else escapes.
+
+    It stops at the missing-team-id branch, which is the one path that needs no data files --
+    but it proves the fetch surface is patchable from a test, which is the property that keeps
+    this suite off the network.
+    """
+    calls: list[str] = []
+
+    def spy(*args: object, **kwargs: object) -> dict[str, Any]:
+        calls.append("league")
+        return _LEAGUE_PAYLOAD
+
+    module = _module()
+    monkeypatch.setattr(module, "fetch_league_payload", spy)
+    monkeypatch.setattr(
+        module.EspnCredentials, "resolve", classmethod(lambda cls, path=None: _CREDS)
+    )
+    args = argparse.Namespace(**{**vars(_parse(module, _MINIMAL)), "team_id": None})
+    assert module.run(args) == 2
+    assert calls == ["league"], "one call, and it went through the patched name"
