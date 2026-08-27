@@ -7,12 +7,31 @@ that is worse than no recommender.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pandas as pd
 import pytest
 
+from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.league_config import LeagueConfig
-from projections.midseason.waivers import Candidate, rank_free_agents
-from projections.schemas import _PYARROW_STR, InjuryStatus, RosterSlot, Ruleset
+from projections.midseason.waivers import Candidate, rank_free_agents, simulate_swaps
+from projections.schemas import (
+    _PYARROW_STR,
+    InjuryStatus,
+    RosterSlot,
+    Ruleset,
+    VorpTableSchema,
+)
+from tests.test_midseason.conftest import (
+    MY_TEAM_ID,
+    POSITIONS,
+    TEAM_IDS,
+    espn_payload,
+    espn_player_id,
+    id_map,
+    vorp_pool,
+)
 
 #: Critts: seven starters, five bench, two IR.
 LEAGUE = LeagueConfig(
@@ -299,3 +318,169 @@ def test_candidates_come_back_best_first() -> None:
 
 def test_an_empty_wire_is_an_empty_list_not_an_error() -> None:
     assert _rank(_players([])) == []
+
+
+# --- stage 2: what the swap is worth in wins -------------------------------------------------
+
+
+#: A free agent nobody rosters, projected above everyone. `vorp_pool` contains only rostered
+#: players and gives MY team the strongest roster, so no rostered player is an upgrade -- which
+#: is realistic for a league leader and useless for testing that an upgrade registers.
+FREE_AGENT_ESPN_ID = 900_001
+FREE_AGENT_GSIS = "00-9000001"
+
+
+def _pool_with_free_agent() -> pd.DataFrame:
+    extra = pd.DataFrame(
+        [
+            {
+                "gsis_id": FREE_AGENT_GSIS,
+                "full_name": "Waiver Stud",
+                "position": "WR",
+                "season_mean_fpts": 400.0,
+                "vorp": 320.0,
+                "replacement_fpts": 80.0,
+                "is_rookie": False,
+            }
+        ]
+    )
+    frame = pd.concat([vorp_pool(), extra], ignore_index=True)
+    frame["gsis_id"] = frame["gsis_id"].astype(_PYARROW_STR)
+    frame["position"] = frame["position"].astype(_PYARROW_STR)
+    frame["full_name"] = frame["full_name"].astype(_PYARROW_STR)
+    return VorpTableSchema.validate(frame)
+
+
+def _id_map_with_free_agent() -> pd.DataFrame:
+    extra = pd.DataFrame(
+        {
+            "espn_id": pd.Series([str(FREE_AGENT_ESPN_ID)], dtype=_PYARROW_STR),
+            "gsis_id": pd.Series([FREE_AGENT_GSIS], dtype=_PYARROW_STR),
+        }
+    )
+    return pd.concat([id_map(), extra], ignore_index=True)
+
+
+def _sim_inputs() -> dict[str, object]:
+    """The shared synthetic league, plus the pieces `simulate_swaps` needs."""
+    pool = _pool_with_free_agent()
+    return {
+        "payload": espn_payload(played_weeks=0),
+        "pool": pool,
+        "id_map": _id_map_with_free_agent(),
+        "availability": PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={}),
+        "params": VarianceParams.load(),
+        "season": 2026,
+        "my_team_id": MY_TEAM_ID,
+        "n_sims": 60,
+    }
+
+
+def _candidate(
+    player_id: int, name: str, *, drop_id: int | None = None, position: str = "RB"
+) -> Candidate:
+    return Candidate(
+        player_id=player_id,
+        player=name,
+        position=position,
+        nfl_team="KC",
+        lineup_gain=5.0,
+        projected=15.0,
+        injury_status=InjuryStatus.ACTIVE,
+        on_waivers=False,
+        percent_owned=40.0,
+        drop_player_id=drop_id,
+        drop_player="" if drop_id is None else f"Player {drop_id}",
+        drop_cost=10.0,
+    )
+
+
+def test_a_no_op_swap_reports_exactly_zero() -> None:
+    """The load-bearing property. Dropping a player and adding the same player back is a
+    change of nothing, so a paired simulation must report 0.0 -- not "close to zero".
+
+    If this ever returns a small non-zero number, the two runs are not sharing their draws and
+    every delta the tool prints is simulation noise wearing a decimal point.
+    """
+    inputs = _sim_inputs()
+    mine = espn_player_id(MY_TEAM_ID, 0)
+    [impact] = simulate_swaps(
+        # Same id, same name, same position: literally the roster it already has.
+        candidates=[_candidate(mine, "Player 17-0", drop_id=mine, position=POSITIONS[0])],
+        **inputs,  # type: ignore[arg-type]
+    )
+    assert impact.delta_wins == 0.0
+    assert impact.delta_playoff_pct == 0.0
+    assert impact.delta_title_pct == 0.0
+
+
+def test_the_same_candidate_twice_reports_the_same_number() -> None:
+    """Determinism, which pairing is worthless without. Not approximately the same -- the
+    same, because both runs start from a generator seeded identically."""
+    inputs = _sim_inputs()
+    candidate = _candidate(
+        espn_player_id(TEAM_IDS[1], 0), "Somebody", drop_id=espn_player_id(MY_TEAM_ID, 5)
+    )
+    first = simulate_swaps(candidates=[candidate], **inputs)  # type: ignore[arg-type]
+    second = simulate_swaps(candidates=[candidate], **inputs)  # type: ignore[arg-type]
+    assert first[0].delta_wins == second[0].delta_wins
+
+
+def test_adding_a_better_player_helps_and_the_tool_says_so() -> None:
+    """The direction check: a 400-point free agent replacing a bench player must raise my
+    projected wins, and `helps` must agree with the sign."""
+    inputs = _sim_inputs()
+    my_bench_wr = espn_player_id(MY_TEAM_ID, 4)
+    [impact] = simulate_swaps(
+        candidates=[
+            _candidate(FREE_AGENT_ESPN_ID, "Waiver Stud", drop_id=my_bench_wr, position="WR")
+        ],
+        **inputs,  # type: ignore[arg-type]
+    )
+    assert impact.delta_wins > 0.0
+    assert impact.helps
+
+
+def test_a_player_the_pool_cannot_project_is_skipped_not_zeroed() -> None:
+    """A free agent nobody projects would simulate as a roster downgrade, which is a confident
+    wrong answer rather than an absence of one."""
+    inputs = _sim_inputs()
+    impacts = simulate_swaps(
+        candidates=[_candidate(999_999, "Unknown Rookie", drop_id=espn_player_id(MY_TEAM_ID, 5))],
+        **inputs,  # type: ignore[arg-type]
+    )
+    assert impacts == []
+
+
+def test_the_caller_payload_is_not_mutated() -> None:
+    """Every candidate must be compared against the ORIGINAL roster. Mutating in place would
+    have each swap build on the last, and the deltas would still look plausible."""
+    inputs = _sim_inputs()
+    payload = cast("dict[str, Any]", inputs["payload"])
+    before = len(next(t for t in payload["teams"] if t["id"] == MY_TEAM_ID)["roster"]["entries"])
+    simulate_swaps(
+        candidates=[
+            _candidate(espn_player_id(TEAM_IDS[1], i), f"Add {i}", drop_id=None) for i in range(3)
+        ],
+        **inputs,  # type: ignore[arg-type]
+    )
+    after = len(next(t for t in payload["teams"] if t["id"] == MY_TEAM_ID)["roster"]["entries"])
+    assert before == after
+
+
+def test_impacts_come_back_best_first() -> None:
+    inputs = _sim_inputs()
+    my_bench_wr = espn_player_id(MY_TEAM_ID, 4)
+    impacts = simulate_swaps(
+        candidates=[
+            # The weakest team's tight end -- a real downgrade for a league leader.
+            _candidate(
+                espn_player_id(TEAM_IDS[-1], 5), "Scrub", drop_id=my_bench_wr, position="TE"
+            ),
+            _candidate(FREE_AGENT_ESPN_ID, "Waiver Stud", drop_id=my_bench_wr, position="WR"),
+        ],
+        **inputs,  # type: ignore[arg-type]
+    )
+    assert len(impacts) == 2
+    assert impacts[0].delta_wins >= impacts[1].delta_wins
+    assert impacts[0].candidate.player == "Waiver Stud", "best first, whatever order they arrive"
