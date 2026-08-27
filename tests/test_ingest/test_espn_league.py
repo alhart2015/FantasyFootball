@@ -7,6 +7,7 @@ shaped like a real ESPN multi-view response.
 from __future__ import annotations
 
 import json
+import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +21,13 @@ from projections.ingest.espn_league import (
     EspnCredentials,
     EspnLeagueError,
     build_league_config,
+    fetch_free_agents,
+    fetch_league_payload,
     find_my_team_id,
     parse_draft_order,
     parse_draft_picks,
     parse_draft_settings,
+    parse_free_agents,
     parse_roster_slots,
     parse_rosters,
     parse_ruleset,
@@ -34,7 +38,13 @@ from projections.ingest.espn_league import (
     team_records,
     write_league_snapshot,
 )
-from projections.schemas import _RULESET_NAME_VALUES, RosterSlot, Team
+from projections.schemas import (
+    _RULESET_NAME_VALUES,
+    InjuryStatus,
+    RosterSlot,
+    Team,
+    parse_injury_status,
+)
 
 _MY_SWID = "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"
 
@@ -834,3 +844,254 @@ def test_the_reported_week_count_is_the_one_used(tmp_path: Path) -> None:
 
     records = pd.read_csv(tmp_path / "records.tsv", sep="	").set_index("team_id")
     assert records.loc[1, "wins"] == 2, "week 14 counts; a bound of 13 would drop it"
+
+
+# --- injury status ------------------------------------------------------------------------------
+
+
+def test_parse_rosters_carries_injury_status() -> None:
+    """Thrown away until now, which meant every downstream projection treated a player on IR
+    as fully healthy -- the exact case the waiver recommender exists for."""
+    payload = _payload()
+    entries = payload["teams"][0]["roster"]["entries"]
+    entries[0]["playerPoolEntry"]["player"]["injuryStatus"] = "INJURY_RESERVE"
+    rosters = parse_rosters(payload)
+    allen = rosters[rosters["player"] == "Josh Allen"].iloc[0]
+    assert allen["injury_status"] == InjuryStatus.INJURY_RESERVE
+    assert allen["injury_status_raw"] == "INJURY_RESERVE"
+
+
+def test_a_player_with_no_injury_field_reads_as_active() -> None:
+    """ESPN omits the field for healthy players, which is the overwhelming majority of rows."""
+    rosters = parse_rosters(_payload())
+    assert set(rosters["injury_status"]) == {InjuryStatus.ACTIVE}
+    assert set(rosters["injury_status_raw"]) == {""}
+
+
+def test_an_unrecognised_status_is_healthy_and_reported_not_swallowed() -> None:
+    """ESPN adds statuses. One we do not know is a gap in our mapping, not evidence about the
+    player -- so inventing an absence from it would quietly move every number he touches. But
+    silently reading it as healthy is how nobody finds the gap, so the raw text is carried."""
+    payload = _payload()
+    payload["teams"][0]["roster"]["entries"][0]["playerPoolEntry"]["player"]["injuryStatus"] = (
+        "PERSONAL_MATTER"
+    )
+    rosters = parse_rosters(payload)
+    allen = rosters[rosters["player"] == "Josh Allen"].iloc[0]
+    assert allen["injury_status"] == InjuryStatus.UNKNOWN
+    assert allen["injury_status_raw"] == "PERSONAL_MATTER", "the reader can be told what we saw"
+    assert InjuryStatus(allen["injury_status"]).is_healthy
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, InjuryStatus.ACTIVE),
+        ("", InjuryStatus.ACTIVE),
+        ("   ", InjuryStatus.ACTIVE),
+        ("questionable", InjuryStatus.QUESTIONABLE),
+        ("OUT", InjuryStatus.OUT),
+        ("Injury_Reserve", InjuryStatus.INJURY_RESERVE),
+        ("WHO_KNOWS", InjuryStatus.UNKNOWN),
+    ],
+)
+def test_parse_injury_status_is_the_only_constructor(raw: object, expected: InjuryStatus) -> None:
+    status, _ = parse_injury_status(raw)
+    assert status is expected
+
+
+def test_parse_injury_status_tolerates_pandas_na() -> None:
+    """The field arrives from a pyarrow-backed frame in some call paths, where absent is NA and
+    `bool(pd.NA)` raises."""
+    status, raw = parse_injury_status(pd.NA)
+    assert status is InjuryStatus.ACTIVE
+    assert raw == ""
+
+
+def test_is_healthy_agrees_with_the_tables_that_key_off_it() -> None:
+    """Asserted against the ADJUSTMENT TABLES rather than against a hand-written set literal.
+
+    The literal form mirrored `_HEALTHY_STATUSES`, so any edit to the enum needed a matching
+    edit here and nothing was verified in between. What actually matters is that "healthy"
+    means "costs nothing": every status the multiplier table prices must be unhealthy, and
+    every status it does not must be healthy.
+    """
+    from projections.midseason.injuries import WEEKLY_MULTIPLIER, weekly_multiplier
+
+    for status in InjuryStatus:
+        if status.is_healthy:
+            assert weekly_multiplier(status) == 1.0, f"{status} is healthy but is discounted"
+            assert status not in WEEKLY_MULTIPLIER, f"{status} is healthy but is priced"
+        else:
+            assert status in WEEKLY_MULTIPLIER, f"{status} is unhealthy but has no multiplier"
+            assert weekly_multiplier(status) < 1.0, f"{status} is unhealthy but costs nothing"
+
+
+# --- the free-agent pool -------------------------------------------------------------------------
+
+
+def _free_agent_payload(n: int = 3, *, on_waivers: int = 0) -> dict[str, Any]:
+    """`kona_player_info` shape, trimmed to the fields the parser reads."""
+    players = []
+    for i in range(n):
+        players.append(
+            {
+                "id": 100 + i,
+                "status": "WAIVERS" if i < on_waivers else "FREEAGENT",
+                "player": {
+                    "id": 100 + i,
+                    "fullName": f"Player {i}",
+                    "defaultPositionId": 3,  # WR
+                    "proTeamId": 1,
+                    "injuryStatus": "QUESTIONABLE" if i == 0 else "ACTIVE",
+                    "ownership": {"percentOwned": 90.0 - i},
+                },
+            }
+        )
+    return {"players": players}
+
+
+def test_parse_free_agents_shape() -> None:
+    frame, warning = parse_free_agents(_free_agent_payload(3), limit=50)
+    assert warning is None
+    assert list(frame["player"]) == ["Player 0", "Player 1", "Player 2"]
+    assert set(frame["pos"]) == {"WR"}
+    assert frame.loc[0, "injury_status"] == InjuryStatus.QUESTIONABLE
+    assert frame.loc[0, "percent_owned"] == pytest.approx(90.0)
+
+
+def test_a_waiver_claim_is_distinguished_from_a_straight_add() -> None:
+    """They differ in how you acquire the player, not in whether he helps -- but a
+    recommendation that drops the distinction sends you to click "Add" on someone who is on a
+    claim until the waiver period runs."""
+    frame, _ = parse_free_agents(_free_agent_payload(3, on_waivers=2), limit=50)
+    assert list(frame["on_waivers"]) == [True, True, False]
+
+
+def test_a_truncated_free_agent_list_says_so() -> None:
+    """The response is capped, and a cap hit silently reads as "there is nobody better
+    available" -- the one answer this tool must never give wrongly."""
+    frame, warning = parse_free_agents(_free_agent_payload(10), limit=10)
+    assert len(frame) == 10
+    assert warning is not None
+    assert "truncated" in warning and "10" in warning
+
+
+def test_an_empty_pool_is_typed_not_bare() -> None:
+    """Mid-season a thin wire is normal, and downstream code must not KeyError on it."""
+    frame, warning = parse_free_agents({"players": []}, limit=50)
+    assert frame.empty
+    assert warning is None
+    for column in ("player", "pos", "injury_status", "percent_owned", "on_waivers"):
+        assert column in frame.columns
+
+
+def test_free_agents_and_rosters_describe_injuries_identically() -> None:
+    """Both sides of a swap are compared on this column, so they have to be the same column.
+    Two spellings of the same fact is how the comparison quietly stops being like-for-like."""
+    roster_cols = set(parse_rosters(_payload()).columns)
+    fa_cols = set(parse_free_agents(_free_agent_payload(1), limit=50)[0].columns)
+    shared = {"player", "pos", "nfl_team", "injury_status", "injury_status_raw"}
+    assert shared <= roster_cols
+    assert shared <= fa_cols
+
+
+# --- the shared request handler ------------------------------------------------------------------
+
+
+class _Response:
+    def __init__(self, payload: object) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _Response:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("http://espn", code, "Reason", hdrs=None, fp=None)  # type: ignore[arg-type]
+
+
+def test_an_empty_top_level_list_is_fatal_for_every_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The behaviour a flag once made configurable, and should not have.
+
+    `{"players": []}` means "nobody matched the filter" -- an answer. An empty top-level LIST
+    is a malformed response, and letting the free-agent caller swallow it made a failed request
+    read as an empty wire, while on the roster-pricing call it made my own starters
+    unprojectable and inflated every recommendation with nothing printed to say so.
+    """
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response([]))
+    creds = EspnCredentials(swid="{X}", espn_s2="s2")
+    with pytest.raises(EspnLeagueError, match="empty payload"):
+        fetch_league_payload(1, 2026, creds)
+    with pytest.raises(EspnLeagueError, match="empty payload"):
+        fetch_free_agents(1, 2026, creds)
+
+
+def test_every_error_names_which_call_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three ESPN calls go out per waiver run. A bare "ESPN HTTP 500 for league 856974" says
+    nothing about which one, which is the whole reason `what` exists."""
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise _http_error(500)
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    creds = EspnCredentials(swid="{X}", espn_s2="s2")
+    with pytest.raises(EspnLeagueError, match="fetching the league"):
+        fetch_league_payload(1, 2026, creds)
+    with pytest.raises(EspnLeagueError, match="freeagent"):
+        fetch_free_agents(1, 2026, creds)
+
+
+def test_a_404_does_not_claim_the_league_is_missing_on_a_player_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run has already fetched the league by then, so "ESPN has no league N" contradicts
+    what just happened and sends the reader to check league renewal instead of the view."""
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise _http_error(404)
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    creds = EspnCredentials(swid="{X}", espn_s2="s2")
+    with pytest.raises(EspnLeagueError) as caught:
+        fetch_free_agents(1, 2026, creds)
+    assert "freeagent" in str(caught.value)
+    assert "scoring period" in str(caught.value)
+
+
+def test_a_401_says_which_cookie_and_that_swid_is_not_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identical advice from every call, which is why the handler is shared: the two had
+    drifted to different wording for the same failure."""
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise _http_error(401)
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    creds = EspnCredentials(swid="{X}", espn_s2="s2")
+    with pytest.raises(EspnLeagueError, match="espn_s2"):
+        fetch_league_payload(1, 2026, creds)
+    with pytest.raises(EspnLeagueError, match="espn_s2"):
+        fetch_free_agents(1, 2026, creds)
+
+
+def test_a_one_element_list_is_unwrapped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Some ESPN endpoints wrap the object in a list; the parsers only ever see one shape."""
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response([{"teams": []}]))
+    payload = fetch_league_payload(1, 2026, EspnCredentials(swid="{X}", espn_s2="s2"))
+    assert payload == {"teams": []}
+
+
+def test_a_non_dict_payload_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response("nope"))
+    with pytest.raises(EspnLeagueError, match="Unexpected ESPN payload shape"):
+        fetch_league_payload(1, 2026, EspnCredentials(swid="{X}", espn_s2="s2"))

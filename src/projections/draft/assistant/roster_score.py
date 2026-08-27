@@ -24,6 +24,13 @@ def optimal_lineup_points(
     `roster_rows` needs columns `gsis_id`, `position`, `season_mean_fpts`
     (no NaN in `season_mean_fpts`; the upstream pandera schema enforces this).
     Bench/IR slots contribute nothing; a starting slot no player can fill scores 0.
+
+    **This is a second implementation of `roster_eligibility.choose_starters`**, kept
+    deliberately: this one is DataFrame-shaped and sits in the auction bidding inner loop,
+    where converting per call would plausibly cost more than the duplication does. That cost
+    is ASSERTED, not measured -- collapsing the two is its own change with its own benchmark.
+    `assistant.season_value` holds a third, vectorised over availability draws. If you change
+    the fill order or the tie-break here, change it in all three.
     """
     # Per-position points, best-first, deterministic gsis_id tie-break.
     ordered = roster_rows.sort_values(["season_mean_fpts", "gsis_id"], ascending=[False, True])

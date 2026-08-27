@@ -41,7 +41,14 @@ import pandas as pd
 
 from projections.draft.league_calendar import usable_int
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset, Team, normalize_team_code
+from projections.schemas import (
+    _PYARROW_STR,
+    RosterSlot,
+    Ruleset,
+    Team,
+    normalize_team_code,
+    parse_injury_status,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -177,6 +184,11 @@ ESPN_LINEUP_SLOTS: dict[int, RosterSlot] = {
 #: because `Position` covers skill positions only and rosters include K and D/ST.
 ESPN_POSITION_NAMES: dict[int, str] = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "DST"}
 
+#: The inverse. Derived rather than re-spelled -- a hand-written copy is a fourth place the
+#: same mapping can go stale, and this one is used to write synthetic roster entries back into
+#: a payload, where a wrong id is a plausible player at the wrong position.
+ESPN_POSITION_IDS: dict[str, int] = {name: id_ for id_, name in ESPN_POSITION_NAMES.items()}
+
 #: ESPN proTeamId -> NFL team code. Id 0 means "no pro team" (free agent).
 ESPN_PRO_TEAMS: dict[int, str] = {
     1: "ATL",
@@ -268,6 +280,124 @@ def fetch_league_payload(
         f"{url}?{query}",
         headers={"User-Agent": _UA, "Cookie": creds.cookie_header(), "Accept": "application/json"},
     )
+    return _get_json(
+        request, timeout=timeout, league_id=league_id, season=season, what="fetching the league"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pure parsers
+# ---------------------------------------------------------------------------
+
+
+#: ESPN `status` values for a player nobody rosters. `FREEAGENT` can be added immediately;
+#: `WAIVERS` is on a claim until the league's waiver period runs. They differ in how you
+#: acquire him, not in whether he would help, so both are returned and the distinction is
+#: carried -- a recommendation that drops it sends you to click "Add" on a player you cannot
+#: have until Wednesday.
+FREE_AGENT_STATUSES: tuple[str, ...] = ("FREEAGENT", "WAIVERS")
+
+#: Lineup slot ids worth asking for: QB, RB, WR, TE, FLEX, D/ST, K.
+#:
+#: FLEX (23) admits nobody the position slots do not, but ESPN indexes some players only by
+#: their flex eligibility, so asking costs nothing and omitting it can silently lose one.
+#:
+#: **K and D/ST are included because this same call prices MY roster** (via
+#: `statuses=("ONTEAM",)`), and a kicker the tool cannot price is a kicker it treats as
+#: unstartable -- leaving a hole in the baseline lineup and inflating every candidate's gain.
+#:
+#: They are NOT filtered out of the free-agent side, and in a league with a K or D/ST starting
+#: slot a free-agent kicker with a weekly projection will therefore be ranked as an add and come
+#: back `simulated=False` from stage 2, because the pool holds no rest-of-season number for him.
+#: (An earlier comment claimed `rank_free_agents` would not surface him -- it gates on
+#: `lineup_gain`, not on `remaining_points`.) Latent for Critts, which starts neither; the fix
+#: when it stops being latent is a separate slot set per call, not a filter after the fact.
+_SKILL_SLOT_IDS: tuple[int, ...] = (0, 2, 4, 6, 23, 16, 17)
+
+#: How many free agents to request. Sorted by percent-owned descending, so a cap keeps the
+#: players anyone would plausibly add and drops the long tail of never-rostered names.
+DEFAULT_FREE_AGENT_LIMIT = 400
+
+
+def fetch_free_agents(
+    league_id: int,
+    season: int,
+    creds: EspnCredentials,
+    *,
+    scoring_period: int | None = None,
+    limit: int = DEFAULT_FREE_AGENT_LIMIT,
+    statuses: tuple[str, ...] = FREE_AGENT_STATUSES,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    """GET players by roster status, with their projections for one scoring period.
+
+    Defaults to the players nobody rosters, which is what the name is about. `statuses` opens
+    the same call to `("ONTEAM",)` -- the players who ARE rostered -- because the waiver
+    recommender needs both sides priced by one source: comparing a starter to a free agent
+    whose projection came from a different feed, scored a different way, is not a comparison.
+
+    **The league endpoint, not `leaguedefaults`.** `external_projections.py` also asks for
+    `kona_player_info`, but against the generic player universe, which has no idea who is
+    rostered *here*. Free agency is a per-league fact, so this goes to the same authenticated
+    URL as every other call in this module.
+
+    The filter is server-side, in the `X-Fantasy-Filter` header, because the unfiltered
+    response is the entire NFL. `scoring_period` narrows the projections ESPN attaches to each
+    player to one week; omitted, it returns season-to-date shape.
+    """
+    payload_filter = {
+        "players": {
+            "filterStatus": {"value": list(statuses)},
+            "filterSlotIds": {"value": list(_SKILL_SLOT_IDS)},
+            "limit": int(limit),
+            "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+        }
+    }
+    url = _BASE_URL.format(season=season, league_id=league_id) + "?view=kona_player_info"
+    if scoring_period is not None:
+        url += f"&scoringPeriodId={int(scoring_period)}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _UA,
+            "Cookie": creds.cookie_header(),
+            "Accept": "application/json",
+            "X-Fantasy-Filter": json.dumps(payload_filter),
+        },
+    )
+    return _get_json(
+        request,
+        timeout=timeout,
+        league_id=league_id,
+        season=season,
+        what=f"fetching {'/'.join(statuses).lower()} players",
+    )
+
+
+def _get_json(
+    request: urllib.request.Request,
+    *,
+    timeout: float,
+    league_id: int,
+    season: int,
+    what: str,
+) -> dict[str, Any]:
+    """Issue an ESPN request and hand back one dict, or raise `EspnLeagueError` saying why.
+
+    Shared by every call in this module. The 401 advice in particular has to be identical
+    everywhere: the two callers had drifted to different wording for the same failure, and a
+    reader who follows one and not the other is being told half the fix.
+
+    `what` names the call in every message, because three of them go out per waiver run and a
+    bare "ESPN HTTP 500 for league 856974" says nothing about which.
+
+    **An empty top-level list is always fatal**, for every caller. A previous version let the
+    free-agent caller treat it as "nobody matched the filter" -- but that is what
+    `{"players": []}` means, and an empty LIST is a malformed response. Swallowing it made a
+    failed request read as an empty wire ("nothing would change your lineup — in a 16-team
+    league that is the usual answer"), and on the roster-pricing call it made my own starters
+    unprojectable, which inflates every candidate's gain with nothing printed to say so.
+    """
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -280,28 +410,90 @@ def fetch_league_payload(
                 "and copy espn_s2 again."
             ) from exc
         if exc.code == 404:
+            # `what` is in the message because a 404 means different things per call. On the
+            # league read it plausibly means the league is not published; on a player-info
+            # read the run has ALREADY fetched the league successfully, so telling the reader
+            # the league does not exist contradicts what just happened and sends them to check
+            # the wrong thing.
             raise EspnLeagueError(
-                f"ESPN has no league {league_id} for season {season} (404). If the league was "
-                "just renewed, the new season may not be published yet."
+                f"ESPN returned 404 {what} for league {league_id} season {season}. If this was "
+                "the league read, the new season may not be published yet; otherwise check the "
+                "scoring period and the view."
             ) from exc
-        raise EspnLeagueError(f"ESPN HTTP {exc.code} for league {league_id}: {exc.reason}") from exc
+        raise EspnLeagueError(
+            f"ESPN HTTP {exc.code} {what} for league {league_id}: {exc.reason}"
+        ) from exc
     except urllib.error.URLError as exc:
-        raise EspnLeagueError(f"Could not reach ESPN: {exc.reason}") from exc
+        raise EspnLeagueError(f"Could not reach ESPN {what}: {exc.reason}") from exc
 
-    # A multi-view read returns an object, but some ESPN endpoints wrap it in a
-    # one-element list. Normalize so the parsers only ever see one shape.
+    # A multi-view read returns an object, but some ESPN endpoints wrap it in a one-element
+    # list. Normalize so the parsers only ever see one shape.
     if isinstance(payload, list):
         if not payload:
-            raise EspnLeagueError(f"ESPN returned an empty payload for league {league_id}.")
+            raise EspnLeagueError(f"ESPN returned an empty payload {what} for league {league_id}.")
         payload = payload[0]
     if not isinstance(payload, dict):
         raise EspnLeagueError(f"Unexpected ESPN payload shape: {type(payload).__name__}.")
     return payload
 
 
-# ---------------------------------------------------------------------------
-# Pure parsers
-# ---------------------------------------------------------------------------
+def parse_free_agents(
+    payload: dict[str, Any], *, limit: int = DEFAULT_FREE_AGENT_LIMIT
+) -> tuple[pd.DataFrame, str | None]:
+    """`kona_player_info` -> one row per available player, plus a truncation warning or None.
+
+    **The truncation report is not optional.** The response is capped, and a cap that is hit
+    silently reads as "there is nobody better available" -- the one answer this tool must never
+    give wrongly. The caller surfaces the string; it does not decide whether to.
+
+    `on_waivers` separates a player on a claim from one who can be added now. `percent_owned`
+    is carried as a rough read on whether a claim will actually clear.
+    """
+    rows: list[dict[str, Any]] = []
+    for entry in payload.get("players", []) or []:
+        player = entry.get("player", {}) or {}
+        pro_team = pro_team_code(int(player.get("proTeamId", 0) or 0))
+        injury_status, raw_status = parse_injury_status(player.get("injuryStatus"))
+        ownership = player.get("ownership", {}) or {}
+        rows.append(
+            {
+                "player_id": int(player.get("id", entry.get("id", 0)) or 0),
+                "player": str(player.get("fullName", "") or ""),
+                "pos": ESPN_POSITION_NAMES.get(
+                    int(player.get("defaultPositionId", 0) or 0), "UNKNOWN"
+                ),
+                "nfl_team": str(pro_team) if pro_team is not None else "",
+                "injury_status": str(injury_status.value),
+                "injury_status_raw": raw_status,
+                "percent_owned": float(ownership.get("percentOwned", 0.0) or 0.0),
+                "on_waivers": str(entry.get("status", "") or "").upper() == "WAIVERS",
+            }
+        )
+    frame = pd.DataFrame(
+        rows,
+        columns=[
+            "player_id",
+            "player",
+            "pos",
+            "nfl_team",
+            "injury_status",
+            "injury_status_raw",
+            "percent_owned",
+            "on_waivers",
+        ],
+    )
+    for column in ("player", "pos", "nfl_team", "injury_status", "injury_status_raw"):
+        frame[column] = frame[column].astype(_PYARROW_STR)
+
+    warning = None
+    if len(frame) >= limit:
+        warning = (
+            f"ESPN returned {len(frame)} free agents, which is the requested limit of {limit} — "
+            "the list is truncated, so a better player may exist below the cut. It is sorted by "
+            "percent rostered, so what was dropped is what nobody else wants either. Raise "
+            "--free-agent-limit to see further down."
+        )
+    return frame, warning
 
 
 def parse_roster_slots(payload: dict[str, Any]) -> dict[RosterSlot, int]:
@@ -585,6 +777,7 @@ def parse_rosters(payload: dict[str, Any]) -> pd.DataFrame:
         for entry in entries:
             player = (entry.get("playerPoolEntry", {}) or {}).get("player", {}) or {}
             pro_team = pro_team_code(int(player.get("proTeamId", 0) or 0))
+            injury_status, raw_status = parse_injury_status(player.get("injuryStatus"))
             rows.append(
                 {
                     "team_id": team_id,
@@ -598,6 +791,13 @@ def parse_rosters(payload: dict[str, Any]) -> pd.DataFrame:
                         ESPN_LINEUP_SLOTS.get(int(entry.get("lineupSlotId", -1)), "")
                     ),
                     "acquisition_type": str(entry.get("acquisitionType", "") or ""),
+                    # Carried, not discarded. Without it every downstream projection treats a
+                    # player who is on IR as fully healthy, which is exactly the case the
+                    # waiver recommender exists for.
+                    "injury_status": str(injury_status.value),
+                    #: The raw ESPN text, so a status we do not recognise can be reported
+                    #: rather than silently read as healthy.
+                    "injury_status_raw": raw_status,
                 }
             )
     frame = pd.DataFrame(
@@ -610,9 +810,19 @@ def parse_rosters(payload: dict[str, Any]) -> pd.DataFrame:
             "nfl_team",
             "lineup_slot",
             "acquisition_type",
+            "injury_status",
+            "injury_status_raw",
         ],
     )
-    for column in ("player", "pos", "nfl_team", "lineup_slot", "acquisition_type"):
+    for column in (
+        "player",
+        "pos",
+        "nfl_team",
+        "lineup_slot",
+        "acquisition_type",
+        "injury_status",
+        "injury_status_raw",
+    ):
         frame[column] = frame[column].astype(_PYARROW_STR)
     return frame
 
@@ -745,6 +955,24 @@ def team_records(schedule: pd.DataFrame, *, through_week: int | None = None) -> 
     return frame.astype({"team_id": int, "wins": int, "losses": int, "ties": int})
 
 
+def espn_gsis_crosswalk(id_map: pd.DataFrame) -> dict[str, str]:
+    """ESPN id -> gsis, deduplicated on the ESPN side. **The one crosswalk.**
+
+    `IdMapSchema` marks only `gsis_id` unique -- `espn_id` is nullable and non-unique, and the
+    live `data/raw/id_map.parquet` holds two ESPN ids that each map to two different players.
+    Left as-is, a join on it fans out: the same player lands on a roster twice, where he can
+    fill two starting slots at once.
+
+    Extracted because that rationale was being copied along with the code. Three modules built
+    this mapping separately -- `midseason.standings`, `midseason.swap_impact` and the waiver
+    CLI -- each reproducing the dedup and the paragraph explaining it, which is exactly how a
+    fix to one misses the other two.
+    """
+    cross = id_map[["espn_id", "gsis_id"]].dropna().astype({"espn_id": str})
+    cross = cross.drop_duplicates("espn_id")
+    return dict(zip(cross["espn_id"].astype(str), cross["gsis_id"].astype(str), strict=True))
+
+
 def espn_to_gsis(rosters: pd.DataFrame, id_map: pd.DataFrame) -> pd.Series:
     """ESPN `player_id` -> `gsis_id`, index-aligned to `rosters`. NA where unmapped.
 
@@ -753,19 +981,17 @@ def espn_to_gsis(rosters: pd.DataFrame, id_map: pd.DataFrame) -> pd.Series:
     each map to two different players. Left as-is, a join on it fans out: the same player lands
     on a roster twice, where he can fill two starting slots at once.
 
-    The one crosswalk. `midseason.standings.rosters_to_slots` and `midseason.my_team` both go
-    through it, so a doubly-mapped ESPN id cannot resolve to one player on the standings page
-    and another on the team page. They previously built it separately, line for line including
-    the dedup rationale, which is how a fix to one would have missed the other.
+    The frame-shaped form of `espn_gsis_crosswalk`, which owns the dedup and the reason for
+    it. `midseason.standings.rosters_to_slots` and `midseason.my_team` both go through this, so
+    a doubly-mapped ESPN id cannot resolve to one player on the standings page and another on
+    the team page.
     """
-    cross = (
-        id_map[["espn_id", "gsis_id"]]
-        .dropna()
-        .astype({"espn_id": str})
-        .drop_duplicates("espn_id")
-        .set_index("espn_id")["gsis_id"]
-    )
-    return rosters["player_id"].astype(str).map(cross)
+    cross = pd.Series(espn_gsis_crosswalk(id_map), dtype=object)
+    # Back to the nullable string dtype the id_map carries. `pd.Series(dict, dtype=object)`
+    # makes `.map` produce object/NaN, and CLAUDE.md is explicit that object-plus-NaN is the
+    # shape that quietly loses data downstream -- the previous `.set_index()` form preserved it
+    # by accident, and one caller (`standings.rosters_to_slots`) never re-casts.
+    return rosters["player_id"].astype(str).map(cross).astype(_PYARROW_STR)
 
 
 def parse_draft_picks(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFrame:

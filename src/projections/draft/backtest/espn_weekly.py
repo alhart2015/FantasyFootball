@@ -58,19 +58,29 @@ def _statline_dict(raw: dict[str, float]) -> dict[str, float]:
 
 
 def parse_espn_weekly(
-    payload: dict[str, Any], *, season: int, week: int, ruleset: Ruleset
+    payload: dict[str, Any],
+    *,
+    season: int,
+    week: int,
+    ruleset: Ruleset,
+    skill_positions_only: bool = True,
 ) -> pd.DataFrame:
-    """Parse a single-week ESPN kona_player_info payload -> one row per QB/RB/WR/TE.
+    """Parse a single-week ESPN kona_player_info payload -> one row per player.
 
     Columns: espn_id (str), season (int), week (int), position (str), projected_points (float|None).
     projected_points is None when no weekly projection entry exists for the player (e.g. bye week
     or missing data). A zero-stat projection entry produces 0.0, not None.
+
+    `skill_positions_only=False` keeps kickers and defenses, whose `defaultPositionId` is not in
+    `ESPN_POSITIONS`; they come back with an empty `position`. The waiver recommender needs them
+    because it prices MY roster from this same feed, and a starter it cannot price is a starter
+    it treats as unstartable.
     """
     rows: list[dict[str, Any]] = []
     for pl in payload.get("players", []):
         p = pl.get("player", {})
         position = ESPN_POSITIONS.get(p.get("defaultPositionId"))
-        if position is None:
+        if position is None and skill_positions_only:
             continue
         raw = _weekly_proj_stats(p, week)
         proj = expected_points(_statline_dict(raw), ruleset) if raw is not None else None
@@ -79,7 +89,7 @@ def parse_espn_weekly(
                 "espn_id": str(p.get("id")),
                 "season": season,
                 "week": week,
-                "position": position,
+                "position": position or "",
                 "projected_points": proj,
             }
         )
