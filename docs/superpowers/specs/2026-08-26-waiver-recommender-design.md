@@ -212,25 +212,40 @@ projected wins, playoff %, bye % and title %. **The swap is simulated as permane
 the honest model: dropping a player really is irreversible, and a streamer really does occupy
 the spot until the next stream displaces him.
 
-### 5.1 The paired-simulation rule, which is load-bearing
+### 5.1 The paired-simulation rule, and what it is actually worth — measured
 
-Two independent 2,000-sim runs of the same league differ by simulation noise alone, and that
-noise is plausibly the same size as the effect being measured — a stream worth five points in
-one week out of eight moves expected wins by something like 0.05.
+Two independent 2,000-sim runs of the same league differ by simulation noise alone, so the
+recommendation depends on that noise being smaller than the effect. `scripts/measure_swap_noise.py`
+measures it rather than assuming; run 2026-08-26 on a synthetic 16-team league at 2,000 sims,
+six seeds:
 
-So: **one baseline, computed once, and every candidate simulated against the same seeded
-`rng`.** Common random numbers — the difference between two runs sharing draws is far more
-precise than either estimate is on its own.
+| | |
+|---|---|
+| Spread of ONE projected-wins estimate across seeds | **sd 0.090 wins** |
+| Error an UNPAIRED difference would carry | ~0.127 wins |
+| Error of the PAIRED difference (same seed both sides) | **sd 0.062, stderr 0.025** |
 
-This is the single most likely way for this tool to produce a confident wrong answer, so it
-gets two tests: a no-op swap must report **exactly** 0.0, and the same candidate simulated
-twice must report the same number to the bit.
+**Pairing shrinks the error 2.0x, not the order of magnitude an earlier draft of this section
+claimed.** `project_league_standings` reseeds internally, so a roster change perturbs the draw
+sequence and only part of the noise cancels. The claim was wrong and is corrected here rather
+than quietly dropped: 2x is worth having and is not what "far below either estimate" means.
 
-**Whether the effect clears the noise at all is an empirical question**, and it is not settled
-by writing it down. Step 6 of the plan measures the standard error of Δ wins across repeated
-seeds before any recommendation is printed. If a real stream is not distinguishable from zero
-at 2,000 sims, the number of sims goes up or the tool reports an interval rather than a point
-estimate. It does not print a false precision.
+**The effect clears it at every realistic swap size**, because the residual noise scales with
+the effect rather than sitting at a fixed floor:
+
+| Swap worth | Δ wins | sd | ratio |
+|---|---|---|---|
+| 10 season points | +0.086 | 0.023 | 3.7 |
+| 20 season points | +0.156 | 0.030 | 5.3 |
+| 40 season points | +0.289 | 0.062 | 4.7 |
+
+So a point estimate is reportable. Useful conversion for reading the output: **roughly 140
+season points to a win**, which puts a five-point one-week stream at about **0.04 wins** — real,
+near the edge of resolution, and the reason the lineup gain stays on screen beside it.
+
+Determinism is confirmed: same pool, same seed, twice, identical to six decimals. Pairing
+cannot work without that, so it is checked in the same run and the script exits non-zero if
+either property fails.
 
 ### 5.2 Two stages, because 50 simulations is minutes
 
