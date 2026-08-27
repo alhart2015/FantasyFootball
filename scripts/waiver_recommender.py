@@ -175,7 +175,7 @@ def run(args: argparse.Namespace) -> int:
     roster = parse_rosters(payload)
     roster = roster[roster["team_id"] == my_team_id]
 
-    candidates = rank_free_agents(
+    candidates, open_spots = rank_free_agents(
         roster,
         free_agents,
         projections,
@@ -187,6 +187,10 @@ def run(args: argparse.Namespace) -> int:
     _print_header(run_state.team_name, week, len(free_agents), truncated)
     for note in run_state.notes:
         print(f"  ! {note}")
+
+    if open_spots:
+        print(f"
+  {open_spots} active roster spot(s) open — an add there costs nothing.")
 
     if not candidates:
         print("\n  Nothing on the wire would change your starting lineup this week.")

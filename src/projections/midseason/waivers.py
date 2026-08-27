@@ -62,7 +62,13 @@ class Candidate:
     #: On a waiver claim rather than addable now. Different action, same value.
     on_waivers: bool
     percent_owned: float
-    #: Who to drop for him, and what that costs. `None` when a roster spot is already free.
+    #: An active roster spot is already free, so nobody has to go. Stated as its own field
+    #: rather than inferred from an absent drop: "we found nobody to drop" and "you do not need
+    #: to drop anyone" are opposite facts, and `is_free` used to report both as the latter.
+    needs_no_drop: bool = False
+    #: Who to drop for him, and what that costs. `None` when no drop was named -- which is
+    #: either because none is needed (`needs_no_drop`) or because nobody droppable could be
+    #: priced.
     drop_player_id: int | None = None
     drop_player: str = ""
     #: The dropped player's remaining-season projection — the cost side of the trade.
@@ -71,7 +77,7 @@ class Candidate:
     @property
     def is_free(self) -> bool:
         """No one has to be dropped. The first thing worth telling a reader."""
-        return self.drop_player_id is None
+        return self.needs_no_drop
 
 
 def adjusted_weekly_points(
@@ -107,48 +113,75 @@ class _LineupRow:
     projected: float | None
 
 
+def _player_id(player: Mapping[str, object]) -> int:
+    """An ESPN player id out of a pandas row.
+
+    `float()` first, then `int()`. The column arrives as int64 normally, but any frame that has
+    been through a merge introducing an NA becomes float64, and `int("12345.0")` raises -- which
+    is precisely the shape an earlier comment here claimed to be handling.
+    """
+    raw = player.get("player_id", 0)
+    if raw is None or (not isinstance(raw, str) and pd.isna(raw)):
+        return 0
+    if isinstance(raw, str):
+        return int(float(raw)) if raw.strip() else 0
+    if isinstance(raw, int | float):
+        return int(raw)
+    # A numpy scalar, which types as `object` but converts fine.
+    return int(float(str(raw)))
+
+
+def is_on_ir(player: Mapping[str, object]) -> bool:
+    """Whether this roster row is parked in an IR slot.
+
+    **One definition, because three places need it and they disagreed.** An IR player does not
+    occupy an active roster spot, cannot be started, and is not a drop candidate that frees an
+    active spot. Each of those was got wrong separately: the headcount charged him against
+    active capacity, the lineup let him hold a starting slot, and the two facts together meant
+    the morning after an injury the tool reported "nothing on the wire would change your
+    lineup" -- the one case it exists for.
+    """
+    return display_str(player.get("lineup_slot")) == RosterSlot.IR
+
+
 def _row(player: Mapping[str, object], projected: float | None) -> _LineupRow:
-    # `player_id` arrives from pandas as a numpy int, an object column, or missing. `str()`
-    # first so every one of those reaches `int()` as something it accepts -- a numpy value
-    # passed straight through type-checks as `object`, which it is.
     return _LineupRow(
-        player_id=int(str(player.get("player_id", 0) or 0)),
+        player_id=_player_id(player),
         player=display_str(player.get("player")),
         position=display_str(player.get("pos")),
-        projected=projected,
+        # An IR player cannot legally start, whatever ESPN projects for him. `None` rather than
+        # 0.0 because that is the value `choose_starters` reads as unstartable, and 0.0 can
+        # still fill a slot nobody else is eligible for.
+        projected=None if is_on_ir(player) else projected,
     )
 
 
-def _startable_slots(config: LeagueConfig) -> dict[RosterSlot, int]:
-    """Starting slots only. BENCH and IR hold players; they do not score."""
-    return {
-        slot: count
-        for slot, count in config.roster_slots.items()
-        if slot not in (RosterSlot.BENCH, RosterSlot.IR)
-    }
-
-
 def _open_spots(roster: pd.DataFrame, config: LeagueConfig) -> int:
-    """Roster spots not currently filled.
+    """ACTIVE roster spots not currently filled.
 
     An add into an open spot costs nothing, which makes it categorically different from every
     other recommendation this tool makes — so it is counted rather than inferred.
 
-    **IR slots do not count.** They hold a player who is already hurt; you cannot park a healthy
-    add there. Counting them made a full 12-man roster look like it had two spaces going spare,
-    so the tool reported every recommendation as free and never named a drop -- which is the
-    failure mode where the tool is most confidently wrong, because a free add needs no
-    justification and a costly one does.
+    **IR is excluded from both sides of the subtraction**, and getting only one side right is
+    how this went wrong twice in opposite directions. Counting IR *slots* as capacity made a
+    full roster look like it had spares, so every recommendation came back free and no drop was
+    named. Then counting IR *players* against active capacity made a roster with someone on IR
+    look full, so the tool named a drop nobody had to make. A spot is active, and so is the
+    player who fills it.
     """
     capacity = sum(count for slot, count in config.roster_slots.items() if slot != RosterSlot.IR)
-    return max(int(capacity) - len(roster), 0)
+    active = sum(1 for _, player in roster.iterrows() if not is_on_ir(player))
+    return max(int(capacity) - active, 0)
 
 
 def lineup_points(rows: Sequence[_LineupRow], config: LeagueConfig) -> tuple[float, list[int]]:
     """This week's best startable total, and the indices of the players who start."""
+    # `config.roster_slots` unfiltered: `choose_starters` only ever reads POSITION_SLOTS and
+    # FLEX_SLOTS, so removing BENCH and IR first changed nothing. `backtest.lineup` passes it
+    # through unfiltered too, and gets the same answer.
     chosen = choose_starters(
         list(rows),
-        _startable_slots(config),
+        config.roster_slots,
         value=lambda row: row.projected,
         position=lambda row: row.position,
     )
@@ -165,7 +198,7 @@ def rank_free_agents(
     *,
     source_is_injury_aware: bool = True,
     min_gain: float = 0.5,
-) -> list[Candidate]:
+) -> tuple[list[Candidate], int]:
     """Free agents who would improve this week's starting lineup, best first.
 
     `weekly_projections` and `remaining_points` are keyed by ESPN player id as a string —
@@ -179,12 +212,16 @@ def rank_free_agents(
 
     `min_gain` filters the noise. Half a point of projected lineup gain is not a roster move,
     and a list that includes it trains the reader to skip the list.
+
+    Returns the candidates and the number of ACTIVE roster spots currently open. Every
+    `needs_no_drop` candidate is claiming the same spots, so a caller showing three of them
+    without saying there is only one free spot is inviting a roster overfill.
     """
     roster_rows = [
         _row(
             player,
             adjusted_weekly_points(
-                weekly_projections.get(str(int(str(player.get("player_id", 0) or 0)))),
+                weekly_projections.get(str(_player_id(player))),
                 _status(player),
                 source_is_injury_aware=source_is_injury_aware,
             ),
@@ -196,7 +233,7 @@ def rank_free_agents(
 
     candidates: list[Candidate] = []
     for _, agent in free_agents.iterrows():
-        espn_id = int(str(agent.get("player_id", 0) or 0))
+        espn_id = _player_id(agent)
         status = _status(agent)
         projected = adjusted_weekly_points(
             weekly_projections.get(str(espn_id)),
@@ -217,6 +254,9 @@ def rank_free_agents(
             if open_spots > 0
             else _drop_candidate(with_him, chosen, remaining_points, skip_index=len(with_him) - 1)
         )
+        # `open_spots` is the same for every candidate, so each one is reported against the
+        # SAME free spot. Acting on two of them overfills the roster, which is why the caller
+        # is told how many there are rather than just that there is one.
         candidates.append(
             Candidate(
                 player_id=espn_id,
@@ -228,6 +268,7 @@ def rank_free_agents(
                 injury_status=status,
                 on_waivers=bool(agent.get("on_waivers", False)),
                 percent_owned=float(agent.get("percent_owned", 0.0) or 0.0),
+                needs_no_drop=open_spots > 0,
                 drop_player_id=None if drop is None else drop.player_id,
                 drop_player="" if drop is None else drop.player,
                 drop_cost=0.0 if drop is None else drop.cost,
@@ -235,7 +276,7 @@ def rank_free_agents(
         )
 
     candidates.sort(key=lambda c: (-c.lineup_gain, c.player))
-    return candidates
+    return candidates, open_spots
 
 
 def _status(player: Mapping[str, object]) -> InjuryStatus:
@@ -275,9 +316,16 @@ def _drop_candidate(
     for index, row in enumerate(rows):
         if index in starters or index == skip_index:
             continue
-        cost = float(remaining_points.get(str(row.player_id), 0.0))
+        cost = remaining_points.get(str(row.player_id))
+        if cost is None:
+            # **Not 0.0.** A player the pool cannot price -- a kicker, a defense, a just-signed
+            # back nobody projects yet -- would otherwise be the cheapest leftover by
+            # construction, and the tool would recommend dropping him "at no cost". Those are
+            # exactly the players a waiver tool is supposed to be careful with, and "we have no
+            # number for him" is not "he is worth nothing".
+            continue
         if cheapest is None or cost < cheapest.cost:
-            cheapest = _Drop(player_id=row.player_id, player=row.player, cost=cost)
+            cheapest = _Drop(player_id=row.player_id, player=row.player, cost=float(cost))
     return cheapest
 
 

@@ -51,20 +51,23 @@ LEAGUE = LeagueConfig(
 )
 
 
-def _players(rows: list[tuple[int, str, str, str]]) -> pd.DataFrame:
+def _players(rows: list[tuple[Any, ...]]) -> pd.DataFrame:
     """`(player_id, name, position, injury_status)` -> a roster or free-agent frame."""
-    frame = pd.DataFrame(
+    return pd.DataFrame(
         {
             "player_id": [r[0] for r in rows],
             "player": pd.Series([r[1] for r in rows], dtype=_PYARROW_STR),
             "pos": pd.Series([r[2] for r in rows], dtype=_PYARROW_STR),
             "nfl_team": pd.Series(["KC"] * len(rows), dtype=_PYARROW_STR),
             "injury_status": pd.Series([r[3] for r in rows], dtype=_PYARROW_STR),
+            # `parse_rosters` always produces this, and `is_on_ir` reads it.
+            "lineup_slot": pd.Series(
+                [r[4] if len(r) > 4 else "" for r in rows], dtype=_PYARROW_STR
+            ),
             "percent_owned": [50.0] * len(rows),
             "on_waivers": [False] * len(rows),
         }
     )
-    return frame
 
 
 def _full_roster() -> pd.DataFrame:
@@ -111,17 +114,43 @@ def _rank(
     free_agents: pd.DataFrame,
     *,
     projections: dict[str, float] | None = None,
+    remaining: dict[str, float] | None = None,
     roster: pd.DataFrame | None = None,
-    **kwargs: object,
+    source_is_injury_aware: bool = True,
+    min_gain: float = 0.5,
 ) -> list[Candidate]:
-    return rank_free_agents(
+    """Explicit keywords rather than `**kwargs: object`.
+
+    The kwargs form threw away every argument type and then needed a
+    `# type: ignore[arg-type]` at each call site to hide the result -- seven of them, in a repo
+    whose CLAUDE.md forbids broad ignores to make things pass.
+    """
+    candidates, _ = rank_free_agents(
+        _full_roster() if roster is None else roster,
+        free_agents,
+        {**BASE_PROJECTIONS, **(projections or {})},
+        BASE_REMAINING if remaining is None else remaining,
+        LEAGUE,
+        source_is_injury_aware=source_is_injury_aware,
+        min_gain=min_gain,
+    )
+    return candidates
+
+
+def _open_spots(
+    free_agents: pd.DataFrame,
+    *,
+    projections: dict[str, float] | None = None,
+    roster: pd.DataFrame | None = None,
+) -> int:
+    _, spots = rank_free_agents(
         _full_roster() if roster is None else roster,
         free_agents,
         {**BASE_PROJECTIONS, **(projections or {})},
         BASE_REMAINING,
         LEAGUE,
-        **kwargs,  # type: ignore[arg-type]
     )
+    return spots
 
 
 # --- the refusals, which are the point ----------------------------------------------------------
@@ -193,7 +222,7 @@ def test_a_bye_week_hole_makes_a_replacement_valuable() -> None:
     projections = dict(BASE_PROJECTIONS)
     del projections["6"]  # TE1 on bye
     agents = _players([(99, "Streamer TE", "TE", "ACTIVE")])
-    [candidate] = rank_free_agents(
+    (candidate,), _ = rank_free_agents(
         _full_roster(), agents, {**projections, "99": 7.0}, BASE_REMAINING, LEAGUE
     )
     assert candidate.lineup_gain == pytest.approx(7.0), "an empty slot means the whole projection"
@@ -295,7 +324,7 @@ def test_an_injured_player_on_my_roster_opens_the_hole_he_leaves() -> None:
     roster.loc[roster["player"] == "WR1", "injury_status"] = "OUT"
     projections = {**BASE_PROJECTIONS, "4": 0.0, "99": 10.0}
     agents = _players([(99, "Replacement WR", "WR", "ACTIVE")])
-    [candidate] = rank_free_agents(
+    (candidate,), _ = rank_free_agents(
         roster, agents, projections, BASE_REMAINING, LEAGUE, source_is_injury_aware=False
     )
     assert candidate.lineup_gain > 0
@@ -534,7 +563,7 @@ def test_the_pipeline_runs_on_parser_output_not_hand_built_frames() -> None:
     projections["900002"] = 30.0
     remaining = {str(pid): 50.0 for pid in roster["player_id"]}
 
-    candidates = rank_free_agents(roster, free_agents, projections, remaining, LEAGUE)
+    candidates, _ = rank_free_agents(roster, free_agents, projections, remaining, LEAGUE)
     assert [c.player for c in candidates] == ["Wire Stud"]
     assert candidates[0].lineup_gain > 0
     assert candidates[0].position == "WR"
@@ -554,9 +583,111 @@ def test_an_injured_free_agent_survives_the_parsers_with_his_status() -> None:
     projections["900003"] = 30.0
     remaining = {str(pid): 50.0 for pid in roster["player_id"]}
 
-    [candidate] = rank_free_agents(roster, free_agents, projections, remaining, LEAGUE)
+    (candidate,), _ = rank_free_agents(roster, free_agents, projections, remaining, LEAGUE)
     assert candidate.injury_status is InjuryStatus.QUESTIONABLE
     # 30.0 x 0.86 = 25.8, so the gain is smaller than the healthy version would give.
     healthy, _ = parse_free_agents(_fa_payload(900_003, "Fit Stud", 3), limit=50)
-    [fit] = rank_free_agents(roster, healthy, projections, remaining, LEAGUE)
+    (fit,), _ = rank_free_agents(roster, healthy, projections, remaining, LEAGUE)
     assert candidate.lineup_gain < fit.lineup_gain
+
+
+# --- one roster model: IR is not an active spot, and an IR player is not startable ------------
+
+
+def _roster_with_ir() -> pd.DataFrame:
+    """Eleven active players plus one parked on IR. Twelve rows, eleven active spots used."""
+    rows: list[tuple[Any, ...]] = [
+        (1, "QB1", "QB", "ACTIVE", "QB"),
+        (2, "RB1", "RB", "ACTIVE", "RB"),
+        (3, "RB2", "RB", "ACTIVE", "RB"),
+        (4, "WR1", "WR", "ACTIVE", "WR"),
+        (5, "WR2", "WR", "ACTIVE", "WR"),
+        (6, "TE1", "TE", "ACTIVE", "TE"),
+        (7, "FlexRB", "RB", "ACTIVE", "FLEX"),
+    ]
+    rows += [(10 + i, f"Bench{i}", "WR", "ACTIVE", "BENCH") for i in range(4)]
+    rows += [(20, "Hurt WR", "WR", "INJURY_RESERVE", "IR")]
+    return _players(rows)
+
+
+def test_a_player_on_ir_does_not_occupy_an_active_roster_spot() -> None:
+    """The mirror of the bug the last fix introduced. Counting IR SLOTS as capacity made a full
+    roster look like it had spares, so every recommendation came back free. Counting IR PLAYERS
+    against active capacity made a roster with someone on IR look full, so the tool named a
+    drop nobody had to make. A spot is active, and so is the player who fills it."""
+    agents = _players([(99, "Stud WR", "WR", "ACTIVE")])
+    assert _open_spots(agents, projections={"99": 20.0}, roster=_roster_with_ir()) == 1
+    [candidate] = _rank(agents, projections={"99": 20.0}, roster=_roster_with_ir())
+    assert candidate.is_free, "eleven active players in twelve spots: nobody has to go"
+
+
+def test_a_player_on_ir_cannot_hold_a_starting_slot() -> None:
+    """The morning-after case, and the one the whole tool exists for.
+
+    My WR1 is on IR. ESPN still projects him -- `weekly_multiplier` deliberately leaves an
+    IR player alone when the source already prices injuries -- so if the lineup counts him,
+    every wire receiver's gain falls under `min_gain` and the tool reports "nothing on the
+    wire would change your lineup" on exactly the day it should be shouting.
+    """
+    roster = _roster_with_ir()
+    roster.loc[roster["player"] == "WR1", "lineup_slot"] = "IR"
+    roster.loc[roster["player"] == "WR1", "injury_status"] = "INJURY_RESERVE"
+
+    agents = _players([(99, "Replacement WR", "WR", "ACTIVE")])
+    [candidate] = _rank(agents, projections={"99": 13.0}, roster=roster)
+    # WR1 (16.0) is unstartable, so the slot is filled by WR2 (12.0) and the replacement takes
+    # the other one. Without the IR rule WR1 holds his slot and 13.0 beats nobody.
+    assert candidate.lineup_gain > 0
+
+
+# --- a player we cannot price is not a player worth zero ---------------------------------------
+
+
+def test_a_player_the_pool_cannot_price_is_never_the_recommended_drop() -> None:
+    """A kicker, a defense, a back nobody projects yet -- absent from `remaining_points`.
+
+    Defaulting him to 0.0 made him the cheapest leftover by construction, so the tool
+    recommended dropping him and printed "costs 0 rest-of-season points" underneath. Those are
+    exactly the players a waiver tool should be careful with, and "we have no number for him"
+    is not "he is worth nothing".
+    """
+    roster = _full_roster()
+    agents = _players([(99, "Stud WR", "WR", "ACTIVE")])
+    # Bench0 is the cheapest player we CAN price; Bench1 has no price at all.
+    remaining = {k: v for k, v in BASE_REMAINING.items() if k != "11"}
+    [candidate] = _rank(agents, projections={"99": 20.0}, remaining=remaining, roster=roster)
+    assert candidate.drop_player == "Bench0"
+    assert candidate.drop_player != "Bench1"
+
+
+def test_no_droppable_player_is_not_the_same_as_needing_no_drop() -> None:
+    """`is_free` used to report both as "roster spot open", which is a lie in one of them --
+    and it is the one the module calls the first thing worth telling a reader."""
+    roster = _full_roster()
+    agents = _players([(99, "Stud WR", "WR", "ACTIVE")])
+    # Nobody who could be dropped can be priced -- the bench, and the flex RB the add
+    # displaces. The roster is still full.
+    remaining = {k: v for k, v in BASE_REMAINING.items() if int(k) < 7}
+    [candidate] = _rank(agents, projections={"99": 20.0}, remaining=remaining, roster=roster)
+    assert not candidate.is_free, "the roster is full; we simply could not price a drop"
+    assert candidate.drop_player_id is None
+
+
+def test_the_caller_is_told_how_many_spots_are_actually_open() -> None:
+    """Every `needs_no_drop` candidate is claiming the SAME spot. Three of them printed without
+    that number invites a roster overfill."""
+    roster = _full_roster().iloc[:-2]  # two bench spots free
+    agents = _players([(98, "Stud WR", "WR", "ACTIVE"), (99, "Other WR", "WR", "ACTIVE")])
+    spots = _open_spots(agents, projections={"98": 20.0, "99": 19.0}, roster=roster)
+    assert spots == 2
+    ranked = _rank(agents, projections={"98": 20.0, "99": 19.0}, roster=roster)
+    assert all(c.is_free for c in ranked)
+
+
+def test_a_float_player_id_column_does_not_crash() -> None:
+    """Any frame that has been through a merge introducing an NA becomes float64, and
+    `int("12345.0")` raises -- the exact shape the old comment claimed to handle."""
+    agents = _players([(99, "Stud WR", "WR", "ACTIVE")])
+    agents["player_id"] = agents["player_id"].astype("float64")
+    [candidate] = _rank(agents, projections={"99": 20.0})
+    assert candidate.player_id == 99
