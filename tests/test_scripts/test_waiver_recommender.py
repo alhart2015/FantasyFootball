@@ -136,10 +136,33 @@ def test_an_unsimulated_candidate_is_not_printed_as_a_zero(
     uncertain."""
     module = _module()
     candidate = _candidate()
-    module._print_candidate(candidate, None, _impact(candidate, simulated=False, delta_wins=0.0))
+    module._print_candidate(
+        candidate,
+        None,
+        _impact(
+            candidate,
+            simulated=False,
+            delta_wins=0.0,
+            not_simulated_because="no season projection for him",
+        ),
+    )
     out = capsys.readouterr().out
     assert "NOT SIMULATED" in out
+    assert "no season projection for him" in out, "it says WHY, which is the actionable part"
     assert "+0.00 wins" not in out
+
+
+def test_an_unsimulated_impact_must_carry_a_reason() -> None:
+    """The CLI interpolates it into a sentence, so an empty one renders "NOT SIMULATED — ."
+    The dataclass refuses rather than letting a caller construct that."""
+    with pytest.raises(ValueError, match="must say why"):
+        SwapImpact(
+            candidate=_candidate(),
+            delta_wins=0.0,
+            delta_playoff_pct=0.0,
+            delta_title_pct=0.0,
+            simulated=False,
+        )
 
 
 def test_a_delta_inside_the_noise_is_marked(capsys: pytest.CaptureFixture[str]) -> None:
@@ -152,8 +175,9 @@ def test_a_delta_inside_the_noise_is_marked(capsys: pytest.CaptureFixture[str]) 
     assert "inside noise" in out
     # The row names the floor it was judged against, because a swap and a free add are held to
     # different ones -- a bare "inside noise" on a 0.09 free add contradicts a footer quoting
-    # the paired 0.06.
-    assert "floor 0.06" in out
+    # the paired floor. Three decimals, because two rounds a delta of -0.0615 and its floor of
+    # 0.062 to the same "0.06" and the row then reads as though 0.06 were inside 0.06.
+    assert "floor 0.062" in out
 
     module._print_candidate(candidate, None, _impact(candidate, delta_wins=0.30))
     assert "inside noise" not in capsys.readouterr().out
@@ -167,7 +191,7 @@ def test_a_free_add_is_judged_against_the_wider_floor(
     free = _candidate(needs_no_drop=True, drop_player_id=None, drop_player="", drop_cost=0.0)
     module._print_candidate(free, None, _impact(free, delta_wins=0.09))
     out = capsys.readouterr().out
-    assert "inside noise" in out and "floor 0.13" in out
+    assert "inside noise" in out and "floor 0.127" in out
 
     swap = _candidate()
     module._print_candidate(swap, None, _impact(swap, delta_wins=0.09))

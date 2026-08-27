@@ -223,7 +223,16 @@ def report(settings: Settings) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__ or "")
     parser.add_argument("--n-sims", type=int, default=2000)
-    parser.add_argument("--repeats", type=int, default=8, help="how many seeds to average over")
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=6,
+        help=(
+            "how many seeds to average over. Six, because that is what the constants in "
+            "`midseason.swap_impact` were measured at -- a different default means a "
+            "re-run cannot reproduce the stderr they quote."
+        ),
+    )
     parser.add_argument(
         "--swap-points",
         type=float,

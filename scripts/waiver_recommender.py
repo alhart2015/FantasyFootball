@@ -113,12 +113,18 @@ def _print_candidate(
         )
     else:
         # The floor differs by regime, so the row says which one it was judged against --
-        # otherwise a free add reading "+0.09 (inside simulation noise)" contradicts a footer
-        # quoting 0.06.
-        floor = PAIRED_DELTA_NOISE if impact.paired else UNPAIRED_DELTA_NOISE
-        certainty = "" if impact.beats_noise else f"   (inside noise, floor {floor:.2f})"
+        # otherwise a free add reading "+0.09 (inside noise)" contradicts a footer quoting 0.06.
+        # Read off the object rather than recomputed, so the printed floor cannot disagree with
+        # the verdict it explains.
+        #
+        # Three decimals, because two rounds a delta of -0.0615 and its floor of 0.062 to the
+        # same "0.06" and the row then reads as though 0.06 were inside 0.06 -- at exactly the
+        # boundary this annotation exists to describe.
+        certainty = (
+            "" if impact.beats_noise else f"   (inside noise, floor {impact.noise_floor:.3f})"
+        )
         print(
-            f"    {impact.delta_wins:+.2f} wins   "
+            f"    {impact.delta_wins:+.3f} wins   "
             f"{impact.delta_playoff_pct * 100:+.1f}% playoffs   "
             f"+{candidate.lineup_gain:.1f} lineup{certainty}"
         )
@@ -305,9 +311,9 @@ def run(args: argparse.Namespace) -> int:
     else:
         print(
             f"\n  Δ wins is a simulated difference. A swap is paired (same roster size both "
-            f"sides) and its noise floor is {PAIRED_DELTA_NOISE:.2f}; an add into an open spot "
+            f"sides) and its noise floor is {PAIRED_DELTA_NOISE:.3f}; an add into an open spot "
             f"grows the roster, so it is unpaired and its floor is "
-            f"{UNPAIRED_DELTA_NOISE:.2f}. Roughly 140 season points to a win."
+            f"{UNPAIRED_DELTA_NOISE:.3f}. Roughly 140 season points to a win."
         )
     return 0
 

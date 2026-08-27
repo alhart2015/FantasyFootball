@@ -7,6 +7,7 @@ shaped like a real ESPN multi-view response.
 from __future__ import annotations
 
 import json
+import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ from projections.ingest.espn_league import (
     EspnCredentials,
     EspnLeagueError,
     build_league_config,
+    fetch_free_agents,
+    fetch_league_payload,
     find_my_team_id,
     parse_draft_order,
     parse_draft_picks,
@@ -991,3 +994,104 @@ def test_free_agents_and_rosters_describe_injuries_identically() -> None:
     shared = {"player", "pos", "nfl_team", "injury_status", "injury_status_raw"}
     assert shared <= roster_cols
     assert shared <= fa_cols
+
+
+# --- the shared request handler ------------------------------------------------------------------
+
+
+class _Response:
+    def __init__(self, payload: object) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _Response:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("http://espn", code, "Reason", hdrs=None, fp=None)  # type: ignore[arg-type]
+
+
+def test_an_empty_top_level_list_is_fatal_for_every_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The behaviour a flag once made configurable, and should not have.
+
+    `{"players": []}` means "nobody matched the filter" -- an answer. An empty top-level LIST
+    is a malformed response, and letting the free-agent caller swallow it made a failed request
+    read as an empty wire, while on the roster-pricing call it made my own starters
+    unprojectable and inflated every recommendation with nothing printed to say so.
+    """
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response([]))
+    creds = EspnCredentials(swid="{X}", espn_s2="s2")
+    with pytest.raises(EspnLeagueError, match="empty payload"):
+        fetch_league_payload(1, 2026, creds)
+    with pytest.raises(EspnLeagueError, match="empty payload"):
+        fetch_free_agents(1, 2026, creds)
+
+
+def test_every_error_names_which_call_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three ESPN calls go out per waiver run. A bare "ESPN HTTP 500 for league 856974" says
+    nothing about which one, which is the whole reason `what` exists."""
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise _http_error(500)
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    creds = EspnCredentials(swid="{X}", espn_s2="s2")
+    with pytest.raises(EspnLeagueError, match="fetching the league"):
+        fetch_league_payload(1, 2026, creds)
+    with pytest.raises(EspnLeagueError, match="freeagent"):
+        fetch_free_agents(1, 2026, creds)
+
+
+def test_a_404_does_not_claim_the_league_is_missing_on_a_player_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run has already fetched the league by then, so "ESPN has no league N" contradicts
+    what just happened and sends the reader to check league renewal instead of the view."""
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise _http_error(404)
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    creds = EspnCredentials(swid="{X}", espn_s2="s2")
+    with pytest.raises(EspnLeagueError) as caught:
+        fetch_free_agents(1, 2026, creds)
+    assert "freeagent" in str(caught.value)
+    assert "scoring period" in str(caught.value)
+
+
+def test_a_401_says_which_cookie_and_that_swid_is_not_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identical advice from every call, which is why the handler is shared: the two had
+    drifted to different wording for the same failure."""
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise _http_error(401)
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    creds = EspnCredentials(swid="{X}", espn_s2="s2")
+    with pytest.raises(EspnLeagueError, match="espn_s2"):
+        fetch_league_payload(1, 2026, creds)
+    with pytest.raises(EspnLeagueError, match="espn_s2"):
+        fetch_free_agents(1, 2026, creds)
+
+
+def test_a_one_element_list_is_unwrapped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Some ESPN endpoints wrap the object in a list; the parsers only ever see one shape."""
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response([{"teams": []}]))
+    payload = fetch_league_payload(1, 2026, EspnCredentials(swid="{X}", espn_s2="s2"))
+    assert payload == {"teams": []}
+
+
+def test_a_non_dict_payload_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response("nope"))
+    with pytest.raises(EspnLeagueError, match="Unexpected ESPN payload shape"):
+        fetch_league_payload(1, 2026, EspnCredentials(swid="{X}", espn_s2="s2"))

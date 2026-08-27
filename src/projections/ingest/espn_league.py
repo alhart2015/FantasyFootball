@@ -410,9 +410,15 @@ def _get_json(
                 "and copy espn_s2 again."
             ) from exc
         if exc.code == 404:
+            # `what` is in the message because a 404 means different things per call. On the
+            # league read it plausibly means the league is not published; on a player-info
+            # read the run has ALREADY fetched the league successfully, so telling the reader
+            # the league does not exist contradicts what just happened and sends them to check
+            # the wrong thing.
             raise EspnLeagueError(
-                f"ESPN has no league {league_id} for season {season} (404). If the league was "
-                "just renewed, the new season may not be published yet."
+                f"ESPN returned 404 {what} for league {league_id} season {season}. If this was "
+                "the league read, the new season may not be published yet; otherwise check the "
+                "scoring period and the view."
             ) from exc
         raise EspnLeagueError(
             f"ESPN HTTP {exc.code} {what} for league {league_id}: {exc.reason}"

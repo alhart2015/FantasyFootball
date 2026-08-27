@@ -59,8 +59,16 @@ class SwapImpact:
     #: Why, when it could not. Two causes -- one about the data (nobody projects him), one
     #: about the roster (full, and nothing on it can be dropped) -- and they are different
     #: facts, so a caller that prints only the first asserts something false whenever it was
-    #: the second.
+    #: the second. **Required whenever `simulated` is False**, checked below: the CLI
+    #: interpolates it into a sentence, and an empty one renders "NOT SIMULATED — ."
     not_simulated_because: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.simulated and not self.not_simulated_because:
+            raise ValueError(
+                "an unsimulated SwapImpact must say why: the reason is printed to the reader, "
+                "and the two causes (no projection / no legal drop) are different facts."
+            )
 
     @property
     def paired(self) -> bool:
@@ -89,6 +97,17 @@ class SwapImpact:
         return self.simulated and self.delta_wins > 0.0
 
     @property
+    def noise_floor(self) -> float:
+        """The spread this delta has to clear to count as signal.
+
+        **One owner.** The verdict and the number a caller prints beside it were computed
+        independently from the same inputs, so a change to one would silently leave the other
+        quoting a floor the verdict was never taken against — the same disagreement `paired`
+        was made a property to prevent.
+        """
+        return PAIRED_DELTA_NOISE if self.paired else UNPAIRED_DELTA_NOISE
+
+    @property
     def beats_noise(self) -> bool:
         """Whether the delta is bigger than the simulation noise on it.
 
@@ -103,8 +122,7 @@ class SwapImpact:
         is held to the wider unpaired bar. Printing it against the paired one would mark noise
         as signal on exactly the recommendations that need no justification to act on.
         """
-        floor = PAIRED_DELTA_NOISE if self.paired else UNPAIRED_DELTA_NOISE
-        return self.simulated and abs(self.delta_wins) > floor
+        return self.simulated and abs(self.delta_wins) > self.noise_floor
 
 
 #: Standard DEVIATION of a paired delta at 2,000 sims, measured by
@@ -117,9 +135,14 @@ class SwapImpact:
 #: printing them to two decimals is inventing precision.
 PAIRED_DELTA_NOISE = 0.062
 
-#: The same spread when the two runs do NOT share their draws -- measured at 0.127, which is
-#: roughly `sd * sqrt(2)` as independent errors compose. A free add is in this regime because it
-#: changes the roster size.
+#: The same spread when the two runs do NOT share their draws.
+#:
+#: **Derived, not measured.** `measure_swap_noise.py` reports it as `sd * sqrt(2)` from
+#: same-size runs, which is what two fully independent errors compose to; it never simulates a
+#: roster that gained a player, which is the regime a free add is actually in. The true figure
+#: is somewhere in `[PAIRED_DELTA_NOISE, 0.127]` and this takes the conservative end, so a
+#: free-add delta has to be larger before the tool will call it signal. Measuring it properly
+#: means teaching that script to change a roster's size.
 UNPAIRED_DELTA_NOISE = 0.127
 
 
@@ -143,7 +166,8 @@ def simulate_swaps(
     differ by simulation noise alone, and at 2,000 sims that noise (sd 0.090 wins) is larger
     than a realistic swap is worth. Every run here — the baseline and every candidate — starts
     from `np.random.default_rng(seed)`, so the two sides share their draws and most of the
-    noise cancels. Measured: the paired difference carries sd 0.062 against 0.127 unpaired.
+    noise cancels. Measured: the paired difference carries sd 0.062; the ~0.127 unpaired
+    figure is DERIVED as `sd * sqrt(2)`, not measured.
 
     That is a 2x reduction rather than the order of magnitude common random numbers can give,
     because `project_league_standings` reseeds internally and a roster change perturbs the draw
@@ -196,10 +220,13 @@ def simulate_swaps(
                     delta_playoff_pct=0.0,
                     delta_title_pct=0.0,
                     simulated=False,
+                    # `impossible` first. When a move is BOTH illegal and unprojectable,
+                    # the illegal half is the actionable one -- no amount of better data makes
+                    # a full roster with nothing droppable into a legal add.
                     not_simulated_because=(
-                        "no season projection for him"
-                        if unprojected
-                        else "your active roster is full and nobody on it can be dropped"
+                        "your active roster is full and nobody on it can be dropped"
+                        if impossible
+                        else "no season projection for him"
                     ),
                 )
             )
