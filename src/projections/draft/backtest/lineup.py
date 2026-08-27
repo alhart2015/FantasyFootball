@@ -1,8 +1,15 @@
 """Set a weekly lineup by PROJECTION (the manager's decision), score it by ACTUAL points.
 
-Mirrors roster_score.optimal_lineup_points' restrictive-slot-first greedy, but assigns by
-`projected` and sums `actual`. Players with a null projection are unstartable (bye/inactive);
-a started player with a null actual contributes 0; unfilled slots contribute 0.
+The choice itself is `roster_eligibility.choose_starters`, shared with the waiver recommender;
+this module is the "set by projection, score by actual" wrapper around it. Players with a null
+projection are unstartable (bye/inactive); a started player with a null actual contributes 0;
+unfilled slots contribute 0.
+
+`assistant.roster_score.optimal_lineup_points` still carries its own copy of the same greedy,
+over a DataFrame of season points. Not merged here on purpose: it sits in the auction bidding
+inner loop where the per-call frame conversion would cost more than the duplication does, and
+`assistant.season_value` holds a third, vectorised over availability draws. Three shapes of one
+algorithm is worth knowing about; collapsing them is its own change with its own benchmark.
 """
 
 from __future__ import annotations
@@ -10,8 +17,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
-from projections.draft.roster_eligibility import FLEX_SLOTS, POSITION_SLOTS
-from projections.schemas import Position, RosterSlot
+from projections.draft.roster_eligibility import choose_starters
+from projections.schemas import RosterSlot
 
 
 def weekly_lineup_points(
@@ -32,47 +39,18 @@ def weekly_lineup_points(
     Players with a null `projected` are unstartable. A started player whose `score_by`
     value is null contributes 0. Slots with no eligible player also contribute 0.
     """
-    startable = [p for p in roster if p.get("projected") is not None]
-
-    by_pos: dict[Position, list[Mapping[str, Any]]] = {pos: [] for pos in Position}
-    for p in startable:
-        by_pos[Position(p["position"])].append(p)
-    for pos in by_pos:
-        by_pos[pos].sort(key=lambda p: float(p["projected"]), reverse=True)
-
-    cursor: dict[Position, int] = {pos: 0 for pos in Position}
-
-    def _score(p: Mapping[str, Any]) -> float:
-        # NOTE: score_by must be a key present in each roster dict ("projected"/"actual").
-        # This coupling is by convention, not type-checked — a missing key reads as 0.0 (None),
-        # silently zeroing every player. If you rename the roster dict keys, update the
-        # score_by Literal in this signature to match.
-        v = p.get(score_by)
-        return 0.0 if v is None else float(v)
-
+    chosen = choose_starters(
+        list(roster),
+        roster_slots,
+        value=lambda p: None if p.get("projected") is None else float(p["projected"]),
+        position=lambda p: str(p["position"]),
+    )
     total = 0.0
-
-    # 1) Single-position starting slots (most restrictive first).
-    for slot in POSITION_SLOTS:
-        pos = Position(slot.value)
-        for _ in range(roster_slots.get(slot, 0)):
-            if cursor[pos] < len(by_pos[pos]):
-                total += _score(by_pos[pos][cursor[pos]])
-                cursor[pos] += 1
-
-    # 2) Flex tiers, narrowest eligibility first; each takes the highest-projected
-    #    remaining eligible player and scores their actual points.
-    for slot, eligible in FLEX_SLOTS:
-        for _ in range(roster_slots.get(slot, 0)):
-            best_pos: Position | None = None
-            best_proj = float("-inf")
-            for pos in sorted(eligible, key=lambda p: p.value):
-                if cursor[pos] < len(by_pos[pos]):
-                    proj = float(by_pos[pos][cursor[pos]]["projected"])
-                    if proj > best_proj:
-                        best_pos, best_proj = pos, proj
-            if best_pos is not None:
-                total += _score(by_pos[best_pos][cursor[best_pos]])
-                cursor[best_pos] += 1
-
+    for index in chosen:
+        # NOTE: score_by must be a key present in each roster dict ("projected"/"actual").
+        # This coupling is by convention, not type-checked -- a missing key reads as 0.0
+        # (None), silently zeroing every player. If you rename the roster dict keys, update
+        # the score_by Literal in this signature to match.
+        points = roster[index].get(score_by)
+        total += 0.0 if points is None else float(points)
     return total

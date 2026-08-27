@@ -10,7 +10,7 @@ an open *starting* (non-bench) slot.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from math import ceil
 from typing import TypeVar
 
@@ -40,6 +40,79 @@ FLEX_SLOTS: tuple[tuple[RosterSlot, frozenset[Position]], ...] = (
     (RosterSlot.FLEX, FLEX_ELIGIBLE),
     (RosterSlot.SUPER_FLEX, SUPER_FLEX_ELIGIBLE),
 )
+
+
+def choose_starters(
+    players: Sequence[_Player],
+    roster_slots: Mapping[RosterSlot, int],
+    *,
+    value: Callable[[_Player], float | None],
+    position: Callable[[_Player], str],
+) -> list[int]:
+    """Indices of the players who start, best lineup first. Restrictive slots, then flex.
+
+    **The selection, extracted.** Three implementations of this greedy already existed --
+    `assistant.roster_score.optimal_lineup_points` over a DataFrame of season points,
+    `backtest.lineup.weekly_lineup_points` over mappings of weekly points, and a vectorised
+    sampler in `assistant.season_value` -- and each returned only a total. The waiver
+    recommender needs to know *which* players started, because the player it should suggest
+    dropping is by definition one who did not. Rather than write a fourth copy, the choice
+    lives here, beside `POSITION_SLOTS` and `FLEX_SLOTS`, which is the taxonomy it walks.
+
+    `value` returning `None` means unstartable — a bye week, or a player with no projection.
+    Distinct from returning `0.0`, which is a real projection of nothing and can still fill a
+    slot no one else is eligible for.
+
+    Fill order is load-bearing: single-position slots first (most restrictive), then flex tiers
+    narrowest-first. Greedy is optimal under that order for these slot structures, which is why
+    every copy of this has used it.
+
+    Ties break on the earlier index, so a caller that sorts its input gets a deterministic
+    lineup. Returned in fill order rather than sorted, so the caller can see which slot each
+    player filled by position in the list.
+    """
+    startable: list[tuple[int, float, Position]] = []
+    for index, player in enumerate(players):
+        points = value(player)
+        if points is None:
+            continue
+        try:
+            pos = Position(position(player))
+        except ValueError:
+            # A position the league does not roster (an IDP slot, an ESPN oddity). Unstartable
+            # rather than an error: one unrecognised player must not stop a lineup being set.
+            continue
+        startable.append((index, float(points), pos))
+
+    by_pos: dict[Position, list[tuple[int, float]]] = {pos: [] for pos in Position}
+    for index, points, pos in startable:
+        by_pos[pos].append((index, points))
+    for pos in by_pos:
+        # Descending by points, then ascending by index so the tie-break is the caller's order.
+        by_pos[pos].sort(key=lambda pair: (-pair[1], pair[0]))
+
+    cursor: dict[Position, int] = {pos: 0 for pos in Position}
+    chosen: list[int] = []
+
+    for slot in POSITION_SLOTS:
+        pos = Position(slot.value)
+        for _ in range(roster_slots.get(slot, 0)):
+            if cursor[pos] < len(by_pos[pos]):
+                chosen.append(by_pos[pos][cursor[pos]][0])
+                cursor[pos] += 1
+
+    for slot, eligible in FLEX_SLOTS:
+        for _ in range(roster_slots.get(slot, 0)):
+            best_pos: Position | None = None
+            best_value = float("-inf")
+            for pos in sorted(eligible, key=lambda p: p.value):
+                if cursor[pos] < len(by_pos[pos]) and by_pos[pos][cursor[pos]][1] > best_value:
+                    best_pos, best_value = pos, by_pos[pos][cursor[pos]][1]
+            if best_pos is not None:
+                chosen.append(by_pos[best_pos][cursor[best_pos]][0])
+                cursor[best_pos] += 1
+
+    return chosen
 
 
 def bench_eligible_positions(roster_slots: Mapping[RosterSlot, int]) -> frozenset[Position]:
