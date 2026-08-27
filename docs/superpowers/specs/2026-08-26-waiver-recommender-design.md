@@ -1,6 +1,6 @@
 # Waiver / free-agent recommender — design
 
-**Status:** design, not yet implemented
+**Status:** design, not yet implemented (§4 measured 2026-08-26)
 **Branch:** `feat/waiver-recommender`
 **Date:** 2026-08-26
 **Issue:** #104 53a (the umbrella issue is closed; this is its last unbuilt feature)
@@ -24,6 +24,7 @@ drop-this-add-that pair rather than handing back a ranked list to cross-referenc
 | Season simulation | `midseason.standings.project_league_standings` | projected wins, playoff %, bye %, title % |
 | My roster, resolved | `midseason.my_team.build_my_team` | roster + `gsis_id` + YTD + ROS, one team |
 | Actuals under our scoring | `scoring.actuals.actual_season_total` | `weekly_stats` × league `Ruleset` |
+| **Weekly projections** | `draft.backtest.espn_weekly.refresh_espn_weekly_projections` | per-week ESPN projections, already written to the store for 2021-2025 |
 | Positional ranking | `rankings.rank_within_position` | integer ranks, no fractional ties |
 | ESPN league pull | `ingest.espn_league.fetch_league_payload` | settings, teams, rosters, schedule |
 | A `kona_player_info` fetch | `draft.backtest.espn_weekly._fetch_espn_week` | the request shape, including the filter header |
@@ -91,100 +92,185 @@ raw value carried so it can be reported rather than silently swallowed. ESPN add
 
 ---
 
-## 4. The modelling call: turning a status into points
+## 4. What an injury designation actually costs — measured
 
-This is the one genuinely new piece of modelling, and it has a free parameter, so it is stated
-here rather than buried.
+This was going to be a table of guesses. It is not, because the data to measure it is already
+on disk: weekly injury reports (`nfl_data_py.import_injuries`), ESPN weekly projections
+(`data/processed/espn_weekly_projections`, 2021-2025), and `weekly_stats` scored under the
+league ruleset. Everything below is 2021-2025, QB/RB/WR/TE.
 
-A rest-of-season projection assumes a healthy player. An injured player will miss some games.
-So:
+### 4.1 A Questionable starter plays. A Questionable deep-bench player does not.
 
-```
-adjusted_ros = ros_points × (games_remaining − expected_games_missed) / games_remaining
-```
+Play rate given a Questionable designation, split by what ESPN projected him for that week:
 
-`expected_games_missed` per status, as a v1 table:
-
-| Status | Games missed | Why |
+| Projected | n | Played |
 |---|---|---|
-| `ACTIVE` / absent / `UNKNOWN` | 0 | healthy, or we cannot tell |
-| `DAY_TO_DAY` | 0 | practice designation, plays most weeks |
-| `QUESTIONABLE` | 0.5 | genuinely a coin flip on game day |
-| `DOUBTFUL` | 1 | almost never plays |
-| `OUT` | 1 | ruled out for this week only — ESPN re-reports weekly |
-| `SUSPENSION` | 1 | same shape: a known absence with an unknown length |
-| `INJURY_RESERVE` | 4 | the NFL minimum for a return from IR |
+| < 2 pts | 864 | 11.0% |
+| 2-5 | 251 | 72.9% |
+| 5-10 | 444 | 93.7% |
+| 10-15 | 308 | 99.4% |
+| 15+ | 94 | 100.0% |
 
-**Every one of these is a guess, and the table is the only place they live.** The IR number is
-the most consequential and the least certain: a player can return at four weeks or be gone for
-the year, and ESPN's status does not distinguish them. Four is the floor, which biases the tool
-toward *keeping* an IR'd player — the conservative direction, since dropping a returning starter
-is worse than holding him a week too long.
+**The headline "54% of Questionable players play" is true and useless.** It is an average over
+a population dominated by players who were never going to play, injury or not. Conditioned on
+the only players a lineup decision is ever about, Questionable means *plays*.
 
-**What this deliberately does not do** is re-model availability. `availability.py` already
-learns per-player injury *rates* from prior seasons and is already applied inside the
-simulator. This adjustment is about a specific, known, current absence, which historical rates
-cannot see. The two compose: the model says "this player misses 15% of games in a typical
-season", the status says "and he is definitely missing this one".
+Any aggregate over injury designations that does not condition on projected volume is measuring
+roster churn, not injury.
 
-**The tool reports the adjustment rather than applying it silently.** A recommendation that
-only exists because of an injury discount says so, so you can disagree with the table.
+### 4.2 But he plays worse — by about 14%
+
+Share of ESPN's weekly projection delivered, restricted to players projected for 5+ points:
+
+| | n | Mean delivered | Median |
+|---|---|---|---|
+| Healthy | 13,960 | 96.5% | 84.6% |
+| Questionable | 846 | **83.4%** | 72.7% |
+
+Conditional on playing at all: healthy 100.3%, Questionable 89.2%. So most of the gap is "played
+hurt and produced less", not "sat".
+
+**Multiplier: 0.86.**
+
+### 4.3 The confound, checked
+
+If ESPN already discounted a Questionable player's projection, §4.2 would be measuring nothing —
+the shortfall would be real points against an already-lowered bar, and applying our own
+multiplier on top would double-count.
+
+Test: a player's projection in his Questionable weeks against his own median healthy-week
+projection. Result: **100.4%** (n=843). ESPN does not discount Questionable. The 0.86 is ours to
+apply.
+
+**It does discount `Out`**: of 1,475 `Out` designations reaching the projection feed, exactly one
+carries a projection of 5+ points. ESPN zeroes them. **So a weekly view must not apply an `Out`
+multiplier on top of an ESPN weekly projection** — that is a double-discount, and its symptom is
+a plausible-looking number.
+
+### 4.4 The two horizons need different adjustments
+
+The finding that reshapes this spec: **a Questionable tag covers one week.**
+
+- **Rest-of-season** (the waiver swap): 0.86 applied to one week out of ten remaining is a ~1.4%
+  haircut. It will never flip a drop/add decision. What moves a season-long number is a
+  *multi-week* absence — IR, or a long injury.
+- **This week** (start/sit, streaming): 0.86 on a single week's projection is a 14% cut, which is
+  exactly the size that flips a start/sit call between two close players.
+
+Both are real questions and the tool answers both. Collapsing them into one number was the
+mistake this section exists to correct.
+
+### 4.5 The tables, per horizon
+
+**Weekly** — multiply the week's projection:
+
+| Status | Multiplier | Source |
+|---|---|---|
+| Active / absent / unknown | 1.00 | — |
+| Questionable | **0.86** | measured, n=846 |
+| Doubtful | 0.04 | measured play rate 0.4%, n=269 |
+| Out | 0.00 | measured play rate 0.1%, n=1,661 |
+
+Applied only when the source projection is **not** already injury-aware (§4.3).
+
+**Rest-of-season** — expected games missed:
+
+| Status | Games missed | Source |
+|---|---|---|
+| Active / day-to-day / unknown | 0 | — |
+| Questionable | 0.14 | 1 − 0.86, one week |
+| Doubtful | 1 | measured |
+| Out | 1 | measured; ESPN re-reports weekly |
+| Suspension | 1 | assumed — same shape, known absence, unknown length |
+| **Injured Reserve** | **4** | **guess.** NFL minimum. Not measurable from the injury report, which carries game status, not roster designation |
+
+**IR is the only number still guessed, and the one that matters most.** Set to the minimum, which
+biases toward keeping the player — dropping someone who returns is worse than holding him a week
+too long. §5.3 is how the tool compensates for not knowing.
 
 ---
 
-## 5. The recommendation — points first
+## 5. The recommendation
 
-`src/projections/midseason/waivers.py`:
+`src/projections/midseason/waivers.py`, one entry point per horizon.
+
+### 5.1 Rest of season — "should I drop him and add this guy"
 
 ```python
-def recommend_swaps(run: MyTeamRun, free_agents: pd.DataFrame, *, config, id_map, min_gain=...)
-    -> list[Swap]
+def recommend_swaps(run: MyTeamRun, free_agents, *, config, id_map, min_gain=...) -> list[Swap]
 ```
 
 `MyTeamRun` already carries the roster, the pool with `season_mean_fpts` rewritten to remaining
-points, and the week. The free agents are scored through **the same `remaining_totals` call as
-my roster** — one code path, so a free agent and a rostered player are never measured
-differently. That is the whole reason this takes a `MyTeamRun` rather than re-deriving.
+points, and the week. Free agents are scored through **the same `remaining_totals` call as my
+roster** — one code path, so a free agent and a rostered player can never be measured
+differently. That is why this takes a `MyTeamRun` rather than re-deriving one.
 
-**Swaps are compared within position.** A WR who out-projects my worst RB is not a swap I can
-make without breaking my lineup, and a v1 that ignores positional slots produces confident
-nonsense. FLEX is handled by treating RB/WR/TE as mutually comparable *for flex-eligible drop
-candidates only*, which is a rule the league config already states.
+**Swaps are compared within position**, flex-aware from `config.roster_slots`. A WR who
+out-projects my worst RB is not a move I can make.
 
-**The drop candidate is my worst player at that position**, by adjusted ROS, and only from the
-bench and IR unless the free agent beats a starter outright. Recommending you drop a starter is
-a real recommendation, and the tool should make it when it is right — but it should not make it
-by accident because a bench player happened to sort oddly.
+**The drop candidate is my worst player at that position**, by adjusted rest-of-season points,
+from the bench and IR first. It will recommend dropping a starter when that is right, but not
+because a bench player sorted oddly.
 
-Each `Swap` reports:
+Each `Swap` reports drop, add, rest-of-season gain, waivers-vs-free-agent, percent rostered, and
+— when an injury adjustment drove it — the status and the write-up (§5.3).
 
-- who to drop and who to add, both by name
-- **ROS gain** — the number the recommendation is made on
-- whether the add is on waivers or a straight free agent
-- percent rostered, as a proxy for "will this claim actually clear"
-- **why**, when an injury discount drove it, naming the status
+### 5.2 This week — "who do I start, and is there a better option on the wire"
 
-Output is sorted by ROS gain, with `min_gain` filtering the noise: two points over a rest of a
-season is not a roster move, and a list that includes it trains you to ignore the list.
+```python
+def rank_this_week(run: MyTeamRun, free_agents, *, week, config, id_map) -> list[WeeklyRow]
+```
+
+Same roster, different number: this week's projection with the §4.5 weekly multiplier. This is
+where 0.86 earns its keep — a 14% cut on one week is the size that decides a close start/sit, and
+it is the case that motivated measuring any of this.
+
+Weekly projections come from `refresh_espn_weekly_projections`, which already exists and already
+writes to the store. **The `Out` double-discount guard (§4.3) lives here**, with a test: an `Out`
+player must not be zeroed twice.
+
+### 5.3 What the tool shows instead of pretending to know
+
+For any player on IR or carrying a multi-week absence, the numeric adjustment is a guess (§4.5)
+and the write-up is not. ESPN's public athlete endpoint carries it, no auth:
+
+```
+status:       Questionable
+type:         Groin · Soreness · 2026-08-24
+shortComment: "Nacua (groin) isn't practicing Monday, Sarah Barshop of ESPN.com reports."
+longComment:  "...ticking toward two weeks off the practice field... the team likely is being
+               as cautious as possible with Week 1 against the 49ers in mind."
+```
+
+Body part, severity, a beat reporter's read, and a date so staleness is visible.
+
+**The text is shown, never parsed.** A regex for "four to six weeks" is wrong whenever the
+sentence is about practice rather than games, or about a different player — and the error would
+land inside a projection, where nobody can see it. The number says what it assumed; the text lets
+you overrule it.
+
+**Cost and caching.** One call per player, and the league-wide feed is 403. Fetched only for
+players whose fantasy status is not Active, cached by player and date. A handful of calls, not a
+hundred.
 
 ---
 
-## 6. The recommendation — wins, for the shortlist only
+## 6. Wins, for the shortlist only
 
 Points answer "is he better". Wins answer "does this help me win the league", and those come
-apart: a bench upgrade at a position I already start two good players at is worth real points
-and almost no wins.
+apart: a bench upgrade at a position I already start two good players at is worth real points and
+almost no wins.
 
-So the top `k` swaps by ROS gain (default 3) are re-run through
-`project_league_standings` with the swap applied, reporting Δ projected wins, Δ playoff %,
-Δ title %. **Only the shortlist**, because each one is a full Monte-Carlo season and the whole
-point of §5 is that it returns in seconds.
+So the top `k` swaps by rest-of-season gain (default 3) are re-run through
+`project_league_standings` with the swap applied, reporting Δ projected wins, Δ playoff %, Δ
+title %. **Only the shortlist**, because each is a full Monte-Carlo season and the point of §5.1
+is that it returns in seconds.
 
-The baseline is a single run with no swap, shared across all candidates and the same
-`rng` seed — two runs at different seeds differ by simulation noise alone, and at 2000 sims
-that noise is comparable to the effect being measured. **Same seed, one baseline, differences
-only.** This is the failure mode most likely to produce a confident wrong answer here, so it
-gets a test that asserts a no-op swap reports exactly zero.
+The baseline is a single run with no swap, shared across all candidates at the same `rng` seed —
+two runs at different seeds differ by simulation noise alone, and at 2000 sims that noise is
+comparable to the effect being measured. **Same seed, one baseline, differences only.** This is
+the failure mode most likely to produce a confident wrong answer here, so it gets a test
+asserting a no-op swap reports exactly zero.
 
 ---
 
@@ -203,25 +289,43 @@ that work is done.
 
 ## 8. Out of scope
 
-- **Acquisition cost.** FAAB bidding and waiver priority are how you *get* the player; this
-  tool is about whether you want him. Worth its own pass later.
-- **Streaming.** "Best DST/K this week" is a weekly-projection question, not a
-  rest-of-season one, and the pool does not carry kickers or defenses at all.
-- **Multi-player moves.** One drop, one add. Joint swaps are a combinatorial problem and
-  #154's trade analyzer is the place that argument gets had.
+- **Acquisition cost.** FAAB bidding and waiver priority are how you *get* the player; this tool
+  is about whether you want him. Worth its own pass later.
+- **Streaming DST/K.** The pool carries neither, so there is nothing to rank.
+- **Multi-player moves.** One drop, one add. Joint swaps are combinatorial and #154's trade
+  analyzer is where that argument gets had.
 - **Auto-execution.** The tool recommends; it never touches the league.
 
 ---
 
 ## 9. Plan
 
-1. `InjuryStatus` enum + `parse_rosters` carries it. Smallest change, unblocks everything.
+1. `InjuryStatus` enum + `parse_rosters` carries it. Smallest change, unblocks the rest.
 2. `fetch_free_agents` / `parse_free_agents`, with the truncation report.
-3. The injury adjustment table and `adjusted_ros`, with the reporting.
-4. `recommend_swaps` — points only, positional, min-gain filtered.
-5. `scripts/waiver_recommender.py`, run live against league 856974.
-6. The wins shortlist, shared baseline, same seed.
-7. The dashboard page.
+3. The §4.5 tables and both adjustments, with the `Out` double-discount guard and its test.
+4. `recommend_swaps` — rest of season, positional, min-gain filtered.
+5. The injury write-up fetch (§5.3), cached, non-Active players only.
+6. `scripts/waiver_recommender.py`, run live against league 856974.
+7. `rank_this_week` — the weekly horizon.
+8. The wins shortlist: top 3 swaps re-simulated, one shared baseline, one seed.
+9. The dashboard page.
 
-Steps 1–5 are independently useful: a points-only recommender you can run from the terminal is
-the thing that answers the Tuesday-morning question. 6 and 7 are upgrades to it.
+Steps 1-6 give a terminal tool that answers the Tuesday-morning question. 7 is the Sunday-morning
+one. 8 and 9 are upgrades to both.
+
+---
+
+## 10. Findings worth keeping regardless of this tool
+
+Recorded here because they outlive the feature and were expensive to establish:
+
+- **Any aggregate over injury designations must condition on projected volume**, or it measures
+  roster churn. "54% of Questionable players play" and "Questionable starters always play" are
+  both true of the same dataset.
+- **ESPN discounts `Out` in its weekly projections and does not discount `Questionable`.**
+  Anything consuming that feed needs to know which statuses are already priced in.
+- **A Questionable player who plays still delivers ~11% under his projection.** The designation is
+  informative even when it does not keep him off the field.
+- **The scripts that produced these numbers are worth keeping**, not just their outputs — see
+  `scripts/measure_injury_impact.py` (step 3), so the tables can be re-measured when the 2026
+  season adds a year of data.
