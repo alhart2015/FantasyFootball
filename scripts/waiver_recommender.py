@@ -189,8 +189,9 @@ def run(args: argparse.Namespace) -> int:
         print(f"  ! {note}")
 
     if open_spots:
-        print(f"
-  {open_spots} active roster spot(s) open — an add there costs nothing.")
+        # Said once, up front, because every "roster spot open" row below is claiming THESE
+        # spots -- not one each. Acting on two of them when one is free overfills the roster.
+        print(f"\n  {open_spots} active roster spot(s) open — an add there costs nothing.")
 
     if not candidates:
         print("\n  Nothing on the wire would change your starting lineup this week.")
