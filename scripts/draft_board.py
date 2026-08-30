@@ -7,6 +7,7 @@ Thin view over projections.draft.assistant.live.LiveDraftSession. Run with:
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -14,6 +15,11 @@ import pandas as pd
 import streamlit as st
 
 from projections.draft.assistant.availability_loader import load_store_availability
+from projections.draft.assistant.league_profile import (
+    DEFAULT_PROFILE_ROOT,
+    DEFAULT_STRATEGY,
+    discover_profiles,
+)
 from projections.draft.assistant.league_projection import N_BYES, PLAYOFF_SIZE
 from projections.draft.assistant.live import (
     BOARD_STRATEGIES,
@@ -35,6 +41,11 @@ from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, IdMapSchema, Position, VorpTableSchema
 
 _DEFAULT_ID_MAP = "data/raw/id_map.parquet"
+_PROFILE_ROOT_ENV = "FF_BOARD_PROFILE_ROOT"
+# Sentinel for "no configured league" in the League dropdown. Not a valid directory name, so
+# it can never collide with a real profile key.
+_GENERIC = "__generic__"
+_GENERIC_LABEL = "Generic preset (mock drafts)"
 
 
 def _load_inputs(vorp_path: Path, id_map_path: Path, league: LeagueConfig):  # type: ignore[no-untyped-def]
@@ -100,6 +111,16 @@ def _install_session(sess: LiveDraftSession, *, autosave_path: Path | None = Non
     st.session_state["autosave_path"] = autosave_path
 
 
+def _profiles_root() -> Path:
+    """Where to look for `board_profile.json` files.
+
+    Env-overridable rather than session-state-injected: the real root is gitignored user data
+    that would otherwise decide the outcome of every board test on this machine and no test at
+    all on a fresh clone. An env var also covers the runs that never touch session state.
+    """
+    return Path(os.environ.get(_PROFILE_ROOT_ENV, DEFAULT_PROFILE_ROOT))
+
+
 def _sidebar() -> None:
     st.sidebar.header("⚙ Setup")
     mode = st.sidebar.radio(
@@ -108,36 +129,102 @@ def _sidebar() -> None:
         index=0,
         format_func=lambda m: "Co-pilot (live)" if m == "copilot" else "Mock",
     )
-    scoring = st.sidebar.selectbox(
-        "Scoring",
-        SCORING_KEYS,
-        index=SCORING_KEYS.index(DEFAULT_SCORING),
-        format_func=lambda k: {"half": "Half-PPR", "ppr": "Full PPR", "std": "Standard"}[k],
+
+    # A configured league is selected by default, so the common case — the user's own draft —
+    # needs no sidebar input at all. Every field below is a defaulted override, not a
+    # question. `_GENERIC` is the escape hatch for a mock draft in some other format.
+    profiles, profile_errors = discover_profiles(_profiles_root())
+    for err in profile_errors:
+        # Never silently skipped: a profile that vanished on a typo would drop the board to a
+        # generic preset that looks fine and is not this league.
+        st.sidebar.warning(f"Ignoring {err.path}: {err.message}")
+    by_key = {p.key: p for p in profiles}
+    choice = st.sidebar.selectbox(
+        "League",
+        [*by_key, _GENERIC],
+        index=0,
+        format_func=lambda k: _GENERIC_LABEL if k == _GENERIC else by_key[k].label,
     )
-    n_teams = st.sidebar.selectbox("Teams", TEAM_SIZES, index=TEAM_SIZES.index(DEFAULT_TEAMS))
-    preset = get_preset(scoring, int(n_teams))
-    my_slot = st.sidebar.number_input("My draft slot", min_value=1, max_value=int(n_teams), value=1)
-    id_map_path = st.sidebar.text_input("id_map parquet", _DEFAULT_ID_MAP)
-    with st.sidebar.expander("Advanced: custom VORP table"):
-        custom_vorp = st.text_input("VORP parquet (overrides preset)", "")
-    vorp_path = custom_vorp.strip() or str(preset.table_path)
-    strategy_name = st.sidebar.selectbox("Strategy", BOARD_STRATEGIES, index=0)
+    profile = by_key.get(choice)
+
+    if profile is not None:
+        # The config is authoritative for scoring and team count, so offering dropdowns for
+        # them here would be offering the user a way to contradict their own league.
+        st.sidebar.caption(
+            f"{profile.league.ruleset.name} · {profile.league.n_teams} teams · "
+            f"{profile.league.roster_size} rounds · {profile.vorp_path}"
+        )
+        preset = None
+        n_teams = profile.league.n_teams
+        default_slot, default_season = profile.my_slot, profile.season
+        default_strategy, default_id_map = profile.strategy, str(profile.id_map_path)
+    else:
+        scoring = st.sidebar.selectbox(
+            "Scoring",
+            SCORING_KEYS,
+            index=SCORING_KEYS.index(DEFAULT_SCORING),
+            format_func=lambda k: {"half": "Half-PPR", "ppr": "Full PPR", "std": "Standard"}[k],
+        )
+        n_teams = st.sidebar.selectbox("Teams", TEAM_SIZES, index=TEAM_SIZES.index(DEFAULT_TEAMS))
+        preset = get_preset(scoring, int(n_teams))
+        default_slot, default_season = 1, 2026
+        default_strategy, default_id_map = DEFAULT_STRATEGY, _DEFAULT_ID_MAP
+
+    my_slot = st.sidebar.number_input(
+        "My draft slot", min_value=1, max_value=int(n_teams), value=int(default_slot)
+    )
+    strategy_name = st.sidebar.selectbox(
+        "Strategy", BOARD_STRATEGIES, index=BOARD_STRATEGIES.index(default_strategy)
+    )
     n_sims = st.sidebar.number_input(
         "n_sims (MC strategies)", min_value=50, max_value=2000, value=300, step=50
     )
     adp_jitter = st.sidebar.slider("ADP jitter", 0.0, 20.0, 8.0, 0.5)
-    season = st.sidebar.number_input("Season", min_value=2020, max_value=2030, value=2026)
+    season = st.sidebar.number_input(
+        "Season", min_value=2020, max_value=2030, value=int(default_season)
+    )
+    with st.sidebar.expander("Advanced: override paths"):
+        id_map_path = st.text_input("id_map parquet", default_id_map)
+        custom_vorp = st.text_input("VORP parquet (overrides preset)", "")
+        custom_league = st.text_input("league_config JSON (overrides preset)", "")
+    if profile is not None:
+        vorp_path = custom_vorp.strip() or str(profile.vorp_path)
+    else:
+        assert preset is not None  # set together in the else-branch above
+        vorp_path = custom_vorp.strip() or str(preset.table_path)
 
     if st.sidebar.button("Start / restart draft", type="primary"):
         try:
-            # Persist the preset's in-memory config to a real file so autosave/resume (which
-            # store the league config as a PATH) work for preset-started drafts.
-            league_config_path = materialize_league_config(preset)
+            # A preset's roster shape is a canonical skill roster, not any real league's.
+            # An explicit league_config.json overrides it: `league.roster_slots` drives
+            # roster eligibility for every recommendation, so a preset that starts 3 WR in
+            # a league that starts 2 silently recommends an unstartable third receiver.
+            if custom_league.strip():
+                league_config_path = Path(custom_league.strip())
+                league = LeagueConfig.model_validate_json(
+                    league_config_path.read_text(encoding="utf-8")
+                )
+                # The slot picker was bounded by whatever team count is in force. A config
+                # disagreeing with it would draft the wrong number of rounds against a slot
+                # the picker never validated, so refuse rather than guess.
+                if league.n_teams != int(n_teams):
+                    raise ValueError(
+                        f"league_config has n_teams={league.n_teams} but the board is set "
+                        f"to {int(n_teams)} teams — set them to match."
+                    )
+            elif profile is not None:
+                league, league_config_path = profile.league, profile.league_config_path
+            else:
+                assert preset is not None
+                league = preset.league_config
+                # Persist the preset's in-memory config to a real file so autosave/resume
+                # (which store the league config as a PATH) work for preset-started drafts.
+                league_config_path = materialize_league_config(preset)
             _install_session(
                 _build_session(
                     vorp_path=Path(vorp_path),
                     id_map_path=Path(id_map_path),
-                    league=preset.league_config,
+                    league=league,
                     league_config_path=league_config_path,
                     my_slot=int(my_slot),
                     mode=mode,
