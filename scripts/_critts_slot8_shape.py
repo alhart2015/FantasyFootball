@@ -5,10 +5,13 @@ that strategy *does*. This runs the winner over many simulated drafts and report
 of the hero's own picks, how often each position is taken and who the modal player is.
 
 That distinction matters at the table. A VORP board reads as an unbroken wall of RB in this
-league, because RB replacement level sits far below WR's. But `RawVorpStrategy` takes the
+league, because RB replacement level sits far below WR's. But every strategy here takes the
 best *roster-eligible* player, so once RB1/RB2/FLEX are filled a fourth RB stops being
 takeable and the board's apparent advice inverts. The per-round frequencies below are the
 board *after* roster construction is applied -- which is the thing you can actually follow.
+
+`--strategy` defaults to the board's own default. A shape read off one strategy while
+drafting on another is worse than no table at all, so the header prints which one ran.
 
 Usage:
     python scripts/_critts_slot8_shape.py --sims 300
@@ -23,9 +26,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from projections.draft.assistant.availability_loader import load_store_availability
+from projections.draft.assistant.live import MC_STRATEGIES, build_session_strategy
 from projections.draft.assistant.pick_timing import slot_for
 from projections.draft.assistant.simulation import _draft_picks
-from projections.draft.assistant.strategy import RawVorpStrategy
 from projections.draft.assistant.survival import default_sigma
 from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, VorpTableSchema
@@ -39,6 +43,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--my-slot", type=int, default=8)
     p.add_argument("--sims", type=int, default=300)
     p.add_argument("--seed", type=int, default=0)
+    # The shape is a property of the STRATEGY, not of the league -- reading a raw_vorp shape
+    # while drafting on another strategy is worse than having no table at all.
+    p.add_argument("--strategy", default="now_or_never_targeted")
+    p.add_argument("--strategy-n-sims", type=int, default=100)
+    p.add_argument("--season", type=int, default=2026)
     return p.parse_args()
 
 
@@ -50,7 +59,19 @@ def main() -> int:
     names = pool.set_index("gsis_id")["full_name"].to_dict()
     validated = VorpTableSchema.validate(pool)
 
-    strategy = RawVorpStrategy()
+    availability = None
+    if args.strategy in MC_STRATEGIES:
+        availability = load_store_availability(
+            validated, season=args.season, data_root=Path("data")
+        )
+    strategy = build_session_strategy(
+        args.strategy,
+        league=config,
+        sigma=None,
+        availability=availability,
+        n_sims=args.strategy_n_sims,
+        base_seed=0,
+    )
     jitter = default_sigma(config.n_teams)
 
     # round index -> Counter(position), and -> Counter(player)
@@ -70,8 +91,8 @@ def main() -> int:
             pos_counts.setdefault(rnd, Counter())[str(by_pos.get(gid, "?"))] += 1
             who_counts.setdefault(rnd, Counter())[names.get(gid, gid)] += 1
 
-    print(f"RawVorpStrategy from slot {args.my_slot} of {config.n_teams} -- {args.sims} drafts")
-    print("(the tournament winner; 'best roster-eligible VORP', no market timing)\n")
+    print(f"{args.strategy} from slot {args.my_slot} of {config.n_teams} -- {args.sims} drafts")
+    print(f"(strategy_n_sims={args.strategy_n_sims})\n")
     print(f"{'Rd':<4}{'Pick':<6}{'position mix':<44}modal player")
     for rnd in sorted(pos_counts):
         pc, wc = pos_counts[rnd], who_counts[rnd]

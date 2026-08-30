@@ -6,6 +6,55 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## The draft plan was recommending the worst strategy of the ten (2026-08-30, branch `fix/draft-strategy-default`)
+
+**Caught hours before the draft, by the user asking "the tournament tested more than just those
+two, right?"** It had. `draft_plan.md` recommended `raw_vorp` on the strength of a **two**-strategy
+comparison; `reports/draft_strategy_tests.md` is a **19-test log** over ten strategies, and on its
+honest yardstick `raw_vorp` finishes **last of ten on both axes**.
+
+**The failure is a metric, and it is the most reusable lesson on this project so far.** The plan's
+tournament scored rosters by *mean roster value* — projected points under **the same preseason
+projections the strategy drafts from**. Circular, and the strategy log already flags it in a
+standing warning: that metric *"overrates VORP/preseason-chasing strategies."* `raw_vorp` won the
+one test constructed to flatter it. Real-outcome scoring (2021–2025, 16-team half-PPR, 16 seats ×
+25 seeds = 2000 CRN-paired drafts per strategy) inverts the answer completely:
+
+| strategy | WIN% | CHAMP% |
+| --- | --- | --- |
+| `now_or_never_targeted` | **72.6** | 31.4 |
+| `now_or_never_floored` | 71.6 | 29.3 |
+| `season_value_targeted` | 70.5 | **34.4** |
+| `seat_aware` / `season_value_timing` | 69.8 / 69.9 | 33.4 / 33.2 |
+| `now_or_never` | 69.4 | 24.3 |
+| **`raw_vorp`** | **67.9** | **21.4** |
+
+**Shipped default: `now_or_never_targeted`** (user's call, and the right one). The first pick was
+`season_value_targeted` for its title rate; the user reversed it on the grounds that **a
+championship is one rare binary event per season while win% averages 14 games**, so champ% carries
+roughly **3x the interval width** (±2.5 vs ±0.8 in the same runs) and is the noisier thing to
+optimise. That reasoning is correct and is now written into the plan.
+
+**It changes the draft materially, not cosmetically.** `raw_vorp` at pick 8 returns five running
+backs. `now_or_never_targeted` returns **Gibbs, Nacua, Bijan, Josh Allen, Chase** — Nacua ranks
+*above* Bijan on 64 fewer VORP, because RB is deep enough at the top to come back at pick 25 and
+the elite WRs are not. The round-by-round shape went from a single position at 94–100% in rounds
+1–9 to genuinely contingent in rounds 1–7: **there is no positional script any more**, which is
+the point of an opportunity-cost strategy and is now stated as such rather than left as a table
+that looks broken.
+
+**Two things verified rather than assumed before switching.** The availability-blind pool bug that
+Test 14 exists to correct is **not** present in this league's pool (318 distinct injury `p`, range
+[0.40, 0.97], 462 byes — the healthy signature). And all six candidate strategies build and return
+a recommendation in **under a second** on the real 574-player pool, so the MC strategies were never
+disqualified by the pick clock.
+
+**`scripts/_critts_slot8_shape.py` hard-coded `RawVorpStrategy`.** It now takes `--strategy` and
+prints which one ran, because a round-by-round shape read off one strategy while drafting on
+another is worse than having no table at all.
+
+---
+
 ## Draft day — the live board was scoring against the wrong roster (2026-08-30, branch `fix/draft-board-league-config`, PR #159)
 
 **Draft night prep for Critts (16-team snake, slot 8, 9:00 PM ET).** Refreshed the projection
