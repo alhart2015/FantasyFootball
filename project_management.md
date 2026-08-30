@@ -30,6 +30,33 @@ slot picker and selects the preset table; a config disagreeing with it would dra
 number of rounds against a slot bound that was never checked. Erroring is the only honest
 option — there is no way to tell which of the two the user meant.
 
+**Follow-up the same day: the board now self-configures from a `board_profile.json`.** Adding
+a league-config box fixed the roster shape but left the user retyping four things from the plan
+document under time pressure — and three of the remaining defaults were *also* wrong for this
+league: slot 1 (not 8), the generic preset pool, and strategy `now_or_never`, which is
+`BOARD_STRATEGIES[0]` and the option the tournament measured **~17 points of roster value
+worse** than `raw_vorp`. A board right about three of the four still recommends the wrong
+player and looks entirely normal doing it.
+
+New `src/projections/draft/assistant/league_profile.py` reads a `board_profile.json` sitting
+beside a league's `league_config.json` — pool path, seat, season, strategy, id_map — and the
+sidebar defaults to the discovered league, with the generic presets kept as an explicitly
+labelled escape hatch for mock drafts. Launching is now `streamlit run scripts/draft_board.py`
+and one button.
+
+**Two design calls worth recording.** A malformed profile is **reported, not skipped**: silently
+dropping it would fall the board back to a preset that looks fine and is not the user's league,
+which is the exact failure the module exists to prevent. And `my_slot` is validated against the
+config's `n_teams` at load, because a board on slot 17 of a 16-team league runs perfectly and
+puts every single one of the user's picks in the wrong place.
+
+**The test-harness hole this opened is worth more than the feature.** `data/leagues/` is
+gitignored, so discovery keyed on it would have made every board test depend on untracked local
+files — passing here, exercising a different code path on a fresh clone. The root is behind
+`FF_BOARD_PROFILE_ROOT` with an autouse fixture pinning it to an empty directory, so a test that
+wants a profile builds one. This is the same shape as the live-ESPN-call hole closed on the
+web-UI branch: an environment the test does not control silently deciding which branch runs.
+
 **One test-harness lesson worth carrying:** an AppTest widget value set in the same pass as the
 click reads as the *default*. The first version of the override test passed while starting a
 preset draft. `set_value` → `run()` → `click()`, and the comment says why.

@@ -4,6 +4,7 @@ shared confirm flow + the opponent ADP shortcut."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -17,6 +18,19 @@ _TIMEOUT = 60
 # root, so a bare "scripts/draft_board.py" looks for tests/test_scripts/scripts/... and
 # raises FileNotFoundError. Spell the path out from this file.
 _BOARD = str(Path(__file__).resolve().parents[2] / "scripts" / "draft_board.py")
+_PROFILE_ROOT_ENV = "FF_BOARD_PROFILE_ROOT"
+
+
+@pytest.fixture(autouse=True)
+def _no_configured_leagues(tmp_path_factory, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Point league discovery at an empty directory for every test in this file.
+
+    `data/leagues/` is gitignored user data. Left to the real default, whether the board comes
+    up on a preset or on the developer's own league would depend on that machine's untracked
+    files — these tests would pass here and exercise a different code path on a fresh clone.
+    Tests that want a profile opt in by re-pointing the env var.
+    """
+    monkeypatch.setenv(_PROFILE_ROOT_ENV, str(tmp_path_factory.mktemp("no_leagues")))
 
 
 def _smoke_session(picks: list[str] | None = None, my_slot: int = 1, n_teams: int = 12):  # type: ignore[no-untyped-def]
@@ -285,3 +299,122 @@ def test_custom_league_config_refuses_a_team_count_mismatch(tmp_path: Path) -> N
     assert not at.exception
     assert "session" not in at.session_state
     assert any("n_teams=10" in str(getattr(e, "value", "")) for e in at.error)
+
+
+def _write_profile_root(tmp_path: Path) -> Path:
+    """A league directory holding a real `board_profile.json` and everything it points at."""
+    from projections.draft.league_config import LeagueConfig
+    from projections.schemas import RosterSlot, Ruleset
+
+    vorp, id_map = _write_board_inputs(tmp_path)
+    league = LeagueConfig(
+        name="Critts-shaped",
+        n_teams=16,
+        roster_slots={
+            RosterSlot.QB: 1,
+            RosterSlot.RB: 2,
+            RosterSlot.WR: 2,
+            RosterSlot.TE: 1,
+            RosterSlot.FLEX: 1,
+            RosterSlot.BENCH: 5,
+            RosterSlot.IR: 2,
+        },
+        ruleset=Ruleset.espn_half(),
+    )
+    league_json = tmp_path / "league_config.json"
+    league_json.write_text(league.model_dump_json(indent=2))
+
+    root = tmp_path / "leagues"
+    league_dir = root / "critts_2025_2026"
+    league_dir.mkdir(parents=True)
+    (league_dir / "board_profile.json").write_text(
+        json.dumps(
+            {
+                "name": "Critts 2026",
+                "league_config": str(league_json),
+                "vorp_table": str(vorp),
+                "id_map": str(id_map),
+                "my_slot": 8,
+                "season": 2026,
+                "strategy": "raw_vorp",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_board_starts_the_configured_league_with_no_sidebar_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of a profile: press Start, touch nothing, and be drafting the right league.
+
+    Pins all four settings that were previously wrong or blank by default — roster shape,
+    seat, strategy and pool — because a board that is right about three of them and wrong
+    about the fourth still recommends the wrong player and looks entirely normal doing it.
+    """
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    from projections.schemas import RosterSlot
+
+    monkeypatch.setenv(_PROFILE_ROOT_ENV, str(_write_profile_root(tmp_path)))
+    at = AppTest.from_file(_BOARD, default_timeout=_TIMEOUT).run()
+    assert not at.exception
+
+    for b in at.button:
+        if "Start" in str(getattr(b, "label", "")):
+            at = b.click().run()
+            break
+    assert not at.exception
+
+    sess = at.session_state["session"]
+    assert sess.league.roster_slots[RosterSlot.WR] == 2  # not the preset's 3
+    assert sess.league.roster_size == 12  # not the preset's 13
+    assert sess.my_slot == 8  # not the old default of 1
+    assert sess.strategy_name == "raw_vorp"  # not BOARD_STRATEGIES[0] == "now_or_never"
+    assert sess.league.name == "Critts-shaped"
+
+
+def test_board_offers_the_generic_preset_alongside_a_configured_league(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mock drafts in other formats must stay reachable, and the real league must be first."""
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv(_PROFILE_ROOT_ENV, str(_write_profile_root(tmp_path)))
+    at = AppTest.from_file(_BOARD, default_timeout=_TIMEOUT).run()
+
+    league_box = next(sb for sb in at.selectbox if str(getattr(sb, "label", "")) == "League")
+    # AppTest surfaces the *formatted* options, which is what the user actually reads.
+    assert league_box.value == "critts_2025_2026"  # the configured league is the default
+    assert league_box.options[0].startswith("Critts 2026")
+    assert "16 teams, 12 rounds, slot 8" in league_box.options[0]
+    assert league_box.options[-1] == "Generic preset (mock drafts)"
+    # Scoring/Teams are the config's to state, so they are not offered while it is selected.
+    labels = [str(getattr(sb, "label", "")) for sb in at.selectbox]
+    assert "Scoring" not in labels and "Teams" not in labels
+
+
+def test_board_warns_about_a_broken_profile_rather_than_ignoring_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A silently skipped profile drops the board to a preset that looks fine and is not
+    this league — the failure the whole feature exists to prevent."""
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    root = _write_profile_root(tmp_path)
+    broken = root / "typo_league"
+    broken.mkdir()
+    (broken / "board_profile.json").write_text("{not json", encoding="utf-8")
+
+    monkeypatch.setenv(_PROFILE_ROOT_ENV, str(root))
+    at = AppTest.from_file(_BOARD, default_timeout=_TIMEOUT).run()
+
+    assert not at.exception
+    assert any("typo_league" in str(getattr(w, "value", "")) for w in at.warning)
+    # ...and the good profile is still the default.
+    league_box = next(sb for sb in at.selectbox if str(getattr(sb, "label", "")) == "League")
+    assert league_box.value == "critts_2025_2026"
