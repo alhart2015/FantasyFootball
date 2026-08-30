@@ -288,3 +288,8 @@ data/leagues/*
 data/leagues/*/*
 !data/leagues/*/league_config.json
 !data/leagues/*/board_profile.json
+# Encrypted league docs (scripts/league_doc_cipher.py). Only ciphertext -- the matching
+# plaintext keeps its own name and stays ignored by the rule above. Encrypt-then-MAC under a
+# passphrase that is not in this repo. Still: nothing goes in here that would be a problem
+# published, because the phrase is the only thing standing between it and the world.
+!data/leagues/*/*.enc
