@@ -118,8 +118,9 @@ def _sidebar() -> None:
     preset = get_preset(scoring, int(n_teams))
     my_slot = st.sidebar.number_input("My draft slot", min_value=1, max_value=int(n_teams), value=1)
     id_map_path = st.sidebar.text_input("id_map parquet", _DEFAULT_ID_MAP)
-    with st.sidebar.expander("Advanced: custom VORP table"):
+    with st.sidebar.expander("Advanced: custom league"):
         custom_vorp = st.text_input("VORP parquet (overrides preset)", "")
+        custom_league = st.text_input("league_config JSON (overrides preset)", "")
     vorp_path = custom_vorp.strip() or str(preset.table_path)
     strategy_name = st.sidebar.selectbox("Strategy", BOARD_STRATEGIES, index=0)
     n_sims = st.sidebar.number_input(
@@ -130,14 +131,33 @@ def _sidebar() -> None:
 
     if st.sidebar.button("Start / restart draft", type="primary"):
         try:
-            # Persist the preset's in-memory config to a real file so autosave/resume (which
-            # store the league config as a PATH) work for preset-started drafts.
-            league_config_path = materialize_league_config(preset)
+            # A preset's roster shape is a canonical skill roster, not any real league's.
+            # An explicit league_config.json overrides it: `league.roster_slots` drives
+            # roster eligibility for every recommendation, so a preset that starts 3 WR in
+            # a league that starts 2 silently recommends an unstartable third receiver.
+            if custom_league.strip():
+                league_config_path = Path(custom_league.strip())
+                league = LeagueConfig.model_validate_json(
+                    league_config_path.read_text(encoding="utf-8")
+                )
+                # The Teams dropdown bounds the slot picker and selects the preset table.
+                # A config disagreeing with it would draft the wrong number of rounds
+                # against a slot the picker never validated, so refuse rather than guess.
+                if league.n_teams != int(n_teams):
+                    raise ValueError(
+                        f"league_config has n_teams={league.n_teams} but the Teams "
+                        f"dropdown is set to {int(n_teams)} — set them to match."
+                    )
+            else:
+                league = preset.league_config
+                # Persist the preset's in-memory config to a real file so autosave/resume
+                # (which store the league config as a PATH) work for preset-started drafts.
+                league_config_path = materialize_league_config(preset)
             _install_session(
                 _build_session(
                     vorp_path=Path(vorp_path),
                     id_map_path=Path(id_map_path),
-                    league=preset.league_config,
+                    league=league,
                     league_config_path=league_config_path,
                     my_slot=int(my_slot),
                     mode=mode,
