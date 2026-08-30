@@ -274,4 +274,17 @@ configs/espn_credentials.json
 # League pulls. This repo is public and these carry real people's names, ESPN display
 # handles and (in espn_raw.json) their SWID account ids. Kept local by decision
 # (user, 2026-08-24). Regenerate with `python -m projections.ingest.espn_league`.
-data/leagues/
+# ...except the two files the live draft board needs to configure itself, which carry only
+# league RULES and file paths -- no member names, no ids, no cookies. Without them a second
+# machine silently falls back to a generic preset (3 WR / 13 rounds / slot 1 / now_or_never),
+# which is every default the profile exists to correct. Verified clean before un-ignoring;
+# re-check by hand before adding any further file from this directory.
+#
+# Ignoring `data/leagues/` outright would make those exceptions dead letters -- git does not
+# descend into an excluded DIRECTORY, so a `!` rule under one can never match. The contents
+# are excluded instead, with the directories themselves left traversable.
+data/leagues/*
+!data/leagues/*/
+data/leagues/*/*
+!data/leagues/*/league_config.json
+!data/leagues/*/board_profile.json

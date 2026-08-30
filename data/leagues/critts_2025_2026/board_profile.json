@@ -1,0 +1,9 @@
+{
+  "name": "Critts 2026",
+  "league_config": "data/leagues/critts_2025_2026/league_config.json",
+  "vorp_table": "data/vorp_2026/critts_half16_snake.parquet",
+  "id_map": "data/raw/id_map.parquet",
+  "my_slot": 8,
+  "season": 2026,
+  "strategy": "now_or_never_targeted"
+}
