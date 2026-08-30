@@ -6,6 +6,48 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Draft day — the live board was scoring against the wrong roster (2026-08-30, branch `fix/draft-board-league-config`, PR #159)
+
+**Draft night prep for Critts (16-team snake, slot 8, 9:00 PM ET).** Refreshed the projection
+pool per `draft_plan.md`'s standing instruction (`asof` 08-24 → 08-30) and found a defect in
+the tool the whole plan routes through.
+
+**`scripts/draft_board.py` resolved its `LeagueConfig` from a preset and had no override.** The
+sidebar's Advanced expander took a custom VORP parquet — the *values* — but nothing for the
+roster *shape*. And `league.roster_slots` is what `live.py` uses to decide roster eligibility,
+which is half of what `raw_vorp` ("best **roster-eligible** player") means. Measured: the
+Half-PPR/16 preset is **WR 3 over 13 rounds**; Critts is **WR 2 over 12**. On the night the
+board would have offered a third receiver it believed could start, and run a round too long.
+Both halves of the sidebar were needed and only one existed.
+
+**The doc had been describing a feature that did not exist.** `draft_plan.md` already said
+"Sidebar takes … `league_config.json`" — it never did. A prose instruction is not an input, and
+nothing pinned it because nothing tested the sidebar's *setup* path (the existing AppTest cases
+all inject a pre-built session into `session_state` and skip the whole thing).
+
+**A mismatched `n_teams` is now refused rather than reconciled.** The Teams dropdown bounds the
+slot picker and selects the preset table; a config disagreeing with it would draft the wrong
+number of rounds against a slot bound that was never checked. Erroring is the only honest
+option — there is no way to tell which of the two the user meant.
+
+**One test-harness lesson worth carrying:** an AppTest widget value set in the same pass as the
+click reads as the *default*. The first version of the override test passed while starting a
+preset draft. `set_value` → `run()` → `click()`, and the comment says why.
+
+**The refresh moved two players enough to change a decision.** Tank Dell **−53.9 VORP**, out of
+the draftable pool entirely — and the 08-24 note had him as a *+44* late-round target, so that
+call fully reversed in six days. Ashton Jeanty **+18.7**, back to RB12 and a live pick-25 target
+after 08-24 had written him off. The top of the board did not move (Gibbs / Bijan / McCaffrey /
+Taylor) and Josh Allen's QB cliff came back at **37.4 points** for the third refresh running.
+The round-by-round position mix is unchanged for rounds 1–9 and 12; rounds 10–11 flipped order,
+which is exactly what "genuine coin flips" predicted.
+
+**Next:** run the draft. Afterwards `parse_rosters` starts returning real rosters, which unblocks
+the waiver recommender's first real run, `points_to_date` in projected standings, and the
+midseason dashboard page — all three have been waiting on a drafted league.
+
+---
+
 ## Waiver recommender built — and the injury numbers are measured, not guessed (2026-08-26, branch `feat/waiver-recommender`)
 
 **#104 53a, the last unbuilt feature of the mid-season backlog, and the one the user asked for by name:** *is anyone on waivers better than someone on my team?* Spec: `docs/superpowers/specs/2026-08-26-waiver-recommender-design.md` (§11 records what was cut). Run it with `python scripts/waiver_recommender.py --league-id 856974 --season 2026 --team-id 17 --league-dir data/leagues/critts_2025_2026 --pool data/vorp_2026/critts_half16_snake.parquet [--wins]`.
