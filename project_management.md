@@ -6,6 +6,42 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## ESPN re-randomised the draft order, and the plan was built for the wrong seat (2026-08-30, branch `fix/draft-slot-5`)
+
+**Caught by the user saying "I'm draft slot 5, didn't we plan for a different one?" — hours before
+the draft.** He was right. The whole plan was built for slot 8.
+
+**Re-pulled live from ESPN rather than trusting either the file or the memory.** `draft_order.tsv`
+(pulled 08-24) said slot 8; the live pull says **slot 5**, and **all 16 seats moved — not one team
+kept its position**. The 08-24 file was not wrong when written; the commissioner re-drew the order
+some time in the intervening six days.
+
+**The re-pull also caught something nobody was looking for: the draft moved an hour earlier.**
+ESPN reports `2026-08-31T00:00Z` = **8:00 PM ET**, against the 9:00 PM in every version of
+`league.md` and `draft_plan.md`. That is the more dangerous of the two findings, because a wrong
+seat is discovered on the first pick and a wrong start time is discovered by missing it.
+
+**Slot 5 is materially a different draft.** The round-1 → round-2 gap is **22 opponent picks**
+against slot 8's 16, so opportunity cost is higher — which is precisely what
+`now_or_never_targeted` scores. **Josh Allen moves from 4th to 3rd on the opening board, ahead of
+Bijan Robinson**, because he survives to the second pick only 37% of the time from here against
+43% from slot 8. The round-by-round shape also flattened: round 2 is now a four-way split
+(RB 31 / WR 30 / TE 29 / QB 10).
+
+**The fix that matters is not the number, it is where the number lives.** `_critts_slot8_board.py`
+and `_critts_slot8_shape.py` hard-coded `--my-slot 8` and wrote `slot8_*` filenames. Both now read
+`my_slot` from `board_profile.json` — the same file the live board reads — and name their output
+after the slot they actually ran. Hard-coding it is what allowed a slot-8 analysis to sit under a
+slot-8 filename while the board drafted slot 5, each looking entirely correct in isolation. Renamed
+to `_critts_slot_board.py` / `_critts_slot_shape.py`, since the scripts are no longer slot-specific.
+
+**Standing lesson: re-pull the league on draft day, not just the projections.** The projection
+refresh was already in the checklist and ran twice today. The *league* pull was six days old and
+nothing prompted it — the draft order and the draft time are both mutable, and neither is visible
+in any artifact derived from them.
+
+---
+
 ## The draft plan was recommending the worst strategy of the ten (2026-08-30, branch `fix/draft-strategy-default`)
 
 **Caught hours before the draft, by the user asking "the tournament tested more than just those

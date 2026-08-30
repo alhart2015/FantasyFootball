@@ -16,12 +16,13 @@ attrition -- so a player at p_here 0.9 / p_next 0.2 is a now-or-never pick even
 though he looks safely available.
 
 Usage:
-    python scripts/_critts_slot8_board.py --top 8
+    python scripts/_critts_slot_board.py --top 8
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -31,12 +32,26 @@ from projections.draft.assistant.survival import LogisticSurvival, default_sigma
 from projections.draft.league_config import LeagueConfig
 
 _LEAGUE = Path("data/leagues/critts_2025_2026")
+
+
+def _profile_slot() -> int:
+    """The hero's draft slot, from `board_profile.json` -- the same file the live board reads.
+
+    Hard-coding it here is what let this drift: ESPN re-randomised the draft order six days
+    before the draft, and a default of 8 would have produced a slot-8 analysis under a
+    slot-5 filename while looking entirely normal. One source of truth, overridable.
+    """
+    return int(json.loads((_LEAGUE / "board_profile.json").read_text(encoding="utf-8"))["my_slot"])
+
+
 _POOL = Path("data/vorp_2026/critts_half16_snake.parquet")
 
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--my-slot", type=int, default=8, help="1-based draft slot.")
+    p.add_argument(
+        "--my-slot", type=int, default=None, help="1-based draft slot (default: the profile's)."
+    )
     p.add_argument("--top", type=int, default=8, help="Players to show per pick.")
     p.add_argument(
         "--sigma",
@@ -45,12 +60,18 @@ def _parse_args() -> argparse.Namespace:
         help="Survival spread in picks (default ~2/3 of a round).",
     )
     p.add_argument("--rounds", type=int, default=13, help="Rounds in the draft.")
-    p.add_argument("--out", type=Path, default=_LEAGUE / "slot8_board.csv")
+    p.add_argument("--out", type=Path, default=None, help="Default: slot<N>_board.csv.")
     return p.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
+    if args.my_slot is None:
+        args.my_slot = _profile_slot()
+    if args.out is None:
+        # Name the file after the slot it describes; a slot8_ name over slot-5 data is
+        # exactly the silent mismatch this script exists to prevent.
+        args.out = _LEAGUE / f"slot{args.my_slot}_board.csv"
     config = LeagueConfig.model_validate_json((_LEAGUE / "league_config.json").read_text())
     n_teams = config.n_teams
     sigma = default_sigma(n_teams) if args.sigma is None else args.sigma

@@ -14,12 +14,13 @@ board *after* roster construction is applied -- which is the thing you can actua
 drafting on another is worse than no table at all, so the header prints which one ran.
 
 Usage:
-    python scripts/_critts_slot8_shape.py --sims 300
+    python scripts/_critts_slot_shape.py --sims 300
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from collections import Counter
 from pathlib import Path
 
@@ -35,12 +36,24 @@ from projections.draft.league_config import LeagueConfig
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 
 _LEAGUE = Path("data/leagues/critts_2025_2026")
+
+
+def _profile_slot() -> int:
+    """The hero's draft slot, from `board_profile.json` -- the same file the live board reads.
+
+    Hard-coding it here is what let this drift: ESPN re-randomised the draft order six days
+    before the draft, and a default of 8 would have produced a slot-8 analysis under a
+    slot-5 filename while looking entirely normal. One source of truth, overridable.
+    """
+    return int(json.loads((_LEAGUE / "board_profile.json").read_text(encoding="utf-8"))["my_slot"])
+
+
 _POOL = Path("data/vorp_2026/critts_half16_snake.parquet")
 
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--my-slot", type=int, default=8)
+    p.add_argument("--my-slot", type=int, default=None)
     p.add_argument("--sims", type=int, default=300)
     p.add_argument("--seed", type=int, default=0)
     # The shape is a property of the STRATEGY, not of the league -- reading a raw_vorp shape
@@ -53,6 +66,8 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    if args.my_slot is None:
+        args.my_slot = _profile_slot()
     config = LeagueConfig.model_validate_json((_LEAGUE / "league_config.json").read_text())
     pool = pd.read_parquet(_POOL)
     pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
