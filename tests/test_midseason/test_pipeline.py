@@ -130,24 +130,61 @@ def test_a_missing_schedule_raises_rather_than_reading_as_a_finished_season() ->
         _run(with_schedule=False)
 
 
-def test_rosters_that_resolve_to_nothing_raise() -> None:
-    """An id_map that covers none of the league is an ingest failure, and simulating it would
-    hand every matchup to the home team behind a plausible-looking table."""
-    pool = vorp_pool()
-    empty_map = pd.DataFrame(
+def _empty_id_map() -> pd.DataFrame:
+    return pd.DataFrame(
         {
             "espn_id": pd.Series([], dtype=_PYARROW_STR),
             "gsis_id": pd.Series([], dtype=_PYARROW_STR),
         }
     )
+
+
+def test_rosters_that_resolve_to_nothing_raise() -> None:
+    """An id_map that covers none of the league is an ingest failure, and simulating it would
+    hand every matchup to the home team behind a plausible-looking table.
+
+    **The pool's names are scrambled deliberately.** An empty id_map alone no longer means
+    nothing resolves: `pool_name_index` rescues players by name so that rookies -- who have no
+    `espn_id -> gsis` edge to join on at all -- are not dropped. To still exercise the guard,
+    resolution has to fail on *both* paths, so the pool is given names no roster carries.
+    """
+    pool = vorp_pool()
+    pool["full_name"] = [f"zz unmatchable {i}" for i in range(len(pool))]
     with pytest.raises(ProjectionInputError, match="no projectable players"):
         project_league_standings(
             espn_payload(),
             pool,
-            empty_map,
+            _empty_id_map(),
             PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={}),
             VarianceParams.load(),
             season=2026,
             n_sims=10,
             rng=np.random.default_rng(0),
         )
+
+
+def test_players_the_id_map_cannot_reach_are_rescued_by_name() -> None:
+    """The rookie case, end to end. A pre-camp rookie's gsis id is synthetic and exists only
+    inside the pool, so the id_map has no row for him and no crosswalk edge exists. Before the
+    name fallback every such player was dropped from every roster -- measured on the real 2026
+    Critts league, 16 rostered rookies vanished, three of them starters, understating exactly
+    the teams that drafted them.
+
+    An empty id_map is the extreme form: with matching names the run must still complete.
+    """
+    pool = vorp_pool()
+
+    run = project_league_standings(
+        espn_payload(),
+        pool,
+        _empty_id_map(),
+        PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={}),
+        VarianceParams.load(),
+        season=2026,
+        n_sims=10,
+        rng=np.random.default_rng(0),
+    )
+
+    assert not run.standings.empty
+    # Every team scores: a roster that resolved to nothing would sit at zero points.
+    assert (run.standings["projected_points_for"] > 0).all()

@@ -6,6 +6,57 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Post-draft: rookies were being dropped off every roster (2026-08-30, branch `fix/rookie-roster-resolution`)
+
+**The draft happened; results pulled from ESPN (208 rostered, 192 skill picks). The first
+projected-standings run silently dropped 32 rostered players**, reported only as a `note:` line.
+16 were D/ST, legitimately unmodelled. **The other 16 were all rookies, and every one of them was
+already in the projection pool.**
+
+**The cause is structural, not a data gap.** Pre-camp rookies have no real GSIS id, so the pool
+mints a synthetic `99-` one (89 of 574 players on the live 2026 pool). Roster resolution goes
+ESPN id -> gsis through `id_map`, which has no row for a synthetic id — so **no crosswalk edge
+exists at all**, and every rookie resolves to nothing. `espn_to_gsis` now takes an optional
+`name_index` from the new `pool_name_index`, consulted *only* where the id_map came up empty.
+
+**It was not cosmetic — it moved the answer.** Three teams lost a *starter*: Kelly's Heros were
+missing **Jeremiyah Love (+139 VORP)**, Triple Threat Tracy Jadarian Price (+93), Just Happy To Be
+Here Carnell Tate (+40). Kelly's Heros went **15th -> 9th** on the fix, and the user's own week-11
+matchup against them moved from a 38.9% win to **27.7%**. His playoff odds fell 58.1% -> 52.2% and
+title 10.3% -> 9.6%: **the pre-fix numbers were flattering him**, because the understated teams
+were his opponents and his competition for six playoff spots.
+
+**Two guards on a name join, because names are not keys.** Ambiguous keys are dropped rather than
+guessed — two pool rows sharing name and position cannot be told apart, and picking either puts
+real points on the wrong team. And the fallback never overrides a successful id_map hit; applied
+the other way round a stale name row could re-point a player the crosswalk already knew.
+
+**An existing test caught a real bug in the fix**, then needed its own premise updated. Where the
+id_map resolves *nothing*, `.map` returns an all-NaN **float64** series and writing strings into it
+raises `TypeError` — precisely the roster-of-rookies case the fallback exists to rescue. Fixed with
+an `.astype(object)`. Then `test_rosters_that_resolve_to_nothing_raise` began failing legitimately:
+an empty id_map no longer means nothing resolves, because the fixture's roster and pool share
+names. Verified the guard still fires when resolution fails on *both* paths, and the test now
+scrambles the pool's names to exercise that. A companion test pins the rescue itself. **Changed
+with the user's explicit approval**, per the standing rule that a failing test means broken code
+until proven otherwise.
+
+**Josh Jacobs is reportedly facing a season-long suspension; quantified rather than guessed.**
+Modelled as availability `p = 0` — which makes the availability mask reject him every week so the
+lineup fills from the bench — *not* by zeroing his projection, which would leave him starting for
+nothing. Five seeds x 2000 sims, paired: **-1.2 projected wins, playoff 52.0% -> 31.8%, title
+10.0% -> 4.5%, 2nd -> 11th.** Seed spread -1.14 to -1.23, far outside the ~0.06 paired noise the
+swap study measured.
+
+**The interesting part is that it costs 98 season points, not 69.** Replacing him with Jordan Mason
+in the RB2 slot is a 69-point downgrade; the extra 29 is *depth* — Jacobs was also the cover for
+Hall/Dobbins byes and off weeks, and without him that fill-in is Keaton Mitchell (85.6). Worth
+noting the implied **80 points per win** here against the repo's ~140 rule of thumb: plausible for
+a team on the playoff bubble, where points convert most efficiently, but it is an unverified
+discrepancy and 140 should not be treated as a constant.
+
+---
+
 ## ESPN re-randomised the draft order, and the plan was built for the wrong seat (2026-08-30, branch `fix/draft-slot-5`)
 
 **Caught by the user saying "I'm draft slot 5, didn't we plan for a different one?" — hours before

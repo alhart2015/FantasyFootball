@@ -32,6 +32,8 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -973,8 +975,51 @@ def espn_gsis_crosswalk(id_map: pd.DataFrame) -> dict[str, str]:
     return dict(zip(cross["espn_id"].astype(str), cross["gsis_id"].astype(str), strict=True))
 
 
-def espn_to_gsis(rosters: pd.DataFrame, id_map: pd.DataFrame) -> pd.Series:
+def pool_name_index(pool: pd.DataFrame) -> dict[tuple[str, str], str]:
+    """`(lowercased full_name, position)` -> `gsis_id`, for players the id_map cannot reach.
+
+    **Why a name join exists here at all**, against the standing rule that names are for
+    display: pre-camp rookies have no real GSIS id yet, so the projection pool mints a
+    synthetic `99-` one. `nfl_data_py`'s id_map has no row for them, which means no
+    `espn_id -> gsis` edge exists to join on -- the id is not merely missing from the
+    crosswalk, it does not exist anywhere. Measured on the live 2026 pool: **89 of 574
+    players carry a synthetic id**, and after the Critts draft all 16 unresolvable rostered
+    skill players were rookies, three of them in starting slots (one at +139 VORP). Dropping
+    them silently understates exactly the teams that drafted rookies.
+
+    **Ambiguous keys are dropped, not guessed.** If two pool rows share a name and position
+    there is no way to tell which one a roster row means, and picking either would put real
+    points on the wrong team. The pair is omitted so the caller falls back to dropping the
+    player, which is the honest failure.
+    """
+    keyed = pool[["full_name", "position", "gsis_id"]].dropna()
+    keys = list(
+        zip(
+            keyed["full_name"].astype(str).str.strip().str.casefold(),
+            keyed["position"].astype(str).str.strip().str.upper(),
+            strict=True,
+        )
+    )
+    counts = Counter(keys)
+    return {
+        key: str(gsis)
+        for key, gsis in zip(keys, keyed["gsis_id"].astype(str), strict=True)
+        if counts[key] == 1
+    }
+
+
+def espn_to_gsis(
+    rosters: pd.DataFrame,
+    id_map: pd.DataFrame,
+    *,
+    name_index: Mapping[tuple[str, str], str] | None = None,
+) -> pd.Series:
     """ESPN `player_id` -> `gsis_id`, index-aligned to `rosters`. NA where unmapped.
+
+    `name_index` (from `pool_name_index`) is an optional **fallback only**, consulted for rows
+    the id_map cannot resolve and never allowed to override it. Rookies have no real GSIS id
+    yet, so no `espn_id -> gsis` edge exists for them at all; without the fallback they are
+    dropped from every roster, which silently understates the teams that drafted them.
 
     **Deduplicated on `espn_id`.** `IdMapSchema` marks only `gsis_id` unique -- `espn_id` is
     nullable and non-unique, and the live `data/raw/id_map.parquet` holds two ESPN ids that
@@ -991,7 +1036,24 @@ def espn_to_gsis(rosters: pd.DataFrame, id_map: pd.DataFrame) -> pd.Series:
     # makes `.map` produce object/NaN, and CLAUDE.md is explicit that object-plus-NaN is the
     # shape that quietly loses data downstream -- the previous `.set_index()` form preserved it
     # by accident, and one caller (`standings.rosters_to_slots`) never re-casts.
-    return rosters["player_id"].astype(str).map(cross).astype(_PYARROW_STR)
+    # `.astype(object)` before the fallback writes into it: when the id_map resolves NOTHING,
+    # `.map` returns an all-NaN **float64** series, and assigning strings into that raises
+    # `TypeError: Invalid value ... for dtype 'float64'`. That is exactly the roster-of-rookies
+    # case this fallback exists to rescue, so the empty-crosswalk path must not be the one that
+    # breaks.
+    resolved = rosters["player_id"].astype(str).map(cross).astype(object)
+    if name_index:
+        # Fallback ONLY where the id_map came up empty, so a real crosswalk edge always wins
+        # over a name match. Applied the other way round, a stale or duplicated name row could
+        # silently re-point a player the id_map already knew.
+        gap = resolved.isna()
+        if gap.any():
+            names = rosters.loc[gap, "player"].astype(str).str.strip().str.casefold()
+            positions = rosters.loc[gap, "pos"].astype(str).str.strip().str.upper()
+            resolved.loc[gap] = [
+                name_index.get((n, p)) for n, p in zip(names, positions, strict=True)
+            ]
+    return resolved.astype(_PYARROW_STR)
 
 
 def parse_draft_picks(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFrame:

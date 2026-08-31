@@ -38,6 +38,7 @@ from projections.ingest.espn_league import (
     parse_rosters,
     parse_schedule,
     parse_teams,
+    pool_name_index,
     team_records,
 )
 from projections.midseason.rest_of_season import RosDiagnostics, rest_of_season_pool
@@ -164,6 +165,8 @@ def rosters_to_slots(
     id_map: pd.DataFrame,
     slots: SlotMap,
     pool_ids: Collection[str],
+    *,
+    name_index: Mapping[tuple[str, str], str] | None = None,
 ) -> tuple[dict[int, list[str]], int]:
     """ESPN rosters -> `{slot: [gsis_id]}`, plus a count of players the pool cannot project.
 
@@ -182,6 +185,12 @@ def rosters_to_slots(
     two pages resolving the same ESPN id to different players is exactly the divergence a
     shared crosswalk exists to prevent.
 
+    `name_index` (see `espn_league.pool_name_index`) rescues rookies, whose synthetic `99-`
+    gsis ids exist only inside the pool: the id_map has no row for them, so no crosswalk edge
+    exists and they resolve to nothing. Without it, every rookie is dropped from every roster
+    and the teams that drafted them are silently understated -- measured on the 2026 Critts
+    draft, three teams lost a *starter* that way, one of them a +139 VORP running back.
+
     Players the pool cannot project (kickers, defenses, anyone without a projection) are
     dropped and counted -- that part is legitimate. But a resolution that drops *everything*
     is an id_map failure rather than a roster of kickers, so it raises: the caller cannot tell
@@ -193,7 +202,9 @@ def rosters_to_slots(
     # One crosswalk, shared with the season dashboard's team page, so a player cannot resolve
     # differently on the two pages -- including the dedup on `espn_id`, which `IdMapSchema`
     # does not enforce and the live id_map violates twice.
-    merged = rosters.assign(gsis_id=espn_to_gsis(rosters, id_map)).dropna(subset=["gsis_id"])
+    merged = rosters.assign(gsis_id=espn_to_gsis(rosters, id_map, name_index=name_index)).dropna(
+        subset=["gsis_id"]
+    )
 
     by_slot: dict[int, list[str]] = {slot: [] for slot in range(1, len(slots) + 1)}
     kept = 0
@@ -419,7 +430,13 @@ def project_league_standings(
     )
 
     rosters, dropped = rosters_to_slots(
-        rosters_frame, id_map, slots, set(ros_pool["gsis_id"].astype(str))
+        rosters_frame,
+        id_map,
+        slots,
+        set(ros_pool["gsis_id"].astype(str)),
+        # Built from the FULL pool, not `ros_pool`: the name index only has to resolve an id,
+        # and membership in the projectable set is checked separately just below.
+        name_index=pool_name_index(pool),
     )
     outcomes = simulate_seasons(
         rosters,

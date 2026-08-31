@@ -1095,3 +1095,124 @@ def test_a_non_dict_payload_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response("nope"))
     with pytest.raises(EspnLeagueError, match="Unexpected ESPN payload shape"):
         fetch_league_payload(1, 2026, EspnCredentials(swid="{X}", espn_s2="s2"))
+
+
+# ---------------------------------------------------------------------------
+# Rookie name fallback (pool_name_index + espn_to_gsis name_index)
+# ---------------------------------------------------------------------------
+
+
+def _rookie_pool() -> pd.DataFrame:
+    """A pool holding one crosswalked veteran and one rookie on a synthetic id."""
+    return pd.DataFrame(
+        {
+            "full_name": ["Breece Hall", "Jeremiyah Love"],
+            "position": ["RB", "RB"],
+            "gsis_id": ["00-0037834", "99-8467088"],
+        }
+    )
+
+
+def _rookie_id_map() -> pd.DataFrame:
+    """The id_map knows the veteran and has no row at all for the rookie."""
+    return pd.DataFrame({"espn_id": ["4427366"], "gsis_id": ["00-0037834"]})
+
+
+def _rookie_rosters() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "player_id": ["4427366", "5000001"],
+            "player": ["Breece Hall", "Jeremiyah Love"],
+            "pos": ["RB", "RB"],
+        }
+    )
+
+
+def test_pool_name_index_keys_on_casefolded_name_and_position() -> None:
+    from projections.ingest.espn_league import pool_name_index
+
+    index = pool_name_index(_rookie_pool())
+
+    assert index[("jeremiyah love", "RB")] == "99-8467088"
+    assert index[("breece hall", "RB")] == "00-0037834"
+
+
+def test_pool_name_index_drops_ambiguous_names_rather_than_guessing() -> None:
+    """Two pool rows sharing a name and position cannot be told apart, and picking either
+    would put real projected points on the wrong team."""
+    from projections.ingest.espn_league import pool_name_index
+
+    pool = pd.DataFrame(
+        {
+            "full_name": ["Mike Williams", "Mike Williams", "Puka Nacua"],
+            "position": ["WR", "WR", "WR"],
+            "gsis_id": ["99-0000001", "99-0000002", "00-0037834"],
+        }
+    )
+
+    index = pool_name_index(pool)
+
+    assert ("mike williams", "WR") not in index
+    assert index[("puka nacua", "WR")] == "00-0037834"
+
+
+def test_the_same_name_at_a_different_position_is_not_ambiguous() -> None:
+    from projections.ingest.espn_league import pool_name_index
+
+    pool = pd.DataFrame(
+        {
+            "full_name": ["Josh Allen", "Josh Allen"],
+            "position": ["QB", "WR"],
+            "gsis_id": ["99-0000001", "99-0000002"],
+        }
+    )
+
+    index = pool_name_index(pool)
+
+    assert index[("josh allen", "QB")] == "99-0000001"
+    assert index[("josh allen", "WR")] == "99-0000002"
+
+
+def test_a_rookie_is_dropped_without_the_name_index() -> None:
+    """The bug this fixes: no `espn_id -> gsis` edge exists for a synthetic id, so the rookie
+    resolves to nothing and vanishes off the roster of whoever drafted him."""
+    from projections.ingest.espn_league import espn_to_gsis
+
+    resolved = espn_to_gsis(_rookie_rosters(), _rookie_id_map())
+
+    assert resolved.iloc[0] == "00-0037834"
+    assert pd.isna(resolved.iloc[1])
+
+
+def test_the_name_index_resolves_a_rookie_the_id_map_cannot_reach() -> None:
+    from projections.ingest.espn_league import espn_to_gsis, pool_name_index
+
+    resolved = espn_to_gsis(
+        _rookie_rosters(), _rookie_id_map(), name_index=pool_name_index(_rookie_pool())
+    )
+
+    assert list(resolved) == ["00-0037834", "99-8467088"]
+
+
+def test_the_name_index_never_overrides_the_id_map() -> None:
+    """A real crosswalk edge must win. Applied the other way round, a stale or duplicated name
+    row could silently re-point a player the id_map already resolved correctly."""
+    from projections.ingest.espn_league import espn_to_gsis
+
+    misleading = {("breece hall", "RB"): "99-DECOY", ("jeremiyah love", "RB"): "99-8467088"}
+
+    resolved = espn_to_gsis(_rookie_rosters(), _rookie_id_map(), name_index=misleading)
+
+    assert resolved.iloc[0] == "00-0037834"  # id_map wins
+    assert resolved.iloc[1] == "99-8467088"  # fallback fills the genuine gap
+
+
+def test_an_unknown_name_still_resolves_to_na() -> None:
+    """A kicker or defense is legitimately unprojectable; the fallback must not invent an id."""
+    from projections.ingest.espn_league import espn_to_gsis, pool_name_index
+
+    rosters = pd.DataFrame({"player_id": ["-16012"], "player": ["Chiefs D/ST"], "pos": ["DST"]})
+
+    resolved = espn_to_gsis(rosters, _rookie_id_map(), name_index=pool_name_index(_rookie_pool()))
+
+    assert pd.isna(resolved.iloc[0])
