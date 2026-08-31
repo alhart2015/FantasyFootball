@@ -34,6 +34,11 @@ import statistics
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import numpy as np
+import pandas as pd
+
+from projections.draft.assistant.availability import PlayerAvailability
+from projections.draft.assistant.season_value import removal_season_costs
 from projections.draft.roster_eligibility import choose_starters
 from projections.midseason.valuation import PlayerValue
 from projections.schemas import InjuryStatus, Position, RosterSlot
@@ -70,10 +75,56 @@ def surplus(
     *,
     use_market: bool = False,
 ) -> float:
-    """Lineup points lost if `player` leaves this roster. Zero for a true bench body."""
+    """Season-total lineup points lost if `player` leaves. **Full strength, no byes.**
+
+    Kept because the opponent's side of a trade is judged on what a manager sees in the app --
+    a season projection, not a bye-aware simulation -- and because it is verifiable by hand.
+
+    **Do not use it to price your own bench.** It returns exactly 0.0 for anyone who does not
+    crack the optimal lineup, which is every bench player, which is exactly the set a trade tool
+    wants to give away. `season_surplus` is the bye- and availability-aware version and is what
+    ranks a roster.
+    """
     without = [p for p in players if p.gsis_id != player.gsis_id]
     return lineup_points(players, roster_slots, use_market=use_market) - lineup_points(
         without, roster_slots, use_market=use_market
+    )
+
+
+def season_surplus(
+    players: Sequence[PlayerValue],
+    roster_slots: Mapping[RosterSlot, int],
+    availability: PlayerAvailability,
+    *,
+    n_sims: int = 400,
+    seed: int = 0,
+    weeks: Sequence[int] | None = None,
+) -> dict[str, float]:
+    """`gsis -> expected season points lost if he goes`, **with byes and availability**.
+
+    The honest version of `surplus`, and the one the roster is ranked by. It differs from the
+    season-total measure exactly where a season total cannot see a week: a bench receiver whose
+    two starters share a bye is not worth zero that week, he is the whole position.
+
+    Delegates to `season_value.removal_season_costs` rather than re-deriving the walk -- the
+    weekly bye forcing and the CRN availability draws already live there, and a second copy is
+    how the two drift.
+    """
+    frame = pd.DataFrame(
+        {
+            "gsis_id": [p.gsis_id for p in players],
+            "position": [p.position for p in players],
+            "season_mean_fpts": [p.ours for p in players],
+        }
+    )
+    kwargs = {} if weeks is None else {"weeks": weeks}
+    return removal_season_costs(
+        frame,
+        roster_slots,
+        availability,
+        n_sims=n_sims,
+        rng=np.random.default_rng(seed),
+        **kwargs,
     )
 
 
@@ -154,6 +205,10 @@ def team_shapes(
     rosters: Mapping[int, Sequence[PlayerValue]],
     names: Mapping[int, str],
     roster_slots: Mapping[RosterSlot, int],
+    availability: PlayerAvailability | None = None,
+    *,
+    n_sims: int = 400,
+    weeks: Sequence[int] | None = None,
 ) -> dict[int, TeamShape]:
     """Surplus and need for every team in the league.
 
@@ -168,7 +223,14 @@ def team_shapes(
         shapes[team_id] = TeamShape(
             team_id=team_id,
             team_name=str(names.get(team_id, team_id)),
-            surplus={p.gsis_id: surplus(seq, p, roster_slots) for p in seq},
+            # Bye- and availability-aware when we have the data. Falling back to the
+            # season-total measure prices every bench player at 0.0, so the fallback is for
+            # tests and never for a live run -- the CLI always passes availability.
+            surplus=(
+                season_surplus(seq, roster_slots, availability, n_sims=n_sims, weeks=weeks)
+                if availability is not None
+                else {p.gsis_id: surplus(seq, p, roster_slots) for p in seq}
+            ),
             need={pos: need(seq, pos, reference.get(pos, 0.0), roster_slots) for pos in TRADEABLE},
             players=seq,
         )
@@ -181,6 +243,7 @@ __all__ = [
     "lineup_points",
     "median_starters",
     "need",
+    "season_surplus",
     "surplus",
     "team_shapes",
 ]

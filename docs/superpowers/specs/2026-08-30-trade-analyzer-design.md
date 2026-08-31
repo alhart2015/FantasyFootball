@@ -349,3 +349,74 @@ the shape of a sellable trade, because both sides give up a bench body.
 - `edge` is small on almost every player here (the largest on the hero's roster is −26.4), which
   is what §4's caveat predicted: our consensus contains ESPN, so the two rarely diverge much.
   **Nearly all the gain the tool finds is fit, not edge**, and the attribution says so.
+
+
+---
+
+## 13. `surplus` was wrong for exactly the players it was built to find (2026-08-31)
+
+Caught by the user on a sanity check of §12's output: *"how do all of my top draft picks cost me
+nothing to trade?"* The premise was slightly off — the zero-surplus five were picks 124–197, not
+his top picks — but the instinct was right and the bug is worse than the phrasing.
+
+**§3.1's definition scores one lineup, at full strength, on season totals.** It therefore returns
+**exactly 0.0 for every bench player**, which is precisely the set a trade tool wants to give
+away. Tested against the simulator on the live roster:
+
+| Player | Season points | §3.1 surplus | Δ wins if removed |
+| --- | --- | --- | --- |
+| Khalil Shakir (WR3) | 133.7 | **0.0** | **−0.82** |
+| Jayden Reed (WR2) | 150.3 | 16.5 | −0.74 |
+| Hunter Henry (TE2) | 123.2 | **0.0** | −0.61 |
+| Jordan Mason (RB4) | 143.3 | **0.0** | −0.48 |
+
+**The ranking was not miscalibrated, it was inverted:** the WR3 scored 0.0 and costs *more* than
+the WR2, who scored 16.5. For scale, losing Josh Jacobs costs 1.22 wins — the "free" WR3 is
+two-thirds of that.
+
+**The missing facts are per-week, and a season total has no week to put them in.** This roster's
+WR1 and WR2 share a **week-11 bye**; Nacua is QUESTIONABLE besides. A season-total measure cannot
+represent either.
+
+**This is the same trap `reports/draft_strategy_tests.md` already documented** — `raw_vorp`
+hoarding ten quarterbacks because `optimal_lineup_points` counts only starters — rebuilt in a new
+place. §8's failure-mode list missed it entirely, which is the more useful lesson: the catalogue
+was written from the spec's own assumptions.
+
+### The fix
+
+`season_value.removal_season_costs` — the mirror of the existing `marginal_season_values`, which
+asks what an *addition* is worth. Same CRN structure, same weekly bye forcing, one shared draw
+matrix so each removal cancels common noise rather than measuring it. `roster_shape.season_surplus`
+wraps it and `team_shapes` uses it whenever availability is supplied; the CLI always supplies it.
+The season-total `surplus` is **kept and re-documented**, because the opponent's side is still
+judged on what a manager sees in the app.
+
+### The result, on the real roster
+
+| Player | Old | New |
+| --- | --- | --- |
+| Khalil Shakir | 0.0 | **38.8** |
+| Hunter Henry | 0.0 | **22.1** |
+| Jordan Mason | 0.0 | **12.5** |
+| Keaton Mitchell | 0.0 | 3.9 |
+| Samaje Perine | 0.0 | 2.0 |
+| Lamar Jackson | 318.4 | 215.5 |
+
+Nobody is free any more, and the order changed: **Shakir now outranks LaPorta and Reed**, matching
+what the simulator said. Lamar falls from 318 to 216 because the old figure implicitly assumed a
+QB-less lineup all season rather than one that streams a replacement.
+
+### A control test that came out backwards, and the code was right
+
+Spread byes make a backup worth **more** than colliding ones — roughly double. Two starters out in
+the same week open two slots and one backup fills only one; out in different weeks he covers both.
+The test was written asserting the opposite. Pinned now, because the intuition that a "doubled
+hole" is worse for the roster is true and says nothing about the *backup's* value.
+
+### What this does not fix
+
+The proposals are materially unchanged (still Jacobs-centred, still with `Gibbs in a blanket`,
+still inside the noise floor), because §12's two open issues are untouched: **a season-long
+suspension is modelled as one missed game**, and the injury haircut is applied to both valuations,
+which erases exactly the edge private information would give. Those remain the next tweaks.

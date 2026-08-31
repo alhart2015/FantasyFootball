@@ -17,11 +17,13 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from projections.draft.assistant.availability import PlayerAvailability
 from projections.midseason.roster_shape import (
     TeamShape,
     lineup_points,
     median_starters,
     need,
+    season_surplus,
     surplus,
     team_shapes,
 )
@@ -445,3 +447,128 @@ def test_a_player_who_is_not_on_the_named_roster_is_refused() -> None:
 
     with pytest.raises(ProjectionInputError, match="no slot to occupy"):
         payload_with_trade(payload, bogus, my_team_id=TEAM_IDS[0])
+
+
+# ---------------------------------------------------------------------------
+# season_surplus — the bye- and availability-aware version
+# ---------------------------------------------------------------------------
+
+
+def _bye_availability(players: list[PlayerValue], byes: dict[str, int]) -> PlayerAvailability:
+    """Everyone healthy every week; only the named byes force anyone out."""
+    return PlayerAvailability(
+        p={p.gsis_id: 1.0 for p in players},
+        bye={name: week for name, week in byes.items()},
+    )
+
+
+def _bench_wr_roster() -> list[PlayerValue]:
+    """A roster where the WR3 genuinely does NOT start.
+
+    The RB3 at 175 outranks the WR3 at 160 for the single flex, so the WR3 is a true bench
+    body and his season-total surplus is exactly 0.0. Without that RB3 the flex would take the
+    WR3 and the fixture would be testing nothing -- which is how the first version of these
+    tests failed.
+    """
+    return [
+        pv("QB1", "QB", 300.0),
+        pv("RB1", "RB", 200.0),
+        pv("RB2", "RB", 190.0),
+        pv("RB3", "RB", 175.0),  # takes the flex, ahead of WR3
+        pv("WR1", "WR", 180.0),
+        pv("WR2", "WR", 170.0),
+        pv("WR3", "WR", 160.0),
+        pv("TE1", "TE", 110.0),
+    ]
+
+
+def test_season_total_surplus_prices_a_bench_player_at_exactly_zero() -> None:
+    """The bug, stated. This is *correct* for the question the season-total measure asks and
+    useless for the question a trade tool asks, which is why `season_surplus` exists."""
+    roster = _roster()
+
+    assert surplus(roster, roster[4], SLOTS) == pytest.approx(0.0)
+
+
+def test_a_bench_receiver_is_not_free_when_both_starters_share_a_bye() -> None:
+    """The live case that exposed this: WR1 and WR2 on the same bye week, so for one week the
+    WR3 IS the receiving corps. A season total cannot represent that at all — it never looks at
+    a week — and prices him at zero, which is how a trade tool ends up giving him away."""
+    players = _bench_wr_roster()
+    wr1, wr2, wr3 = players[4], players[5], players[6]
+    availability = _bye_availability(players, {wr1.gsis_id: 5, wr2.gsis_id: 5})
+
+    season_total = surplus(players, wr3, SLOTS)
+    aware = season_surplus(players, SLOTS, availability, n_sims=200, weeks=list(range(1, 15)))
+
+    assert season_total == pytest.approx(0.0), "the season-total measure sees nothing"
+    assert aware[wr3.gsis_id] > 0.0, "the bye-aware measure must price the week-5 cover"
+
+
+def test_spread_byes_make_a_backup_worth_more_than_colliding_ones() -> None:
+    """The direction here is the opposite of the obvious guess, and the code is right.
+
+    Colliding byes (both starters out in week 5) open **two** WR slots in one week, and one
+    backup can only fill **one** of them -- the other goes unfilled regardless. Spread byes
+    (weeks 5 and 9) open one slot in each of two weeks, and he fills **both**. So a backup is
+    worth roughly twice as much behind starters whose byes do not collide.
+
+    Written the other way round first, which is why it is worth pinning: the intuition that a
+    "doubled hole" is worse for the roster is true, but it makes the *backup* less useful, not
+    more, because his coverage is capped at one slot per week.
+    """
+    players = _bench_wr_roster()
+    wr1, wr2, wr3 = players[4], players[5], players[6]
+    weeks = list(range(1, 15))
+
+    collide = season_surplus(
+        players,
+        SLOTS,
+        _bye_availability(players, {wr1.gsis_id: 5, wr2.gsis_id: 5}),
+        n_sims=200,
+        weeks=weeks,
+    )
+    apart = season_surplus(
+        players,
+        SLOTS,
+        _bye_availability(players, {wr1.gsis_id: 5, wr2.gsis_id: 9}),
+        n_sims=200,
+        weeks=weeks,
+    )
+
+    assert apart[wr3.gsis_id] > collide[wr3.gsis_id]
+    # ...and roughly double, since he covers two weeks instead of one.
+    assert apart[wr3.gsis_id] == pytest.approx(2 * collide[wr3.gsis_id], rel=0.15)
+
+
+def test_an_injury_prone_starter_makes_his_backup_worth_something() -> None:
+    """The other half of what a season total misses. No byes at all here — the WR3's whole value
+    is covering the weeks the WR1 is drawn out."""
+    players = _bench_wr_roster()
+    wr1, wr3 = players[4], players[6]
+    weeks = list(range(1, 15))
+
+    healthy = PlayerAvailability(p={p.gsis_id: 1.0 for p in players}, bye={})
+    fragile = PlayerAvailability(
+        p={p.gsis_id: (0.5 if p.gsis_id == wr1.gsis_id else 1.0) for p in players}, bye={}
+    )
+
+    assert season_surplus(players, SLOTS, healthy, n_sims=400, weeks=weeks)[
+        wr3.gsis_id
+    ] == pytest.approx(0.0, abs=1e-9)
+    assert season_surplus(players, SLOTS, fragile, n_sims=400, weeks=weeks)[wr3.gsis_id] > 0.0
+
+
+def test_team_shapes_uses_the_bye_aware_surplus_when_availability_is_supplied() -> None:
+    """The wiring. The fallback exists for tests; a live run must never take it."""
+    players = _bench_wr_roster()
+    wr1, wr2, wr3 = players[4], players[5], players[6]
+    availability = _bye_availability(players, {wr1.gsis_id: 5, wr2.gsis_id: 5})
+
+    naive = team_shapes({1: players}, {1: "me"}, SLOTS)
+    aware = team_shapes(
+        {1: players}, {1: "me"}, SLOTS, availability, n_sims=200, weeks=list(range(1, 15))
+    )
+
+    assert naive[1].surplus[wr3.gsis_id] == pytest.approx(0.0)
+    assert aware[1].surplus[wr3.gsis_id] > 0.0

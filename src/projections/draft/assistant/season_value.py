@@ -379,6 +379,54 @@ def marginal_season_values_var(
     return out
 
 
+def removal_season_costs(
+    roster: pd.DataFrame,
+    roster_slots: Mapping[RosterSlot, int],
+    availability: PlayerAvailability,
+    *,
+    n_sims: int,
+    rng: np.random.Generator,
+    weeks: Iterable[int] = range(1, 18),
+) -> dict[str, float]:
+    """CRN expected season points LOST if each player is removed from `roster`.
+
+    The mirror of `marginal_season_values`, which asks what an *addition* is worth. This asks
+    what a player already on the roster is worth to it, which is the question a trade or a drop
+    actually poses.
+
+    **Why this is not the same as re-optimising one full-strength lineup.** A season-total
+    lineup comparison prices every bench player at exactly 0.0: he never starts, so removing him
+    changes nothing. That is wrong, and wrong in the direction that matters, because bench
+    players are the ones a trade tool wants to give away. Measured on the live 2026 Critts
+    roster, the WR3 scored 0.0 by the season-total measure and **0.82 projected wins** by the
+    simulator -- more than the WR2, whose season-total surplus was 16.5. The ranking was not
+    merely miscalibrated; it was inverted.
+
+    The missing facts are byes and availability, both of which are per-WEEK. This league's WR1
+    and WR2 share a week-11 bye, so for one week the WR3 *is* the receiving corps -- a fact a
+    season total cannot represent at all. `_factorized_season_value` walks the weeks and forces
+    bye players out; `draws < p` handles the injury draw.
+
+    All removals share one pre-drawn availability matrix, so each difference cancels the common
+    noise rather than measuring it.
+    """
+    weeks = list(weeks)
+    ids = [str(g) for g in roster["gsis_id"]]
+    col_of = {g: i for i, g in enumerate(ids)}
+    draws = rng.random((n_sims, len(ids)))
+
+    full = expected_season_points_crn(
+        roster, roster_slots, availability, draws=draws, col_of=col_of, weeks=weeks
+    )
+    out: dict[str, float] = {}
+    for i, gsis in enumerate(ids):
+        without = roster.drop(roster.index[i]).reset_index(drop=True)
+        out[gsis] = full - expected_season_points_crn(
+            without, roster_slots, availability, draws=draws, col_of=col_of, weeks=weeks
+        )
+    return out
+
+
 def marginal_season_values(
     base_roster: pd.DataFrame,
     candidates: pd.DataFrame,

@@ -146,7 +146,16 @@ def main() -> int:
         else:
             unvalued += 1
 
-    shapes = team_shapes(by_team, names, config.roster_slots)
+    # Availability is what makes `surplus` see byes and injuries. Without it every bench
+    # player prices at exactly 0.0 -- see `roster_shape.surplus`.
+    availability = load_store_availability(pool, season=args.season, data_root=args.data_root)
+    shapes = team_shapes(
+        by_team,
+        names,
+        config.roster_slots,
+        availability,
+        weeks=list(range(week, calendar.reg_weeks + 1)),
+    )
     mine = shapes[args.team_id]
 
     print(f"\n{names.get(args.team_id, args.team_id)} — week {week}, {games_remaining} games left")
@@ -209,7 +218,6 @@ def main() -> int:
         return 0
 
     if not args.fast:
-        availability = load_store_availability(pool, season=args.season, data_root=args.data_root)
         proposals = simulate_trades(
             payload,
             pool,
