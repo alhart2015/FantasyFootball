@@ -291,3 +291,61 @@ back they do not need, what do they need that I have, and is there a deal that E
 call fair?*
 
 If v1 answers that with a specific, sendable proposal, it has earned its place.
+
+
+---
+
+## 12. What was actually built (2026-08-30)
+
+All five phases in one pass, at the user's instruction. `midseason/valuation.py`,
+`midseason/roster_shape.py`, `midseason/trades.py`, `scripts/trade_analyzer.py`, and 22 tests.
+
+### The first real run found the trade the tool was built to find
+
+`Gibbs in a blanket` needs **130.6 lineup points at RB** — nearly three times the league median
+(48.0) and the largest single need in the league. The hero is holding a suspended Josh Jacobs
+he cannot start. The top proposal sends **Jacobs + Khalil Shakir** for **Amon-Ra St. Brown +
+Germie Bernard**: +45.2 to the hero's lineup, +17.1 to theirs *on ESPN's own numbers*, and an
+ESPN balance of **−7.0** — the hero gives up more market value than he takes. That is a trade
+you can send.
+
+### Stage 1 and stage 2 disagree, and stage 2 is right
+
+**+45.2 season lineup points came out as +0.11 wins — inside the noise floor.** The naive
+conversion (~80 points per win on this roster, §1) predicts ~0.5. The gap is the thing a
+lineup-only tool cannot see: **the trade also improves a rival.** `Gibbs in a blanket` gains
++17.1 on their own lineup, and they compete for the same six playoff spots. My raw gain is not
+my standing's gain.
+
+This is exactly why the objective is Δ wins and not Δ points, and it is the strongest argument
+yet for stage 2 existing at all. **A trade tool that reported only lineup points would have
+called this a +45 slam dunk.**
+
+### What the tests pinned that the spec only asserted
+
+- **The payload swap is an exact involution.** Apply a trade, apply its inverse, and the roster
+  lists must come back identical — ids *and* positions. Order reaches the simulator, and a
+  reordering swap silently unpairs the comparison. Comparing totals cannot catch it; only
+  round-tripping the identities can.
+- **A no-op lineup swap changes the lineup by exactly zero.**
+- **Surplus measures the cascade.** Removing the RB2 from a 4-RB roster costs 50, not the 30 a
+  direct-backup comparison reports, because RB3 slides up and RB4 enters the flex.
+- **Half-PPR vs full-PPR on 100 receptions is exactly 50 points** — the units error that would
+  read as an edge on every pass-catcher at once.
+
+### A fixture that was wrong for an instructive reason
+
+The first "positional fit" test found no trade at all, and the fixture was at fault rather than
+the code: **a 1-for-1 of equal value is neutral whenever the flex can absorb it.** Send a 180
+and receive a 180 and the flex simply swaps which one it holds. A real fit gain needs the
+outgoing player to be one who *cannot start* (surplus 0, the flex already taken by someone
+better) and the incoming one to displace a genuinely weak starter. Worth keeping: it is also
+the shape of a sellable trade, because both sides give up a bench body.
+
+### Known limits, carried forward
+
+- Size-neutral only (§9). `Gibbs in a blanket` would plainly take 2-for-1s.
+- 16 rostered players — every D/ST — are unvalued and untradeable by this tool.
+- `edge` is small on almost every player here (the largest on the hero's roster is −26.4), which
+  is what §4's caveat predicted: our consensus contains ESPN, so the two rarely diverge much.
+  **Nearly all the gain the tool finds is fit, not edge**, and the attribution says so.
