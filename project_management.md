@@ -6,6 +6,67 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Trade analyzer built — and stage 2 immediately contradicted stage 1 (2026-08-30, branch `feat/trade-analyzer`)
+
+**#154, the last unbuilt feature of the Mid-season Manager.** Spec:
+`docs/superpowers/specs/2026-08-30-trade-analyzer-design.md`. Built in one pass at the user's
+instruction rather than the usual phases. Run it with
+`python scripts/trade_analyzer.py --league-id 856974 --season 2026 --team-id 17 --pool data/vorp_2026/critts_half16_snake.parquet`.
+
+**It exists because the waiver tool proved the wire is empty.** Best free-agent RB 67.8 against
+the user's *worst rostered* RB at 85.6. With Josh Jacobs facing a season-long suspension
+(−1.22 wins), trade is the only lever left.
+
+**Three definitions carry it, and all three are marginal rather than absolute.** *Surplus* is what
+a player is worth to his OWN team — the lineup points lost when he goes and the cascade
+re-optimises. *Need* is what a median-starter upgrade at a position would add. *Edge* is our
+projection minus ESPN's, both scored under the league's own `Ruleset`. Points cannot answer "am I
+strong at RB"; a fourth back in a 2-RB league is worth nothing to the lineup and plenty on the
+market.
+
+**The user's framing — "fair on ESPN, advantageous on ours" — is a narrow, deliberate departure
+from #154's "no opponent-preference model".** That warning is about modelling psychology and it
+stands. Scoring their side on the public projections both managers can see is a stated, checkable
+proxy, and the tool says "this looks fair on ESPN's numbers", never "he will accept". Verified
+before designing on it: 192 of 192 rostered skill players have an ESPN stat line.
+
+**The first real run found the trade it was built to find.** `Gibbs in a blanket` needs **130.6
+points at RB** — nearly 3x the league median and the largest single need in the league — and the
+hero holds a suspended RB he cannot start. Top proposal: Jacobs + Shakir for Amon-Ra St. Brown +
+Bernard, **+45.2** to the hero's lineup, **+17.1** to theirs *on ESPN's numbers*, ESPN balance
+**−7.0** (the hero gives up more market value than he takes).
+
+**Then stage 2 contradicted stage 1, and stage 2 is right.** That +45.2 came out as **+0.11
+wins — inside the noise floor**, against ~0.5 from the naive points-per-win conversion. The gap
+is what a lineup-only tool structurally cannot see: **the trade also improves a rival** who
+competes for the same six playoff spots. My raw gain is not my standing's gain. This is the
+strongest argument yet for the two-stage design — **a points-only tool would have called this a
++45 slam dunk.**
+
+**A fixture that was wrong for an instructive reason.** The first positional-fit test found no
+trade, and the fixture was at fault: **a 1-for-1 of equal value is neutral whenever the flex can
+absorb it.** Send a 180, receive a 180, and the flex just swaps which one it holds. A real fit
+gain needs the outgoing player to be unable to start (surplus 0) and the incoming one to displace
+a weak starter — which is also the shape of a *sellable* trade, since both sides give up a bench
+body.
+
+**The gate worth carrying:** `payload_with_trade` is tested as an **exact involution** — apply a
+trade, apply its inverse, and the roster lists come back identical in ids *and* positions. Roster
+order reaches the simulator, and a reordering swap silently unpairs the comparison; comparing
+totals cannot catch that, only round-tripping identities can.
+
+**Carried limits:** size-neutral trades only (2-for-1 needs a roster-spot-filling policy, and the
+FA pool that would fill it is measurably worthless here); all 16 D/ST are unvalued and
+untradeable; and `edge` is small on nearly every player (largest on the hero's roster is −26.4),
+exactly as the spec's caveat predicted — our consensus contains ESPN, so **almost all the gain the
+tool finds is fit, not edge**, and the output attributes it that way.
+
+**Next:** 2-for-1 if the wire ever improves, and the dashboard page (deferred on the same
+reasoning as the waiver page — a thin presentation of the same objects, not judgeable until the
+tables have been read in anger).
+
+---
+
 ## Post-draft: rookies were being dropped off every roster (2026-08-30, branch `fix/rookie-roster-resolution`)
 
 **The draft happened; results pulled from ESPN (208 rostered, 192 skill picks). The first
