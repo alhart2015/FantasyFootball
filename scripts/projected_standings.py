@@ -6,8 +6,14 @@ where every team is heading plus the odds on each remaining game. Optionally wri
 a weekly snapshot so the trajectory can be read back across the season.
 
 Usage:
-    python scripts/projected_standings.py --league-id 856974 --season 2026
-    python scripts/projected_standings.py --league-id 856974 --season 2026 --write-snapshot
+    python scripts/projected_standings.py                    # the one configured league
+    python scripts/projected_standings.py --write-snapshot
+    python scripts/projected_standings.py --league-id 856974 --season 2026 \
+        --team-id 17 --pool data/vorp_2026/critts_half16_snake.parquet
+
+With no league arguments, league id, season, team and pool come from the single
+`board_profile.json` under `data/leagues/` — the same file the draft board loads.
+Anything typed wins over the file, and the run announces which profile it used.
 """
 
 from __future__ import annotations
@@ -20,6 +26,10 @@ import numpy as np
 import pandas as pd
 
 from projections.draft.assistant.availability_loader import load_store_availability
+from projections.draft.assistant.league_profile import (
+    add_league_arguments,
+    resolve_league_target,
+)
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
 from projections.ingest.espn_league import (
@@ -35,16 +45,14 @@ from projections.store import write_partition
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--league-id", type=int, required=True)
-    p.add_argument("--season", type=int, required=True)
-    p.add_argument("--team-id", type=int, default=None, help="Highlight this team as mine.")
+    # The five league flags all default to the profile; see `resolve_league_target`.
+    add_league_arguments(p, team_id_help="Highlight this team as mine.")
     p.add_argument(
         "--credentials",
         type=Path,
         default=Path("configs/espn_credentials.json"),
         help="ESPN cookie file (gitignored).",
     )
-    p.add_argument("--pool", type=Path, required=True, help="VORP parquet for this league.")
     p.add_argument("--n-sims", type=int, default=2000)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--data-root", type=Path, default=Path("data"))
@@ -58,6 +66,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    try:
+        target = resolve_league_target(args)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if target.source is not None:
+        print(target.describe())
+
     # `resolve` tries the environment first and then the file, and raises with a longer
     # message than anything reproduced here. Using it also keeps ESPN_SWID / ESPN_S2 working,
     # which `from_file` alone silently ignored.
@@ -66,14 +82,14 @@ def main(argv: list[str] | None = None) -> int:
     except EspnLeagueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    payload = fetch_league_payload(args.league_id, args.season, creds=creds)
+    payload = fetch_league_payload(target.league_id, target.season, creds=creds)
 
     teams = parse_teams(payload)
-    if args.team_id is not None and args.team_id not in set(teams["team_id"]):
+    if target.team_id is not None and target.team_id not in set(teams["team_id"]):
         # `write_league_snapshot` performs exactly this check. Without it a typo just produces
         # a report with no "you" marker and no matchup section, which reads like success.
         print(
-            f"--team-id {args.team_id} is not a team in this league. Valid ids: "
+            f"team id {target.team_id} is not a team in this league. Valid ids: "
             f"{sorted(teams['team_id'])}.",
             file=sys.stderr,
         )
@@ -91,15 +107,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    pool = attach_is_rookie(_load_pool(args.pool), season=args.season, data_root=args.data_root)
+    pool = attach_is_rookie(_load_pool(target.pool), season=target.season, data_root=args.data_root)
     try:
         run = project_league_standings(
             payload,
             pool,
             pd.read_parquet(id_map_path),
-            load_store_availability(pool, season=args.season, data_root=args.data_root),
+            load_store_availability(pool, season=target.season, data_root=args.data_root),
             VarianceParams.load(),
-            season=args.season,
+            season=target.season,
             n_sims=args.n_sims,
             rng=np.random.default_rng(args.seed),
         )
@@ -112,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(
-        f"{run.league_name} ({args.season}) — week {run.snapshot_week} of "
+        f"{run.league_name} ({target.season}) — week {run.snapshot_week} of "
         f"{run.calendar.reg_weeks}, {run.weeks_remaining} to play. "
         f"{run.n_matchups_played} matchups played."
     )
@@ -126,9 +142,9 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    _print_standings(run.standings, my_team_id=args.team_id)
+    _print_standings(run.standings, my_team_id=target.team_id)
     _print_ties_footnote()
-    _print_my_matchups(run.odds, my_team_id=args.team_id)
+    _print_my_matchups(run.odds, my_team_id=target.team_id)
 
     if args.write_snapshot:
         for table, frame in (("projected_standings", run.standings), ("matchup_odds", run.odds)):
@@ -136,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.data_root / "processed",
                 table,
                 frame,
-                season=args.season,
+                season=target.season,
                 week=run.snapshot_week,
             )
             print(f"Wrote {path}")

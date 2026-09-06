@@ -5,5 +5,7 @@
   "id_map": "data/raw/id_map.parquet",
   "my_slot": 5,
   "season": 2026,
-  "strategy": "now_or_never_targeted"
+  "strategy": "now_or_never_targeted",
+  "league_id": 856974,
+  "team_id": 17
 }

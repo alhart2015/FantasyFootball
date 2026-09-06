@@ -1,7 +1,11 @@
 """Run the season dashboard on localhost.
 
-    python scripts/run_season_dashboard.py --league-id 856974 --season 2026 --team-id 17 \
-        --pool data/vorp_2026/critts_half16_snake.parquet
+    python scripts/run_season_dashboard.py                   # the one configured league
+    python scripts/run_season_dashboard.py --league-id 856974 --season 2026 \
+        --team-id 17 --pool data/vorp_2026/critts_half16_snake.parquet
+
+League id, season, team, pool and league directory come from the single
+`board_profile.json` under `data/leagues/` unless typed; anything typed wins.
 
 Read-only: both pages are readers over data the repo already computes. Nothing here writes to
 the store, and there is no auth because it binds to localhost for one person.
@@ -17,18 +21,17 @@ import argparse
 import sys
 from pathlib import Path
 
+from projections.draft.assistant.league_profile import (
+    add_league_arguments,
+    resolve_league_target,
+)
 from projections.web import DashboardConfig, create_app
-
-_DEFAULT_LEAGUE_DIR = Path("data/leagues/critts_2025_2026")
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--league-id", type=int, required=True)
-    p.add_argument("--season", type=int, required=True)
-    p.add_argument("--team-id", type=int, default=None, help="Highlight this team as mine.")
-    p.add_argument("--pool", type=Path, required=True, help="VORP parquet for this league.")
-    p.add_argument("--league-dir", type=Path, default=_DEFAULT_LEAGUE_DIR)
+    # The five league flags all default to the profile; see `resolve_league_target`.
+    add_league_arguments(p, team_id_help="Highlight this team as mine.")
     p.add_argument("--data-root", type=Path, default=Path("data"))
     p.add_argument(
         "--credentials",
@@ -44,13 +47,22 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    try:
+        target = resolve_league_target(args)
+        league_dir = target.require_league_dir()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if target.source is not None:
+        print(target.describe())
+
     config = DashboardConfig(
         data_root=args.data_root,
-        league_dir=args.league_dir,
-        pool_path=args.pool,
-        season=args.season,
-        league_id=args.league_id,
-        my_team_id=args.team_id,
+        league_dir=league_dir,
+        pool_path=target.pool,
+        season=target.season,
+        league_id=target.league_id,
+        my_team_id=target.team_id,
         credentials_path=args.credentials,
         n_sims=args.n_sims,
     )
