@@ -237,9 +237,41 @@ boundary, v1 **drops the bucket and re-derives it from Sleeper's continuous `pts
 ### 5.1 `build_league_config` and replacement level
 
 The docstring at `espn_league.py:660` argues dropping DST is *correct* replacement math because a
-D/ST pick "does not consume a skill player." That was true only while D/ST was unprojectable. It
-is now the bug #166 names: a 16-team league drains 16 × 13, not 16 × 12, and the 2026 draft is the
-evidence.
+D/ST pick "does not consume a skill player."
+
+**That half of the argument is correct, and measurement confirms it.** Probe run 2026-09-06, same
+projections, two configs differing only by `RosterSlot.DST: 1`, 16 teams:
+
+```
+pos     without DST    with DST     delta
+DST   None       90.00       n/a
+QB           290.00      290.00     +0.00
+RB           177.50      177.50     +0.00
+TE           150.00      150.00     +0.00
+WR           179.50      179.50     +0.00
+```
+
+Skill replacement levels do not move by a cent, and the mechanism says they cannot:
+`_starter_demand` (`draft/vorp.py:53`) derives per-position demand from `_select_pool`, which fills
+each position slot from that position alone (`frozenset({slot.value})`) and FLEX from
+`FLEX_ELIGIBLE` = RB/WR/TE. `Position.DST` is in neither, so the DST pass takes 16 defenses and
+touches no skill selection. **Adding DST does not change RB VORP.**
+
+**Where the 16 × 13 argument actually bites is auction dollars,** via
+`LeagueConfig.total_pool_size = n_teams × roster_size`:
+
+```
+               pool   top RB   top WR   top QB
+without DST     208    54.00    47.00    20.00
+with DST        224    51.00    44.00    19.00
+```
+
+A fixed $3,200 spread over 224 players instead of 208 reprices every player down ~6%, and 16 of
+those dollars now correctly go to defenses. That is the real distortion #166 names, and it lives in
+`draft/auction.py`, not `draft/vorp.py`.
+
+So the drop is not "wrong replacement math" — it is a correct workaround for an unprojectable
+position, which is no longer unprojectable, and whose absence misprices the auction.
 
 `RosterSlot.K` **stays dropped.** Critts rosters no kicker, kicker categories remain unmodelled,
 and widening that too would ship an unvalidated position. The drop becomes K-only and the log
@@ -285,9 +317,12 @@ Variance is fit **once, offline**, and stored as a per-team-strength-tier parame
    id→name table to get wrong. The one translation (Sleeper, §4.2) is isolated and cross-checked
    against ESPN.
 3. **Renumbered gsis_ids orphaning stored data.** Pinned by test (§3).
-4. **Replacement level moving without anyone noticing.** Adding DST to `roster_slots` changes VORP
-   for *every* position. The plan must include a before/after VORP diff on the real Critts config,
-   reviewed by the user, not just a passing test suite.
+4. **Auction prices moving without anyone noticing.** Skill VORP is provably unaffected (§5.1), but
+   every auction dollar figure shifts ~6% because the pool grows 208 → 224. The plan must include a
+   before/after **auction-value** diff on the real Critts config, reviewed by the user. A test that
+   merely passes will not surface a repricing of the whole board. Pin the VORP invariant too: a
+   regression test asserting skill `replacement_fpts` is byte-identical with and without the DST
+   slot, so a future FLEX-eligibility change cannot silently couple them.
 5. **A defense projection that is silently zero.** If `dst_points_by_stat_id` is empty (league has
    no D/ST scoring) but a DST roster slot exists, that is a contradiction — raise, do not project 0.
 6. **Sleeper bucket misalignment applied silently.** §4.2 requires it be documented and derived,
