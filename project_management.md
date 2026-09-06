@@ -6,6 +6,37 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## The in-season tools stopped asking who I am (2026-09-05)
+
+**Four CLIs — `projected_standings`, `waiver_recommender`, `trade_analyzer`,
+`run_season_dashboard` — each required `--league-id --season --team-id --pool` on every run.**
+They now default from the single `board_profile.json` under `data/leagues/`, the same file the
+draft board already loads. `python scripts/trade_analyzer.py` with no arguments is the everyday
+form; anything typed still wins, and a fully-explicit run never opens a profile at all, so the
+old invocations and a checkout with no `data/leagues/` both keep working.
+
+**`board_profile.json` gained `league_id` and `team_id`.** Both optional — profiles written for
+the board alone predate them — and both distinct from `my_slot`, which is a *draft seat* in
+`1..n_teams` while `team_id` is ESPN's arbitrary franchise id (5 and 17 respectively for this
+league). Conflating them is the silent failure this whole area guards against, and there is a
+test named for it.
+
+**The shared surface is `add_league_arguments` / `resolve_league_target` in
+`league_profile.py`**, returning a `LeagueTarget`. One flag set, one fallback rule, one banner
+line — every run that reads anything from a profile prints which league it chose, because a
+wrong default otherwise produces a complete, confident report about somebody else's roster.
+
+**Two bugs found while building it, both worth remembering.** `league_dir` was first derived
+from `league_config_path.parent`; in this league that is the same directory as the profile, so
+it would never have shown up here, but `rosters.tsv` / `schedule.tsv` live beside the *profile*.
+`LeagueProfile` now carries `profile_dir` explicitly. And dropping `required=True` turned every
+missed `args.season` into a silent `None`: two survived the first pass in
+`projected_standings.py` and surfaced ninety seconds into a simulation as a `season` column of
+nulls failing pandera coercion. `resolve_league_target` now **consumes** the five attributes off
+the Namespace, so a missed reference is an immediate `AttributeError` naming the attribute.
+
+---
+
 ## Trade analyzer built — and stage 2 immediately contradicted stage 1 (2026-08-30, branch `feat/trade-analyzer`)
 
 **#154, the last unbuilt feature of the Mid-season Manager.** Spec:

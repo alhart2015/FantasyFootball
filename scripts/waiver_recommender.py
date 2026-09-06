@@ -1,6 +1,7 @@
 """Is anyone on waivers better than someone on my team?
 
-    python scripts/waiver_recommender.py --league-id 856974 --season 2026 --team-id 8
+    python scripts/waiver_recommender.py                     # the one configured league
+    python scripts/waiver_recommender.py --team-id 8         # somebody else's team
     python scripts/waiver_recommender.py ... --fast          # skip the simulation
     python scripts/waiver_recommender.py ... --min-gain 2.0  # only real moves
 
@@ -26,11 +27,16 @@ is not.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import pandas as pd
 
 from projections.draft.assistant.availability_loader import load_store_availability
+from projections.draft.assistant.league_profile import (
+    add_league_arguments,
+    resolve_league_target,
+)
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.league_config import LeagueConfig
@@ -162,29 +168,36 @@ def _print_note(note: InjuryNote | None, *, indent: str = "    ") -> None:
 
 
 def run(args: argparse.Namespace) -> int:
+    try:
+        target = resolve_league_target(args)
+        league_config_path = target.require_league_config()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if target.source is not None:
+        print(target.describe())
+
     creds = EspnCredentials.resolve(args.credentials)
-    payload = fetch_league_payload(args.league_id, args.season, creds)
+    payload = fetch_league_payload(target.league_id, target.season, creds)
     teams = parse_teams(payload)
 
-    my_team_id = args.team_id
+    my_team_id = target.team_id
     if my_team_id is None:
         print("--team-id is required. Teams in this league:")
         for _, team in teams.iterrows():
             print(f"  {int(team['team_id']):>3}  {team['team_name']}")
         return 2
 
-    config = LeagueConfig.model_validate_json(
-        (args.league_dir / "league_config.json").read_text(encoding="utf-8")
-    )
-    pool = pd.read_parquet(args.pool)
+    config = LeagueConfig.model_validate_json(league_config_path.read_text(encoding="utf-8"))
+    pool = pd.read_parquet(target.pool)
     pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
     pool = attach_is_rookie(
-        VorpTableSchema.validate(pool), season=args.season, data_root=args.data_root
+        VorpTableSchema.validate(pool), season=target.season, data_root=args.data_root
     )
     id_map = pd.read_parquet(args.data_root / "raw" / "id_map.parquet")
 
     try:
-        weekly_stats = read_partition(args.data_root / "raw", "weekly_stats", season=args.season)
+        weekly_stats = read_partition(args.data_root / "raw", "weekly_stats", season=target.season)
     except FileNotFoundError:
         weekly_stats = pd.DataFrame()
 
@@ -195,12 +208,16 @@ def run(args: argparse.Namespace) -> int:
         weekly_stats,
         config,
         my_team_id=my_team_id,
-        season=args.season,
+        season=target.season,
     )
     week = args.week or run_state.week
 
     fa_payload = fetch_free_agents(
-        args.league_id, args.season, creds, scoring_period=week, limit=args.free_agent_limit
+        target.league_id,
+        target.season,
+        creds,
+        scoring_period=week,
+        limit=args.free_agent_limit,
     )
     free_agents, truncated = parse_free_agents(fa_payload, limit=args.free_agent_limit)
     projections = weekly_projections_by_espn_id(fa_payload, week, config.ruleset)
@@ -214,8 +231,8 @@ def run(args: argparse.Namespace) -> int:
     # the truncation check only runs on the free-agent side.
     rostered_limit = config.n_teams * (sum(config.roster_slots.values()) + 2)
     mine_payload = fetch_free_agents(
-        args.league_id,
-        args.season,
+        target.league_id,
+        target.season,
         creds,
         scoring_period=week,
         limit=rostered_limit,
@@ -263,10 +280,10 @@ def run(args: argparse.Namespace) -> int:
             payload,
             pool,
             id_map,
-            load_store_availability(pool, season=args.season, data_root=args.data_root),
+            load_store_availability(pool, season=target.season, data_root=args.data_root),
             VarianceParams.load(),
             shortlist,
-            season=args.season,
+            season=target.season,
             my_team_id=my_team_id,
             n_sims=args.n_sims,
             week=week,
@@ -318,14 +335,11 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__ or "")
-    parser.add_argument("--league-id", type=int, required=True)
-    parser.add_argument("--season", type=int, required=True)
-    parser.add_argument("--team-id", type=int, help="your team; omit to list them")
+    # The five league flags all default to the profile; see `resolve_league_target`.
+    add_league_arguments(parser, team_id_help="your team; omit to list them")
     parser.add_argument("--week", type=int, help="defaults to the first unplayed week")
-    parser.add_argument("--league-dir", type=Path, required=True)
-    parser.add_argument("--pool", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--credentials", type=Path, default=Path("configs/espn_credentials.json"))
     parser.add_argument("--free-agent-limit", type=int, default=DEFAULT_FREE_AGENT_LIMIT)
@@ -342,8 +356,11 @@ def main(argv: list[str] | None = None) -> int:
         help="skip the simulation and rank by this week's lineup gain alone",
     )
     parser.add_argument("--n-sims", type=int, default=2000)
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
 
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
     try:
         return run(args)
     except (ProjectionInputError, EspnLeagueError, OSError) as exc:
