@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Final, NewType
+from typing import ClassVar, Final, NewType
 
 import pandas as pd
 import pandera.pandas as pa
@@ -1083,6 +1083,47 @@ class ExternalProjectionWeeklySchema(pa.DataFrameModel):
     class Config:
         strict = "filter"
         coerce = True
+
+
+class DstProjectionSchema(pa.DataFrameModel):
+    """External D/ST projections, **long format**: one row per scored stat, per defense.
+
+    Deliberately long rather than wide. A defense's projection is a bag of ~47 numbered ESPN
+    stat categories, and which ids are populated is the source's business, not ours -- a wide
+    schema would need a column per id and would break the day ESPN adds one. Long format also
+    keeps the scoring path honest: `scoring.dst.score_dst` consumes exactly this shape, and no
+    column here has to be interpreted to score it.
+
+    **Stats, not points** -- same rule as every other ingest table. A D/ST projection scores
+    differently in every league (the Critts and goat_steins configs disagree), so storing a
+    fantasy-point total here would bake one league's ruleset into raw data. The conversion
+    happens downstream via `Ruleset.dst_stat_points`.
+
+    `stat_id` is ESPN's numeric category id kept as a string: it is a label, never arithmetic,
+    and the Sleeper adapter maps its named fields onto the same ids so both sources land in one
+    vocabulary. Human-readable names live in `scoring.dst.DST_STAT_LABELS` (display only).
+
+    `gsis_id` is the synthetic team-defense id from `DST_GSIS_IDS`; `team` is carried
+    alongside because every consumer of a defense wants the team, and re-deriving it through
+    `DST_TEAM_BY_GSIS` at each call site is noise.
+    """
+
+    source: Series[str] = pa.Field(isin=_SOURCE_VALUES)
+    source_player_id: Series[str]
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    # ISO YYYY-MM-DD; also encoded in the partition path, mirroring ExternalProjectionSchema.
+    asof: Series[str] = pa.Field(str_matches=r"^\d{4}-\d{2}-\d{2}$")
+    stat_id: Series[str] = pa.Field(str_matches=r"^\d+$")
+    value: Series[float] = pa.Field(nullable=False)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+        # One value per stat per defense per snapshot. A duplicate would silently double that
+        # category's contribution when the dot product sums the rows.
+        unique: ClassVar[list[str]] = ["source", "gsis_id", "season", "asof", "stat_id"]
 
 
 class ConsensusProjectionSchema(pa.DataFrameModel):

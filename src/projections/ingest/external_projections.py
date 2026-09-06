@@ -23,19 +23,23 @@ import urllib.error
 import urllib.request
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pandas as pd
 
+from projections.ingest.espn_league import ESPN_PRO_TEAMS
 from projections.ingest.identity import placeholder_name_key
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import (
     _PYARROW_STR,
+    DST_GSIS_IDS,
     ESPN_AUCTION_COLS,
     STAT_FIELDS,
+    DstProjectionSchema,
     ExternalProjectionSchema,
     Position,
     ProjectionSource,
+    normalize_team_code,
 )
 from projections.store import read_partition, write_partition
 
@@ -197,6 +201,78 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
             n_no_projection,
         )
     return pd.DataFrame(rows)
+
+
+#: ESPN's `defaultPositionId` for a team defense.
+ESPN_DST_POSITION_ID: Final[int] = 16
+
+
+def parse_espn_dst(payload: dict[str, Any], season: int) -> pd.DataFrame:
+    """Tidy one ESPN kona_player_info payload -> long-format D/ST projection rows.
+
+    One row per (defense, stat_id). Returns the columns `DstProjectionSchema` needs except
+    `asof`, which the refresh stamps.
+
+    Defenses are parsed separately from `parse_espn_players` rather than folded into it because
+    they share no columns with a skill line: a defense has none of `passing_yards` etc., and its
+    projection is a bag of numbered categories instead. See `DstProjectionSchema` for why the
+    shape is long.
+
+    ESPN identifies a D/ST by a NEGATIVE player id (the Texans defense is -16034) and by
+    `proTeamId`; the canonical key is the synthetic `DST_GSIS_IDS[team]`.
+    """
+    rows: list[dict[str, object]] = []
+    n_seen = 0
+    n_no_projection = 0
+    for entry in payload.get("players", []):
+        pl = entry.get("player", {})
+        if pl.get("defaultPositionId") != ESPN_DST_POSITION_ID:
+            continue
+        n_seen += 1
+        raw_team = ESPN_PRO_TEAMS.get(int(pl.get("proTeamId", 0) or 0))
+        if raw_team is None:
+            # proTeamId 0 is "free agent", which a real defense never is. Skipping rather
+            # than guessing from the name keeps a malformed row out of the store.
+            n_no_projection += 1
+            continue
+        team = normalize_team_code(raw_team)
+        proj_stats: dict[str, float] | None = None
+        for s in pl.get("stats", []):
+            if s.get("seasonId") != season or s.get("statSplitTypeId") != 0:
+                continue
+            if s.get("statSourceId") == 1:
+                proj_stats = s.get("stats", {})
+        if not proj_stats:
+            n_no_projection += 1
+            continue
+        for stat_id, value in proj_stats.items():
+            if value is None:
+                continue
+            rows.append(
+                {
+                    "source": ProjectionSource.ESPN.value,
+                    "source_player_id": str(pl.get("id")),
+                    "gsis_id": DST_GSIS_IDS[team],
+                    "team": team.value,
+                    "season": season,
+                    "stat_id": str(stat_id),
+                    "value": float(value),
+                }
+            )
+    if n_seen:
+        level = logging.WARNING if n_no_projection else logging.INFO
+        _log.log(
+            level,
+            "ESPN D/ST parse season=%s: %d of %d defenses had a season projection (%d rows).",
+            season,
+            n_seen - n_no_projection,
+            n_seen,
+            len(rows),
+        )
+    return pd.DataFrame(
+        rows,
+        columns=["source", "source_player_id", "gsis_id", "team", "season", "stat_id", "value"],
+    )
 
 
 # NOTE (v1 position choice): rows use `player.position` (the primary position), not
@@ -452,6 +528,58 @@ def refresh_external_projections(data_root: Path, *, season: int, asof: date | N
     return out
 
 
+def refresh_dst_projections(
+    data_root: Path,
+    *,
+    season: int,
+    asof: date | None = None,
+    payload: dict[str, Any] | None = None,
+) -> Path:
+    """Fetch ESPN D/ST projections and write one dated `dst_projections` snapshot.
+
+    A separate table from `external_projections` because a defense's projection shares no
+    columns with a skill stat line -- see `DstProjectionSchema`. `payload` is injectable so the
+    caller (or a test) can reuse a payload already fetched rather than hit ESPN twice.
+
+    Raises:
+        ExternalProjectionError: If the pull yields no defenses. Writing an empty snapshot would
+            look like "ESPN has no defenses this year" to every later read.
+    """
+    asof = asof or datetime.now(UTC).date()
+    espn_payload = payload if payload is not None else fetch_espn(season)
+    frame = parse_espn_dst(espn_payload, season)
+    if frame.empty:
+        raise ExternalProjectionError(
+            f"ESPN returned no D/ST projections for season {season}; refusing to write an empty "
+            "asof snapshot. Check the payload before trusting any defense number."
+        )
+    frame["asof"] = asof.isoformat()
+    for col in ("source", "source_player_id", "gsis_id", "team", "asof", "stat_id"):
+        frame[col] = frame[col].astype(_PYARROW_STR)
+    frame = DstProjectionSchema.validate(frame)
+
+    n_defenses = frame["gsis_id"].nunique()
+    if n_defenses != len(DST_GSIS_IDS):
+        _log.warning(
+            "dst_projections season=%s asof=%s: %d of %d defenses present. A missing defense "
+            "is unrankable, not merely absent.",
+            season,
+            asof.isoformat(),
+            n_defenses,
+            len(DST_GSIS_IDS),
+        )
+    _log.info(
+        "dst_projections season=%s asof=%s: wrote %d rows across %d defenses.",
+        season,
+        asof.isoformat(),
+        len(frame),
+        n_defenses,
+    )
+    out = write_partition(data_root / "raw", "dst_projections", frame, season=season, asof=asof)
+    record_manifest(data_root, table="dst_projections", season=season, df=frame)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Ingest external preseason projections (one snapshot)."
@@ -464,12 +592,24 @@ def main() -> None:
         default=None,
         help="Pull-date partition (ISO YYYY-MM-DD); defaults to today (UTC).",
     )
+    ap.add_argument(
+        "--skip-dst",
+        action="store_true",
+        help="Skip the D/ST snapshot. Defenses are written by default (issue #166).",
+    )
     args = ap.parse_args()
     try:
         path = refresh_external_projections(args.data_root, season=args.season, asof=args.asof)
     except ExternalProjectionError as exc:
         raise SystemExit(str(exc)) from exc
     print(f"Wrote external-projection snapshot: {path}", flush=True)
+    if args.skip_dst:
+        return
+    try:
+        dst_path = refresh_dst_projections(args.data_root, season=args.season, asof=args.asof)
+    except ExternalProjectionError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(f"Wrote D/ST snapshot: {dst_path}", flush=True)
 
 
 if __name__ == "__main__":
