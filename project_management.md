@@ -6,6 +6,29 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Next up: defenses (2026-09-05)
+
+**The user's call, in his words: not accounting for defenses in the draft was "a huge mistake",
+and roster decisions cannot keep ignoring them.** Tracked as
+[#166](https://github.com/alhart2015/FantasyFootball/issues/166); the projections-core half is
+the long-standing [#122](https://github.com/alhart2015/FantasyFootball/issues/122).
+
+**It is one structural gap, not four bugs.** `build_league_config` strips `RosterSlot.K` and
+`RosterSlot.DST` because the projections core ingests QB/RB/WR/TE only — keep the slot and
+`generate_vorp_table` raises "cannot fill 16 DST slots: only 0 eligible players remain". Every
+tool downstream inherits it and says so only in a `note:` line: standings skip them, the trade
+analyzer calls all 16 rostered defenses unvalued and untradeable, waivers cannot rank one.
+Streaming a defense is a routine in-season move in this format and the toolkit has nothing to
+say about it.
+
+**Scoping note:** this league rosters one D/ST and **no kicker**, so D/ST is the blocking half
+and K can wait. The unresolved design question is unchanged — D/ST is team-level, keyed on
+`Team` rather than `GsisId`, so it does not fit the per-player ingest -> VORP -> roster chain
+anywhere. Degraded v0 off `implied_team_total` (fast, later rewrite) vs ingesting the real
+play-by-play inputs (right shape, slower) is the decision to make first.
+
+---
+
 ## The in-season tools stopped asking who I am (2026-09-05)
 
 **Four CLIs — `projected_standings`, `waiver_recommender`, `trade_analyzer`,
