@@ -22,7 +22,8 @@ def test_id_map_refresh_records_manifest_entry(
     rows = manifest[manifest["table"] == "id_map"]
     assert len(rows) == 1
     row = rows.iloc[0]
-    assert row["rowcount"] == 4
+    # 4 fixture players + the 32 team defenses build_id_map appends (issue #166).
+    assert row["rowcount"] == 4 + 32
     assert pd.isna(row["season"])
     assert isinstance(row["checksum"], str) and len(row["checksum"]) == 64
 
