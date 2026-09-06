@@ -478,6 +478,14 @@ _SKILL_POSITION_VALUES = [
     Position.WR.value,
     Position.TE.value,
 ]
+
+#: Skill positions plus D/ST — what a *rosterable* table admits (issue #166).
+#:
+#: Deliberately separate from `_SKILL_POSITION_VALUES` rather than replacing it. The feature
+#: builders and the preseason model genuinely are skill-only: no D/ST features exist, and a
+#: schema that admitted defenses there would accept rows nothing can produce. Only tables that
+#: carry a rosterable player — the consensus blend and the waiver pool — widen.
+_ROSTERABLE_POSITION_VALUES = [*_SKILL_POSITION_VALUES, Position.DST.value]
 _TEAM_VALUES = [t.value for t in Team]
 _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
 _RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD", "DRAFTKINGS"]
@@ -1145,7 +1153,7 @@ class ConsensusProjectionSchema(pa.DataFrameModel):
     # ISO YYYY-MM-DD; mirrors the raw external_projections snapshot this was derived from
     asof: Series[str] = pa.Field(str_matches=r"^\d{4}-\d{2}-\d{2}$")
     full_name: Series[str]
-    position: Series[str] = pa.Field(isin=_SKILL_POSITION_VALUES)
+    position: Series[str] = pa.Field(isin=_ROSTERABLE_POSITION_VALUES)
     consensus_adp: Series[pd.Float64Dtype] = pa.Field(gt=0, nullable=True)
     consensus_rank: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
     n_adp_sources: Series[pd.Int64Dtype] = pa.Field(ge=0)
@@ -1399,7 +1407,7 @@ class WaiverPoolSchema(pa.DataFrameModel):
     NaN when the position has no above-replacement players in the pool (0/0).
     """
 
-    position: Series[str] = pa.Field(isin=_SKILL_POSITION_VALUES, unique=True)
+    position: Series[str] = pa.Field(isin=_ROSTERABLE_POSITION_VALUES, unique=True)
     top1_vorp: Series[float] = pa.Field(nullable=True)
     top2_vorp: Series[float] = pa.Field(nullable=True)
     top3_vorp: Series[float] = pa.Field(nullable=True)

@@ -210,18 +210,59 @@ point"*).
 3. Keep the unmodelled-category note for genuinely unmapped ids — kicker categories remain
    unmodelled and must keep saying so (§7.1).
 
-### 4.2 Sleeper
+### 4.2 Sleeper is NOT a D/ST source in v1 — measured, not assumed
 
-Sleeper publishes named fields, not ESPN statIds, so the dot product does not apply directly.
-v1 maps the Sleeper D/ST fields onto the same **stat vector** the ESPN path produces, using the
-§1.4 label map in reverse — this is the one place a name↔id translation exists, it is confined to
-one source adapter, and it is covered by a test that scores a known Sleeper line under Critts
-rules and compares against the ESPN line for the same team-week within tolerance.
+The plan was to map Sleeper's named D/ST fields onto the same stat vector. **Measurement on
+2026-09-06 killed it: Sleeper's season D/ST projection is a stub, not a projection.**
 
-**Known mismatch to handle explicitly:** Sleeper's points-allowed buckets do not align with
-ESPN's (`pts_allow_14_20` vs ESPN's `14–17` + `18–27`). Where a Sleeper bucket straddles an ESPN
-boundary, v1 **drops the bucket and re-derives it from Sleeper's continuous `pts_allow` /
-`yds_allow`**, which are unambiguous. This is stated in the module docstring, not silently done.
+Least-squares fit of Sleeper's own published `pts_half_ppr` against its own D/ST stat vector,
+all 32 defenses:
+
+```
+   sack               +1.000        def_fum_td         -0.000
+   int                +2.000        pass_int_td        -0.000
+   fum_rec            +2.000        def_kr_td          +0.000
+                                    pr_td              -0.000
+  max |residual|: 0.00
+```
+
+Sleeper's season D/ST number is exactly
+
+```
+points = sacks + 2 × interceptions + 2 × fumble_recoveries + 2
+```
+
+Checked against the top defense: LAR `52 + 2(15) + 2(11) + 2 = 106`, and Sleeper publishes
+`pts_half_ppr = 106`. Exact.
+
+What that formula omits is the problem. **Points allowed and yards allowed — the two largest
+D/ST scoring components, worth roughly 40–60 points of season value under Critts — are absent,
+and every touchdown category is ignored.** The fields that look like they carry them do not:
+
+```
+  blk_kick         distinct= 1  min=  1.0 max=  1.0  <-- CONSTANT
+  pts_allow_0      distinct= 1  min=  1.0 max=  1.0  <-- CONSTANT
+  yds_allow_0_100  distinct= 1  min=  1.0 max=  1.0  <-- CONSTANT
+  gp               distinct= 1  min=  1.0 max=  1.0  <-- CONSTANT
+```
+
+They are placeholders set to 1.0 for all 32 teams, not per-team projections.
+
+Blending that into ESPN would move every defense's number by an amount driven by a source that
+never modelled two thirds of the scoring — a wrong projection that looks plausible, which
+`CLAUDE.md` names as worse than no projection. There is also no way to validate a mapping:
+ESPN ships `appliedTotal`, which is what let §1.3 prove exactness to 1e-8. Sleeper ships only a
+total its own stub formula produced.
+
+**v1 is ESPN-only for D/ST.** The ESPN path is validated against ground truth; the Sleeper path
+cannot be. Revisit if Sleeper's weekly endpoint (which does carry continuous `pts_allow` /
+`yds_allow`) proves richer than its season endpoint — that is a Phase 6+ question, and the
+straddling-bucket problem below still applies there.
+
+**Recorded for whoever revisits:** Sleeper's weekly points-allowed buckets do not align with
+ESPN's (`pts_allow_14_20` vs ESPN's `14–17` + `18–27`), and its bucket fields are one-hot on the
+modal bucket rather than a distribution over buckets, where ESPN gives fractional probabilities
+across all of them. Both differences must be handled before any blend, not after.
 
 ---
 
@@ -292,6 +333,39 @@ D/ST rows genuinely flow through it:
 
 Leaving three narrow is deliberate: D/ST in v1 is an **external projection passed through**, not a
 modelled position. §8 covers what it would take to change that.
+
+### 5.3 The repricing, measured on the real Critts board (2026-09-06)
+
+The diff §7.4 requires a human to look at. Real `espn_raw.json` config, real
+`consensus_vorp_2026` skill projections, real ESPN D/ST projections scored through
+`score_dst`:
+
+```
+POOL:  192  ->  208   (roster 12 -> 13, budget $3200)
+
+TOP SKILL PLAYERS                          BY POSITION (mean $)
+name                 pos  before after      pos   n   before  after   delta
+Jahmyr Gibbs          RB      71    67      QB   34      8.4    8.0    -0.4
+Bijan Robinson        RB      69    66      RB   50     28.8   27.3    -1.5
+Christian McCaffrey   RB      69    65      TE   31      8.4    8.0    -0.4
+Puka Nacua            WR      63    60      WR   77     15.8   15.1    -0.7
+Ja'Marr Chase         WR      57    54
+
+DEFENSES NOW PRICED (32), total $155
+DEN D/ST  130.8 proj   54.7 vorp   $16      NYJ D/ST   82.6    6.5   $0
+HOU D/ST  129.1        53.0        $15      TEN D/ST   68.4   -7.7   $0
+LAR D/ST  124.4        48.4        $14      WAS D/ST   60.8  -15.3   $0
+
+Total $ on the board: 3200 -> 3200
+```
+
+Reads correctly on every axis: the budget is conserved, the top defense is worth about what a
+low-end starting RB is, replacement-level defenses correctly price to $0, and the ~$155 that
+moves to defenses comes proportionally off the skill board rather than from one position.
+
+Note the real Critts numbers differ from the illustrative figures in §5.1 (which came from a
+synthetic 14-slot config): Critts rosters QB1/RB2/WR2/TE1/FLEX1/DST1/BENCH5, so the pool moves
+192 → 208, not 208 → 224, and the top-RB effect is −$3 to −$4 rather than −6%.
 
 ---
 

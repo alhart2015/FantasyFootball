@@ -693,13 +693,23 @@ def parse_draft_settings(payload: dict[str, Any]) -> dict[str, Any]:
 def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> LeagueConfig:
     """Derive a `LeagueConfig` from an ESPN payload.
 
-    **K and D/ST slots are dropped**, matching every hand-written config in `configs/`. This
-    is not cosmetic: the projections core models skill positions only (`external_projections`
-    ingests QB/RB/WR/TE), so a kept D/ST slot makes `generate_vorp_table` raise
-    "cannot fill 16 DST slots: only 0 eligible players remain". Dropping them is also the
-    *correct* replacement-level math — a D/ST pick does not consume a skill player, so the
-    skill pool a 16-team league drains is 16 x 12, not 16 x 13. `parse_roster_slots` still
-    reports what ESPN actually says; only this config-building step filters.
+    **The K slot is dropped; D/ST is kept** (issue #166). `parse_roster_slots` still reports
+    what ESPN actually says; only this config-building step filters.
+
+    D/ST used to be dropped alongside K because the projections core had no defense numbers, so
+    a kept slot made `generate_vorp_table` raise "cannot fill 16 DST slots: only 0 eligible
+    players remain". `ingest.external_projections.refresh_dst_projections` now supplies them.
+
+    The old docstring also argued the drop was *correct* replacement math because a D/ST pick
+    "does not consume a skill player". That half is true and measurement confirms it — skill
+    replacement levels are identical with and without the slot, because `_select_pool` fills a
+    position slot from that position alone and FLEX from RB/WR/TE, and `Position.DST` is in
+    neither. What the drop actually distorted is **auction dollars**: `total_pool_size` is
+    `n_teams x roster_size`, so omitting the slot priced a 16-team league's board over 208
+    players instead of 224, inflating every skill player ~6% and pricing defenses at nothing.
+
+    K stays dropped: this league rosters no kicker, and kicker scoring is still unmodelled by
+    `Ruleset`, so admitting the slot would ship a position with no numbers behind it.
 
     Auction budget comes from `draftSettings.auctionBudget`; a snake league reports 0
     there, in which case `LeagueConfig`'s own default budget is used (the field requires
@@ -720,26 +730,29 @@ def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> 
         _log.warning("Scoring: %s", note)
 
     espn_slots = parse_roster_slots(payload)
-    skill_slots = {
-        slot: count
-        for slot, count in espn_slots.items()
-        if slot not in (RosterSlot.K, RosterSlot.DST)
-    }
-    dropped = {slot: espn_slots[slot] for slot in espn_slots if slot not in skill_slots}
+    modelled_slots = {slot: count for slot, count in espn_slots.items() if slot != RosterSlot.K}
+    dropped = {slot: espn_slots[slot] for slot in espn_slots if slot not in modelled_slots}
     if dropped:
         _log.warning(
-            "Roster: dropped %s from the LeagueConfig — the projections core models skill "
-            "positions only, and these slots do not consume a skill player. ESPN's real roster "
-            "is %d deep; this config models the %d skill picks.",
+            "Roster: dropped %s from the LeagueConfig — kicker scoring is not modelled by "
+            "Ruleset, so a K slot would be a position with no numbers behind it. ESPN's real "
+            "roster is %d deep; this config models %d picks.",
             ", ".join(f"{slot}x{count}" for slot, count in dropped.items()),
             sum(c for s, c in espn_slots.items() if s != RosterSlot.IR),
-            sum(c for s, c in skill_slots.items() if s != RosterSlot.IR),
+            sum(c for s, c in modelled_slots.items() if s != RosterSlot.IR),
+        )
+    if modelled_slots.get(RosterSlot.DST, 0) and not ruleset.scores_dst:
+        raise EspnLeagueError(
+            "This league rosters a D/ST but no D/ST scoring categories were parsed. That is a "
+            "contradiction, not a league without defenses — every defense would rank as "
+            "identically worthless. Inspect settings.scoringSettings.scoringItems for "
+            "pointsOverrides['16'] before trusting any projection."
         )
 
     kwargs: dict[str, Any] = {
         "name": league_name,
         "n_teams": n_teams,
-        "roster_slots": skill_slots,
+        "roster_slots": modelled_slots,
         "ruleset": ruleset,
     }
     # ESPN reports auctionBudget: 200 even for snake leagues, where it means nothing.

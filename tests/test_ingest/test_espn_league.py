@@ -93,6 +93,12 @@ def _payload(**overrides: Any) -> dict[str, Any]:
                     {"statId": 26, "points": 2.0},
                     {"statId": 44, "points": 2.0},
                     {"statId": 83, "points": 3.0},  # a kicking category Ruleset cannot model
+                    # D/ST scoring, in ESPN's real shape: base points 0, the value in
+                    # pointsOverrides["16"]. A league that rosters a D/ST always has these;
+                    # a fixture with the slot and no scoring is not a league that exists.
+                    {"statId": 99, "points": 0.0, "pointsOverrides": {"16": 1.0}},  # sack
+                    {"statId": 95, "points": 0.0, "pointsOverrides": {"16": 2.0}},  # INT
+                    {"statId": 89, "points": 0.0, "pointsOverrides": {"16": 5.0}},  # shutout
                 ]
             },
         },
@@ -417,22 +423,35 @@ def test_build_league_config_matches_espn_settings() -> None:
     assert config.n_teams == 12
     assert config.budget == 200
     assert config.ruleset.reception_pts == pytest.approx(0.5)
-    # roster_size excludes IR, and K/DST are dropped: QB1+RB2+WR2+TE1+FLEX2+BENCH5 = 13
-    assert config.roster_size == 13
+    # roster_size excludes IR; only K is dropped (#166): QB1+RB2+WR2+TE1+FLEX2+DST1+BENCH5 = 14
+    assert config.roster_size == 14
 
 
-def test_build_league_config_drops_k_and_dst_slots() -> None:
-    """The projections core ingests QB/RB/WR/TE only, so a kept D/ST slot makes
-    generate_vorp_table raise "cannot fill 16 DST slots: only 0 eligible players remain"
-    (hit live on league 856974, 2026-08-24). Dropping them is also the correct replacement
-    level: a D/ST pick does not consume a skill player."""
+def test_build_league_config_drops_k_but_keeps_dst() -> None:
+    """Changed by issue #166. D/ST used to be dropped because the projections core had no
+    defense numbers, so a kept slot made generate_vorp_table raise "cannot fill 16 DST slots:
+    only 0 eligible players remain" (hit live on league 856974, 2026-08-24).
+    refresh_dst_projections now supplies them, and omitting the slot mispriced the auction:
+    total_pool_size is n_teams x roster_size, so the board was priced over 12x13 instead of
+    12x14 and every skill player was inflated.
+
+    K stays dropped -- kicker scoring is still unmodelled by Ruleset."""
     config = build_league_config(_payload())
     assert RosterSlot.K not in config.roster_slots
-    assert RosterSlot.DST not in config.roster_slots
-    # ESPN roster is 15 deep (QB1 RB2 WR2 TE1 FLEX2 K1 DST1 BENCH5); 13 are skill picks.
-    assert config.roster_size == 13
+    assert config.roster_slots[RosterSlot.DST] == 1
+    # ESPN roster is 15 deep (QB1 RB2 WR2 TE1 FLEX2 K1 DST1 BENCH5); 14 once only K is dropped.
+    assert config.roster_size == 14
     # parse_roster_slots still reports ESPN faithfully — only the config filters.
     assert parse_roster_slots(_payload())[RosterSlot.DST] == 1
+
+
+def test_build_league_config_rejects_a_dst_slot_with_no_dst_scoring() -> None:
+    """A league that rosters a defense and scores none is a contradiction, not a league
+    without defenses. Projecting 0 would rank every defense identically worthless."""
+    payload = _payload()
+    payload["settings"]["scoringSettings"]["scoringItems"] = [{"statId": 53, "points": 0.5}]
+    with pytest.raises(EspnLeagueError, match="rosters a D/ST but no D/ST scoring"):
+        build_league_config(payload)
 
 
 def test_build_league_config_falls_back_to_team_count() -> None:
