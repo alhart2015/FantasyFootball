@@ -338,7 +338,11 @@ def run(args: argparse.Namespace) -> int:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__ or "")
     # The five league flags all default to the profile; see `resolve_league_target`.
-    add_league_arguments(parser, team_id_help="your team; omit to list them")
+    add_league_arguments(
+        parser,
+        team_id_help="your team; defaults to the league profile's team_id, and with "
+        "neither set the run lists the league's teams instead",
+    )
     parser.add_argument("--week", type=int, help="defaults to the first unplayed week")
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--credentials", type=Path, default=Path("configs/espn_credentials.json"))

@@ -282,3 +282,85 @@ def test_the_five_flags_are_consumed_off_the_namespace(tmp_path: Path) -> None:
 
     for flag in LEAGUE_ARGUMENTS:
         assert not hasattr(args, flag), f"{flag} still readable off args"
+
+
+# ---------------------------------------------------------------------------------------
+# regressions found reviewing this change
+# ---------------------------------------------------------------------------------------
+
+
+def test_require_team_id_is_not_skipped_by_a_fully_typed_run(tmp_path: Path) -> None:
+    """The first draft returned early once league_id/season/pool were all typed, BEFORE the
+    require_team_id check — so the trade analyzer got `team_id=None` from a caller that had
+    demanded one, and died on a traceback where argparse used to exit cleanly."""
+    args = _bare(league_id=1, season=2026, pool=Path("p.parquet"))
+
+    with pytest.raises(ValueError, match="team_id"):
+        resolve_league_target(args, require_team_id=True, root=tmp_path)
+
+
+def test_a_fully_typed_run_still_finds_its_league_directory_by_id(tmp_path: Path) -> None:
+    """`run_season_dashboard` needs `league_dir` for rosters.tsv / schedule.tsv, and its own
+    documented example does not pass one. Matching the typed `league_id` against configured
+    profiles finds it — a keyed lookup, so it cannot land on another league's folder."""
+    league_dir = _full_profile(tmp_path)
+
+    target = resolve_league_target(
+        _bare(league_id=856974, season=2026, team_id=17, pool=Path("p.parquet")), root=tmp_path
+    )
+
+    assert target.require_league_dir() == league_dir
+    assert target.source is None  # nothing substantive came from the file
+
+
+def test_a_typed_league_id_matching_no_profile_leaves_the_directory_unset(
+    tmp_path: Path,
+) -> None:
+    """The safety half: an unrecognised league must NOT inherit the only profile's folder, or
+    the dashboard would read a different league's rosters and say nothing."""
+    _full_profile(tmp_path)
+
+    target = resolve_league_target(
+        _bare(league_id=999999, season=2026, pool=Path("p.parquet")), root=tmp_path
+    )
+
+    assert target.league_dir is None
+    with pytest.raises(ValueError, match="--league-dir"):
+        target.require_league_dir()
+
+
+def test_a_league_dir_with_no_profile_is_a_clean_message_not_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """Every CLI catches ValueError and none catches OSError, so an unguarded read here
+    surfaced as a traceback."""
+    empty = tmp_path / "no_profile"
+    empty.mkdir()
+
+    with pytest.raises(ValueError, match=r"cannot read|no board_profile"):
+        resolve_league_target(_bare(league_dir=empty))
+
+
+def test_one_league_directory_resolves_to_one_league_config(tmp_path: Path) -> None:
+    """`league_config_path` was derived two ways — `league_dir/league_config.json` on the
+    explicit path, the profile's own `league_config` key on the other. A profile pointing at a
+    relocated config made the same folder resolve to two different rulesets, silently."""
+    league_dir = tmp_path / "critts"
+    _write_profile(
+        league_dir,
+        {
+            "league_config": str(_write_league(tmp_path)),  # NOT inside league_dir
+            "vorp_table": "pool.parquet",
+            "my_slot": 5,
+            "league_id": 856974,
+            "team_id": 17,
+        },
+    )
+
+    bare = resolve_league_target(_bare(league_dir=league_dir))
+    typed = resolve_league_target(
+        _bare(league_dir=league_dir, league_id=856974, season=2026, pool=Path("pool.parquet"))
+    )
+
+    assert bare.require_league_config() == typed.require_league_config()
+    assert bare.require_league_config() == tmp_path / "league_config.json"

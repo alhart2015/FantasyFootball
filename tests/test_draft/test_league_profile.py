@@ -8,6 +8,7 @@ generic preset that looks perfectly fine and is not the user's league.
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -16,8 +17,10 @@ import pytest
 from projections.draft.assistant.league_profile import (
     DEFAULT_ID_MAP,
     DEFAULT_STRATEGY,
+    LEAGUE_ARGUMENTS,
     discover_profiles,
     load_profile,
+    resolve_league_target,
     resolve_profile,
 )
 from projections.draft.league_config import LeagueConfig
@@ -253,9 +256,13 @@ def test_the_espn_ids_are_optional(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("bad", [0, -1, "seventeen"])
-def test_a_nonsense_espn_id_is_rejected_at_load(tmp_path: Path, bad: object) -> None:
-    """Caught here rather than at the use site, where the traceback names an ESPN call and
-    not the file that caused it."""
+def test_a_nonsense_espn_id_is_recorded_without_failing_the_load(
+    tmp_path: Path, bad: object
+) -> None:
+    """Caught at load, but carried rather than raised. `league_id` / `team_id` are read by the
+    in-season CLIs and by NOTHING the draft board touches, so raising here would make
+    `discover_profiles` report a `ProfileError`, and the board drops every errored profile back
+    to a generic preset — the wrong league on draft night, over a key it never reads."""
     league_path = _write_league(tmp_path)
     profile_path = _write_profile(
         tmp_path / "bad_team",
@@ -267,8 +274,44 @@ def test_a_nonsense_espn_id_is_rejected_at_load(tmp_path: Path, bad: object) -> 
         },
     )
 
+    p = load_profile(profile_path)
+
+    assert p.team_id is None
+    assert p.id_error is not None and "team_id" in p.id_error
+    # Still a usable board profile: everything the board reads survived.
+    assert p.my_slot == 1 and p.league.n_teams == 16
+
+
+@pytest.mark.parametrize("bad", [0, -1, "seventeen"])
+def test_a_nonsense_espn_id_still_fails_the_consumer_that_reads_it(
+    tmp_path: Path, bad: object
+) -> None:
+    """The other half of the bargain: the CLIs that DO read these keys must refuse to run
+    rather than fall back to a default franchise."""
+    league_path = _write_league(tmp_path)
+    _write_profile(
+        tmp_path / "bad_team",
+        {
+            "league_config": str(league_path),
+            "vorp_table": "pool.parquet",
+            "my_slot": 1,
+            "team_id": bad,
+        },
+    )
+    args = argparse.Namespace(**dict.fromkeys(LEAGUE_ARGUMENTS))
+
     with pytest.raises(ValueError, match="team_id"):
-        load_profile(profile_path)
+        resolve_league_target(args, root=tmp_path)
+
+
+def test_a_directory_with_no_profile_is_a_value_error_not_an_oserror(tmp_path: Path) -> None:
+    """`--league-dir some/folder` reaches `load_profile` with a path that does not exist. Every
+    CLI catches `ValueError` and none catches `OSError`, so a raw read here surfaced as a
+    traceback where a one-line message was intended."""
+    (tmp_path / "empty").mkdir()
+
+    with pytest.raises(ValueError, match="cannot read"):
+        load_profile(tmp_path / "empty" / "board_profile.json")
 
 
 def test_resolve_picks_the_only_profile(tmp_path: Path) -> None:

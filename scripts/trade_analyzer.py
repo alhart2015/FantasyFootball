@@ -114,12 +114,14 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
         target = resolve_league_target(args, require_team_id=True)
+        # Inside the try on purpose: `require_team_id` above is what normally raises, with a
+        # message naming the profile, but this is the same failure and must not be a traceback.
+        my_team_id = target.require_team()
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
     if target.source is not None:
         print(target.describe())
-    my_team_id = target.require_team()
 
     try:
         creds = EspnCredentials.resolve(args.credentials)

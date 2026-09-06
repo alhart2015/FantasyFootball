@@ -75,6 +75,14 @@ class LeagueProfile:
     #: them, which every consumer must handle by asking for the argument explicitly.
     league_id: int | None = None
     team_id: int | None = None
+    #: Why `league_id` / `team_id` came back `None` despite being present in the file.
+    #: These two keys are read by the in-season CLIs and by nothing else, so a typo in one
+    #: must NOT fail the whole load: `discover_profiles` would turn that into a
+    #: `ProfileError`, and the live draft board drops any errored profile back to a generic
+    #: preset — coming up on draft night with the wrong league, over a key the board never
+    #: reads. The error travels here instead and `resolve_league_target` raises on it, so
+    #: it still fires loudly for the only consumer that cares.
+    id_error: str | None = None
 
     @property
     def label(self) -> str:
@@ -93,24 +101,33 @@ class ProfileError:
     message: str
 
 
-def _optional_positive_int(raw: dict[str, object], key: str) -> int | None:
-    """Read an optional id. Absent is fine; present-and-nonsense is not — a `team_id` of `0` or
-    `"seventeen"` would otherwise fail at the use site, far from the file that caused it."""
+def _optional_positive_int(raw: dict[str, object], key: str) -> tuple[int | None, str | None]:
+    """Read an optional id as `(value, error)`. Absent is fine; present-and-nonsense is not —
+    a `team_id` of `0` or `"seventeen"` must be caught here rather than at the use site, far
+    from the file that caused it. The error is RETURNED rather than raised because these keys
+    are read only by the in-season CLIs; see `LeagueProfile.id_error`."""
     if key not in raw or raw[key] is None:
-        return None
+        return None, None
     try:
         value = int(str(raw[key]).strip())
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{key} {raw[key]!r} is not an integer") from exc
+    except (TypeError, ValueError):
+        return None, f"{key} {raw[key]!r} is not an integer"
     if value <= 0:
-        raise ValueError(f"{key} {value} is not a positive integer")
-    return value
+        return None, f"{key} {value} is not a positive integer"
+    return value, None
 
 
 def load_profile(path: Path) -> LeagueProfile:
     """Load and validate one `board_profile.json`. Raises `ValueError` on any problem."""
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        # `--league-dir some/folder` with no profile in it lands here. Every caller catches
+        # `ValueError` and nothing catches `OSError`, so leaving this raw meant a traceback
+        # where a one-line message was intended.
+        raise ValueError(f"cannot read {path} ({exc.strerror or exc})") from exc
+    try:
+        raw = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ValueError(f"not valid JSON ({exc})") from exc
     if not isinstance(raw, dict):
@@ -146,8 +163,8 @@ def load_profile(path: Path) -> LeagueProfile:
 
     season = int(raw.get("season", 2026))
     id_map_path = Path(str(raw.get("id_map", DEFAULT_ID_MAP)))
-    league_id = _optional_positive_int(raw, "league_id")
-    team_id = _optional_positive_int(raw, "team_id")
+    league_id, league_id_error = _optional_positive_int(raw, "league_id")
+    team_id, team_id_error = _optional_positive_int(raw, "team_id")
 
     return LeagueProfile(
         key=path.parent.name,
@@ -162,6 +179,7 @@ def load_profile(path: Path) -> LeagueProfile:
         strategy=strategy,
         league_id=league_id,
         team_id=team_id,
+        id_error=league_id_error or team_id_error,
     )
 
 
@@ -297,6 +315,31 @@ def add_league_arguments(
     )
 
 
+def _profile_at(league_dir: Path) -> LeagueProfile | None:
+    """The profile in a named league directory, or `None` if that directory has none.
+
+    A folder with no `board_profile.json` is a perfectly good `--league-dir`: it is how the
+    waiver tool was invoked before profiles existed. Any OTHER problem still raises.
+    """
+    path = league_dir / PROFILE_FILENAME
+    return load_profile(path) if path.is_file() else None
+
+
+def _profile_for_league_id(league_id: int, root: Path) -> LeagueProfile | None:
+    """The configured profile for a league the caller named by id, if exactly one matches.
+
+    This is a keyed lookup, not a guess: it is what lets a fully-typed run still find the
+    folder holding that league's `rosters.tsv` / `schedule.tsv` without `--league-dir`.
+    Matching on the id is the whole safety property — filling the directory in from "the only
+    profile lying around" would point the dashboard at another league's rosters. Unreadable
+    profiles are skipped rather than raised on, because failing to find a directory here is
+    recoverable: the tool that needs one asks for `--league-dir` by name.
+    """
+    profiles, _ = discover_profiles(root)
+    matches = [p for p in profiles if p.league_id == league_id]
+    return matches[0] if len(matches) == 1 else None
+
+
 def resolve_league_target(
     args: argparse.Namespace,
     *,
@@ -305,14 +348,15 @@ def resolve_league_target(
 ) -> LeagueTarget:
     """Fill whatever the user did not type from the league's `board_profile.json`.
 
-    Reads the attribute names `add_league_arguments` defines. Raises `ValueError` when the
-    profile cannot be resolved unambiguously, or when it lacks a key with no other source.
+    Reads the attribute names `add_league_arguments` defines, and CONSUMES them (see below).
+    Raises `ValueError` when the profile cannot be resolved unambiguously, or when a value has
+    no source and no safe default.
 
-    A run that already names `league_id`, `season` and `pool` never opens a profile at all —
-    the fully-explicit invocation keeps working in a checkout with no `data/leagues/`, and a
-    league folder that has no `board_profile.json` is still usable via `--league-dir`.
-    `team_id` is not part of that test: it is optional for most of these tools, so requiring
-    it would defeat the fallback for exactly the runs that need it least.
+    A run that already names `league_id`, `season` and `pool` takes nothing substantive from a
+    profile — the fully-explicit invocation keeps working in a checkout with no `data/leagues/`,
+    and a league folder with no `board_profile.json` is still usable via `--league-dir`. Such a
+    run may still *locate* its league directory through a profile whose `league_id` matches the
+    one typed, which is a keyed lookup rather than a guess.
     """
     league_id, season = args.league_id, args.season
     team_id, pool, league_dir = args.team_id, args.pool, args.league_dir
@@ -325,38 +369,63 @@ def resolve_league_target(
         if hasattr(args, flag):
             delattr(args, flag)
 
-    if league_id is not None and season is not None and pool is not None:
-        return LeagueTarget(
-            league_id=league_id,
-            season=season,
-            team_id=team_id,
-            pool=pool,
-            league_dir=league_dir,
-            league_config_path=None if league_dir is None else league_dir / "league_config.json",
-            source=None,
-        )
+    needs_values = league_id is None or season is None or pool is None
+    profile: LeagueProfile | None = None
+    if league_dir is not None:
+        # Named directly: load it whether or not anything is missing, so `league_config_path`
+        # is derived the same way on both paths. Deriving it as `league_dir/league_config.json`
+        # here and from the profile's own `league_config` key there let one league resolve to
+        # two different configs — different scoring, different recommendations, no warning.
+        profile = _profile_at(league_dir)
+        if profile is None and needs_values:
+            raise ValueError(f"no {PROFILE_FILENAME} in {league_dir}")
+    elif needs_values:
+        profile = resolve_profile(None, root=root)
+    elif league_id is not None:
+        profile = _profile_for_league_id(league_id, root=root)
 
-    profile = resolve_profile(league_dir, root=root)
-    league_id = league_id if league_id is not None else profile.league_id
-    team_id = team_id if team_id is not None else profile.team_id
-    if league_id is None or (require_team_id and team_id is None):
-        missing = ["league_id"] if league_id is None else []
-        if require_team_id and team_id is None:
-            missing.append("team_id")
+    if profile is not None:
+        if profile.id_error is not None:
+            raise ValueError(f"{profile.profile_dir / PROFILE_FILENAME}: {profile.id_error}")
+        league_id = league_id if league_id is not None else profile.league_id
+        team_id = team_id if team_id is not None else profile.team_id
+        season = season if season is not None else profile.season
+        pool = pool if pool is not None else profile.vorp_path
+        league_dir = league_dir if league_dir is not None else profile.profile_dir
+
+    # One check, after both paths have contributed — an early return that skipped it would
+    # hand a caller that asked for `require_team_id` a `team_id` of `None` anyway.
+    missing = [
+        name
+        for name, value in (("league_id", league_id), ("season", season), ("pool", pool))
+        if value is None
+    ]
+    if require_team_id and team_id is None:
+        missing.append("team_id")
+    if missing:
         keys = " and ".join(missing)
         flags = " ".join(f"--{n.replace('_', '-')}" for n in missing)
-        raise ValueError(
-            f"{profile.profile_dir / PROFILE_FILENAME} has no {keys}; "
-            f"add it there, or pass {flags} on the command line"
+        where = (
+            f"{profile.profile_dir / PROFILE_FILENAME} has no {keys}; add it there, or pass"
+            if profile is not None
+            else f"no {keys}; pass"
         )
+        raise ValueError(f"{where} {flags} on the command line")
+
     return LeagueTarget(
         league_id=int(league_id),
-        season=season if season is not None else profile.season,
+        season=int(season),
         team_id=None if team_id is None else int(team_id),
-        pool=pool if pool is not None else profile.vorp_path,
-        league_dir=profile.profile_dir,
-        league_config_path=profile.league_config_path,
-        source=profile.name,
+        pool=pool,
+        league_dir=league_dir,
+        league_config_path=(
+            profile.league_config_path
+            if profile is not None
+            else None
+            if league_dir is None
+            else league_dir / "league_config.json"
+        ),
+        source=profile.name if profile is not None and needs_values else None,
     )
 
 
