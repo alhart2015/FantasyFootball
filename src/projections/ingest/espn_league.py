@@ -37,7 +37,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pandas as pd
 
@@ -249,6 +249,10 @@ _YARDAGE_SCORING_IDS: dict[int, str] = {
 #: ESPN two-point-conversion statIds (passing / rushing / receiving). `Ruleset` models a
 #: single `two_pt_pts`, so a disagreement between them is reported rather than collapsed.
 _TWO_PT_SCORING_IDS: dict[int, str] = {19: "passing", 26: "rushing", 44: "receiving"}
+
+#: ESPN's position id for D/ST, as it appears as a key in `pointsOverrides`. A string
+#: because ESPN keys those overrides by stringified position id.
+_ESPN_DST_POSITION_ID: Final[str] = "16"
 
 
 def pro_team_code(pro_team_id: int) -> Team | None:
@@ -574,16 +578,36 @@ def parse_ruleset(payload: dict[str, Any], name: str | None = None) -> tuple[Rul
 
     fields: dict[str, float] = {}
     two_pt: dict[str, float] = {}
+    dst_points: dict[str, float] = {}
     notes: list[str] = []
     unmodelled: list[str] = []
 
     for item in items:
         stat_id = int(item.get("statId", -1))
         points = float(item.get("points", 0.0))
-        if item.get("pointsOverrides"):
+        overrides = item.get("pointsOverrides") or {}
+
+        # D/ST scoring is the dot product of the projected stat vector and these values.
+        #
+        # ONLY explicit `pointsOverrides["16"]` entries are taken, not a fallback to the base
+        # `points`. Both rules reconstruct ESPN's own appliedTotal exactly (1215 rows, worst
+        # error 5e-9, measured 2026-09-06), because a D/ST stat vector contains no skill stat
+        # ids at all -- so the 19 extra base-valued categories the fallback would add are
+        # multiplied by zero every time. Taking overrides only keeps the map to the 27
+        # categories that can actually score, and makes "does this league score a defense?"
+        # answerable: a league that does not has no position-16 overrides.
+        override = overrides.get(_ESPN_DST_POSITION_ID)
+        if override is not None and float(override) != 0.0:
+            dst_points[str(stat_id)] = float(override)
+
+        # Overrides for OTHER positions remain unmodelled -- Ruleset still applies one value
+        # per skill category. Position 16 is excluded because it is now modelled above, and
+        # noting it would emit 26 misleading warnings on a normal league.
+        other_overrides = {k: v for k, v in overrides.items() if k != _ESPN_DST_POSITION_ID}
+        if other_overrides:
             notes.append(
                 f"statId {stat_id} has per-position pointsOverrides "
-                f"{item['pointsOverrides']}; Ruleset applies one value to all positions."
+                f"{other_overrides}; Ruleset applies one value to all positions."
             )
         if stat_id in _DIRECT_SCORING_IDS:
             fields[_DIRECT_SCORING_IDS[stat_id]] = points
@@ -613,8 +637,9 @@ def parse_ruleset(payload: dict[str, Any], name: str | None = None) -> tuple[Rul
 
     if unmodelled:
         notes.append(
-            f"{len(unmodelled)} scoring categories are not modelled by Ruleset (kicking, D/ST "
-            f"and bonus categories have no skill-position equivalent): {', '.join(unmodelled)}."
+            f"{len(unmodelled)} scoring categories are not modelled by Ruleset (kicking and "
+            f"bonus categories have no skill-position equivalent): {', '.join(unmodelled)}. "
+            "D/ST categories ARE modelled -- see Ruleset.dst_stat_points."
         )
 
     expected = set(_DIRECT_SCORING_IDS.values()) | set(_YARDAGE_SCORING_IDS.values())
@@ -632,7 +657,18 @@ def parse_ruleset(payload: dict[str, Any], name: str | None = None) -> tuple[Rul
             f"standard family; tagged as the nearest one, {family}. The exact value is still "
             "what scores projections — only the family tag is approximate."
         )
-    return Ruleset(name=name or family, **fields), notes
+    if dst_points:
+        notes.append(
+            f"{len(dst_points)} D/ST scoring categories parsed into Ruleset.dst_stat_points. "
+            "These carry base points of 0 with the real value in pointsOverrides['16'], so "
+            "they were invisible to this parser before 2026-09-06 (issue #166)."
+        )
+
+    return Ruleset(
+        name=name or family,
+        dst_stat_points=tuple(sorted(dst_points.items(), key=lambda kv: int(kv[0]))),
+        **fields,
+    ), notes
 
 
 def parse_draft_settings(payload: dict[str, Any]) -> dict[str, Any]:

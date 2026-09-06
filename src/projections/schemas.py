@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Final, NewType
 
@@ -327,6 +328,64 @@ def validate_gsis_id(raw: str) -> GsisId:
     return GsisId(raw)
 
 
+#: Synthetic canonical ids for the 32 team defenses.
+#:
+#: D/ST is team-level -- its natural primary key is `Team`, not `GsisId` -- but every storage
+#: and join path in this repo keys on `GsisId`. Rather than special-case one position through
+#: the whole chain, each defense gets a stable synthetic id, assigned in `Team` declaration
+#: order.
+#:
+#: The `98-` block is deliberate: `00-` is the real-player space and `99-` is the pre-camp
+#: rookie placeholder block minted by `ingest.external_projections`, so a defense id is
+#: recognisable on sight and in a raw parquet dump.
+#:
+#: **These values are frozen.** They are persisted in parquet partitions; renumbering one
+#: silently orphans stored history rather than failing. `tests/test_schemas/test_dst_ids.py`
+#: pins every literal so a reorder or edit fails loudly.
+#:
+#: Unlike the rookie placeholders these are NOT `is_placeholder_gsis` -- they are stable and
+#: canonical, not awaiting reconciliation against a real id that will appear later.
+DST_GSIS_IDS: Final[Mapping[Team, GsisId]] = {
+    Team.ARI: GsisId("98-0000001"),
+    Team.ATL: GsisId("98-0000002"),
+    Team.BAL: GsisId("98-0000003"),
+    Team.BUF: GsisId("98-0000004"),
+    Team.CAR: GsisId("98-0000005"),
+    Team.CHI: GsisId("98-0000006"),
+    Team.CIN: GsisId("98-0000007"),
+    Team.CLE: GsisId("98-0000008"),
+    Team.DAL: GsisId("98-0000009"),
+    Team.DEN: GsisId("98-0000010"),
+    Team.DET: GsisId("98-0000011"),
+    Team.GB: GsisId("98-0000012"),
+    Team.HOU: GsisId("98-0000013"),
+    Team.IND: GsisId("98-0000014"),
+    Team.JAC: GsisId("98-0000015"),
+    Team.KC: GsisId("98-0000016"),
+    Team.LAC: GsisId("98-0000017"),
+    Team.LAR: GsisId("98-0000018"),
+    Team.LV: GsisId("98-0000019"),
+    Team.MIA: GsisId("98-0000020"),
+    Team.MIN: GsisId("98-0000021"),
+    Team.NE: GsisId("98-0000022"),
+    Team.NO: GsisId("98-0000023"),
+    Team.NYG: GsisId("98-0000024"),
+    Team.NYJ: GsisId("98-0000025"),
+    Team.PHI: GsisId("98-0000026"),
+    Team.PIT: GsisId("98-0000027"),
+    Team.SEA: GsisId("98-0000028"),
+    Team.SF: GsisId("98-0000029"),
+    Team.TB: GsisId("98-0000030"),
+    Team.TEN: GsisId("98-0000031"),
+    Team.WAS: GsisId("98-0000032"),
+}
+
+#: Inverse of `DST_GSIS_IDS`. Use to recover the team a defense row belongs to.
+DST_TEAM_BY_GSIS: Final[Mapping[GsisId, Team]] = {
+    gsis_id: team for team, gsis_id in DST_GSIS_IDS.items()
+}
+
+
 class Ruleset(BaseModel):
     """Scoring ruleset. Defaults match ESPN standard PPR.
 
@@ -357,6 +416,35 @@ class Ruleset(BaseModel):
     fumble_lost_pts: float = -2.0
     two_pt_pts: float = 2.0
     return_td_pts: float = 6.0
+
+    # Team defense / special teams.
+    #
+    # ESPN statId -> points, for the D/ST position only. Empty for a league that does not
+    # roster a defense. Populated by `ingest.espn_league.parse_ruleset` from
+    # `pointsOverrides["16"]`, falling back to the item's base `points`.
+    #
+    # Keyed by raw statId rather than by name ON PURPOSE. ESPN's D/ST score is exactly the
+    # dot product of the projected stat vector and these values -- verified against all 1215
+    # D/ST projection rows ESPN publishes for 2026, worst absolute error 1e-8 (see
+    # docs/superpowers/specs/2026-09-06-dst-projections-design.md §1.3). Because the scoring
+    # path never needs a statId -> name table, it cannot carry a mis-transcribed entry that
+    # yields a plausible-looking wrong projection. Human-readable labels live in
+    # `scoring.dst.DST_STAT_LABELS` and are for display only.
+    #
+    # A tuple of pairs rather than a dict because this model is `frozen=True` and its
+    # docstring promises hashability -- a dict field makes `hash(ruleset)` raise. Read it
+    # through `dst_points_by_stat_id`.
+    dst_stat_points: tuple[tuple[str, float], ...] = ()
+
+    @property
+    def dst_points_by_stat_id(self) -> Mapping[str, float]:
+        """`dst_stat_points` as a mapping. See that field for why it is stored as a tuple."""
+        return dict(self.dst_stat_points)
+
+    @property
+    def scores_dst(self) -> bool:
+        """Whether this league scores a team defense at all."""
+        return bool(self.dst_stat_points)
 
     @classmethod
     def espn_ppr(cls) -> Ruleset:
