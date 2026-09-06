@@ -29,6 +29,7 @@ import pandas as pd
 
 from projections.midseason.injuries import season_multiplier
 from projections.schemas import InjuryStatus, Ruleset, parse_injury_status
+from projections.scoring.dst import score_dst
 from projections.scoring.score import expected_points
 
 #: ESPN stat-line columns in `external_projections`, mapped to `StatLine` field names. ESPN
@@ -70,13 +71,26 @@ class PlayerValue:
 
 
 def espn_season_points(
-    external: pd.DataFrame, ruleset: Ruleset, *, source: str = "ESPN"
+    external: pd.DataFrame,
+    ruleset: Ruleset,
+    *,
+    source: str = "ESPN",
+    dst: pd.DataFrame | None = None,
 ) -> dict[str, float]:
     """`gsis_id -> ESPN's projected season points`, scored under `ruleset`.
 
     `external` is one `asof` partition of `external_projections`. Rows from other sources are
     dropped: Sleeper supplies ADP only and carries a null stat line, which would score as a
     confident 0.0 rather than as "no opinion".
+
+    `dst` is one `asof` partition of `dst_projections` (issue #166). Defenses live in their own
+    table because they share no columns with a skill stat line, so they have to be added here
+    explicitly or every rostered defense stays unvalued and no trade can include one.
+
+    Note what this does NOT create: our D/ST number and ESPN's are the SAME number in v1 (we
+    pass ESPN's projection through), so a defense's `edge` is exactly 0. That is the honest
+    answer -- we hold no independent opinion on defenses yet -- and it is what lets a defense
+    be included in a proposal at fair value without the tool inventing an edge on it.
     """
     rows = external[external["source"].astype(str).str.upper() == source.upper()]
     out: dict[str, float] = {}
@@ -91,6 +105,12 @@ def espn_season_points(
             # nothing. Omitted so callers can tell the two apart.
             continue
         out[str(row.gsis_id)] = expected_points(line, ruleset)
+
+    if dst is not None and not dst.empty:
+        for gsis_id, group in dst.groupby("gsis_id"):
+            out[str(gsis_id)] = score_dst(
+                dict(zip(group["stat_id"], group["value"], strict=True)), ruleset
+            )
     return out
 
 
@@ -102,6 +122,7 @@ def build_values(
     ruleset: Ruleset,
     *,
     games_remaining: int,
+    dst: pd.DataFrame | None = None,
 ) -> dict[str, PlayerValue]:
     """Value every rostered player twice. Keyed by gsis; players we cannot value are omitted.
 
@@ -114,7 +135,7 @@ def build_values(
     both directions: valuing a suspended player at his healthy projection makes him a phantom
     asset, and applying the haircut to only one side manufactures an edge out of arithmetic.
     """
-    market = espn_season_points(external, ruleset)
+    market = espn_season_points(external, ruleset, dst=dst)
     ours = dict(zip(pool["gsis_id"].astype(str), pool["season_mean_fpts"], strict=True))
     names = dict(zip(pool["gsis_id"].astype(str), pool["full_name"].astype(str), strict=True))
 
@@ -124,8 +145,9 @@ def build_values(
             continue
         key = str(gsis)
         if key not in ours or key not in market:
-            # Kickers, defenses, and anyone only one source has an opinion about. A player
-            # valued by one side only cannot be traded on a like-for-like comparison.
+            # Kickers, and anyone only one source has an opinion about. A player valued by
+            # one side only cannot be traded on a like-for-like comparison. Defenses used to
+            # land here too; pass `dst` so they do not (issue #166).
             continue
         status, raw = parse_injury_status(getattr(row, "injury_status_raw", None))
         haircut = season_multiplier(status, games_remaining=games_remaining)
