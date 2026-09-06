@@ -58,6 +58,8 @@ from projections.midseason.roster_shape import TRADEABLE, team_shapes
 from projections.midseason.standings import ProjectionInputError, first_unplayed_week
 from projections.midseason.trades import WINS_NOISE_FLOOR, generate_all, simulate_trades
 from projections.midseason.valuation import PlayerValue, build_values
+from projections.schemas import RosterSlot
+from projections.store import read_latest_partition
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -162,8 +164,29 @@ def main(argv: list[str] | None = None) -> int:
     week = first_unplayed_week(parse_schedule(dict(payload), teams), calendar)
     games_remaining = max(SEASON_GAMES - (week - 1), 0)
     gsis = espn_to_gsis(rosters, id_map, name_index=pool_name_index(pool))
+    # Defenses live in their own table (issue #166); without them every rostered D/ST is
+    # unvalued and no proposal can include one.
+    dst = None
+    if config.roster_slots.get(RosterSlot.DST, 0) > 0:
+        try:
+            dst = read_latest_partition(
+                args.data_root / "raw", "dst_projections", season=target.season
+            )
+        except (FileNotFoundError, ValueError):
+            print(
+                "No dst_projections snapshot found; rostered defenses will be unvalued. "
+                "Build it with `python -m projections.ingest.external_projections "
+                f"--season {target.season}`.",
+                file=sys.stderr,
+            )
     values = build_values(
-        rosters, gsis, pool, external, config.ruleset, games_remaining=games_remaining
+        rosters,
+        gsis,
+        pool,
+        external,
+        config.ruleset,
+        games_remaining=games_remaining,
+        dst=dst,
     )
 
     by_team: dict[int, list[PlayerValue]] = {int(t): [] for t in teams["team_id"]}

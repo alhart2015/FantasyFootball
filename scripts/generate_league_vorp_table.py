@@ -26,8 +26,9 @@ import pandas as pd
 
 from projections.draft.assistant.pool_identity import real_gsis_by_key, reconcile_pool_gsis
 from projections.draft.assistant.presets import DraftPreset
+from projections.draft.dst_pool import DstPoolError, load_dst_season_projections
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import ExternalProjectionSchema, VorpTableSchema
+from projections.schemas import ExternalProjectionSchema, RosterSlot, VorpTableSchema
 from projections.store import read_latest_partition
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling-script import (see below)
@@ -59,12 +60,30 @@ def main(argv: list[str] | None = None) -> int:
         league_config=config,
         table_path=args.out,
     )
+    # Defenses, but only when the league actually starts one. A config without a DST slot has
+    # no use for them, and demanding the snapshot would break every skill-only league.
+    dst_season = None
+    if config.roster_slots.get(RosterSlot.DST, 0) > 0:
+        try:
+            dst_season = load_dst_season_projections(
+                args.data_root,
+                season=args.season,
+                ruleset=config.ruleset,
+                generated_at=pd.Timestamp.now(tz="UTC"),
+            )
+        except DstPoolError as exc:
+            # Not a warning: this league starts a defense every week. A pool without them
+            # silently drops one starter per team from every simulation.
+            raise SystemExit(str(exc)) from exc
+
     id_map = pd.read_parquet(args.data_root / "raw" / "id_map.parquet")
     # Reconcile placeholder gsis to real ones so the table joins to weekly_stats (injury p) and
     # id_map (byes); re-validate after, since reconcile rewrites the unique join key.
     table = VorpTableSchema.validate(
         reconcile_pool_gsis(
-            build_preset_table(external, preset), id_map, key_map=real_gsis_by_key(id_map)
+            build_preset_table(external, preset, dst_season),
+            id_map,
+            key_map=real_gsis_by_key(id_map),
         )
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
