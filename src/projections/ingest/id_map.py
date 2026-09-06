@@ -64,14 +64,28 @@ def _normalize_team(v: str | None) -> str | None:
 _ESPN_DST_ID_BASE: Final = 16000
 
 
+#: Sleeper's DEF `player_id` is a team code in SLEEPER's spelling, which is not always the
+#: canonical one. Verified against the live 2026 endpoint: Jacksonville is the sole divergence
+#: (`"JAX"`, canonical `"JAC"`). Storing the canonical value would silently lose that one team
+#: on the first Sleeper D/ST join -- the exact class of bug `normalize_team_code` exists for.
+_SLEEPER_DST_ID_OVERRIDES: Final[dict[Team, str]] = {Team.JAC: "JAX"}
+
+
 def dst_id_map_rows() -> pd.DataFrame:
     """The 32 team-defense rows, which the upstream player-id source does not carry.
 
     Without these a rostered defense cannot be resolved from an ESPN roster entry, and every
     mid-season tool reports it as an unknown player and skips it (issue #166).
 
-    Sleeper identifies a defense by the bare team code (`"SEA"`), ESPN by the negative id above.
-    `full_name` matches ESPN's own label so a name-based fallback lookup resolves too.
+    Sleeper identifies a defense by its own team-code spelling; ESPN by the negative id above.
+
+    **`full_name` is deliberately NOT ESPN's label.** ESPN calls them `"Texans D/ST"` /
+    `"Broncos D/ST"` (nicknames), and this stores `"HOU D/ST"` -- team-code form, matching
+    `draft.dst_pool.dst_display_name` and the rest of this repo's Team-keyed convention. The
+    consequence is that `espn_to_gsis`'s name_index fallback does NOT rescue a defense; the
+    `espn_id` edge is what resolves one. That edge is deterministic for all 32 (see
+    `_ESPN_DST_ID_BASE`) and covered by test, so the fallback is unnecessary rather than
+    missing -- but do not read this column as an ESPN-side join key.
     """
     espn_by_team = {
         normalize_team_code(code): -(_ESPN_DST_ID_BASE + pro_id)
@@ -84,7 +98,9 @@ def dst_id_map_rows() -> pd.DataFrame:
                 [str(espn_by_team[t]) if t in espn_by_team else pd.NA for t in Team],
                 dtype=_PYARROW_STR,
             ),
-            "sleeper_id": pd.Series([t.value for t in Team], dtype=_PYARROW_STR),
+            "sleeper_id": pd.Series(
+                [_SLEEPER_DST_ID_OVERRIDES.get(t, t.value) for t in Team], dtype=_PYARROW_STR
+            ),
             "pfr_id": pd.Series([pd.NA] * len(Team), dtype=_PYARROW_STR),
             "full_name": pd.Series([f"{t.value} D/ST" for t in Team], dtype=_PYARROW_STR),
             "position": pd.Series([Position.DST.value] * len(Team), dtype=_PYARROW_STR),

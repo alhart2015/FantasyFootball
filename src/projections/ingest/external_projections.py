@@ -206,6 +206,13 @@ def parse_espn_players(payload: dict[str, Any], season: int) -> pd.DataFrame:
 #: ESPN's `defaultPositionId` for a team defense.
 ESPN_DST_POSITION_ID: Final[int] = 16
 
+#: Player-pull size used whenever defenses are wanted. `kona_player_info` sorts by percent-owned
+#: descending, and defenses are rostered far less than skill players, so the skill-tuned default
+#: can cut them off. All 32 were within the top 800 when measured on 2026-09-06, but that is a
+#: fact about one day's ownership, not a guarantee -- and a short pull is now an error, so the
+#: headroom is what keeps the ingest working rather than what hides a problem.
+DST_FETCH_LIMIT: Final[int] = 1500
+
 
 def parse_espn_dst(payload: dict[str, Any], season: int) -> pd.DataFrame:
     """Tidy one ESPN kona_player_info payload -> long-format D/ST projection rows.
@@ -224,6 +231,7 @@ def parse_espn_dst(payload: dict[str, Any], season: int) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     n_seen = 0
     n_no_projection = 0
+    n_unknown_team = 0
     for entry in payload.get("players", []):
         pl = entry.get("player", {})
         if pl.get("defaultPositionId") != ESPN_DST_POSITION_ID:
@@ -232,8 +240,9 @@ def parse_espn_dst(payload: dict[str, Any], season: int) -> pd.DataFrame:
         raw_team = ESPN_PRO_TEAMS.get(int(pl.get("proTeamId", 0) or 0))
         if raw_team is None:
             # proTeamId 0 is "free agent", which a real defense never is. Skipping rather
-            # than guessing from the name keeps a malformed row out of the store.
-            n_no_projection += 1
+            # than guessing from the name keeps a malformed row out of the store. Counted
+            # separately: reporting it as "no projection" names the wrong cause.
+            n_unknown_team += 1
             continue
         team = normalize_team_code(raw_team)
         proj_stats: dict[str, float] | None = None
@@ -260,14 +269,18 @@ def parse_espn_dst(payload: dict[str, Any], season: int) -> pd.DataFrame:
                 }
             )
     if n_seen:
-        level = logging.WARNING if n_no_projection else logging.INFO
+        n_dropped = n_no_projection + n_unknown_team
+        level = logging.WARNING if n_dropped else logging.INFO
         _log.log(
             level,
-            "ESPN D/ST parse season=%s: %d of %d defenses had a season projection (%d rows).",
+            "ESPN D/ST parse season=%s: %d of %d defenses kept (%d rows); dropped %d with no "
+            "season projection and %d with an unmappable proTeamId.",
             season,
-            n_seen - n_no_projection,
+            n_seen - n_dropped,
             n_seen,
             len(rows),
+            n_no_projection,
+            n_unknown_team,
         )
     return pd.DataFrame(
         rows,
@@ -452,14 +465,25 @@ def _warn_on_placeholder_collisions(frame: pd.DataFrame) -> None:
         )
 
 
-def refresh_external_projections(data_root: Path, *, season: int, asof: date | None = None) -> Path:
+def refresh_external_projections(
+    data_root: Path,
+    *,
+    season: int,
+    asof: date | None = None,
+    espn_payload: dict[str, Any] | None = None,
+) -> Path:
     """Fetch ESPN + Sleeper preseason projections, crosswalk to gsis_id (placeholder for
     rookies), validate, and write one dated snapshot. `asof` defaults to today (UTC). A pull is
     refused only if BOTH sources are empty; a single empty source is logged and the other is
-    written (losing a good single-source snapshot would be worse than a partial one)."""
+    written (losing a good single-source snapshot would be worse than a partial one).
+
+    `espn_payload` is injectable so one pull can feed both this and `refresh_dst_projections`
+    (the CLI writes both under a single `asof`, and two fetches could straddle a server-side
+    update, dating two snapshots the same from different states)."""
     asof = asof or datetime.now(UTC).date()
     try:
-        espn_payload = fetch_espn(season)
+        if espn_payload is None:
+            espn_payload = fetch_espn(season)
         sleeper_payload = fetch_sleeper_season(season)
     except (urllib.error.URLError, json.JSONDecodeError) as exc:
         if isinstance(exc, urllib.error.HTTPError):
@@ -534,6 +558,7 @@ def refresh_dst_projections(
     season: int,
     asof: date | None = None,
     payload: dict[str, Any] | None = None,
+    expect_all_teams: bool = True,
 ) -> Path:
     """Fetch ESPN D/ST projections and write one dated `dst_projections` snapshot.
 
@@ -546,7 +571,26 @@ def refresh_dst_projections(
             look like "ESPN has no defenses this year" to every later read.
     """
     asof = asof or datetime.now(UTC).date()
-    espn_payload = payload if payload is not None else fetch_espn(season)
+    if payload is not None:
+        espn_payload = payload
+    else:
+        try:
+            # DST_FETCH_LIMIT, not fetch_espn's default: the default is tuned for skill players
+            # and the 32 defenses sit far down a percent-owned sort. A short pull only logs a
+            # WARNING, and a partial defense pool prices replacement level off the wrong rank.
+            espn_payload = fetch_espn(season, limit=DST_FETCH_LIMIT)
+        except (urllib.error.URLError, json.JSONDecodeError) as exc:
+            # Mirrors refresh_external_projections: a network blip must reach the CLI as a
+            # SystemExit with a readable cause, not a raw traceback.
+            if isinstance(exc, urllib.error.HTTPError):
+                detail = f"HTTP {exc.code}"
+            elif isinstance(exc, urllib.error.URLError):
+                detail = str(exc.reason)
+            else:
+                detail = f"non-JSON response ({exc})"
+            raise ExternalProjectionError(
+                f"ESPN API error fetching D/ST for season {season}: {detail}"
+            ) from exc
     frame = parse_espn_dst(espn_payload, season)
     if frame.empty:
         raise ExternalProjectionError(
@@ -559,14 +603,14 @@ def refresh_dst_projections(
     frame = DstProjectionSchema.validate(frame)
 
     n_defenses = frame["gsis_id"].nunique()
-    if n_defenses != len(DST_GSIS_IDS):
-        _log.warning(
-            "dst_projections season=%s asof=%s: %d of %d defenses present. A missing defense "
-            "is unrankable, not merely absent.",
-            season,
-            asof.isoformat(),
-            n_defenses,
-            len(DST_GSIS_IDS),
+    if expect_all_teams and n_defenses != len(DST_GSIS_IDS):
+        # Was a warning; a warning on a batch ingest is a line nobody reads. A partial snapshot
+        # is worse than none: `_replacement_level` takes the projection at cushioned starter
+        # rank, so N defenses short silently moves DST replacement level and every DST vorp.
+        raise ExternalProjectionError(
+            f"ESPN returned {n_defenses} of {len(DST_GSIS_IDS)} defenses for season {season}; "
+            "refusing to write a partial snapshot, which would price D/ST replacement level "
+            "off the wrong rank. Re-run, or raise DST_FETCH_LIMIT."
         )
     _log.info(
         "dst_projections season=%s asof=%s: wrote %d rows across %d defenses.",
@@ -598,15 +642,27 @@ def main() -> None:
         help="Skip the D/ST snapshot. Defenses are written by default (issue #166).",
     )
     args = ap.parse_args()
+    # One ESPN pull for both snapshots, at the D/ST-safe limit. Two fetches could straddle a
+    # server-side update and date two snapshots the same from different states.
+    espn_payload: dict[str, Any] | None = None
+    if not args.skip_dst:
+        try:
+            espn_payload = fetch_espn(args.season, limit=DST_FETCH_LIMIT)
+        except (urllib.error.URLError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"ESPN API error for season {args.season}: {exc}") from exc
     try:
-        path = refresh_external_projections(args.data_root, season=args.season, asof=args.asof)
+        path = refresh_external_projections(
+            args.data_root, season=args.season, asof=args.asof, espn_payload=espn_payload
+        )
     except ExternalProjectionError as exc:
         raise SystemExit(str(exc)) from exc
     print(f"Wrote external-projection snapshot: {path}", flush=True)
     if args.skip_dst:
         return
     try:
-        dst_path = refresh_dst_projections(args.data_root, season=args.season, asof=args.asof)
+        dst_path = refresh_dst_projections(
+            args.data_root, season=args.season, asof=args.asof, payload=espn_payload
+        )
     except ExternalProjectionError as exc:
         raise SystemExit(str(exc)) from exc
     print(f"Wrote D/ST snapshot: {dst_path}", flush=True)

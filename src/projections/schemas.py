@@ -420,8 +420,11 @@ class Ruleset(BaseModel):
     # Team defense / special teams.
     #
     # ESPN statId -> points, for the D/ST position only. Empty for a league that does not
-    # roster a defense. Populated by `ingest.espn_league.parse_ruleset` from
-    # `pointsOverrides["16"]`, falling back to the item's base `points`.
+    # score a defense. Populated by `ingest.espn_league.parse_ruleset` from
+    # `pointsOverrides["16"]` ONLY -- there is deliberately no fallback to the item's base
+    # `points`. Both rules reconstruct ESPN's appliedTotal exactly, because a D/ST stat vector
+    # carries no skill stat ids; overrides-only keeps the map to the categories that can score
+    # and is what makes `scores_dst` a real question rather than always true.
     #
     # Keyed by raw statId rather than by name ON PURPOSE. ESPN's D/ST score is exactly the
     # dot product of the projected stat vector and these values -- verified against all 1215
@@ -483,8 +486,13 @@ _SKILL_POSITION_VALUES = [
 #:
 #: Deliberately separate from `_SKILL_POSITION_VALUES` rather than replacing it. The feature
 #: builders and the preseason model genuinely are skill-only: no D/ST features exist, and a
-#: schema that admitted defenses there would accept rows nothing can produce. Only tables that
-#: carry a rosterable player — the consensus blend and the waiver pool — widen.
+#: schema that admitted defenses there would accept rows nothing can produce.
+#:
+#: `ConsensusProjectionSchema` carries defenses today. `WaiverPoolSchema` is widened AHEAD of
+#: its producer: `draft.backtest.waiver_pool` still iterates skill positions only, so no DST
+#: row reaches it yet. The widening is a no-op until that changes -- kept because the schema is
+#: the contract and a defense is rosterable, but do not read it as "the waiver backtest covers
+#: defenses". It does not.
 _ROSTERABLE_POSITION_VALUES = [*_SKILL_POSITION_VALUES, Position.DST.value]
 _TEAM_VALUES = [t.value for t in Team]
 _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]

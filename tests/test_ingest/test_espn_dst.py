@@ -145,7 +145,15 @@ def test_refresh_writes_a_validated_snapshot(tmp_path: Path) -> None:
             _dst_player(25, -16025, {"99": 3.1, "89": 0.05}),  # SF
         ]
     )
-    out = refresh_dst_projections(tmp_path, season=2026, asof=date(2026, 9, 6), payload=payload)
+    out = refresh_dst_projections(
+        tmp_path,
+        season=2026,
+        asof=date(2026, 9, 6),
+        payload=payload,
+        # Two synthetic defenses on purpose; the 32-team gate is an ingest guard, not a
+        # statement about what a fixture may contain.
+        expect_all_teams=False,
+    )
     assert out.exists()
 
     stored = read_partition(tmp_path / "raw", "dst_projections", season=2026, asof=date(2026, 9, 6))
@@ -178,7 +186,15 @@ def test_stored_rows_score_through_the_scoring_layer(tmp_path: Path) -> None:
             )
         ]
     )
-    refresh_dst_projections(tmp_path, season=2026, asof=date(2026, 9, 6), payload=payload)
+    refresh_dst_projections(
+        tmp_path,
+        season=2026,
+        asof=date(2026, 9, 6),
+        payload=payload,
+        # Two synthetic defenses on purpose; the 32-team gate is an ingest guard, not a
+        # statement about what a fixture may contain.
+        expect_all_teams=False,
+    )
     stored = read_partition(tmp_path / "raw", "dst_projections", season=2026, asof=date(2026, 9, 6))
 
     ruleset = Ruleset(

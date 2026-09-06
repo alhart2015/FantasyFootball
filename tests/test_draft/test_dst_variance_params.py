@@ -64,3 +64,13 @@ def test_dst_is_the_least_predictable_position_season_to_season(params: Variance
     dst = params.log_sd(Position.DST.value, is_rookie=False)
     for skill in ("QB", "RB", "WR", "TE"):
         assert dst >= params.log_sd(skill, is_rookie=False)
+
+
+def test_defenses_are_always_available() -> None:
+    """A team defense does not get injured, benched or cut — it plays every game its team
+    plays. weekly_stats carries no DST rows, so without an explicit rule a defense falls
+    through default_by_pos to overall_default: measured at p=0.5976 on the real 2026 Critts
+    pool, a ~38% weekly discount on a position that misses nothing but its bye."""
+    from projections.draft.assistant.availability import ALWAYS_AVAILABLE_POSITIONS
+
+    assert Position.DST.value in ALWAYS_AVAILABLE_POSITIONS

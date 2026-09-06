@@ -445,13 +445,24 @@ def test_build_league_config_drops_k_but_keeps_dst() -> None:
     assert parse_roster_slots(_payload())[RosterSlot.DST] == 1
 
 
-def test_build_league_config_rejects_a_dst_slot_with_no_dst_scoring() -> None:
-    """A league that rosters a defense and scores none is a contradiction, not a league
-    without defenses. Projecting 0 would rank every defense identically worthless."""
+def test_build_league_config_drops_a_dst_slot_with_no_dst_scoring(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A league that rosters a defense and scores none cannot price one, so the slot is
+    dropped and said out loud.
+
+    It DEGRADES rather than raising (changed after the PR #168 review): build_league_config is
+    the entry point for every league tool, so failing here would take start/sit, trades and
+    standings down over a position only some of them use. Dropping the slot is the pre-#166
+    behaviour and still refuses to price a defense at zero."""
+    import logging
+
     payload = _payload()
     payload["settings"]["scoringSettings"]["scoringItems"] = [{"statId": 53, "points": 0.5}]
-    with pytest.raises(EspnLeagueError, match="rosters a D/ST but no D/ST scoring"):
-        build_league_config(payload)
+    with caplog.at_level(logging.WARNING, logger="projections.ingest.espn_league"):
+        config = build_league_config(payload)
+    assert RosterSlot.DST not in config.roster_slots
+    assert any("no D/ST scoring categories" in record.getMessage() for record in caplog.records)
 
 
 def test_build_league_config_falls_back_to_team_count() -> None:

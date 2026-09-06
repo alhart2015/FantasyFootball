@@ -636,10 +636,20 @@ def parse_ruleset(payload: dict[str, Any], name: str | None = None) -> tuple[Rul
         fields["two_pt_pts"] = distinct_two_pt.pop()
 
     if unmodelled:
+        # The D/ST sentence is conditional: a D/ST statId arriving as a nonzero base `points`
+        # with no position-16 override lands in `unmodelled`, and claiming it is modelled would
+        # assert the opposite of the truth about a category this note just listed.
+        modelled_note = (
+            " D/ST categories with a pointsOverrides['16'] value ARE modelled -- see "
+            "Ruleset.dst_stat_points."
+            if dst_points
+            else " No D/ST categories were parsed; if this league rosters a defense, its "
+            "scoring is not in pointsOverrides['16'] and cannot be applied."
+        )
         notes.append(
             f"{len(unmodelled)} scoring categories are not modelled by Ruleset (kicking and "
-            f"bonus categories have no skill-position equivalent): {', '.join(unmodelled)}. "
-            "D/ST categories ARE modelled -- see Ruleset.dst_stat_points."
+            f"bonus categories have no skill-position equivalent): {', '.join(unmodelled)}."
+            f"{modelled_note}"
         )
 
     expected = set(_DIRECT_SCORING_IDS.values()) | set(_YARDAGE_SCORING_IDS.values())
@@ -705,8 +715,9 @@ def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> 
     replacement levels are identical with and without the slot, because `_select_pool` fills a
     position slot from that position alone and FLEX from RB/WR/TE, and `Position.DST` is in
     neither. What the drop actually distorted is **auction dollars**: `total_pool_size` is
-    `n_teams x roster_size`, so omitting the slot priced a 16-team league's board over 208
-    players instead of 224, inflating every skill player ~6% and pricing defenses at nothing.
+    `n_teams x roster_size`, so omitting the slot priced the real 16-team Critts board over 192
+    players instead of 208 -- inflating every skill player by 208/192, about 8%, and pricing
+    defenses at nothing.
 
     K stays dropped: this league rosters no kicker, and kicker scoring is still unmodelled by
     `Ruleset`, so admitting the slot would ship a position with no numbers behind it.
@@ -742,11 +753,20 @@ def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> 
             sum(c for s, c in modelled_slots.items() if s != RosterSlot.IR),
         )
     if modelled_slots.get(RosterSlot.DST, 0) and not ruleset.scores_dst:
-        raise EspnLeagueError(
-            "This league rosters a D/ST but no D/ST scoring categories were parsed. That is a "
-            "contradiction, not a league without defenses — every defense would rank as "
-            "identically worthless. Inspect settings.scoringSettings.scoringItems for "
-            "pointsOverrides['16'] before trusting any projection."
+        # Degrade, do not brick. `build_league_config` is the entry point for EVERY league tool,
+        # so raising here would take start/sit, trades and standings down over a position one of
+        # them uses. Dropping the slot is the pre-#166 behaviour and still refuses to price a
+        # defense at zero -- it just says so instead of failing the whole config.
+        #
+        # Reachable for real: this parser reads D/ST scoring only from pointsOverrides["16"],
+        # which is how every league measured so far expresses it, but that is a measurement of
+        # one league's shape and not a guarantee about ESPN's schema.
+        del modelled_slots[RosterSlot.DST]
+        _log.warning(
+            "Roster: dropped DSTx1 — this league rosters a D/ST but no D/ST scoring categories "
+            "were parsed, so a defense cannot be priced and every one would rank as identically "
+            "worthless. Inspect settings.scoringSettings.scoringItems for pointsOverrides['16']. "
+            "Defenses are excluded from this config until that is resolved."
         )
 
     kwargs: dict[str, Any] = {

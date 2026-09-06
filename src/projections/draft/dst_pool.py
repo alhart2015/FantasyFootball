@@ -27,7 +27,7 @@ from projections.schemas import (
     Ruleset,
 )
 from projections.scoring.dst import score_dst
-from projections.store import read_latest_partition
+from projections.store import read_latest_partition, read_partition
 
 #: Model id stamped on the rows, so a pool row's provenance is readable on the table itself.
 MODEL_ID = "espn_dst_passthrough"
@@ -62,16 +62,31 @@ def load_dst_season_projections(
         DstPoolError: If the snapshot is missing, or `ruleset` scores no D/ST categories. Both
             would otherwise surface as a league that quietly has no defenses.
     """
+    # Checked before reading: score_dst would raise DstScoringError deep inside the loop, which
+    # callers do not catch (they catch DstPoolError, as this docstring promises). A league with
+    # a DST slot and no D/ST scoring must fail with the actionable message, not a traceback.
+    if not ruleset.scores_dst:
+        raise DstPoolError(
+            f"Ruleset {ruleset.name!r} scores no D/ST categories, so defenses cannot be priced. "
+            "If this league rosters a D/ST, re-derive its config from the ESPN payload "
+            "(`python -m projections.ingest.espn_league`) so pointsOverrides['16'] is parsed."
+        )
     try:
-        raw = read_latest_partition(data_root / "raw", "dst_projections", season=season)
+        # read_partition for an explicit asof, read_latest_partition otherwise. Filtering the
+        # latest frame by an older asof would silently return nothing and report it as "empty",
+        # never having read the snapshot the caller asked for.
+        raw = (
+            read_partition(data_root / "raw", "dst_projections", season=season, asof=asof)
+            if asof is not None
+            else read_latest_partition(data_root / "raw", "dst_projections", season=season)
+        )
     except (FileNotFoundError, ValueError) as exc:
         raise DstPoolError(
-            f"No dst_projections snapshot for season {season} under {data_root / 'raw'}. "
+            f"No dst_projections snapshot for season {season} under {data_root / 'raw'}"
+            f"{f' at asof={asof.isoformat()}' if asof else ''}. "
             "Build it with `python -m projections.ingest.external_projections "
             f"--season {season}`."
         ) from exc
-    if asof is not None:
-        raw = raw[raw["asof"] == asof.isoformat()]
     raw = DstProjectionSchema.validate(raw)
     if raw.empty:
         raise DstPoolError(f"dst_projections for season {season} is empty.")

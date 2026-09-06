@@ -52,7 +52,15 @@ def data_root(tmp_path: Path) -> Path:
             _dst_player(25, -16025, {"99": 1.0}),  # SF: 1
         ]
     }
-    refresh_dst_projections(tmp_path, season=2026, asof=date(2026, 9, 6), payload=payload)
+    refresh_dst_projections(
+        tmp_path,
+        season=2026,
+        asof=date(2026, 9, 6),
+        payload=payload,
+        # Two synthetic defenses on purpose; the 32-team gate is an ingest guard, not a
+        # statement about what a fixture may contain.
+        expect_all_teams=False,
+    )
     return tmp_path
 
 
@@ -115,10 +123,38 @@ def test_a_missing_snapshot_raises_with_the_command_to_run(tmp_path: Path) -> No
         load_dst_season_projections(tmp_path, season=2026, ruleset=_ruleset(), generated_at=GEN_AT)
 
 
-def test_a_ruleset_without_dst_scoring_raises(data_root: Path) -> None:
-    from projections.scoring.dst import DstScoringError
+# --- review follow-ups (PR #168) -------------------------------------------
 
-    with pytest.raises(DstScoringError):
+
+def test_a_ruleset_without_dst_scoring_raises_the_documented_error(data_root: Path) -> None:
+    """DstPoolError, not the raw DstScoringError from deep inside the loop. Callers catch
+    DstPoolError (generate_league_vorp_table.py), so the wrong type is an unhandled traceback
+    where a clean message was intended."""
+    with pytest.raises(DstPoolError, match="scores no D/ST categories"):
         load_dst_season_projections(
             data_root, season=2026, ruleset=Ruleset.espn_half(), generated_at=GEN_AT
+        )
+
+
+def test_an_explicit_asof_reads_that_snapshot(data_root: Path) -> None:
+    rows = load_dst_season_projections(
+        data_root,
+        season=2026,
+        ruleset=_ruleset(),
+        generated_at=GEN_AT,
+        asof=date(2026, 9, 6),
+    )
+    assert len(rows) == 2
+
+
+def test_a_missing_asof_names_the_asof_it_looked_for(data_root: Path) -> None:
+    """Previously this filtered the LATEST frame by the requested asof, silently produced an
+    empty frame, and reported 'is empty' — never having read the snapshot asked for."""
+    with pytest.raises(DstPoolError, match="asof=2026-08-01"):
+        load_dst_season_projections(
+            data_root,
+            season=2026,
+            ruleset=_ruleset(),
+            generated_at=GEN_AT,
+            asof=date(2026, 8, 1),
         )
