@@ -125,6 +125,15 @@ SLEEPER_STAT_FIELDS: dict[str, str] = {
     "fum_lost": "fumbles_lost",
 }
 
+#: The stat fields BOTH external sources carry — the only fields a two-source blend can
+#: average. Computed from the two maps above rather than typed out, so it cannot drift from
+#: them when either source adds or renames a field. Sorted for a stable column order.
+#: `dfs.blend` and `midseason.start_sit` are the consumers; a third copy of this list is how
+#: one blender silently starts dropping a stat the other keeps.
+WEEKLY_BLEND_FIELDS: tuple[str, ...] = tuple(
+    sorted(set(ESPN_STAT_IDS.values()) & set(SLEEPER_STAT_FIELDS.values()))
+)
+
 
 def _sleeper_stats_to_statline(stats: dict[str, float]) -> dict[str, float] | None:
     """Map Sleeper's raw projected stat line to the canonical STAT_FIELDS, raw (no rounding) —

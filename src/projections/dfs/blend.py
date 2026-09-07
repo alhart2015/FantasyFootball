@@ -9,22 +9,13 @@ from __future__ import annotations
 
 import pandas as pd
 
-from projections.schemas import Ruleset, Stat
+from projections.ingest.external_projections import WEEKLY_BLEND_FIELDS
+from projections.schemas import Ruleset
 from projections.scoring import expected_points
 
-# canonical stat fields shared by both sources (Sleeper uses these names; our
-# emitter uses Stat.value, which are the same strings).
-_BLEND_FIELDS = [
-    Stat.PASSING_YARDS.value,
-    Stat.PASSING_TDS.value,
-    Stat.INTERCEPTIONS.value,
-    Stat.RUSHING_YARDS.value,
-    Stat.RUSHING_TDS.value,
-    Stat.RECEPTIONS.value,
-    Stat.RECEIVING_YARDS.value,
-    Stat.RECEIVING_TDS.value,
-    Stat.FUMBLES_LOST.value,
-]
+# The shared field list lives in `ingest.external_projections`, derived from the two
+# source maps, so it cannot drift from either source's own field names.
+_BLEND_FIELDS = list(WEEKLY_BLEND_FIELDS)
 _KEY = ["gsis_id", "season", "week"]
 
 

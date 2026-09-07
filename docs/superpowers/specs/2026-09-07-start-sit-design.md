@@ -30,8 +30,23 @@ design's hardest requirement. Three things make this tool say something ESPN can
 ## 3. Blend in stat-line space, not points space
 
 Follows `consensus.blend` and `dfs/blend.blend_statlines`: average per-stat means, assemble
-one line, score once. Averaging two already-scored point totals is a different and worse
-estimator — it bakes in each source's scoring assumptions before we can override them.
+one line, score once.
+
+**Be precise about why, because the obvious reason is wrong here.** `Ruleset` is purely
+linear — points-per-yard and points-per-event, no bonus thresholds — so blending in stat
+space and blending two scored totals give *the same number* whenever both sources report
+the same fields. The difference is entirely in the case where they do not:
+
+- **Stat space weights per field.** ESPN reports receptions, Sleeper omits them: the
+  reception count comes from ESPN alone at full weight, every other field blends 50/50.
+- **Points space weights per player.** The same case averages a total that includes ESPN's
+  receptions against one that silently excludes them, and the blend reads low by half of
+  ESPN's reception points with nothing on screen to say so.
+
+That is the live reason. Two more that are real but not yet load-bearing: a source's own
+published total (`pts_half_ppr`, ESPN's `appliedTotal`) is scored under *its* rules rather
+than the league's, and a ruleset that later gains a yardage bonus would make the two spaces
+diverge everywhere rather than only on missing fields.
 
 `espn_weekly.parse_espn_weekly` already builds the full line in `_statline_dict` and scores it
 immediately. **Expose the line** (new sibling returning stat columns) rather than re-deriving.
