@@ -174,6 +174,37 @@ ESPN weekly, Sleeper weekly and a blend all scored under one ruleset,
 `benchmark_projections.py` can measure all three against weekly actuals and settle the blend
 weight — and settle whether our own model has any weekly value at all.
 
+## 9b. What the first live run changed (2026-09-07)
+
+Three defects, all found by running it against the real league and none of which a unit test
+had reason to catch. Recorded because each is a *class* of mistake this repo keeps meeting.
+
+**D/ST was priced at a fabricated 0.0.** ESPN reports defenses in the 100-block stat ids —
+zero overlap with the nine fields this layer maps — so `_statline_dict` defaulted all nine to
+0.0 and scored a confident nothing. Indistinguishable on screen from a real projection of
+nothing, and the same shape as the waiver bug where "a player the pool could not price was
+priced at 0.0". A line sharing no ids with `ESPN_STAT_IDS` is now **unpriced**, and the report
+names those players rather than silently starting them. **Neither source can price K or D/ST
+weekly**; those slots are the manager's to set, and the tool says so instead of pretending.
+
+**The slot labels were reconstructed, and reconstruction was wrong.** `choose_starters` skips
+a slot it cannot fill, so its returned indices are dense while the slot order is not. Zipping
+the two shifted every pick after the hole — the live run printed a FLEX running back as the
+D/ST, because the defense slot went unfilled. The greedy now **returns the slot it filled**
+(`choose_starters_with_slots`); the reconstruction is deleted and its docstring no longer
+claims the mapping is positional. The tests that had blessed the reconstruction were replaced,
+not patched: they encoded the bug.
+
+**`blend` showed the post-injury number.** A Questionable player read *below* both sources,
+which looks like an arithmetic error rather than a haircut. `blend` and `start` are now
+separate columns.
+
+**Two-source coverage is good where it matters**: 12 of 13 rostered players priced by both,
+against 81% Sleeper coverage in the `id_map` overall. Rostered players are well-known ones, so
+the crosswalk risk §Risks flagged did not materialise. The single-source cases are named
+individually, with *which* source — a Sleeper-only player is one ESPN has no line for this
+week; an ESPN-only one is usually a crosswalk miss.
+
 ## 10. Reuse — what this does NOT rewrite
 
 - `choose_starters` (`draft/roster_eligibility.py`) — the engine. Fourth caller, not fourth copy.
