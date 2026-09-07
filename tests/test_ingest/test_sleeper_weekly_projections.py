@@ -61,7 +61,7 @@ def test_refresh_attaches_gsis_and_stores(tmp_path: Path, monkeypatch: pytest.Mo
             "stats": {"rush_yd": 40.0, "rush_td": 0.3},
         },
     ]
-    monkeypatch.setattr(swp, "_fetch_sleeper_weekly", lambda season, week: payload)
+    monkeypatch.setattr(swp, "fetch_sleeper_weekly", lambda season, week: payload)
 
     out_path = swp.refresh_sleeper_weekly(tmp_path / "raw", season=2023, week=5)
     assert out_path.exists()
