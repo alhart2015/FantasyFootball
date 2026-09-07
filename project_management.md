@@ -6,6 +6,50 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Refreshing data is one command now (2026-09-07, branch `chore/one-shot-refresh`)
+
+**`python scripts/refresh_data.py`, no arguments.** It runs every raw ingest source and then
+rebuilds the derived VORP tables (9 presets + one per configured league), and prints a single
+summary block. Written because a by-hand refresh that morning cost most of an hour and produced
+exactly one useful output.
+
+**The thing that made it hard was never the ingest — it was telling two failures apart.** On
+2026-09-07 the season had not kicked off, and `weekly_stats` 404'd, `snap_counts` and all three
+NGS pulls raised `ValueError: Season must be between 2012 and 2025`, and `depth_charts` raised a
+pandera `SchemaError`. Five of those six are "the NFL has not played a game yet" and one is a real
+bug. From a traceback they are indistinguishable, and a naive loop aborts at the first one and
+leaves the rest unrun.
+
+So the script pre-checks the calendar (kickoff = the Thursday after Labor Day, mirroring
+`nflreadpy.get_current_season`) and reports the per-game sources **SKIPPED with the kickoff date**
+instead of attempting them. The market-facing sources — `id_map`, `schedules`, `draft_picks`,
+`external_projections` — are published year-round and always run, which is the entire value of the
+command in September when the projections are the only thing moving. **SKIPPED exits 0; FAILED
+exits 1** and is re-listed under the table with its exception.
+
+**`classify_error` matches on message text, deliberately narrowly.** `nflreadpy` raises bare
+`ValueError` / `ConnectionError` for both "not published yet" and real defects, so the message is
+the only available signal. An unrecognised message is FAILED, never SKIPPED — a defect laundered
+into "nothing to fetch" is the exact failure the script exists to prevent, and there is a test
+asserting a near-miss message ("Season 2026 is not between our supported bounds") does not match.
+
+**Derived tables rebuild only when the projection snapshot actually refreshed.** Rebuilding from
+an unchanged snapshot writes new mtimes over identical numbers, which is indistinguishable from a
+real refresh and is precisely how a stale pool ends up looking current.
+
+**Both paths verified live, not just under fixtures.** 2026: 6 OK / 6 SKIPPED / 0 failed, exit 0.
+`--season 2025`: **10 OK / 0 skipped / 0 failed** — which also scoped the bug below, since
+`depth_charts` succeeds for a season whose rookies have real ids.
+
+**The bug it surfaced is [#169](https://github.com/alhart2015/FantasyFootball/issues/169).**
+`depth_charts` dies on nflverse's PFR-style placeholder gsis ids (`WAS569019` = Mike Washington
+Jr.; 1,211 rows / 12 players in the 2026 payload). `build_id_map` and `refresh_draft_picks` both
+already filter these with a warning; `depth_charts` filters only on `notna()` in **both** normalize
+paths. The fix is a third copy of six lines, which is the argument for factoring it into one shared
+helper — the next ingest source will otherwise get it wrong by omission, exactly as this one did.
+
+---
+
 ## Next up: defenses (2026-09-05)
 
 **The user's call, in his words: not accounting for defenses in the draft was "a huge mistake",

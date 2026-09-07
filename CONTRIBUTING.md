@@ -49,6 +49,47 @@ pre-commit autoupdate                                    # Refresh hook versions
 
 Pre-commit runs lint + format + typecheck on every commit. You don't need to remember to run those manually before committing.
 
+## Refreshing the data
+
+One command, no arguments, from the repo root:
+
+```bash
+python scripts/refresh_data.py
+```
+
+It refreshes every raw source and then rebuilds the derived VORP tables (the 9 presets plus one per
+configured league), and prints a single summary block classifying each source as **OK**, **SKIPPED**,
+or **FAILED**.
+
+**SKIPPED is not a problem.** The per-game sources (`weekly_stats`, `depth_charts`, `snap_counts`,
+`ngs_*`) have no rows upstream until the season kicks off — the Thursday after Labor Day — and
+nflverse publishes each week's release on a lag after that. The script pre-checks the date and
+reports those as skipped *with the kickoff date*, rather than 404-ing through them. The
+market-facing sources (`id_map`, `schedules`, `draft_picks`, `external_projections`) are published
+year-round and always run, which is what makes the command useful in the preseason.
+
+**FAILED is a real defect** and exits 1. Failures are isolated — one broken source never costs the
+others their run — and re-listed under the table with the exception. Re-run with `--verbose` for
+tracebacks. Do not "fix" a FAILED source by re-running and hoping.
+
+Derived tables rebuild *only* when the projection snapshot actually refreshed. Rebuilding from an
+unchanged snapshot writes new mtimes over identical numbers, which is indistinguishable from a real
+refresh and is exactly how a stale pool ends up looking current.
+
+```bash
+python scripts/refresh_data.py --season 2025        # a specific season
+python scripts/refresh_data.py --seasons 2021-2025  # a range (or 2021,2026)
+python scripts/refresh_data.py --with-pbp           # also play-by-play (hundreds of MB, off by default)
+python scripts/refresh_data.py --skip-derived       # raw sources only
+```
+
+With no `--season`, the season comes from the single `board_profile.json` under `data/leagues/`,
+matching the in-season CLIs; with no profile it falls back to the calendar.
+
+**Standing lesson from draft day 2026: refreshing the projections is not the same as re-pulling the
+league.** Draft order and draft time are mutable and are not visible in anything derived from them.
+This script does not touch ESPN league state.
+
 The Python public API is `from projections import ...`. CLI verbs (`python -m projections refresh|project|backtest|query`) are coming in Plan 4 and aren't built yet.
 
 ## Live draft boards (Draft Assistant UI)
