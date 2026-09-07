@@ -96,6 +96,49 @@ def parse_espn_weekly(
     return pd.DataFrame(rows)
 
 
+def espn_weekly_statlines(
+    payload: dict[str, Any], *, week: int, skill_positions_only: bool = False
+) -> pd.DataFrame:
+    """Parse the same weekly entry as `parse_espn_weekly` but return the line UNSCORED.
+
+    Columns: espn_id (str), position (str), + the nine canonical stat fields.
+
+    `parse_espn_weekly` scores this line immediately, which is right for a projection store
+    and wrong for a blend: averaging two already-scored totals bakes in each source's scoring
+    assumptions before the league's own `Ruleset` can override them. The start/sit blend
+    averages per-stat and scores once (`midseason.start_sit.blend_weekly_points`), matching
+    `consensus.blend` and `dfs.blend.blend_statlines`.
+
+    **A player with no weekly projection entry is ABSENT, not present with a zero line.**
+    `parse_espn_weekly` keeps him with `projected_points = None` because its schema wants one
+    row per player; here the mapping is consumed by `choose_starters`, for which absence is
+    unstartability. That is how bye weeks work with no rule about bye weeks.
+
+    `skill_positions_only` defaults to **False**, the opposite of `parse_espn_weekly`, because
+    every caller of this function prices a real roster and a roster starts a K and a D/ST.
+    They arrive with an empty `position`, as they do from `parse_espn_weekly(...,
+    skill_positions_only=False)`.
+    """
+    fields = list(ESPN_STAT_IDS.values())
+    rows: list[dict[str, Any]] = []
+    for pl in payload.get("players", []):
+        p = pl.get("player", {})
+        position = ESPN_POSITIONS.get(p.get("defaultPositionId"))
+        if position is None and skill_positions_only:
+            continue
+        raw = _weekly_proj_stats(p, week)
+        if raw is None:
+            continue
+        rows.append(
+            {
+                "espn_id": str(p.get("id")),
+                "position": position or "",
+                **_statline_dict(raw),
+            }
+        )
+    return pd.DataFrame(rows, columns=["espn_id", "position", *fields])
+
+
 def _fetch_espn_week(season: int, week: int, *, limit: int = 800) -> dict[str, Any]:
     """Fetch the ESPN kona_player_info payload for a single scoring period.
 
