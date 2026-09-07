@@ -6,6 +6,105 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Refreshing data is one command now (2026-09-07, branch `chore/one-shot-refresh`)
+
+**`python scripts/refresh_data.py`, no arguments.** It runs every raw ingest source and then
+rebuilds the derived VORP tables (9 presets + one per configured league), and prints a single
+summary block. Written because a by-hand refresh that morning cost most of an hour and produced
+exactly one useful output.
+
+**The thing that made it hard was never the ingest — it was telling two failures apart.** On
+2026-09-07 the season had not kicked off, and `weekly_stats` 404'd, `snap_counts` and all three
+NGS pulls raised `ValueError: Season must be between 2012 and 2025`, and `depth_charts` raised a
+pandera `SchemaError`. Five of those six are "the NFL has not played a game yet" and one is a real
+bug. From a traceback they are indistinguishable, and a naive loop aborts at the first one and
+leaves the rest unrun.
+
+So the script pre-checks the calendar (kickoff = the Thursday after Labor Day, mirroring
+`nflreadpy.get_current_season`) and reports the per-game sources **SKIPPED with the kickoff date**
+instead of attempting them. The market-facing sources — `id_map`, `schedules`, `draft_picks`,
+`external_projections` — are published year-round and always run, which is the entire value of the
+command in September when the projections are the only thing moving. **SKIPPED exits 0; FAILED
+exits 1** and is re-listed under the table with its exception.
+
+**`classify_error` matches on message text, deliberately narrowly.** `nflreadpy` raises bare
+`ValueError` / `ConnectionError` for both "not published yet" and real defects, so the message is
+the only available signal. An unrecognised message is FAILED, never SKIPPED — a defect laundered
+into "nothing to fetch" is the exact failure the script exists to prevent, and there is a test
+asserting a near-miss message ("Season 2026 is not between our supported bounds") does not match.
+
+**Derived tables rebuild only when the projection snapshot actually refreshed.** Rebuilding from
+an unchanged snapshot writes new mtimes over identical numbers, which is indistinguishable from a
+real refresh and is precisely how a stale pool ends up looking current.
+
+**Both paths verified live, not just under fixtures.** 2026: 6 OK / 6 SKIPPED / 0 failed, exit 0.
+`--season 2025`: **10 OK / 0 skipped / 0 failed** — which also scoped the bug below, since
+`depth_charts` succeeds for a season whose rookies have real ids.
+
+**Review at `high` caught six issues, one of which defeated the script's entire premise.**
+`run_step` caught `Exception`, but `generate_preset_vorp_tables.main` raises **`SystemExit`** when
+the id_map is missing — and `SystemExit` derives from `BaseException`. So on a fresh checkout the
+script would do the full raw pull, isolate and record every source correctly, then die at
+`vorp_presets` printing nothing but argparse's message: **every result discarded, no summary at
+all.** Reproduced against a data root holding the projections snapshot but no id_map; now caught,
+reported `FAILED  vorp_presets  SystemExit: No id_map at ...`, and pinned by a test.
+`KeyboardInterrupt` still propagates on purpose — Ctrl-C must stop the run, not be filed as one
+source failing.
+
+**Two more were the same class of defect the script exists to prevent — silence.** A mixed range
+(`--seasons 2024-2026` today) filtered the unplayable season out and never mentioned it: a clean
+zero-failure run saying nothing about a season the user explicitly asked for. And a malformed
+league profile was dropped entirely when the projections had failed, contradicting the comment
+eight lines below it. Both now always report. The remaining three: sibling `main()` return codes
+were discarded, `_rebuild_preset_tables` fabricated its `"9 preset tables"` detail regardless, and
+a test named `..._prefers_the_configured_league` wrote an unparseable profile — so it silently
+exercised the calendar fallback, and `default_season`'s actual primary branch could have been
+deleted with the suite green.
+
+**The sixth was [#171](https://github.com/alhart2015/FantasyFootball/issues/171) — fixed here, at the user's call.**
+The first cut shipped a second hard-coded list of "every ingest source" beside the existing
+`projections.ingest.refresh.refresh`, planning to consolidate later. **The user rejected that:
+"let's fix that here instead of introducing a duplicate only to remove it immediately."** Right
+call — the two already disagreed on arrival, `refresh` being blind to `draft_picks`,
+`external_projections`, and `pbp`.
+
+**There is now one registry: `INGEST_SOURCES` in `src/projections/ingest/sources.py`.** Eleven
+entries, in dependency order, each carrying the two facts that decide when it may run —
+`needs_games_played` and `heavy`. Both callers drive it: `refresh()` fail-fast for programmatic
+use, `scripts/refresh_data.py` isolated and summarised for a human or an agent. Adding a source is
+one entry; neither caller changes.
+
+**The module had to be renamed `refresh.py` -> `sources.py`, and that was not cosmetic.**
+`ingest/__init__.py` re-exports the `refresh` *function*, which shadows the module of the same
+name — so `patch.object(projections.ingest.refresh, ...)` reaches the function and raises
+`AttributeError`. The collision was invisible while nothing needed to patch module state; the
+moment the registry lived there, it blocked the test. The new name also says what the module holds.
+
+**Two behaviour changes fell out, both improvements.** `refresh()` now covers `draft_picks` and
+`external_projections` (it did not before, and the preset build reads the latter), and it now skips
+per-game sources for a season that has not kicked off — previously fail-fast meant a preseason call
+died on `weekly_stats` and never reached the sources that would have worked. Verified live: a real
+`refresh(seasons=[2026], ...)` on 2026-09-07 completes clean.
+
+**`tests/test_ingest/test_sources.py` asserts against the registry, not a list of its own.** The
+old test enumerated the expected calls by hand — a second list of "every source", which is the
+same trap one level down; it would have gone on passing while drifting. It now checks membership,
+ordering constraints, and the flags directly, and the script's tests stub the registry rather than
+individual functions.
+
+Fixed alongside: the missing-id_map message in `generate_preset_vorp_tables.py` pointed users at
+`refresh()`, which builds the id_map but did not fetch the projection snapshot the preset build
+then reads, leaving them one step short.
+
+**The bug it surfaced is [#169](https://github.com/alhart2015/FantasyFootball/issues/169).**
+`depth_charts` dies on nflverse's PFR-style placeholder gsis ids (`WAS569019` = Mike Washington
+Jr.; 1,211 rows / 12 players in the 2026 payload). `build_id_map` and `refresh_draft_picks` both
+already filter these with a warning; `depth_charts` filters only on `notna()` in **both** normalize
+paths. The fix is a third copy of six lines, which is the argument for factoring it into one shared
+helper — the next ingest source will otherwise get it wrong by omission, exactly as this one did.
+
+---
+
 ## Next up: defenses (2026-09-05)
 
 **The user's call, in his words: not accounting for defenses in the draft was "a huge mistake",
