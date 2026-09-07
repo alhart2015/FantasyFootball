@@ -18,10 +18,11 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from projections.draft.roster_eligibility import NON_STARTING_SLOTS
 from projections.midseason.my_team import MyTeamRun
 from projections.midseason.standings import regular_season_complete
 from projections.rankings import rank_within_position
-from projections.schemas import RosterSlot, display_str
+from projections.schemas import display_str
 from projections.web.views.columns import (
     TEAM_COLUMNS,
     Cell,
@@ -32,10 +33,11 @@ from projections.web.views.columns import (
 )
 
 #: Slots that do not start. `RosterSlot` values rather than the strings they wrap, per
-#: CLAUDE.md -- `parse_rosters` produces these FROM `ESPN_LINEUP_SLOTS`, which is keyed on the
-#: enum, so what makes the comparison safe is that the producer and the check read one source.
-#: An unrecognised ESPN slot id becomes `""` there, which is in neither set.
-_BENCH_SLOTS = frozenset({RosterSlot.BENCH, RosterSlot.IR})
+#: `parse_rosters` produces these FROM `ESPN_LINEUP_SLOTS`, which is keyed on the enum, so
+#: what makes the comparison safe is that the producer and the check read one source. The
+#: set itself lives in `roster_eligibility` beside the slot taxonomy, because `start_sit`
+#: asks the same question and two definitions of 'is he starting' is one too many.
+_BENCH_SLOTS = NON_STARTING_SLOTS
 
 #: The column keys `_row_values` fills.
 #:

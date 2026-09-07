@@ -36,20 +36,25 @@ SUPER_FLEX_ELIGIBLE: frozenset[Position] = frozenset(
 # Flex-type slots in ascending eligibility breadth (FLEX subset of SUPER_FLEX). Order is
 # load-bearing: narrowest eligibility first keeps restrictive-first greedy lineup fills optimal.
 # Single source consumed by roster_score, backtest.lineup, and the season-value sampler.
+#: Slots a player can hold WITHOUT being in the starting lineup. "Is he starting" is
+#: `bool(slot) and slot not in NON_STARTING_SLOTS` -- an unrecognised ESPN slot id parses to
+#: `""` and is in neither set, so it reads as bench, which is the safer of the two guesses.
+NON_STARTING_SLOTS: frozenset[RosterSlot] = frozenset({RosterSlot.BENCH, RosterSlot.IR})
+
 FLEX_SLOTS: tuple[tuple[RosterSlot, frozenset[Position]], ...] = (
     (RosterSlot.FLEX, FLEX_ELIGIBLE),
     (RosterSlot.SUPER_FLEX, SUPER_FLEX_ELIGIBLE),
 )
 
 
-def choose_starters(
+def choose_starters_with_slots(
     players: Sequence[_Player],
     roster_slots: Mapping[RosterSlot, int],
     *,
     value: Callable[[_Player], float | None],
     position: Callable[[_Player], str],
-) -> list[int]:
-    """Indices of the players who start, best lineup first. Restrictive slots, then flex.
+) -> list[tuple[int, RosterSlot]]:
+    """Who starts and WHICH SLOT each one fills. Restrictive slots, then flex.
 
     **The selection, extracted.** Three implementations of this greedy already existed --
     `assistant.roster_score.optimal_lineup_points` over a DataFrame of season points,
@@ -68,8 +73,14 @@ def choose_starters(
     every copy of this has used it.
 
     Ties break on the earlier index, so a caller that sorts its input gets a deterministic
-    lineup. Returned in fill order rather than sorted, so the caller can see which slot each
-    player filled by position in the list.
+    lineup, returned in fill order rather than sorted.
+
+    **The slot is returned rather than reconstructed, because reconstructing it is wrong.**
+    An earlier caller re-walked `POSITION_SLOTS` then `FLEX_SLOTS` against `roster_slots`
+    and zipped the result positionally against the indices. That silently breaks the moment
+    a slot cannot be filled: the loops below SKIP such a slot, so the returned list is dense
+    while the slot order is not, and every later pick shifts up one. It reached a live run
+    as a FLEX running back labelled D/ST.
     """
     startable: list[tuple[int, float, Position]] = []
     for index, player in enumerate(players):
@@ -92,13 +103,13 @@ def choose_starters(
         by_pos[pos].sort(key=lambda pair: (-pair[1], pair[0]))
 
     cursor: dict[Position, int] = {pos: 0 for pos in Position}
-    chosen: list[int] = []
+    chosen: list[tuple[int, RosterSlot]] = []
 
     for slot in POSITION_SLOTS:
         pos = Position(slot.value)
         for _ in range(roster_slots.get(slot, 0)):
             if cursor[pos] < len(by_pos[pos]):
-                chosen.append(by_pos[pos][cursor[pos]][0])
+                chosen.append((by_pos[pos][cursor[pos]][0], slot))
                 cursor[pos] += 1
 
     for slot, eligible in FLEX_SLOTS:
@@ -109,10 +120,30 @@ def choose_starters(
                 if cursor[pos] < len(by_pos[pos]) and by_pos[pos][cursor[pos]][1] > best_value:
                     best_pos, best_value = pos, by_pos[pos][cursor[pos]][1]
             if best_pos is not None:
-                chosen.append(by_pos[best_pos][cursor[best_pos]][0])
+                chosen.append((by_pos[best_pos][cursor[best_pos]][0], slot))
                 cursor[best_pos] += 1
 
     return chosen
+
+
+def choose_starters(
+    players: Sequence[_Player],
+    roster_slots: Mapping[RosterSlot, int],
+    *,
+    value: Callable[[_Player], float | None],
+    position: Callable[[_Player], str],
+) -> list[int]:
+    """Indices of the players who start, best lineup first.
+
+    The slot each one fills is available from `choose_starters_with_slots`; callers that
+    only need a total or a membership test use this.
+    """
+    return [
+        index
+        for index, _slot in choose_starters_with_slots(
+            players, roster_slots, value=value, position=position
+        )
+    ]
 
 
 def bench_eligible_positions(roster_slots: Mapping[RosterSlot, int]) -> frozenset[Position]:

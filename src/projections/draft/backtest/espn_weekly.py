@@ -96,6 +96,71 @@ def parse_espn_weekly(
     return pd.DataFrame(rows)
 
 
+def _sparse_statline(raw: dict[str, float]) -> dict[str, float | None]:
+    """Like `_statline_dict`, but an id ESPN did not report is ABSENT, not 0.0.
+
+    The difference is the whole basis of the two-source blend. `_statline_dict` defaults all
+    nine fields to 0.0, which is right for `parse_espn_weekly` — it scores immediately, and a
+    receiver's passing yards really are zero. It is wrong here: `blend_weekly_points` gives a
+    field only one source carries to that source at FULL weight, and a zero-filled ESPN line
+    means ESPN always "carries" every field. A player Sleeper credits with 6 receptions and
+    ESPN omits entirely then blends against a fabricated 0 and reads at half.
+
+    Symmetric with `parse_sleeper_weekly`, which already emits `pd.NA` for what it lacks.
+    """
+    return {field: raw.get(sid) for sid, field in ESPN_STAT_IDS.items()}
+
+
+def espn_weekly_statlines(
+    payload: dict[str, Any], *, week: int, skill_positions_only: bool = False
+) -> pd.DataFrame:
+    """Parse the same weekly entry as `parse_espn_weekly` but return the line UNSCORED.
+
+    Columns: espn_id (str), position (str), + the nine canonical stat fields.
+
+    `parse_espn_weekly` scores this line immediately, which is right for a projection store
+    and wrong for a blend: averaging two already-scored totals bakes in each source's scoring
+    assumptions before the league's own `Ruleset` can override them. The start/sit blend
+    averages per-stat and scores once (`midseason.start_sit.blend_weekly_points`), matching
+    `consensus.blend` and `dfs.blend.blend_statlines`.
+
+    **A player with no weekly projection entry is ABSENT, not present with a zero line.**
+    `parse_espn_weekly` keeps him with `projected_points = None` because its schema wants one
+    row per player; here the mapping is consumed by `choose_starters`, for which absence is
+    unstartability. That is how bye weeks work with no rule about bye weeks.
+
+    `skill_positions_only` defaults to **False**, the opposite of `parse_espn_weekly`, because
+    every caller of this function prices a real roster and a roster starts a K and a D/ST.
+    They arrive with an empty `position`, as they do from `parse_espn_weekly(...,
+    skill_positions_only=False)`.
+    """
+    fields = list(ESPN_STAT_IDS.values())
+    rows: list[dict[str, Any]] = []
+    for pl in payload.get("players", []):
+        p = pl.get("player", {})
+        position = ESPN_POSITIONS.get(p.get("defaultPositionId"))
+        if position is None and skill_positions_only:
+            continue
+        raw = _weekly_proj_stats(p, week)
+        # A stat line sharing NO ids with `ESPN_STAT_IDS` cannot be priced from these nine
+        # fields, and `_statline_dict` would return all zeros -- a fabricated 0.0 that reads
+        # exactly like a real projection of nothing. D/ST is the live case: ESPN reports it in
+        # the 100-block ids (sacks, points allowed) with zero overlap here, so a defense was
+        # arriving priced at 0.0 rather than unpriced. `parse_espn_weekly` has the same hole
+        # and does not care, because it is fed to a schema that expects one row per player;
+        # here the value becomes a lineup decision.
+        if raw is None or not set(raw) & set(ESPN_STAT_IDS):
+            continue
+        rows.append(
+            {
+                "espn_id": str(p.get("id")),
+                "position": position or "",
+                **_sparse_statline(raw),
+            }
+        )
+    return pd.DataFrame(rows, columns=["espn_id", "position", *fields])
+
+
 def _fetch_espn_week(season: int, week: int, *, limit: int = 800) -> dict[str, Any]:
     """Fetch the ESPN kona_player_info payload for a single scoring period.
 

@@ -74,7 +74,12 @@ def parse_sleeper_weekly(payload: list[dict[str, Any]], *, season: int, week: in
     return pd.DataFrame(rows, columns=columns)
 
 
-def _fetch_sleeper_weekly(season: int, week: int) -> list[dict[str, Any]]:
+def fetch_sleeper_weekly(season: int, week: int) -> list[dict[str, Any]]:
+    """GET one week of Sleeper projections. Network-only; monkeypatched in tests.
+
+    Public because the start/sit tool wants the payload WITHOUT the store write
+    `refresh_sleeper_weekly` performs -- it prices a live lineup, it does not ingest.
+    """
     url = _SLEEPER_WEEKLY_URL.format(season=season, week=week)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -114,7 +119,7 @@ def _attach_gsis(df: pd.DataFrame, id_map: pd.DataFrame) -> pd.DataFrame:
 
 def refresh_sleeper_weekly(data_root: Path, *, season: int, week: int) -> Path:
     """Fetch, parse, attach gsis, validate, and store one weekly partition."""
-    payload = _fetch_sleeper_weekly(season, week)
+    payload = fetch_sleeper_weekly(season, week)
     parsed = parse_sleeper_weekly(payload, season=season, week=week)
     id_map = read_partition(data_root, "id_map", season=None)
     attached = _attach_gsis(parsed, id_map)

@@ -6,6 +6,84 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## Start/sit built, and it is a two-source tool on purpose (2026-09-07, branch `feat/start-sit`)
+
+**The last unbuilt mid-season tool.** Spec `docs/superpowers/specs/2026-09-07-start-sit-design.md`,
+plan `docs/superpowers/plans/2026-09-07-start-sit.md`. Run it with `python scripts/start_sit.py`.
+
+**The requirement that shaped everything: the user rejected an ESPN-only tool outright.** "If
+it's espn only this is no value to me, I can already see that info in the espn app." Correct, and
+it killed the obvious design — `waivers.weekly_projections_by_espn_id` already existed and would
+have made this an afternoon's wiring. So the tool prices every player from **two** weekly sources,
+ESPN's feed and Sleeper's weekly endpoint, blends them **stat by stat**, and scores once under the
+league's own `Ruleset`. The `spread` column is where they disagree, which is the only column here
+the ESPN app could not print.
+
+**Sleeper weekly was already ingested and nobody had noticed it could do this.**
+`ingest/sleeper_weekly_projections.py` existed for the DFS backtest path. Verified live: 948
+scored players for 2026 wk2, full stat lines, and an `opponent`. `_fetch_sleeper_weekly` was
+promoted to public — this caller wants the payload *without* the store write.
+
+**Blend in stat space, and be precise about why, because the obvious reason is wrong.** `Ruleset`
+is purely linear, so stat-space and points-space blending give the *same* number whenever both
+sources report the same fields. The difference is entirely the field only one source carries:
+stat space weights per field (ESPN's receptions enter at full weight), points space weights per
+player and reads low with nothing on screen to say so. The spec's first draft claimed
+non-linearity and was wrong; there is now a test pinning the actual distinguishing case.
+`WEEKLY_BLEND_FIELDS` moved to `ingest.external_projections`, **computed** from the two source
+maps rather than typed, and `dfs.blend` now imports it instead of keeping a second copy.
+
+**Injuries are applied here, not delegated, and the first spec draft got the rule backwards.**
+`weekly_multiplier(status, source_is_injury_aware=False)`: ESPN zeroes `Out` but Sleeper's
+behaviour is unmeasured, so a blended `Out` player carries ~half of Sleeper's number and
+declaring the source aware would leave that half standing. The draft had also forced `OUT`,
+`SUSPENSION` and `DOUBTFUL` to `None` alongside IR. Wrong — `choose_starters` distinguishes
+`None` ("cannot fill this slot") from `0.0` ("a real projection of nothing, which can still fill
+a slot no one else is eligible for"). **Only IR earns `None`**, because it is a roster slot ESPN
+will not start you out of. `DOUBTFUL` keeps its measured 0.04: against a bye-week alternative,
+starting him is the correct call and the tool must be able to say so.
+
+**P(right), not Δ expected wins, and the repo's own measurements are why.** Paired swap noise is
+0.062 wins at 2,000 sims against roughly 140 season points to a win, so a 3-point weekly swap is
+~0.021 wins — signal three times smaller than its error bar. `waiver_recommender --wins` is the
+right instrument for a season-long add; it cannot resolve a lineup call. `p_right` reuses
+`sample_weekly_points` with `n_weeks=1` rather than hand-rolling a Gamma, keeping the lognormal
+talent term as well as the weekly one — dropping it would read *more* confident than the evidence.
+
+**Three defects the first live run found, none of which a unit test had reason to catch.** Each
+is a class this repo keeps meeting; §9b of the spec has the detail.
+
+- **A fabricated 0.0 for something we cannot price.** ESPN reports D/ST in the 100-block stat ids,
+  zero overlap with the nine fields this layer maps, so `_statline_dict` defaulted all nine to 0.0
+  and scored a confident nothing. Same shape as the waiver bug where an unpriceable player became
+  the cheapest leftover by construction. Now unpriced, and named in the report. **Neither source
+  prices K or D/ST weekly** — those slots are the manager's, and the tool says so.
+- **Reconstructing state the producer should have returned.** `choose_starters` *skips* an
+  unfillable slot, so its indices are dense while the slot order is not; zipping them shifted
+  every pick after the hole and printed a FLEX running back as the D/ST. `choose_starters_with_slots`
+  now returns the slot, the reconstruction is gone, and the docstring's positional claim — which
+  was the thing that invited the bug — is corrected. The tests that blessed the reconstruction were
+  **replaced, not patched**: they encoded the bug.
+- **A display column mixing two numbers.** `blend` showed the post-injury figure, so a Questionable
+  player read below both sources and looked like arithmetic error. `blend` and `start` are separate.
+
+**Coverage risk did not materialise.** The `id_map` carries `sleeper_id` for 2,741 of 3,385
+players (81%), which the plan flagged as the thing that could quietly reduce this to an ESPN-only
+tool. On the real roster it is **12 of 13 priced by both** — rostered players are well-known ones.
+Single-source players are named individually with *which* source, since Sleeper-only (ESPN has no
+line this week) and ESPN-only (usually a crosswalk miss) are different stories.
+
+**Verified live** against Critts 2026 team 17: week 2 recommends starting Josh Jacobs over Jordan
+Mason, +4.1 lineup points, P(right) 65%.
+
+**Still open:** the 50/50 blend weight is a stated guess. The follow-up issue is the fair weekly
+benchmark this now makes possible — ESPN weekly vs Sleeper weekly vs the blend, all scored under
+one ruleset against weekly actuals, which would settle the weight *and* the long-open question of
+whether our own model has any weekly value. Writing lineups back to ESPN is deliberately out of
+scope: every ESPN call in `ingest/espn_league.py` is a GET.
+
+---
+
 ## depth_charts died on twelve practice-squad players (2026-09-07, branch `fix/depth-charts-placeholder-gsis`)
 
 **[#169](https://github.com/alhart2015/FantasyFootball/issues/169), surfaced by the refresh script
