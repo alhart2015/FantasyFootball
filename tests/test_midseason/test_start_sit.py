@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from projections.midseason.start_sit import blend_weekly_points
+from projections.midseason.start_sit import LineupRow, blend_weekly_points
 from projections.schemas import InjuryStatus, RosterSlot, Ruleset
 
 _HALF = Ruleset.espn_half()
@@ -332,3 +332,227 @@ def test_labels_agree_with_what_choose_starters_actually_filled() -> None:
             assert slot.value == pos.value, f"{pos} labelled {slot}"
         else:
             assert pos in eligible, f"{pos} not eligible for {slot}"
+
+
+# --- the lineup currently set -----------------------------------------------------------
+
+
+def _roster(*rows: tuple[int, str, str, str]) -> pd.DataFrame:
+    """(player_id, player, pos, lineup_slot) in `parse_rosters` shape."""
+    return pd.DataFrame(
+        [
+            {"player_id": pid, "player": name, "pos": pos, "lineup_slot": slot}
+            for pid, name, pos, slot in rows
+        ]
+    )
+
+
+def test_current_starters_exclude_bench_ir_and_unknown_slots() -> None:
+    from projections.midseason.start_sit import current_starter_ids
+
+    roster = _roster(
+        (1, "Starter", "RB", RosterSlot.RB.value),
+        (2, "Flexed", "WR", RosterSlot.FLEX.value),
+        (3, "Benched", "WR", RosterSlot.BENCH.value),
+        (4, "Injured", "TE", RosterSlot.IR.value),
+        (5, "Unplaceable", "QB", ""),  # an ESPN slot id we do not recognise
+    )
+    assert current_starter_ids(roster) == {1, 2}
+
+
+# --- current vs optimal -----------------------------------------------------------------
+
+
+def _row(pid: int, pos: str, points: float | None, slot: RosterSlot | None) -> LineupRow:
+    return LineupRow(
+        player_id=pid,
+        name=f"p{pid}",
+        position=pos,
+        status=InjuryStatus.ACTIVE,
+        current_slot=slot,
+        points=points,
+        blend=None,
+    )
+
+
+_SLOTS = {
+    RosterSlot.QB: 1,
+    RosterSlot.RB: 2,
+    RosterSlot.WR: 2,
+    RosterSlot.TE: 1,
+    RosterSlot.FLEX: 1,
+    RosterSlot.BENCH: 5,
+}
+
+
+def test_an_already_optimal_lineup_produces_no_swaps() -> None:
+    """A success, not a failure. In a settled week this is the usual answer."""
+    from projections.midseason.start_sit import build_swaps
+
+    rows = [
+        _row(1, "QB", 20.0, RosterSlot.QB),
+        _row(2, "RB", 15.0, RosterSlot.RB),
+        _row(3, "RB", 12.0, RosterSlot.RB),
+        _row(4, "WR", 14.0, RosterSlot.WR),
+        _row(5, "WR", 11.0, RosterSlot.WR),
+        _row(6, "TE", 8.0, RosterSlot.TE),
+        _row(7, "RB", 10.0, RosterSlot.FLEX),
+        _row(8, "WR", 4.0, None),
+    ]
+    assert build_swaps(rows, _SLOTS, params=None) == []
+
+
+def test_the_gain_is_the_lineup_gain_not_the_pairwise_one() -> None:
+    """The cascade the waiver work already paid to learn.
+
+    WR c beats the WR in the lineup by 0.2. Starting him pushes that WR into the FLEX, which
+    pushes the FLEX RB out entirely: the lineup gains 1.2, six times the pairwise number a
+    human eye would compute against the man he appears to replace.
+    """
+    from projections.midseason.start_sit import build_swaps
+
+    rows = [
+        _row(1, "QB", 20.0, RosterSlot.QB),
+        _row(2, "RB", 15.0, RosterSlot.RB),
+        _row(3, "RB", 12.0, RosterSlot.RB),
+        _row(4, "WR", 14.0, RosterSlot.WR),
+        _row(5, "WR", 11.0, RosterSlot.WR),
+        _row(6, "TE", 8.0, RosterSlot.TE),
+        _row(7, "RB", 10.0, RosterSlot.FLEX),
+        _row(8, "WR", 11.2, None),  # on the bench, 0.2 better than the started WR
+    ]
+    swaps = build_swaps(rows, _SLOTS, params=None)
+
+    assert [s.start.player_id for s in swaps] == [8]
+    assert [s.sit.player_id for s in swaps] == [7]
+    assert swaps[0].gain == pytest.approx(1.2)
+
+
+def test_swap_gains_sum_to_the_total_lineup_gain() -> None:
+    """Two lineups, one set difference: the per-swap gains are a partition of the total."""
+    from projections.midseason.start_sit import build_swaps, lineup_total, optimal_starters
+
+    rows = [
+        _row(1, "QB", 20.0, RosterSlot.QB),
+        _row(2, "RB", 9.0, RosterSlot.RB),
+        _row(3, "RB", 8.0, RosterSlot.RB),
+        _row(4, "WR", 14.0, RosterSlot.WR),
+        _row(5, "WR", 6.0, RosterSlot.WR),
+        _row(6, "TE", 8.0, RosterSlot.TE),
+        _row(7, "RB", 5.0, RosterSlot.FLEX),
+        _row(8, "WR", 13.0, None),
+        _row(9, "RB", 12.0, None),
+    ]
+    swaps = build_swaps(rows, _SLOTS, params=None)
+    chosen, _ = optimal_starters(rows, _SLOTS)
+    current = [r for r in rows if r.current_slot is not None]
+
+    total = lineup_total(rows, chosen) - lineup_total(current, range(len(current)))
+    assert sum(s.gain for s in swaps) == pytest.approx(total)
+
+
+def test_a_bye_week_starter_is_swapped_out_for_anyone_startable() -> None:
+    from projections.midseason.start_sit import build_swaps
+
+    rows = [
+        _row(1, "QB", 20.0, RosterSlot.QB),
+        _row(2, "RB", 15.0, RosterSlot.RB),
+        _row(3, "RB", 12.0, RosterSlot.RB),
+        _row(4, "WR", None, RosterSlot.WR),  # bye: no projection from either source
+        _row(5, "WR", 11.0, RosterSlot.WR),
+        _row(6, "TE", 8.0, RosterSlot.TE),
+        _row(7, "RB", 10.0, RosterSlot.FLEX),
+        _row(8, "WR", 2.0, None),
+    ]
+    swaps = build_swaps(rows, _SLOTS, params=None)
+    assert [s.start.player_id for s in swaps] == [8]
+    assert [s.sit.player_id for s in swaps] == [4]
+
+
+# --- P(right) ---------------------------------------------------------------------------
+
+
+def test_p_right_is_a_coin_flip_between_identical_players() -> None:
+    import numpy as np
+
+    from projections.draft.assistant.performance_variance import VarianceParams
+    from projections.midseason.start_sit import p_right
+
+    params = VarianceParams.load()
+    got = p_right(
+        _row(1, "RB", 12.0, None),
+        _row(2, "RB", 12.0, None),
+        params,
+        n_sims=20_000,
+        rng=np.random.default_rng(0),
+    )
+    assert got == pytest.approx(0.5, abs=0.02)
+
+
+def test_p_right_is_confident_when_the_edge_is_large() -> None:
+    import numpy as np
+
+    from projections.draft.assistant.performance_variance import VarianceParams
+    from projections.midseason.start_sit import p_right
+
+    params = VarianceParams.load()
+    got = p_right(
+        _row(1, "RB", 22.0, None),
+        _row(2, "RB", 3.0, None),
+        params,
+        n_sims=20_000,
+        rng=np.random.default_rng(0),
+    )
+    assert got > 0.90
+
+
+def test_p_right_never_falls_as_the_edge_widens() -> None:
+    import numpy as np
+
+    from projections.draft.assistant.performance_variance import VarianceParams
+    from projections.midseason.start_sit import p_right
+
+    params = VarianceParams.load()
+    probs = [
+        p_right(
+            _row(1, "RB", start, None),
+            _row(2, "RB", 10.0, None),
+            params,
+            n_sims=20_000,
+            rng=np.random.default_rng(7),
+        )
+        for start in (10.0, 12.0, 15.0, 20.0)
+    ]
+    assert probs == sorted(probs)
+
+
+def test_p_right_is_reproducible_for_a_given_seed() -> None:
+    """It is printed to a digit. A number that moves between runs is not a recommendation."""
+    import numpy as np
+
+    from projections.draft.assistant.performance_variance import VarianceParams
+    from projections.midseason.start_sit import p_right
+
+    params = VarianceParams.load()
+    args = (_row(1, "RB", 13.0, None), _row(2, "WR", 11.0, None), params)
+    first = p_right(*args, n_sims=5_000, rng=np.random.default_rng(3))
+    second = p_right(*args, n_sims=5_000, rng=np.random.default_rng(3))
+    assert first == second
+
+
+def test_p_right_against_an_unstartable_player_is_certain() -> None:
+    """Nothing beats nothing. A bye-week or IR counterpart scores no points at all."""
+    import numpy as np
+
+    from projections.draft.assistant.performance_variance import VarianceParams
+    from projections.midseason.start_sit import p_right
+
+    params = VarianceParams.load()
+    got = p_right(
+        _row(1, "RB", 8.0, None),
+        _row(2, "RB", None, None),
+        params,
+        n_sims=2_000,
+        rng=np.random.default_rng(0),
+    )
+    assert got == pytest.approx(1.0)

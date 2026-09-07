@@ -36,6 +36,11 @@ SUPER_FLEX_ELIGIBLE: frozenset[Position] = frozenset(
 # Flex-type slots in ascending eligibility breadth (FLEX subset of SUPER_FLEX). Order is
 # load-bearing: narrowest eligibility first keeps restrictive-first greedy lineup fills optimal.
 # Single source consumed by roster_score, backtest.lineup, and the season-value sampler.
+#: Slots a player can hold WITHOUT being in the starting lineup. "Is he starting" is
+#: `bool(slot) and slot not in NON_STARTING_SLOTS` -- an unrecognised ESPN slot id parses to
+#: `""` and is in neither set, so it reads as bench, which is the safer of the two guesses.
+NON_STARTING_SLOTS: frozenset[RosterSlot] = frozenset({RosterSlot.BENCH, RosterSlot.IR})
+
 FLEX_SLOTS: tuple[tuple[RosterSlot, frozenset[Position]], ...] = (
     (RosterSlot.FLEX, FLEX_ELIGIBLE),
     (RosterSlot.SUPER_FLEX, SUPER_FLEX_ELIGIBLE),
