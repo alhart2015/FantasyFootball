@@ -149,3 +149,39 @@ def test_statlines_keep_kickers_and_defenses_by_default() -> None:
     assert kept.iloc[0]["position"] == ""
     dropped = espn_weekly_statlines(payload, week=5, skill_positions_only=True)
     assert dropped.empty
+
+
+def test_statlines_omit_a_line_sharing_no_stat_ids_with_ours() -> None:
+    """The D/ST case, verified against the live payload on 2026-09-07.
+
+    ESPN reports defenses in the 100-block (sacks, points allowed) with zero overlap against
+    the nine fields this layer maps. `_statline_dict` would default every one of them to 0.0
+    and score a confident 0.0 -- indistinguishable from a real projection of nothing, and it
+    put the Chiefs D/ST in a lineup at 0.0 on the first live run.
+    """
+    from projections.draft.backtest.espn_weekly import espn_weekly_statlines
+
+    dst_entry = {
+        "scoringPeriodId": 5,
+        "statSourceId": 1,
+        "statSplitTypeId": 1,
+        "stats": {"100": 2.0, "120": 18.0, "127": 320.0},
+    }
+    payload = {"players": [{"player": {"id": 333, "defaultPositionId": 16, "stats": [dst_entry]}}]}
+    assert espn_weekly_statlines(payload, week=5).empty
+
+
+def test_a_genuine_all_zero_projection_is_kept() -> None:
+    """Zero is a real answer when the ids ARE ours. Only an unmappable line is dropped."""
+    from projections.draft.backtest.espn_weekly import espn_weekly_statlines
+
+    entry = {
+        "scoringPeriodId": 5,
+        "statSourceId": 1,
+        "statSplitTypeId": 1,
+        "stats": {"24": 0.0, "42": 0.0},
+    }
+    payload = {"players": [{"player": {"id": 444, "defaultPositionId": 2, "stats": [entry]}}]}
+    df = espn_weekly_statlines(payload, week=5)
+    assert list(df["espn_id"]) == ["444"]
+    assert df.iloc[0]["rushing_yards"] == pytest.approx(0.0)

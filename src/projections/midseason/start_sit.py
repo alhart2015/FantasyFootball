@@ -26,16 +26,14 @@ from projections.draft.assistant.performance_variance import (
     sample_weekly_points,
 )
 from projections.draft.roster_eligibility import (
-    FLEX_SLOTS,
     NON_STARTING_SLOTS,
-    POSITION_SLOTS,
-    choose_starters,
+    choose_starters_with_slots,
 )
 from projections.ingest.external_projections import WEEKLY_BLEND_FIELDS
 from projections.ingest.identity import normalize_join_id
 from projections.midseason.injuries import weekly_multiplier
 from projections.midseason.waivers import player_id
-from projections.schemas import InjuryStatus, RosterSlot, Ruleset
+from projections.schemas import InjuryStatus, RosterSlot, Ruleset, parse_injury_status
 from projections.scoring.score import expected_points
 
 _ESPN_SUFFIX = "_espn"
@@ -200,28 +198,6 @@ def startable_points(projected: float | None, status: InjuryStatus) -> float | N
     return float(projected) * weekly_multiplier(status, source_is_injury_aware=False)
 
 
-def label_starter_slots(
-    chosen: Sequence[int], roster_slots: Mapping[RosterSlot, int]
-) -> list[RosterSlot]:
-    """Which slot each of `choose_starters`' picks is filling, positionally against `chosen`.
-
-    `choose_starters` returns indices in fill order and nothing maps them back to a slot, so
-    this re-walks the same order it filled in: `POSITION_SLOTS` first, each consuming its count,
-    then `FLEX_SLOTS` in ascending breadth. Nothing else may define that order — if the greedy's
-    fill order ever changes, this walk has to change with it, which is why it reads the same two
-    constants rather than restating them.
-
-    `BENCH` and `IR` carry counts in `roster_slots` and are never filled, so they never appear.
-    A lineup shorter than the slot list (an unfillable slot) labels what exists and stops.
-    """
-    order: list[RosterSlot] = []
-    for slot in POSITION_SLOTS:
-        order.extend([slot] * roster_slots.get(slot, 0))
-    for slot, _eligible in FLEX_SLOTS:
-        order.extend([slot] * roster_slots.get(slot, 0))
-    return order[: len(chosen)]
-
-
 @dataclass(frozen=True)
 class LineupRow:
     """One roster player as the lineup solver sees him."""
@@ -253,21 +229,36 @@ class Swap:
     p_right: float | None
 
 
-def current_starter_ids(roster: pd.DataFrame) -> set[int]:
-    """ESPN player ids currently occupying a starting slot.
+def starting_slot(raw: object) -> RosterSlot | None:
+    """The starting slot this `parse_rosters` `lineup_slot` names, or None if it is not one.
 
-    Reads `NON_STARTING_SLOTS`, the same set the My Team page reads, so "is he starting" has
-    one definition. An unrecognised ESPN slot id parses to an empty string and is in neither
-    set, which reads as bench — crediting a player we cannot place to the starting lineup is
-    the more wrong of the two guesses.
+    None covers three cases that all mean the same thing downstream — bench, IR, and a value
+    that is not a `RosterSlot` at all. `parse_rosters` maps an ESPN slot id it does not
+    recognise to an empty string, so the third case should not arise from real data; it is
+    handled rather than raised because **the alternative failure is silent and worse**.
+    Reading an unplaceable player as a STARTER credits him to the current lineup, which
+    understates the gain from fixing it — the same trap the My Team page documents, where an
+    unknown slot inflated the starters-only total.
+
+    `NON_STARTING_SLOTS` is the shared definition; the My Team page reads the same set.
     """
-    benched = {slot.value for slot in NON_STARTING_SLOTS}
-    out: set[int] = set()
-    for _, player in roster.iterrows():
-        slot = str(player.get("lineup_slot") or "")
-        if slot and slot not in benched:
-            out.add(player_id(player))
-    return out
+    value = str(raw or "")
+    if not value:
+        return None
+    try:
+        slot = RosterSlot(value)
+    except ValueError:
+        return None
+    return None if slot in NON_STARTING_SLOTS else slot
+
+
+def current_starter_ids(roster: pd.DataFrame) -> set[int]:
+    """ESPN player ids currently occupying a starting slot."""
+    return {
+        player_id(player)
+        for _, player in roster.iterrows()
+        if starting_slot(player.get("lineup_slot")) is not None
+    }
 
 
 def optimal_starters(
@@ -275,17 +266,23 @@ def optimal_starters(
 ) -> tuple[list[int], list[RosterSlot]]:
     """The best startable lineup: indices into `rows`, and the slot each one fills.
 
-    Calls `choose_starters` directly rather than `waivers.lineup_points`, which does the same
-    thing over a `_LineupRow` — that type is private and shaped for the waiver path. This is
-    the fourth caller of the greedy, not a fourth copy of it.
+    Calls the greedy directly rather than `waivers.lineup_points`, which does the same thing
+    over a `_LineupRow` — that type is private and shaped for the waiver path. Fourth caller,
+    not a fourth copy.
+
+    **The slots come from the solver, not from re-walking the taxonomy.** An earlier cut
+    reconstructed them by zipping the slot order against the returned indices, which is wrong
+    whenever a slot cannot be filled: the greedy skips such a slot, so the indices are dense
+    and the slot order is not. On the first live run that printed a FLEX running back as the
+    D/ST, because the defense had no weekly stat line and its slot went unfilled.
     """
-    chosen = choose_starters(
+    filled = choose_starters_with_slots(
         list(rows),
         roster_slots,
         value=lambda row: row.points,
         position=lambda row: row.position,
     )
-    return chosen, label_starter_slots(chosen, roster_slots)
+    return [index for index, _ in filled], [slot for _, slot in filled]
 
 
 def lineup_total(rows: Sequence[LineupRow], chosen: Iterable[int]) -> float:
@@ -393,3 +390,117 @@ def build_swaps(
             )
         )
     return swaps
+
+
+@dataclass(frozen=True)
+class StartSitRun:
+    """Everything the report needs, with no rendering decisions taken yet."""
+
+    team_name: str
+    week: int
+    #: Every roster player, priced. Bench and IR included — the answer is about both sides.
+    rows: list[LineupRow]
+    #: Indices into `rows` for the optimal lineup, in `choose_starters` fill order.
+    starters: list[int]
+    #: The slot each entry of `starters` fills. Positional, same length.
+    slots: list[RosterSlot]
+    current_total: float
+    optimal_total: float
+    swaps: list[Swap]
+    weight_espn: float
+    notes: tuple[str, ...] = ()
+
+    @property
+    def gain(self) -> float:
+        """Points the optimal lineup adds over the one currently set."""
+        return self.optimal_total - self.current_total
+
+
+def _notes(rows: Sequence[LineupRow], week: int) -> tuple[str, ...]:
+    """What the reader needs to distrust, said out loud.
+
+    The Sleeper coverage line is the important one. This tool's whole claim over the ESPN app
+    is a second opinion; if the crosswalk cannot place most of a roster, the report has quietly
+    degraded to ESPN alone and the reader deserves to know before he benches somebody on it.
+    """
+    out: list[str] = []
+    priced = [row for row in rows if row.blend is not None]
+    single = [row for row in priced if row.blend is not None and row.blend.sources != "both"]
+    if single:
+        # Naming them, and naming WHICH source, because "one source" is not one situation:
+        # a Sleeper-only player is one ESPN has no line for this week, an ESPN-only one is
+        # usually a crosswalk miss. Both mean no second opinion, which is the whole pitch.
+        listed = ", ".join(
+            f"{row.name} ({row.blend.sources} only)" for row in single if row.blend is not None
+        )
+        out.append(
+            f"one source only, so no second opinion on: {listed}. "
+            f"{len(priced) - len(single)}/{len(priced)} of the roster is priced by both."
+        )
+    unpriced = [row for row in rows if row.blend is None]
+    if unpriced:
+        names = ", ".join(sorted(row.name for row in unpriced))
+        out.append(
+            f"no week {week} projection from either source: {names}. Left out of the lineup "
+            "solve entirely rather than priced at zero, so those slots are yours to set. "
+            "K and D/ST land here by construction: neither source ships a stat line this "
+            "layer can score for them."
+        )
+    return tuple(out)
+
+
+def recommend_start_sit(
+    roster: pd.DataFrame,
+    espn_statlines: pd.DataFrame,
+    sleeper: pd.DataFrame,
+    id_map: pd.DataFrame,
+    roster_slots: Mapping[RosterSlot, int],
+    ruleset: Ruleset,
+    *,
+    team_name: str,
+    week: int,
+    weight_espn: float = 0.5,
+    params: VarianceParams | None = None,
+    n_sims: int = 20_000,
+    rng: np.random.Generator | None = None,
+) -> StartSitRun:
+    """Already-fetched data in, a `StartSitRun` out. No I/O, no formatting.
+
+    Same contract as `build_my_team`, and for the same reason: the seam between ingest and
+    logic is where the web UI's defects lived, so the end-to-end tests drive this from real
+    payload shapes through the real parsers rather than around them.
+    """
+    blended = blend_weekly_points(
+        espn_statlines, sleeper, id_map, weight_espn=weight_espn, ruleset=ruleset
+    )
+    rows: list[LineupRow] = []
+    for _, player in roster.iterrows():
+        pid = player_id(player)
+        status, _raw = parse_injury_status(player.get("injury_status"))
+        blend = blended.get(str(pid))
+        rows.append(
+            LineupRow(
+                player_id=pid,
+                name=str(player.get("player") or pid),
+                position=str(player.get("pos") or ""),
+                status=status,
+                current_slot=starting_slot(player.get("lineup_slot")),
+                points=startable_points(blend.points if blend else None, status),
+                blend=blend,
+            )
+        )
+
+    starters, slots = optimal_starters(rows, roster_slots)
+    current = [row for row in rows if row.current_slot is not None]
+    return StartSitRun(
+        team_name=team_name,
+        week=week,
+        rows=rows,
+        starters=starters,
+        slots=slots,
+        current_total=lineup_total(current, range(len(current))),
+        optimal_total=lineup_total(rows, starters),
+        swaps=build_swaps(rows, roster_slots, params=params, n_sims=n_sims, rng=rng),
+        weight_espn=weight_espn,
+        notes=_notes(rows, week),
+    )

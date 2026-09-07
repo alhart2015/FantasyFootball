@@ -127,7 +127,14 @@ def espn_weekly_statlines(
         if position is None and skill_positions_only:
             continue
         raw = _weekly_proj_stats(p, week)
-        if raw is None:
+        # A stat line sharing NO ids with `ESPN_STAT_IDS` cannot be priced from these nine
+        # fields, and `_statline_dict` would return all zeros -- a fabricated 0.0 that reads
+        # exactly like a real projection of nothing. D/ST is the live case: ESPN reports it in
+        # the 100-block ids (sacks, points allowed) with zero overlap here, so a defense was
+        # arriving priced at 0.0 rather than unpriced. `parse_espn_weekly` has the same hole
+        # and does not care, because it is fed to a schema that expects one row per player;
+        # here the value becomes a lineup decision.
+        if raw is None or not set(raw) & set(ESPN_STAT_IDS):
             continue
         rows.append(
             {
