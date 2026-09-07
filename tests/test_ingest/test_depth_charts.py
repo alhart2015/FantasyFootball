@@ -522,3 +522,82 @@ def test_refresh_depth_charts_new_format_raises_when_schedules_missing(
     )
     with pytest.raises(FileNotFoundError, match="schedules"):
         refresh_depth_charts(tmp_path, seasons=[2025])
+
+
+# --- placeholder gsis ids (issue #169) ---------------------------------------------------------
+
+
+def test_snapshot_format_drops_placeholder_ids_instead_of_aborting() -> None:
+    """The 2026 regression, verbatim.
+
+    `nflreadpy.load_depth_charts(seasons=[2026])` carried `WAS569019` (Mike Washington Jr., LV) --
+    a PFR-style placeholder nflverse holds until NFL.com assigns a real gsis_id. `DepthChartsSchema`
+    correctly rejects it, and because this path filtered only on `notna()` the whole season's
+    ingest died on twelve practice-squad players. `build_id_map` and `refresh_draft_picks` already
+    handled the same upstream behaviour; this path did not.
+    """
+    schedules = _make_schedules([(1, "LV", "KC", "2025-09-04T13:00:00Z")])
+    snapshots = _make_snapshots(
+        [
+            {
+                "dt": "2025-09-02T10:00:00Z",
+                "team": "LV",
+                "gsis_id": "00-0000001",
+                "pos_abb": "RB",
+                "pos_slot": 1,
+                "pos_rank": 1,
+            },
+            {
+                "dt": "2025-09-02T10:00:00Z",
+                "team": "LV",
+                "gsis_id": "WAS569019",  # Mike Washington Jr.
+                "pos_abb": "RB",
+                "pos_slot": 11,
+                "pos_rank": 2,
+            },
+        ]
+    )
+    out = _derive_weekly_snapshots_from_new_format(snapshots, schedules)
+    assert list(out["gsis_id"]) == ["00-0000001"]
+
+
+def test_snapshot_format_survives_a_team_week_that_is_all_placeholders() -> None:
+    """Every id on the slate being a placeholder must yield an empty, schema-valid partition
+    rather than a raise -- the degenerate case of the same bug."""
+    schedules = _make_schedules([(1, "LV", "KC", "2025-09-04T13:00:00Z")])
+    snapshots = _make_snapshots(
+        [
+            {
+                "dt": "2025-09-02T10:00:00Z",
+                "team": "LV",
+                "gsis_id": "WAS569019",
+                "pos_abb": "RB",
+                "pos_slot": 11,
+                "pos_rank": 2,
+            },
+        ]
+    )
+    out = _derive_weekly_snapshots_from_new_format(snapshots, schedules)
+    assert out.empty
+    DepthChartsSchema.validate(out)
+
+
+def test_legacy_format_drops_placeholder_ids(
+    tmp_path: Path,
+    fake_depth_charts_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-2025 path had the same `notna()`-only filter. Fixed in both, because a payload
+    that regressed only the legacy branch would look identical from the traceback."""
+    raw = fake_depth_charts_df.copy()
+    placeholder = raw.iloc[[0]].copy()
+    placeholder["gsis_id"] = "SMI283040"
+    raw = pd.concat([raw, placeholder], ignore_index=True)
+
+    monkeypatch.setattr(
+        "projections.ingest.depth_charts._fetch_raw_depth_charts", lambda seasons: raw
+    )
+    refresh_depth_charts(tmp_path, seasons=[2024])
+    written = read_partition(tmp_path / "raw", "depth_charts", season=2024)
+    assert "SMI283040" not in set(written["gsis_id"])
+    assert len(written) == len(raw) - 1

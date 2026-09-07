@@ -74,6 +74,9 @@ from projections.ingest.weekly_stats import (
 pytestmark = pytest.mark.network
 
 _DRIFT_SEASON = 2023
+#: Depth charts switched to a snapshot-by-timestamp release in 2025; the legacy smoke above
+#: cannot exercise that path, so it gets its own season.
+_SNAPSHOT_DRIFT_SEASON = 2025
 
 
 def _assert_columns_present(raw_columns: set[str], expected: set[str], source: str) -> None:
@@ -135,6 +138,27 @@ def test_depth_charts_api_columns_and_schema() -> None:
     }
     _assert_columns_present(set(raw.columns), expected, "load_depth_charts")
     df = _normalize_depth_charts(raw)
+    assert not df.empty
+
+
+def test_depth_charts_snapshot_format_api_columns_and_schema() -> None:
+    """The 2025+ snapshot-by-timestamp release, which the legacy smoke above cannot reach.
+
+    `_DRIFT_SEASON` is 2023, so every drift smoke ran against the legacy shape and the snapshot
+    path had no live coverage at all -- which is how issue #169 shipped: the 2026 payload carried
+    PFR-style placeholder gsis ids (`WAS569019`), `DepthChartsSchema` rejected them, and the whole
+    season's ingest aborted. Normalizing a real snapshot payload end-to-end is what catches that
+    class, since placeholders appear and disappear with the roster and cannot be asserted on
+    directly.
+    """
+    raw = _fetch_raw_depth_charts([_SNAPSHOT_DRIFT_SEASON])
+    expected = {"dt", "team", "gsis_id", "pos_abb", "pos_slot", "pos_rank"}
+    _assert_columns_present(set(raw.columns), expected, "load_depth_charts (snapshot)")
+
+    # The snapshot path needs schedules to resolve (season, week) from `dt`; fetch live rather
+    # than reading data/, so the smoke does not depend on a populated checkout.
+    schedules = _normalize_schedules(_fetch_raw_schedules([_SNAPSHOT_DRIFT_SEASON]))
+    df = _normalize_depth_charts(raw, schedules=schedules)
     assert not df.empty
 
 

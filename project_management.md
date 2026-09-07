@@ -6,6 +6,56 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## depth_charts died on twelve practice-squad players (2026-09-07, branch `fix/depth-charts-placeholder-gsis`)
+
+**[#169](https://github.com/alhart2015/FantasyFootball/issues/169), surfaced by the refresh script
+the same morning.** `refresh_depth_charts(data_root, seasons=[2026])` aborted on
+`pandera.errors.SchemaError: Column 'gsis_id' failed ... failure cases: WAS569019`.
+
+**nflverse carries PFR-style placeholder ids for players NFL.com has not assigned a real gsis_id
+to** — undrafted rookies and practice-squad adds. `WAS569019` is Mike Washington Jr. (LV). In the
+2026 payload: 1,211 of 501,068 raw rows, **12 distinct players**. Every schema keyed on `gsis_id`
+enforces `GSIS_ID_PATTERN`, so those rows cannot be persisted; the only question was whether the
+source drops twelve players or dies. It died, and took the whole season's depth charts with it.
+
+**The fix already existed twice.** `build_id_map` and `refresh_draft_picks` both hit this exact
+upstream behaviour and both filter on the pattern with a `logger.warning`. `depth_charts` filtered
+only on `notna()` — in **both** normalize paths, legacy and the 2025+ snapshot format.
+
+**So the fix is one helper, not a third copy.** `identity.drop_placeholder_gsis_rows(df, source=)`
+is now the single implementation, called from four sites. Net −40 lines across the ingest modules.
+The issue's own note was the argument: three copies of an intent is where the next source gets it
+wrong by omission, which is precisely what happened here.
+
+**Removed the dead code the refactor stranded** — `_GSIS_RE`, `re`, `GSIS_ID_PATTERN`, and an
+unused `logger` in `draft_picks`, and an unused `logger` in `id_map`. Ruff does not flag unused
+module-level assignments, so none of it would have been caught.
+
+**One design point worth keeping.** The helper counts nulls and placeholders *separately* and warns
+only on placeholders. A null id is an ordinary older-season gap, not the placeholder story;
+folding them together would overstate how many players nflverse is holding back and train the
+reader to ignore the line. There is a test for each.
+
+**The reserved `98-`/`99-` ids survive, and that is load-bearing.** `external_projections` mints
+deterministic `99-` placeholder gsis ids for unmatched rookies, and the D/ST rows added in #168 use
+`98-`. Both *match* `GSIS_ID_PATTERN` by design, so the filter keeps them — dropping them would
+silently empty the defense pool. Pinned by a test.
+
+**The real gap was in the smokes, and it is now closed.** `_DRIFT_SEASON` is 2023, so every
+api-drift smoke ran against the **legacy** depth-chart shape and the 2025+ snapshot path — the one
+that actually broke — had no live coverage at all. Added
+`test_depth_charts_snapshot_format_api_columns_and_schema` against a new `_SNAPSHOT_DRIFT_SEASON =
+2025`, fetching schedules live so it does not depend on a populated checkout. Both smokes pass
+against the live API.
+
+**Verified against the real payload, not just fixtures.** 2026 snapshot format now ingests
+**9,537 rows / 561 players**, warning about 17 dropped rows; 2024 legacy still ingests 12,309 rows
+/ 625 players. `build_id_map` and `refresh_draft_picks` warn with the same counts as before the
+refactor (5 and 1), so the shared helper is behaviour-preserving. The three new depth-chart tests
+were confirmed to **fail** against the pre-fix code with the original `SchemaError`.
+
+---
+
 ## Refreshing data is one command now (2026-09-07, branch `chore/one-shot-refresh`)
 
 **`python scripts/refresh_data.py`, no arguments.** It runs every raw ingest source and then

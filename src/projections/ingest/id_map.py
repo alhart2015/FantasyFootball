@@ -6,7 +6,6 @@ hitting the network.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Final
 
@@ -14,6 +13,7 @@ import nflreadpy
 import pandas as pd
 
 from projections.ingest.espn_league import ESPN_PRO_TEAMS
+from projections.ingest.identity import drop_placeholder_gsis_rows
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import (
     _NO_TEAM_CODES,
@@ -25,8 +25,6 @@ from projections.schemas import (
     normalize_team_code,
 )
 from projections.store import write_partition
-
-logger = logging.getLogger(__name__)
 
 
 def _coerce_external_id(s: pd.Series, *, numeric: bool) -> pd.Series:
@@ -120,26 +118,10 @@ def build_id_map(data_root: Path) -> Path:
     df = raw[[c for c in cols if c in raw.columns]].copy()
     df = df.rename(columns={"name": "full_name"})
 
-    # Drop rows without canonical id; downstream joins are unusable without it.
-    df = df[df["gsis_id"].notna()].copy()
-
-    # Drop rows whose gsis_id does not match the canonical pattern. Two
-    # populations hit this: legacy PFR-style IDs for very old players, and
-    # PFR-style placeholders that nflverse holds for the current draft class
-    # until NFL.com assigns real gsis_ids around training camp (~July).
-    from projections.schemas import GSIS_ID_PATTERN
-
-    n_pre_regex = len(df)
-    df = df[df["gsis_id"].astype(str).str.match(rf"^{GSIS_ID_PATTERN}$")].copy()
-    n_filtered = n_pre_regex - len(df)
-    if n_filtered > 0:
-        logger.warning(
-            "build_id_map: filtered %d row(s) with non-GSIS placeholder ids "
-            "(typical of pre-camp rookies for the current draft class — nflverse holds "
-            "PFR-style placeholders until NFL assigns real gsis_ids ~July). Re-ingest "
-            "after training camps to capture these players.",
-            n_filtered,
-        )
+    # Downstream joins are unusable without a canonical id. Two populations are dropped here:
+    # legacy PFR-style ids for very old players, and placeholders nflverse holds for the current
+    # draft class until NFL.com assigns real gsis_ids.
+    df = drop_placeholder_gsis_rows(df, source="build_id_map")
 
     # Drop players at positions outside our covered set (offensive line, punters, etc.)
     # load_ff_playerids() returns roster-wide rows; we only model the positions
