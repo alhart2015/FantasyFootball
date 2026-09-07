@@ -72,24 +72,41 @@ Never silently zero. Concretely:
 The `src` column names which sources priced each player, so a spread of `—` is legible rather
 than mysterious.
 
-## 5. Injuries: source-independent, because the blend has mixed provenance
+## 5. Injuries: applied here, not delegated to the source
 
 `waivers.adjusted_weekly_points` takes `source_is_injury_aware`, a single boolean. **A blend of
-one injury-aware source and one unmeasured source has no single honest value for it**, and
-guessing either way double-counts or under-counts.
+one injury-aware source and one unmeasured source has no honest value for it**, so this tool
+applies the adjustment itself from the roster's `injury_status`:
 
-So this tool applies the adjustment itself, from the roster's `injury_status`, independent of
-source:
+**`weekly_multiplier(status, source_is_injury_aware=False)`, plus one structural exception.**
 
-- `OUT`, `INJURY_RESERVE`, `SUSPENSION`, `DOUBTFUL` → **unstartable (`None`)**. Not 0.0 —
-  a doubtful player must not fill a slot someone else is eligible for.
-- `QUESTIONABLE` → **× 0.86**, the measured constant from `measure_injury_impact.py`
-  (83.4% of projection vs 96.5% healthy, n=846), and the one both horizons agreed was
-  week-sized rather than season-sized.
-- Everything else → unchanged.
+`False` is the load-bearing half. ESPN zeroes the players it lists as `Out`; Sleeper's
+behaviour there is unmeasured. A blended `Out` player therefore carries roughly *half* of
+Sleeper's projection, and passing `True` — which tells the helper "the source already priced
+this" — would leave that half standing. A healthy-looking number for a player who will not
+take a snap is exactly the plausible-wrong-answer class this repo keeps paying for. `False`
+applies our own multiplier over the blend and lands him at 0.0.
 
-This is deliberately *stricter* than the waiver path and the reason is stated: on a one-week
-horizon a Questionable tag is a 14% cut, "the size that decides a close start/sit."
+**The exception is `INJURY_RESERVE` -> `None`, and only that one.** IR is a *roster slot*, not
+a game status: ESPN will not let an IR player occupy a lineup slot at all, so he is
+structurally unstartable rather than merely projected at nothing. `waivers._row` already
+forces `None` on this exact condition via `is_on_ir`.
+
+**Everything else keeps its multiplier and stays startable — an earlier draft of this spec got
+that wrong.** It forced `OUT`, `SUSPENSION` and `DOUBTFUL` to `None` too. `choose_starters`
+says why that is wrong in its own docstring: `0.0` "is a real projection of nothing and can
+still fill a slot no one else is eligible for," while `None` cannot fill it at all. Two
+consequences:
+
+- `DOUBTFUL` is **0.04**, a measured number, not zero. When the only alternative at a slot is
+  a bye-week player — who genuinely is `None` — starting the doubtful player is correct and
+  the tool must be able to say so. Forcing `None` would have left the slot empty.
+- `OUT` and `SUSPENSION` are 0.0, which already gives the wanted behaviour with no special
+  case: they rank below every healthy player and get slotted only when nobody else is
+  eligible, which is what a manager forced to field a body actually does.
+
+The 0.86 on `QUESTIONABLE` applies either way, and is why the adjustment is here at all: on a
+one-week horizon that tag is a 14% cut, "the size that decides a close start/sit."
 
 ## 6. The output
 

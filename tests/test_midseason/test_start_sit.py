@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from projections.midseason.start_sit import blend_weekly_points
-from projections.schemas import Ruleset
+from projections.schemas import InjuryStatus, RosterSlot, Ruleset
 
 _HALF = Ruleset.espn_half()
 
@@ -153,3 +153,182 @@ def test_a_sleeper_player_missing_from_the_id_map_falls_back_to_espn() -> None:
 def test_weight_outside_zero_to_one_is_rejected() -> None:
     with pytest.raises(ValueError, match="weight_espn"):
         blend_weekly_points(_espn(), _sleeper(), _id_map({}), weight_espn=1.5, ruleset=_HALF)
+
+
+# --- the injury rule --------------------------------------------------------------------
+
+
+def test_healthy_player_keeps_his_points() -> None:
+    from projections.midseason.start_sit import startable_points
+
+    assert startable_points(12.0, InjuryStatus.ACTIVE) == pytest.approx(12.0)
+
+
+def test_questionable_takes_the_measured_haircut() -> None:
+    """0.86 is measured, not chosen. Read the constant so a refit cannot silently diverge."""
+    from projections.midseason.injuries import WEEKLY_MULTIPLIER
+    from projections.midseason.start_sit import startable_points
+
+    expected = 12.0 * WEEKLY_MULTIPLIER[InjuryStatus.QUESTIONABLE]
+    assert startable_points(12.0, InjuryStatus.QUESTIONABLE) == pytest.approx(expected)
+
+
+def test_doubtful_is_reduced_but_still_startable() -> None:
+    """0.04, not None.
+
+    `choose_starters` reads None as "cannot fill this slot at all". If the only alternative is
+    a bye-week player -- who really is None -- starting the doubtful player is correct, and a
+    None here would leave the slot empty instead.
+    """
+    from projections.midseason.start_sit import startable_points
+
+    got = startable_points(12.0, InjuryStatus.DOUBTFUL)
+    assert got is not None
+    assert 0.0 < got < 1.0
+
+
+def test_out_is_zero_not_none_so_a_forced_slot_can_still_be_filled() -> None:
+    from projections.midseason.start_sit import startable_points
+
+    assert startable_points(12.0, InjuryStatus.OUT) == pytest.approx(0.0)
+    assert startable_points(12.0, InjuryStatus.SUSPENSION) == pytest.approx(0.0)
+
+
+def test_injury_reserve_is_structurally_unstartable() -> None:
+    """The one None. IR is a roster slot ESPN will not let you start out of, not a projection."""
+    from projections.midseason.start_sit import startable_points
+
+    assert startable_points(12.0, InjuryStatus.INJURY_RESERVE) is None
+
+
+def test_no_projection_stays_no_projection() -> None:
+    from projections.midseason.start_sit import startable_points
+
+    assert startable_points(None, InjuryStatus.ACTIVE) is None
+    assert startable_points(None, InjuryStatus.QUESTIONABLE) is None
+
+
+def test_the_blend_is_not_told_the_source_already_priced_injuries() -> None:
+    """The guard that keeps an Out player from reading at half of Sleeper's projection.
+
+    ESPN zeroes Out; Sleeper's behaviour is unmeasured, so the blend carries ~half of
+    Sleeper's number. `source_is_injury_aware=True` would leave that half standing.
+    """
+    from projections.midseason.injuries import weekly_multiplier
+    from projections.midseason.start_sit import startable_points
+
+    blended_out = 6.0  # half of Sleeper's 12, ESPN having zeroed its half
+    assert startable_points(blended_out, InjuryStatus.OUT) == pytest.approx(0.0)
+    # the wrong call, pinned so it cannot be reintroduced as a "simplification"
+    aware = blended_out * weekly_multiplier(InjuryStatus.OUT, source_is_injury_aware=True)
+    assert aware == pytest.approx(6.0)
+
+
+# --- slot labels ------------------------------------------------------------------------
+
+
+def test_labels_follow_choose_starters_fill_order() -> None:
+    from projections.midseason.start_sit import label_starter_slots
+
+    slots = {
+        RosterSlot.QB: 1,
+        RosterSlot.RB: 2,
+        RosterSlot.WR: 2,
+        RosterSlot.TE: 1,
+        RosterSlot.FLEX: 1,
+        RosterSlot.DST: 1,
+    }
+    labels = label_starter_slots(list(range(8)), slots)
+    assert labels == [
+        RosterSlot.QB,
+        RosterSlot.RB,
+        RosterSlot.RB,
+        RosterSlot.WR,
+        RosterSlot.WR,
+        RosterSlot.TE,
+        RosterSlot.DST,
+        RosterSlot.FLEX,
+    ]
+
+
+def test_labels_stop_when_the_lineup_is_short() -> None:
+    """An unfillable slot means fewer chosen players; label what exists, invent nothing."""
+    from projections.midseason.start_sit import label_starter_slots
+
+    labels = label_starter_slots([0, 1], {RosterSlot.QB: 1, RosterSlot.RB: 2})
+    assert labels == [RosterSlot.QB, RosterSlot.RB]
+
+
+def test_super_flex_is_labelled_after_flex() -> None:
+    from projections.midseason.start_sit import label_starter_slots
+
+    labels = label_starter_slots(
+        [0, 1, 2], {RosterSlot.QB: 1, RosterSlot.SUPER_FLEX: 1, RosterSlot.FLEX: 1}
+    )
+    assert labels == [RosterSlot.QB, RosterSlot.FLEX, RosterSlot.SUPER_FLEX]
+
+
+def test_bench_and_ir_are_never_labels() -> None:
+    """They carry counts in `roster_slots` and `choose_starters` never fills them."""
+    from projections.midseason.start_sit import label_starter_slots
+
+    labels = label_starter_slots([0], {RosterSlot.QB: 1, RosterSlot.BENCH: 6, RosterSlot.IR: 2})
+    assert labels == [RosterSlot.QB]
+
+
+def test_labels_agree_with_what_choose_starters_actually_filled() -> None:
+    """`label_starter_slots` re-walks an order `choose_starters` owns. Pin them together.
+
+    Two independent statements of one fill order is a drift risk, and the only honest check is
+    to run the real greedy and assert every label admits the position it landed on.
+    """
+    from dataclasses import dataclass
+
+    from projections.draft.roster_eligibility import (
+        FLEX_ELIGIBLE,
+        SUPER_FLEX_ELIGIBLE,
+        choose_starters,
+    )
+    from projections.midseason.start_sit import label_starter_slots
+    from projections.schemas import Position
+
+    @dataclass(frozen=True)
+    class _P:
+        position: str
+        points: float
+
+    slots = {
+        RosterSlot.QB: 1,
+        RosterSlot.RB: 2,
+        RosterSlot.WR: 2,
+        RosterSlot.TE: 1,
+        RosterSlot.FLEX: 1,
+        RosterSlot.SUPER_FLEX: 1,
+        RosterSlot.BENCH: 5,
+    }
+    players = [
+        _P("QB", 25.0),
+        _P("QB", 18.0),
+        _P("RB", 17.0),
+        _P("RB", 14.0),
+        _P("RB", 9.0),
+        _P("WR", 16.0),
+        _P("WR", 13.0),
+        _P("WR", 11.0),
+        _P("TE", 10.0),
+        _P("TE", 6.0),
+    ]
+    chosen = choose_starters(
+        players, slots, value=lambda p: p.points, position=lambda p: p.position
+    )
+    labels = label_starter_slots(chosen, slots)
+
+    assert len(labels) == len(chosen)
+    admits = {RosterSlot.FLEX: FLEX_ELIGIBLE, RosterSlot.SUPER_FLEX: SUPER_FLEX_ELIGIBLE}
+    for index, slot in zip(chosen, labels, strict=True):
+        pos = Position(players[index].position)
+        eligible = admits.get(slot)
+        if eligible is None:
+            assert slot.value == pos.value, f"{pos} labelled {slot}"
+        else:
+            assert pos in eligible, f"{pos} not eligible for {slot}"

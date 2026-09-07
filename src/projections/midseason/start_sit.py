@@ -13,15 +13,17 @@ back to ESPN alone rather than vanishing.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
 
+from projections.draft.roster_eligibility import FLEX_SLOTS, POSITION_SLOTS
 from projections.ingest.external_projections import WEEKLY_BLEND_FIELDS
 from projections.ingest.identity import normalize_join_id
-from projections.schemas import Ruleset
+from projections.midseason.injuries import weekly_multiplier
+from projections.schemas import InjuryStatus, RosterSlot, Ruleset
 from projections.scoring.score import expected_points
 
 _ESPN_SUFFIX = "_espn"
@@ -160,3 +162,49 @@ def blend_weekly_points(
             sources="both" if has_espn and has_sleeper else ("espn" if has_espn else "sleeper"),
         )
     return out
+
+
+def startable_points(projected: float | None, status: InjuryStatus) -> float | None:
+    """Weekly points after the injury rule, or None when the player cannot be started at all.
+
+    **Not `waivers.adjusted_weekly_points`.** That takes one `source_is_injury_aware` boolean,
+    and a blend of an injury-aware source and an unmeasured one has no honest value for it.
+    ESPN zeroes the players it lists as `Out`; Sleeper's behaviour there has never been
+    measured, so a blended `Out` player carries roughly *half* of Sleeper's projection.
+    Declaring the source injury-aware would leave that half standing — a perfectly plausible
+    number for a player who will not take a snap. We apply the multiplier ourselves instead.
+
+    **`INJURY_RESERVE` is the one None, and the distinction is not pedantry.** `choose_starters`
+    reads `None` as "cannot fill this slot at all" and `0.0` as "a real projection of nothing,
+    which can still fill a slot no one else is eligible for". IR earns `None` because it is a
+    *roster* slot ESPN will not let you start out of — structural, not statistical.
+    `OUT` and `SUSPENSION` earn 0.0: they sort below every healthy player and get slotted only
+    when nobody else is eligible, which is exactly what a manager forced to field a body does.
+    `DOUBTFUL` keeps its measured 0.04 for the same reason — against a bye-week alternative,
+    who really is `None`, starting him is the right call and the tool must be able to say so.
+    """
+    if projected is None or status is InjuryStatus.INJURY_RESERVE:
+        return None
+    return float(projected) * weekly_multiplier(status, source_is_injury_aware=False)
+
+
+def label_starter_slots(
+    chosen: Sequence[int], roster_slots: Mapping[RosterSlot, int]
+) -> list[RosterSlot]:
+    """Which slot each of `choose_starters`' picks is filling, positionally against `chosen`.
+
+    `choose_starters` returns indices in fill order and nothing maps them back to a slot, so
+    this re-walks the same order it filled in: `POSITION_SLOTS` first, each consuming its count,
+    then `FLEX_SLOTS` in ascending breadth. Nothing else may define that order — if the greedy's
+    fill order ever changes, this walk has to change with it, which is why it reads the same two
+    constants rather than restating them.
+
+    `BENCH` and `IR` carry counts in `roster_slots` and are never filled, so they never appear.
+    A lineup shorter than the slot list (an unfillable slot) labels what exists and stops.
+    """
+    order: list[RosterSlot] = []
+    for slot in POSITION_SLOTS:
+        order.extend([slot] * roster_slots.get(slot, 0))
+    for slot, _eligible in FLEX_SLOTS:
+        order.extend([slot] * roster_slots.get(slot, 0))
+    return order[: len(chosen)]
