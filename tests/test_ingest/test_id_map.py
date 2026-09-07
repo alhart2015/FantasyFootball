@@ -11,6 +11,16 @@ from projections.ingest import build_id_map
 from projections.schemas import IdMapSchema
 from projections.store import read_partition
 
+#: build_id_map appends the 32 team defenses, which the upstream player-id source does not
+#: carry (issue #166). These tests are about the upstream-derived population, so they assert
+#: against the non-DST rows and check the defenses separately.
+N_DEFENSES = 32
+
+
+def _upstream(df: pd.DataFrame) -> pd.DataFrame:
+    """The rows that came from `_fetch_raw_id_map`, i.e. everything but the appended D/ST."""
+    return df[df["position"] != "DST"]
+
 
 def test_build_id_map_writes_validated_parquet(
     tmp_path: Path,
@@ -26,7 +36,8 @@ def test_build_id_map_writes_validated_parquet(
 
     df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
     IdMapSchema.validate(df)  # raises if anything is off
-    assert set(df["gsis_id"]) == {
+    assert (df["position"] == "DST").sum() == N_DEFENSES
+    assert set(_upstream(df)["gsis_id"]) == {
         "00-0036322",
         "00-0034857",
         "00-0034796",
@@ -68,7 +79,7 @@ def test_build_id_map_drops_rows_without_gsis_id(
     build_id_map(tmp_path)
     df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
     assert df["gsis_id"].notna().all()
-    assert len(df) == 4
+    assert len(_upstream(df)) == 4
 
 
 def test_build_id_map_filters_unsupported_positions(
@@ -90,7 +101,7 @@ def test_build_id_map_filters_unsupported_positions(
     build_id_map(tmp_path)
     df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
     assert "00-0099999" not in df["gsis_id"].tolist()
-    assert len(df) == 4
+    assert len(_upstream(df)) == 4
 
 
 def test_build_id_map_warns_on_placeholder_gsis_ids(
@@ -134,7 +145,7 @@ def test_build_id_map_warns_on_placeholder_gsis_ids(
     df = read_partition(tmp_path / "raw", "id_map", season=None, week=None)
     assert "MEN516487" not in df["gsis_id"].tolist()
     assert "TYS405541" not in df["gsis_id"].tolist()
-    assert len(df) == 4
+    assert len(_upstream(df)) == 4
     assert any(
         "filtered 2 row(s) with non-GSIS placeholder ids" in r.getMessage() for r in caplog.records
     )

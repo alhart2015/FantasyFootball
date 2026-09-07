@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Final, NewType
+from typing import ClassVar, Final, NewType
 
 import pandas as pd
 import pandera.pandas as pa
@@ -327,6 +328,64 @@ def validate_gsis_id(raw: str) -> GsisId:
     return GsisId(raw)
 
 
+#: Synthetic canonical ids for the 32 team defenses.
+#:
+#: D/ST is team-level -- its natural primary key is `Team`, not `GsisId` -- but every storage
+#: and join path in this repo keys on `GsisId`. Rather than special-case one position through
+#: the whole chain, each defense gets a stable synthetic id, assigned in `Team` declaration
+#: order.
+#:
+#: The `98-` block is deliberate: `00-` is the real-player space and `99-` is the pre-camp
+#: rookie placeholder block minted by `ingest.external_projections`, so a defense id is
+#: recognisable on sight and in a raw parquet dump.
+#:
+#: **These values are frozen.** They are persisted in parquet partitions; renumbering one
+#: silently orphans stored history rather than failing. `tests/test_schemas/test_dst_ids.py`
+#: pins every literal so a reorder or edit fails loudly.
+#:
+#: Unlike the rookie placeholders these are NOT `is_placeholder_gsis` -- they are stable and
+#: canonical, not awaiting reconciliation against a real id that will appear later.
+DST_GSIS_IDS: Final[Mapping[Team, GsisId]] = {
+    Team.ARI: GsisId("98-0000001"),
+    Team.ATL: GsisId("98-0000002"),
+    Team.BAL: GsisId("98-0000003"),
+    Team.BUF: GsisId("98-0000004"),
+    Team.CAR: GsisId("98-0000005"),
+    Team.CHI: GsisId("98-0000006"),
+    Team.CIN: GsisId("98-0000007"),
+    Team.CLE: GsisId("98-0000008"),
+    Team.DAL: GsisId("98-0000009"),
+    Team.DEN: GsisId("98-0000010"),
+    Team.DET: GsisId("98-0000011"),
+    Team.GB: GsisId("98-0000012"),
+    Team.HOU: GsisId("98-0000013"),
+    Team.IND: GsisId("98-0000014"),
+    Team.JAC: GsisId("98-0000015"),
+    Team.KC: GsisId("98-0000016"),
+    Team.LAC: GsisId("98-0000017"),
+    Team.LAR: GsisId("98-0000018"),
+    Team.LV: GsisId("98-0000019"),
+    Team.MIA: GsisId("98-0000020"),
+    Team.MIN: GsisId("98-0000021"),
+    Team.NE: GsisId("98-0000022"),
+    Team.NO: GsisId("98-0000023"),
+    Team.NYG: GsisId("98-0000024"),
+    Team.NYJ: GsisId("98-0000025"),
+    Team.PHI: GsisId("98-0000026"),
+    Team.PIT: GsisId("98-0000027"),
+    Team.SEA: GsisId("98-0000028"),
+    Team.SF: GsisId("98-0000029"),
+    Team.TB: GsisId("98-0000030"),
+    Team.TEN: GsisId("98-0000031"),
+    Team.WAS: GsisId("98-0000032"),
+}
+
+#: Inverse of `DST_GSIS_IDS`. Use to recover the team a defense row belongs to.
+DST_TEAM_BY_GSIS: Final[Mapping[GsisId, Team]] = {
+    gsis_id: team for team, gsis_id in DST_GSIS_IDS.items()
+}
+
+
 class Ruleset(BaseModel):
     """Scoring ruleset. Defaults match ESPN standard PPR.
 
@@ -357,6 +416,38 @@ class Ruleset(BaseModel):
     fumble_lost_pts: float = -2.0
     two_pt_pts: float = 2.0
     return_td_pts: float = 6.0
+
+    # Team defense / special teams.
+    #
+    # ESPN statId -> points, for the D/ST position only. Empty for a league that does not
+    # score a defense. Populated by `ingest.espn_league.parse_ruleset` from
+    # `pointsOverrides["16"]` ONLY -- there is deliberately no fallback to the item's base
+    # `points`. Both rules reconstruct ESPN's appliedTotal exactly, because a D/ST stat vector
+    # carries no skill stat ids; overrides-only keeps the map to the categories that can score
+    # and is what makes `scores_dst` a real question rather than always true.
+    #
+    # Keyed by raw statId rather than by name ON PURPOSE. ESPN's D/ST score is exactly the
+    # dot product of the projected stat vector and these values -- verified against all 1215
+    # D/ST projection rows ESPN publishes for 2026, worst absolute error 1e-8 (see
+    # docs/superpowers/specs/2026-09-06-dst-projections-design.md §1.3). Because the scoring
+    # path never needs a statId -> name table, it cannot carry a mis-transcribed entry that
+    # yields a plausible-looking wrong projection. Human-readable labels live in
+    # `scoring.dst.DST_STAT_LABELS` and are for display only.
+    #
+    # A tuple of pairs rather than a dict because this model is `frozen=True` and its
+    # docstring promises hashability -- a dict field makes `hash(ruleset)` raise. Read it
+    # through `dst_points_by_stat_id`.
+    dst_stat_points: tuple[tuple[str, float], ...] = ()
+
+    @property
+    def dst_points_by_stat_id(self) -> Mapping[str, float]:
+        """`dst_stat_points` as a mapping. See that field for why it is stored as a tuple."""
+        return dict(self.dst_stat_points)
+
+    @property
+    def scores_dst(self) -> bool:
+        """Whether this league scores a team defense at all."""
+        return bool(self.dst_stat_points)
 
     @classmethod
     def espn_ppr(cls) -> Ruleset:
@@ -390,6 +481,19 @@ _SKILL_POSITION_VALUES = [
     Position.WR.value,
     Position.TE.value,
 ]
+
+#: Skill positions plus D/ST — what a *rosterable* table admits (issue #166).
+#:
+#: Deliberately separate from `_SKILL_POSITION_VALUES` rather than replacing it. The feature
+#: builders and the preseason model genuinely are skill-only: no D/ST features exist, and a
+#: schema that admitted defenses there would accept rows nothing can produce.
+#:
+#: `ConsensusProjectionSchema` carries defenses today. `WaiverPoolSchema` is widened AHEAD of
+#: its producer: `draft.backtest.waiver_pool` still iterates skill positions only, so no DST
+#: row reaches it yet. The widening is a no-op until that changes -- kept because the schema is
+#: the contract and a defense is rosterable, but do not read it as "the waiver backtest covers
+#: defenses". It does not.
+_ROSTERABLE_POSITION_VALUES = [*_SKILL_POSITION_VALUES, Position.DST.value]
 _TEAM_VALUES = [t.value for t in Team]
 _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
 _RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD", "DRAFTKINGS"]
@@ -997,6 +1101,47 @@ class ExternalProjectionWeeklySchema(pa.DataFrameModel):
         coerce = True
 
 
+class DstProjectionSchema(pa.DataFrameModel):
+    """External D/ST projections, **long format**: one row per scored stat, per defense.
+
+    Deliberately long rather than wide. A defense's projection is a bag of ~47 numbered ESPN
+    stat categories, and which ids are populated is the source's business, not ours -- a wide
+    schema would need a column per id and would break the day ESPN adds one. Long format also
+    keeps the scoring path honest: `scoring.dst.score_dst` consumes exactly this shape, and no
+    column here has to be interpreted to score it.
+
+    **Stats, not points** -- same rule as every other ingest table. A D/ST projection scores
+    differently in every league (the Critts and goat_steins configs disagree), so storing a
+    fantasy-point total here would bake one league's ruleset into raw data. The conversion
+    happens downstream via `Ruleset.dst_stat_points`.
+
+    `stat_id` is ESPN's numeric category id kept as a string: it is a label, never arithmetic,
+    and the Sleeper adapter maps its named fields onto the same ids so both sources land in one
+    vocabulary. Human-readable names live in `scoring.dst.DST_STAT_LABELS` (display only).
+
+    `gsis_id` is the synthetic team-defense id from `DST_GSIS_IDS`; `team` is carried
+    alongside because every consumer of a defense wants the team, and re-deriving it through
+    `DST_TEAM_BY_GSIS` at each call site is noise.
+    """
+
+    source: Series[str] = pa.Field(isin=_SOURCE_VALUES)
+    source_player_id: Series[str]
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    # ISO YYYY-MM-DD; also encoded in the partition path, mirroring ExternalProjectionSchema.
+    asof: Series[str] = pa.Field(str_matches=r"^\d{4}-\d{2}-\d{2}$")
+    stat_id: Series[str] = pa.Field(str_matches=r"^\d+$")
+    value: Series[float] = pa.Field(nullable=False)
+
+    class Config:
+        strict = "filter"
+        coerce = True
+        # One value per stat per defense per snapshot. A duplicate would silently double that
+        # category's contribution when the dot product sums the rows.
+        unique: ClassVar[list[str]] = ["source", "gsis_id", "season", "asof", "stat_id"]
+
+
 class ConsensusProjectionSchema(pa.DataFrameModel):
     """Published preseason consensus projection: one row per (gsis_id, season, asof).
 
@@ -1016,7 +1161,7 @@ class ConsensusProjectionSchema(pa.DataFrameModel):
     # ISO YYYY-MM-DD; mirrors the raw external_projections snapshot this was derived from
     asof: Series[str] = pa.Field(str_matches=r"^\d{4}-\d{2}-\d{2}$")
     full_name: Series[str]
-    position: Series[str] = pa.Field(isin=_SKILL_POSITION_VALUES)
+    position: Series[str] = pa.Field(isin=_ROSTERABLE_POSITION_VALUES)
     consensus_adp: Series[pd.Float64Dtype] = pa.Field(gt=0, nullable=True)
     consensus_rank: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
     n_adp_sources: Series[pd.Int64Dtype] = pa.Field(ge=0)
@@ -1270,7 +1415,7 @@ class WaiverPoolSchema(pa.DataFrameModel):
     NaN when the position has no above-replacement players in the pool (0/0).
     """
 
-    position: Series[str] = pa.Field(isin=_SKILL_POSITION_VALUES, unique=True)
+    position: Series[str] = pa.Field(isin=_ROSTERABLE_POSITION_VALUES, unique=True)
     top1_vorp: Series[float] = pa.Field(nullable=True)
     top2_vorp: Series[float] = pa.Field(nullable=True)
     top3_vorp: Series[float] = pa.Field(nullable=True)

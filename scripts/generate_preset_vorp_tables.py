@@ -65,19 +65,39 @@ def resolve_espn_auction_dollars(frame: pd.DataFrame, ruleset: Ruleset) -> pd.Se
     return value.round().astype("Int64")
 
 
-def build_preset_table(external: pd.DataFrame, preset: DraftPreset) -> pd.DataFrame:
+def build_preset_table(
+    external: pd.DataFrame,
+    preset: DraftPreset,
+    dst_season: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """One preset's VORP table: re-score the external snapshot under the preset ruleset,
-    compute VORP for the preset size, attach consensus_adp + full_name."""
+    compute VORP for the preset size, attach consensus_adp + full_name.
+
+    `dst_season` carries the defenses (see `draft.dst_pool.load_dst_season_projections`). They
+    join here, BEFORE `generate_vorp_table`, because the generator is what computes a position's
+    replacement level -- appending them to the finished table would leave every defense without
+    one. A config with no DST slot drops them itself, so passing them is always safe.
+    """
     consensus = ConsensusProjectionSchema.validate(
         build_consensus(external, preset.league_config.ruleset)
     )
     season_proj = consensus_to_season_projections(consensus)
+    dst_names: pd.DataFrame | None = None
+    if dst_season is not None and not dst_season.empty:
+        dst_names = dst_season[["gsis_id", "full_name"]].copy()
+        season_proj = pd.concat(
+            [season_proj, dst_season.drop(columns=["full_name"])], ignore_index=True
+        )
     table = generate_vorp_table(season_proj, preset.league_config)
     consensus = consensus.copy()
     consensus["espn_auction_dollars"] = resolve_espn_auction_dollars(
         consensus, preset.league_config.ruleset
     )
     cols = consensus[["gsis_id", "consensus_adp", "full_name", "espn_auction_dollars"]]
+    if dst_names is not None:
+        # Defenses have no consensus row (no ADP, no ESPN auction value) but must still carry a
+        # display name, or every tool renders them as a bare 98- id.
+        cols = pd.concat([cols, dst_names], ignore_index=True)
     table = table.merge(cols, on="gsis_id", how="left")
     table["gsis_id"] = table["gsis_id"].astype(_PYARROW_STR)
     return VorpTableSchema.validate(table)

@@ -50,10 +50,20 @@ def test_rejects_bad_gsis_id() -> None:
 
 
 def test_rejects_unknown_position() -> None:
+    """Uses K, not DST: issue #166 admitted defenses to this table, so DST is now valid here.
+    K is still genuinely unmodelled -- kicker scoring has no Ruleset representation."""
     df = _valid_frame()
-    df.loc[0, "position"] = "DST"
+    df.loc[0, "position"] = "K"
     with pytest.raises((SchemaError, SchemaErrors)):
         ConsensusProjectionSchema.validate(df)
+
+
+def test_accepts_dst() -> None:
+    """The other half of #166: a defense must survive the consensus blend, not be filtered
+    out of it."""
+    df = _valid_frame()
+    df.loc[0, "position"] = "DST"
+    assert ConsensusProjectionSchema.validate(df) is not None
 
 
 def test_gsis_id_must_be_unique() -> None:

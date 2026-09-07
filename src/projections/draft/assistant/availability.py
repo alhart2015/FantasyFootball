@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from projections.schemas import Position
 from projections.season_calendar import last_regular_week, regular_season_games
 
 
@@ -62,6 +63,19 @@ class PlayerAvailability:
         return self.bye.get(gsis_id)
 
 
+#: Positions that are never individually unavailable, so history cannot price them.
+#:
+#: A team defense is not a player: it does not get injured, benched, or cut, and it takes the
+#: field every week its team plays. `weekly_stats` carries no DST rows at all, so without this
+#: a defense falls through `default_by_pos` to `overall_default` -- the all-players mean active
+#: span, measured at p=0.5976 on the real 2026 Critts pool. That is a ~38% discount applied
+#: every week to a position that misses nothing but its bye (which is modelled separately).
+#:
+#: Mapped to `hi` rather than 1.0 so it stays inside the same clamp as every other player;
+#: `hi` is what "as available as anyone gets" already means here.
+ALWAYS_AVAILABLE_POSITIONS: frozenset[str] = frozenset({Position.DST.value})
+
+
 def build_availability(
     weekly_stats: pd.DataFrame,
     schedules: pd.DataFrame,
@@ -104,6 +118,11 @@ def build_availability(
 
     p: dict[str, float] = {}
     for gid, pos in zip(pool["gsis_id"].astype(str), pool["position"].astype(str), strict=True):
+        if pos in ALWAYS_AVAILABLE_POSITIONS:
+            # Not a history lookup: there IS no history for these, and the fallback chain would
+            # silently price them as a player who misses a third of the season.
+            p[gid] = hi
+            continue
         raw = (
             float(p_raw.loc[gid])
             if gid in p_raw.index
