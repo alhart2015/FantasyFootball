@@ -17,6 +17,7 @@ import nflreadpy
 import pandas as pd
 import pandera.pandas as pa
 
+from projections.ingest.identity import drop_placeholder_gsis_rows
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import (
     _PYARROW_STR,
@@ -130,7 +131,7 @@ def _normalize_one_season(stat_type: NgsStatType, raw: pd.DataFrame) -> pd.DataF
     # 23+=pro bowl / all-star). Schema declares week in [1, 22]; filter.
     df = df[(df["week"] >= 1) & (df["week"] <= 22)].copy()
 
-    df = df[df["gsis_id"].notna()].copy()
+    df = drop_placeholder_gsis_rows(df, source=f"refresh_ngs ({stat_type})")
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["team"] = df["team"].map(_normalize_team).astype(_PYARROW_STR)
     df["position"] = df["position"].astype(_PYARROW_STR)

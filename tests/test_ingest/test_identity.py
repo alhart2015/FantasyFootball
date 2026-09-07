@@ -114,6 +114,45 @@ def test_honours_a_custom_id_column() -> None:
     assert list(kept["player_id"]) == ["00-0041562"]
 
 
+def test_dropping_every_row_raises_rather_than_wiping_a_partition() -> None:
+    """The guard that keeps this helper from being worse than the crash it replaced.
+
+    `store.write_partition` unlinks the existing file before writing, so an empty result
+    overwrites a good season's partition with zero rows -- and `scripts/refresh_data.py` reports
+    OK and exits 0. Losing a handful of players is a roster quirk; losing all of them is upstream
+    changing its id format.
+    """
+    frame = pd.DataFrame({"gsis_id": ["WAS569019", "BAI173035", "SMI283040"]})
+    with pytest.raises(ValueError, match="every one of the 3 row"):
+        drop_placeholder_gsis_rows(frame, source="depth_charts (snapshot format)")
+
+
+def test_the_raise_names_the_source_and_what_to_check() -> None:
+    """The message has to be actionable from a summary line alone -- this fires on an unattended
+    refresh, where nobody is holding the payload."""
+    frame = pd.DataFrame({"gsis_id": ["WAS569019"]})
+    with pytest.raises(ValueError) as excinfo:
+        drop_placeholder_gsis_rows(frame, source="refresh_ngs (passing)")
+    message = str(excinfo.value)
+    assert "refresh_ngs (passing)" in message
+    assert "GSIS_ID_PATTERN" in message
+
+
+def test_one_surviving_row_is_enough_to_not_raise() -> None:
+    """The line is at *all* dropped, not at a percentage. Any threshold would be unvalidated and
+    would eventually abort a legitimately thin week; a format change is all-or-nothing anyway."""
+    frame = pd.DataFrame({"gsis_id": ["WAS569019", "BAI173035", "00-0041562"]})
+    kept = drop_placeholder_gsis_rows(frame, source="test")
+    assert list(kept["gsis_id"]) == ["00-0041562"]
+
+
+def test_an_all_null_frame_does_not_raise() -> None:
+    """Nulls are an ordinary older-season gap, not an id-format change, so they must not trip the
+    guard -- `refresh_draft_picks` legitimately sees null-heavy frames for old drafts."""
+    frame = pd.DataFrame({"gsis_id": [None, None]})
+    assert drop_placeholder_gsis_rows(frame, source="test").empty
+
+
 def test_an_empty_frame_survives() -> None:
     """A season with nothing published yet must return empty, not raise."""
     frame = pd.DataFrame({"gsis_id": pd.Series([], dtype="object")})

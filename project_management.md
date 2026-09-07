@@ -41,6 +41,28 @@ deterministic `99-` placeholder gsis ids for unmatched rookies, and the D/ST row
 `98-`. Both *match* `GSIS_ID_PATTERN` by design, so the filter keeps them — dropping them would
 silently empty the defense pool. Pinned by a test.
 
+**Review at `high` caught that the first cut traded a loud crash for a silent wipe.** Filtering
+instead of raising is right for twelve practice-squad players — but if upstream ever ships a
+payload where *every* id is a placeholder, the normalized frame is empty,
+`store.write_partition` unlinks the existing file before writing, and a good season's partition is
+overwritten with zero rows while `scripts/refresh_data.py` prints OK and exits 0. Worse than the
+bug being fixed. The helper now **raises when it drops every row of a non-empty frame**, and a
+test I had written to bless the empty result was inverted — it encoded the mistake, not a
+requirement.
+
+**The line is at *all* dropped, not at a percentage,** deliberately. A format change is
+all-or-nothing by nature, so "all" catches it with no tuning, while any threshold would be
+unvalidated against real payloads and would eventually abort a legitimately thin week. Real drop
+rates for reference: 17 of 9,554 depth-chart rows, 5 of ~3,400 id_map rows, 1 of ~260 draft picks.
+A companion test pins that one bad team-week among good ones still drops rather than aborting —
+that would be #169 in a new costume.
+
+**The review also found the "single source of truth" claim was not yet true.** `weekly_stats` and
+`ngs` still filtered on a bare `notna()`, and both their schemas enforce `GSIS_ID_PATTERN` — the
+fifth and sixth sources the helper's docstring predicts, already in-tree rather than hypothetical.
+Both converted. Live 2025 payloads carry no non-canonical ids there, so this was latent, but it is
+the identical abort waiting on the identical upstream behaviour.
+
 **The real gap was in the smokes, and it is now closed.** `_DRIFT_SEASON` is 2023, so every
 api-drift smoke ran against the **legacy** depth-chart shape and the 2025+ snapshot path — the one
 that actually broke — had no live coverage at all. Added

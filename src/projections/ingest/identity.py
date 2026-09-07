@@ -47,12 +47,33 @@ def drop_placeholder_gsis_rows(
     which is how `depth_charts` came to abort a whole season's ingest over twelve practice-squad
     players (issue #169). A fifth source will get it wrong by omission the same way; one import
     is harder to forget than six lines.
+
+    **Dropping every row raises.** Losing a handful of players is a roster quirk; losing all of
+    them is upstream changing its id format, and the two need opposite handling. Filtering
+    silently in that case would be strictly worse than the crash this replaced: the caller writes
+    the empty frame through `store.write_partition`, which unlinks the existing file first, so a
+    good season's partition is overwritten with zero rows while the refresh reports OK and exits
+    0. A loud abort over twelve players was bad; a quiet wipe of the season is worse.
+
+    The line is drawn at *all* rather than at some percentage on purpose. A format change is
+    all-or-nothing by nature, so "all" catches it with no tuning, while any threshold I could pick
+    here would be unvalidated against real payloads and would eventually abort a legitimately thin
+    week. For reference, real drop rates are tiny: 17 of 9,554 depth-chart rows, 5 of ~3,400
+    id_map rows, 1 of ~260 draft picks.
     """
     kept = df[df[gsis_col].notna()].copy()
     n_null = len(df) - len(kept)
     n_pre = len(kept)
     kept = kept[kept[gsis_col].astype(str).str.match(_GSIS_RE)].copy()
     n_placeholder = n_pre - len(kept)
+    if n_placeholder and kept.empty and n_pre:
+        raise ValueError(
+            f"{source}: every one of the {n_pre} row(s) with a {gsis_col} carried a non-GSIS "
+            f"placeholder id, so nothing is left to write. That is upstream changing its id "
+            f"format, not the usual handful of pre-camp rookies -- writing the empty result "
+            f"would overwrite a good partition and report success. Check the raw payload's "
+            f"{gsis_col} values against GSIS_ID_PATTERN before re-running."
+        )
     if n_placeholder:
         _log.warning(
             "%s: filtered %d row(s) with non-GSIS placeholder ids (typical of pre-camp rookies "

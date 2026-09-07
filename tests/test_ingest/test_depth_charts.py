@@ -561,9 +561,16 @@ def test_snapshot_format_drops_placeholder_ids_instead_of_aborting() -> None:
     assert list(out["gsis_id"]) == ["00-0000001"]
 
 
-def test_snapshot_format_survives_a_team_week_that_is_all_placeholders() -> None:
-    """Every id on the slate being a placeholder must yield an empty, schema-valid partition
-    rather than a raise -- the degenerate case of the same bug."""
+def test_snapshot_format_raises_when_every_id_is_a_placeholder() -> None:
+    """A payload where *nothing* has a canonical id must abort, not write an empty partition.
+
+    An earlier version of this test asserted the opposite -- that an all-placeholder payload
+    yields an empty, schema-valid frame. That was wrong, and worse than the crash it replaced:
+    `write_partition` unlinks the existing file before writing, so the empty frame would overwrite
+    a good season's depth charts with zero rows while `scripts/refresh_data.py` printed OK and
+    exited 0. Losing a handful of players is a roster quirk; losing all of them is upstream
+    changing its id format, and the two need opposite handling.
+    """
     schedules = _make_schedules([(1, "LV", "KC", "2025-09-04T13:00:00Z")])
     snapshots = _make_snapshots(
         [
@@ -577,8 +584,45 @@ def test_snapshot_format_survives_a_team_week_that_is_all_placeholders() -> None
             },
         ]
     )
+    with pytest.raises(ValueError, match="every one of the 1 row"):
+        _derive_weekly_snapshots_from_new_format(snapshots, schedules)
+
+
+def test_snapshot_format_tolerates_one_bad_team_week_among_good_ones() -> None:
+    """The abort is scoped to the whole payload, not a single team-week.
+
+    KC's only listed player carries a placeholder while LV's is canonical. That is the ordinary
+    practice-squad case and must still drop-and-warn -- an abort here would make one team's thin
+    week take down the season, which is exactly the #169 failure in a new costume.
+    """
+    schedules = _make_schedules(
+        [
+            (1, "LV", "DEN", "2025-09-04T13:00:00Z"),
+            (1, "KC", "BAL", "2025-09-04T13:00:00Z"),
+        ]
+    )
+    snapshots = _make_snapshots(
+        [
+            {
+                "dt": "2025-09-02T10:00:00Z",
+                "team": "LV",
+                "gsis_id": "00-0000001",
+                "pos_abb": "RB",
+                "pos_slot": 1,
+                "pos_rank": 1,
+            },
+            {
+                "dt": "2025-09-02T10:00:00Z",
+                "team": "KC",
+                "gsis_id": "WAS569019",
+                "pos_abb": "RB",
+                "pos_slot": 11,
+                "pos_rank": 2,
+            },
+        ]
+    )
     out = _derive_weekly_snapshots_from_new_format(snapshots, schedules)
-    assert out.empty
+    assert list(out["gsis_id"]) == ["00-0000001"]
     DepthChartsSchema.validate(out)
 
 

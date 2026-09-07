@@ -266,6 +266,9 @@ easy to forget and both have bitten:
   ([#169](https://github.com/alhart2015/FantasyFootball/issues/169)). The helper drops them and
   warns, so a thin partition is visible rather than a diagnostic chase. Reserved `98-`/`99-` ids
   (D/ST rows, minted rookie placeholders) match the pattern by design and are correctly kept.
+  It **raises** if *every* row is a placeholder — that is upstream changing its id format, and
+  `write_partition` unlinks before writing, so silently returning empty would overwrite a good
+  season's partition with zero rows and still report success.
 
 ### Skeleton
 

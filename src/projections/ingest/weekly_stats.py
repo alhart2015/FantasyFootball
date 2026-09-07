@@ -15,6 +15,7 @@ from pathlib import Path
 import nflreadpy
 import pandas as pd
 
+from projections.ingest.identity import drop_placeholder_gsis_rows
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import _PYARROW_STR, Position, WeeklyStatsSchema, normalize_team_code
 from projections.store import write_partition
@@ -115,7 +116,7 @@ def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
     # post-2025 release format includes defensive/special-teams rows whose
     # `opponent` is sometimes NaN, and `normalize_team_code` rejects nulls.
     df = df[df["position"].isin([p.value for p in Position])].copy()
-    df = df[df["gsis_id"].notna()].copy()
+    df = drop_placeholder_gsis_rows(df, source="refresh_weekly_stats")
 
     # Drop player-weeks with zero offensive touch (no attempt, no carry, no
     # target). nflreadpy's post-2025 release format includes inactive-roster
