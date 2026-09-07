@@ -252,7 +252,23 @@ python scripts/pickem_backtest.py --seasons 2015-2025
 
 ## Adding a new ingest source
 
-The pattern is established in `src/projections/ingest/weekly_stats.py`. Follow it.
+The pattern is established in `src/projections/ingest/weekly_stats.py`. Follow it. Two things are
+easy to forget and both have bitten:
+
+- **Add the source to `INGEST_SOURCES` in `src/projections/ingest/sources.py`.** That is the one
+  registry both `refresh()` and `scripts/refresh_data.py` walk. A source that ingests fine but is
+  not registered simply never runs.
+- **Filter placeholder ids with `identity.drop_placeholder_gsis_rows(df, source=...)`, never a bare
+  `notna()`.** nflverse carries PFR-style placeholder ids (`WAS569019`, `MEN516487`) for players
+  NFL.com has not yet assigned a real gsis_id to — undrafted rookies, practice-squad adds, the
+  current draft class until ~July. Every schema keyed on `gsis_id` enforces `GSIS_ID_PATTERN`, so
+  a `notna()`-only filter lets them through to pandera and **aborts the whole season's ingest**
+  ([#169](https://github.com/alhart2015/FantasyFootball/issues/169)). The helper drops them and
+  warns, so a thin partition is visible rather than a diagnostic chase. Reserved `98-`/`99-` ids
+  (D/ST rows, minted rookie placeholders) match the pattern by design and are correctly kept.
+  It **raises** if *every* row is a placeholder — that is upstream changing its id format, and
+  `write_partition` unlinks before writing, so silently returning empty would overwrite a good
+  season's partition with zero rows and still report success.
 
 ### Skeleton
 
@@ -352,7 +368,7 @@ Run them after any `nfl_data_py` version change in `pyproject.toml`:
 pytest -m network --run-network -q
 ```
 
-Each smoke fetches a tiny live slice (one season — currently 2023) for one ingest source, asserts every raw column the corresponding `_normalize_one_season` reads is present, and runs the normalize end-to-end so pandera surfaces dtype / value drift too. When a smoke fails, the assertion message names the missing column(s); patch the corresponding ingest module's `_RENAME` / `_KEEP` / schema and re-run. If the drift was non-trivial, add it to the ingest-drift checklist ([issue #130](https://github.com/alhart2015/FantasyFootball/issues/130)).
+Each smoke fetches a tiny live slice (one season — `_DRIFT_SEASON`, currently 2023; depth charts also run a `_SNAPSHOT_DRIFT_SEASON = 2025` smoke, because the 2025+ snapshot-by-timestamp release is a different code path that 2023 cannot reach) for one ingest source, asserts every raw column the corresponding `_normalize_one_season` reads is present, and runs the normalize end-to-end so pandera surfaces dtype / value drift too. When a smoke fails, the assertion message names the missing column(s); patch the corresponding ingest module's `_RENAME` / `_KEEP` / schema and re-run. If the drift was non-trivial, add it to the ingest-drift checklist ([issue #130](https://github.com/alhart2015/FantasyFootball/issues/130)).
 
 When you add a new ingest source, add a matching smoke test alongside the synthetic-fixture test — the pattern is one `test_<source>_api_columns_and_schema` function per source.
 

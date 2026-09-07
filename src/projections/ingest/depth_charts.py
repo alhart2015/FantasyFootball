@@ -24,6 +24,7 @@ from pathlib import Path
 import nflreadpy
 import pandas as pd
 
+from projections.ingest.identity import drop_placeholder_gsis_rows
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import (
     _PYARROW_STR,
@@ -173,7 +174,7 @@ def _derive_weekly_snapshots_from_new_format(
 
     pos_values = {p.value for p in Position}
     out = out[out["pos_abb"].isin(pos_values)].copy()
-    out = out[out["gsis_id"].notna()].copy()
+    out = drop_placeholder_gsis_rows(out, source="depth_charts (snapshot format)")
 
     depth_rank = out["pos_rank"].clip(lower=1, upper=10).astype("int64")
     out["depth_rank"] = depth_rank
@@ -243,7 +244,7 @@ def _normalize_one_season(raw: pd.DataFrame, schedules: pd.DataFrame | None = No
         if int_col in df.columns:
             df[int_col] = df[int_col].astype("int64")
 
-    df = df[df["gsis_id"].notna()].copy()
+    df = drop_placeholder_gsis_rows(df, source="depth_charts (legacy format)")
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)
     df["team"] = df["team"].map(_normalize_team).astype(_PYARROW_STR)
     df["position"] = df["position"].astype(_PYARROW_STR)
