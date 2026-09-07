@@ -141,12 +141,13 @@ def _print_swaps(run: StartSitRun) -> None:
         print()
         for verb, row in (("START", swap.start), ("SIT", swap.sit)):
             if row is None:
-                # One-sided on purpose: an empty starting slot has nobody to bench, and a
-                # player the solver cannot place has nobody to replace him.
+                # One-sided on purpose, and the message belongs to the MISSING side. An
+                # earlier cut had these inverted: a start with no `sit` is a slot that was
+                # standing empty; a sit with no `start` is one nobody else can fill.
                 note = (
-                    "no one to bench — that slot is empty"
+                    "nobody else is eligible for that slot"
                     if verb == "START"
-                    else ("no replacement — nobody else is eligible there")
+                    else "nothing to bench — that slot was standing empty"
                 )
                 print(f"  {verb:<6}{note}")
                 continue

@@ -407,11 +407,19 @@ def build_swaps(
                 ),
             )
         )
-    # Whoever is left leaves with nobody replacing him: a slot the solver could not fill at
-    # all. Reported rather than dropped, because "your D/ST is not in the optimal lineup" is
-    # information, and its negative gain is part of the total by the same arithmetic.
+    # Whoever is left leaves with nobody replacing him. Reported only when he was STARTABLE:
+    # then a slot really is being vacated and that is a decision. An unstartable leftover is
+    # not a change at all -- he is a slot the solver could not fill, he contributes 0.0 to
+    # both totals, and `_notes` already names him and says why. Listing him as a "change worth
+    # making" worth -0.0 points is noise dressed as a recommendation, which is the failure
+    # this whole tool exists to avoid.
+    #
+    # This is NOT the dropping finding 1 was about. That discarded rows carrying real positive
+    # gain; this drops rows carrying none, and the totals are unchanged either way.
     swaps.extend(
-        Swap(start=None, sit=row, gain=-float(row.points or 0.0), p_right=None) for row in leaving
+        Swap(start=None, sit=row, gain=-float(row.points), p_right=None)
+        for row in leaving
+        if row.points is not None
     )
     return swaps
 

@@ -398,8 +398,8 @@ def test_the_gain_is_the_lineup_gain_not_the_pairwise_one() -> None:
     ]
     swaps = build_swaps(rows, _SLOTS, params=None)
 
-    assert [s.start.player_id for s in swaps] == [8]
-    assert [s.sit.player_id for s in swaps] == [7]
+    assert [s.start.player_id for s in swaps if s.start] == [8]
+    assert [s.sit.player_id for s in swaps if s.sit] == [7]
     assert swaps[0].gain == pytest.approx(1.2)
 
 
@@ -440,8 +440,8 @@ def test_a_bye_week_starter_is_swapped_out_for_anyone_startable() -> None:
         _row(8, "WR", 2.0, None),
     ]
     swaps = build_swaps(rows, _SLOTS, params=None)
-    assert [s.start.player_id for s in swaps] == [8]
-    assert [s.sit.player_id for s in swaps] == [4]
+    assert [s.start.player_id for s in swaps if s.start] == [8]
+    assert [s.sit.player_id for s in swaps if s.sit] == [4]
 
 
 # --- P(right) ---------------------------------------------------------------------------
@@ -670,8 +670,8 @@ def test_end_to_end_from_raw_payloads_through_the_real_parsers() -> None:
     assert run.week == 2
     assert len(run.rows) == 5
     # the benched WR is better than the flexed RB, and the FLEX admits him
-    assert [s.start.player_id for s in run.swaps] == [14]
-    assert [s.sit.player_id for s in run.swaps] == [13]
+    assert [s.start.player_id for s in run.swaps if s.start] == [14]
+    assert [s.sit.player_id for s in run.swaps if s.sit] == [13]
     assert run.gain > 0
     assert sum(s.gain for s in run.swaps) == pytest.approx(run.gain)
     # both sources agreed on every player, so nothing to warn about
@@ -782,8 +782,8 @@ def test_an_injured_starter_is_benched_for_a_healthy_backup() -> None:
         params=None,
     )
 
-    assert [s.start.player_id for s in run.swaps] == [12]
-    assert [s.sit.player_id for s in run.swaps] == [11]
+    assert [s.start.player_id for s in run.swaps if s.start] == [12]
+    assert [s.sit.player_id for s in run.swaps if s.sit] == [11]
     hurt = next(row for row in run.rows if row.player_id == 11)
     assert hurt.points == pytest.approx(0.0)  # zero, not None: he could fill a forced slot
 
@@ -839,22 +839,47 @@ def test_an_empty_starting_slot_still_produces_a_recommendation() -> None:
     assert sum(s.gain for s in swaps) == pytest.approx(total)
 
 
-def test_a_starter_with_no_replacement_is_reported_rather_than_dropped() -> None:
-    """The mirror case: the solver cannot fill a slot, so someone leaves with nobody in.
+def test_an_unstartable_leftover_is_not_dressed_up_as_a_recommendation() -> None:
+    """A D/ST neither source prices is not a "change worth making".
 
-    This is what a D/ST neither source prices looks like from the swap side.
+    He leaves the optimal lineup because the solver could not place him, contributes 0.0 to
+    both totals, and `_notes` already names him and says why. An earlier cut emitted him as a
+    one-sided swap, so a settled week printed "SWAPS - 1 change worth making  +0.0 pts" over a
+    row reading -0.0 -- noise dressed as a recommendation.
+
+    Distinct from the finding-1 case above, which dropped rows carrying REAL positive gain.
     """
-    from projections.midseason.start_sit import build_swaps
+    from projections.midseason.start_sit import build_swaps, lineup_total, optimal_starters
 
+    slots = {RosterSlot.RB: 1, RosterSlot.DST: 1}
     rows = [
         _row(1, "RB", 10.0, RosterSlot.RB),
-        _row(2, "DST", None, RosterSlot.DST),  # unpriceable, so the solver drops the slot
+        _row(2, "DST", None, RosterSlot.DST),  # unpriceable
     ]
-    swaps = build_swaps(rows, {RosterSlot.RB: 1, RosterSlot.DST: 1}, params=None)
+    swaps = build_swaps(rows, slots, params=None)
+    assert swaps == []
+
+    # and the totals genuinely are equal, so "already optimal" is the truthful headline
+    chosen, _ = optimal_starters(rows, slots)
+    current = [row for row in rows if row.current_slot is not None]
+    assert lineup_total(rows, chosen) == pytest.approx(lineup_total(current, range(len(current))))
+
+
+def test_a_startable_starter_leaving_with_no_replacement_is_still_reported() -> None:
+    """The other half of the rule: only the POINTLESS leftover is filtered, not every one."""
+    from projections.midseason.start_sit import Swap, build_swaps
+
+    slots = {RosterSlot.RB: 1, RosterSlot.WR: 1}
+    rows = [
+        _row(1, "RB", 10.0, RosterSlot.RB),
+        _row(2, "RB", 6.0, RosterSlot.WR),  # wrongly slotted at WR; no WR on the roster
+    ]
+    swaps = build_swaps(rows, slots, params=None)
 
     assert [s.sit.player_id for s in swaps if s.sit] == [2]
+    assert isinstance(swaps[0], Swap)
     assert swaps[0].start is None
-    assert swaps[0].p_right is None
+    assert swaps[0].gain == pytest.approx(-6.0)
 
 
 def test_a_player_in_the_ir_lineup_slot_is_never_recommended_as_a_starter() -> None:

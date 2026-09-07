@@ -102,8 +102,11 @@ def test_statlines_return_the_nine_canonical_fields_unscored() -> None:
     assert row["receptions"] == pytest.approx(3.94)
     assert row["receiving_tds"] == pytest.approx(0.34)
     assert row["fumbles_lost"] == pytest.approx(0.02)
-    # fields ESPN did not report default to 0.0, matching `_statline_dict`
-    assert row["passing_yards"] == pytest.approx(0.0)
+    # A field ESPN did not report is ABSENT, not 0.0 -- the opposite of `_statline_dict`,
+    # and the basis of the blend's "full weight to the source that has it" rule. Zero-filling
+    # here meant ESPN always "carried" every stat, so a reception count only Sleeper had was
+    # averaged against a fabricated zero and read at half.
+    assert pd.isna(row["passing_yards"])
 
 
 def test_statlines_omit_players_with_no_weekly_entry() -> None:
