@@ -806,3 +806,195 @@ def test_an_unplaceable_lineup_slot_reads_as_bench_rather_than_raising() -> None
 
     roster = _roster((1, "Odd", "RB", "BE"), (2, "Real", "RB", RosterSlot.RB.value))
     assert current_starter_ids(roster) == {2}
+
+
+# --- regressions from the /code-review high pass on PR #174 -----------------------------
+
+
+def test_an_empty_starting_slot_still_produces_a_recommendation() -> None:
+    """The worst bug this branch had: a positive gain reported as "already optimal".
+
+    `entering` and `leaving` are the set difference of two solved lineups and need NOT be the
+    same length. A roster with an unoccupied starting slot -- a waiver claim that landed on the
+    bench, a starter moved to IR leaving his slot open -- makes `entering` longer, and the
+    earlier `if not leaving: break` threw the surplus away silently.
+    """
+    from projections.midseason.start_sit import build_swaps, lineup_total, optimal_starters
+
+    slots = {RosterSlot.RB: 2, RosterSlot.BENCH: 5}
+    rows = [
+        _row(1, "RB", 10.0, RosterSlot.RB),
+        _row(2, "RB", 12.0, None),  # bench, and one RB slot is standing empty
+        _row(3, "RB", 8.0, None),
+    ]
+    swaps = build_swaps(rows, slots, params=None)
+    chosen, _ = optimal_starters(rows, slots)
+    current = [row for row in rows if row.current_slot is not None]
+    total = lineup_total(rows, chosen) - lineup_total(current, range(len(current)))
+
+    assert total == pytest.approx(12.0)
+    assert swaps, "a 12-point gain must not be reported as an optimal lineup"
+    assert [s.start.player_id for s in swaps if s.start] == [2]
+    assert swaps[0].sit is None  # nobody comes out; the slot was empty
+    assert sum(s.gain for s in swaps) == pytest.approx(total)
+
+
+def test_a_starter_with_no_replacement_is_reported_rather_than_dropped() -> None:
+    """The mirror case: the solver cannot fill a slot, so someone leaves with nobody in.
+
+    This is what a D/ST neither source prices looks like from the swap side.
+    """
+    from projections.midseason.start_sit import build_swaps
+
+    rows = [
+        _row(1, "RB", 10.0, RosterSlot.RB),
+        _row(2, "DST", None, RosterSlot.DST),  # unpriceable, so the solver drops the slot
+    ]
+    swaps = build_swaps(rows, {RosterSlot.RB: 1, RosterSlot.DST: 1}, params=None)
+
+    assert [s.sit.player_id for s in swaps if s.sit] == [2]
+    assert swaps[0].start is None
+    assert swaps[0].p_right is None
+
+
+def test_a_player_in_the_ir_lineup_slot_is_never_recommended_as_a_starter() -> None:
+    """Two different fields, and the code was reading only one of them.
+
+    `startable_points` blocks the injury STATUS `INJURY_RESERVE`. ESPN routinely reports an
+    IR-SLOTTED player as OUT (PUP/NFI) or, once designated to return, as QUESTIONABLE -- and a
+    QUESTIONABLE status alone priced him at 0.86 and put him in a lineup ESPN will not accept.
+    """
+    from projections.draft.backtest.espn_weekly import espn_weekly_statlines
+    from projections.ingest.sleeper_weekly_projections import parse_sleeper_weekly
+    from projections.midseason.start_sit import recommend_start_sit
+
+    espn = espn_weekly_statlines(_espn_payload((1, 2, {"24": 150.0}), (2, 2, {"24": 50.0})), week=2)
+    roster = pd.DataFrame(
+        [
+            {
+                "player_id": 1,
+                "player": "OnIR",
+                "pos": "RB",
+                "lineup_slot": RosterSlot.IR.value,
+                "injury_status": "QUESTIONABLE",
+            },
+            {
+                "player_id": 2,
+                "player": "Fit",
+                "pos": "RB",
+                "lineup_slot": RosterSlot.RB.value,
+                "injury_status": "",
+            },
+        ]
+    )
+    run = recommend_start_sit(
+        roster,
+        espn,
+        parse_sleeper_weekly([], season=2026, week=2),
+        pd.DataFrame({"gsis_id": [], "espn_id": [], "sleeper_id": []}),
+        {RosterSlot.RB: 1},
+        _HALF,
+        team_name="t",
+        week=2,
+        params=None,
+    )
+
+    on_ir = next(row for row in run.rows if row.player_id == 1)
+    assert on_ir.points is None
+    assert 1 not in {run.rows[i].player_id for i in run.starters}
+
+
+def test_a_field_espn_omits_gives_sleeper_full_weight() -> None:
+    """The mirror of `test_a_field_only_one_source_reports_is_not_treated_as_zero`.
+
+    Only the Sleeper-omits direction was pinned, and the ESPN-omits direction was broken:
+    `_statline_dict` zero-fills all nine fields, so ESPN always "carried" every stat and a
+    reception count only Sleeper had was blended against a fabricated 0 and read at half.
+    """
+    from projections.draft.backtest.espn_weekly import espn_weekly_statlines
+    from projections.ingest.sleeper_weekly_projections import parse_sleeper_weekly
+    from projections.midseason.start_sit import blend_weekly_points
+
+    espn = espn_weekly_statlines(_espn_payload((9, 3, {"42": 80.0})), week=2)  # no receptions
+    sleeper = parse_sleeper_weekly(
+        [
+            {
+                "player_id": "s9",
+                "player": {"first_name": "A", "last_name": "B", "position": "WR"},
+                "stats": {"rec_yd": 80.0, "rec": 6.0},
+            }
+        ],
+        season=2026,
+        week=2,
+    )
+    got = blend_weekly_points(espn, sleeper, _id_map({"s9": "9"}), weight_espn=0.5, ruleset=_HALF)[
+        "9"
+    ]
+
+    # yards agree at 80 (8.0 pts); the 6 receptions are Sleeper's alone, at FULL weight (3.0)
+    assert got.points == pytest.approx(11.0)
+
+
+def test_a_partial_overlap_line_does_not_fabricate_the_missing_fields() -> None:
+    from projections.draft.backtest.espn_weekly import espn_weekly_statlines
+
+    df = espn_weekly_statlines(_espn_payload((9, 3, {"42": 80.0})), week=2)
+    assert df.iloc[0]["receiving_yards"] == pytest.approx(80.0)
+    assert pd.isna(df.iloc[0]["receptions"])  # absent, not a confident zero
+
+
+def test_two_sleeper_ids_sharing_one_espn_id_do_not_overwrite_each_other() -> None:
+    """The live id_map holds ESPN ids mapping to two different players.
+
+    Undeduped, both rows survive the outer merge and the last one wins -- an arbitrary Sleeper
+    stat line silently attached to the wrong player.
+    """
+    from projections.midseason.start_sit import blend_weekly_points
+
+    espn = _espn(**{"1": {"receiving_yards": 100.0}})
+    sleeper = _sleeper(**{"s1": {"receiving_yards": 50.0}, "s2": {"receiving_yards": 10.0}})
+    id_map = pd.DataFrame(
+        {
+            "gsis_id": ["00-0000000", "00-0000001"],
+            "espn_id": ["1", "1"],  # the duplication
+            "sleeper_id": ["s1", "s2"],
+        }
+    )
+    out = blend_weekly_points(espn, sleeper, id_map, weight_espn=0.5, ruleset=_HALF)
+    assert len(out) == 1
+    assert out["1"].sleeper == pytest.approx(5.0)  # the FIRST mapping, deterministically
+
+
+def test_a_float_stringified_espn_id_still_joins() -> None:
+    """`normalize_join_id`'s docstring names espn_id as a column the id_map has stored as
+    '4374302.0'. A bare astype(str) would yield an empty merge and report the whole roster as
+    ESPN-only -- a join bug wearing a coverage bug's clothes."""
+    from projections.midseason.start_sit import blend_weekly_points
+
+    id_map = pd.DataFrame({"gsis_id": ["00-0000000"], "espn_id": ["1.0"], "sleeper_id": ["s1"]})
+    got = blend_weekly_points(
+        _espn(**{"1": {"receiving_yards": 100.0}}),
+        _sleeper(**{"s1": {"receiving_yards": 50.0}}),
+        id_map,
+        weight_espn=0.5,
+        ruleset=_HALF,
+    )["1"]
+    assert got.sources == "both"
+
+
+def test_p_right_reads_less_confident_for_a_rookie() -> None:
+    """`VarianceParams.log_sd` has a genuinely wider rookie tier. Hard-coding veteran made the
+    number read MORE confident than the fit supports."""
+    import numpy as np
+
+    from projections.draft.assistant.performance_variance import VarianceParams
+    from projections.midseason.start_sit import p_right
+
+    params = VarianceParams.load()
+    veteran = _row(1, "RB", 15.0, None)
+    rookie = LineupRow(1, "p1", "RB", InjuryStatus.ACTIVE, None, 15.0, None, is_rookie=True)
+    against = _row(2, "RB", 10.0, None)
+
+    as_vet = p_right(veteran, against, params, n_sims=40_000, rng=np.random.default_rng(1))
+    as_rook = p_right(rookie, against, params, n_sims=40_000, rng=np.random.default_rng(1))
+    assert as_rook < as_vet

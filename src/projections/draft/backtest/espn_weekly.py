@@ -96,6 +96,21 @@ def parse_espn_weekly(
     return pd.DataFrame(rows)
 
 
+def _sparse_statline(raw: dict[str, float]) -> dict[str, float | None]:
+    """Like `_statline_dict`, but an id ESPN did not report is ABSENT, not 0.0.
+
+    The difference is the whole basis of the two-source blend. `_statline_dict` defaults all
+    nine fields to 0.0, which is right for `parse_espn_weekly` — it scores immediately, and a
+    receiver's passing yards really are zero. It is wrong here: `blend_weekly_points` gives a
+    field only one source carries to that source at FULL weight, and a zero-filled ESPN line
+    means ESPN always "carries" every field. A player Sleeper credits with 6 receptions and
+    ESPN omits entirely then blends against a fabricated 0 and reads at half.
+
+    Symmetric with `parse_sleeper_weekly`, which already emits `pd.NA` for what it lacks.
+    """
+    return {field: raw.get(sid) for sid, field in ESPN_STAT_IDS.items()}
+
+
 def espn_weekly_statlines(
     payload: dict[str, Any], *, week: int, skill_positions_only: bool = False
 ) -> pd.DataFrame:
@@ -140,7 +155,7 @@ def espn_weekly_statlines(
             {
                 "espn_id": str(p.get("id")),
                 "position": position or "",
-                **_statline_dict(raw),
+                **_sparse_statline(raw),
             }
         )
     return pd.DataFrame(rows, columns=["espn_id", "position", *fields])

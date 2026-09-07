@@ -32,7 +32,7 @@ from projections.draft.roster_eligibility import (
 from projections.ingest.external_projections import WEEKLY_BLEND_FIELDS
 from projections.ingest.identity import normalize_join_id
 from projections.midseason.injuries import weekly_multiplier
-from projections.midseason.waivers import player_id
+from projections.midseason.waivers import is_on_ir, player_id
 from projections.schemas import InjuryStatus, RosterSlot, Ruleset, parse_injury_status
 from projections.scoring.score import expected_points
 
@@ -87,14 +87,19 @@ def _sleeper_keyed_by_espn_id(sleeper: pd.DataFrame, id_map: pd.DataFrame) -> pd
     row means we lose one source for a player ESPN still prices, which the `sources` column
     reports. Losing the ESPN row would lose the player.
     """
-    crosswalk = (
-        id_map[["espn_id", "sleeper_id"]]
-        .dropna(subset=["espn_id", "sleeper_id"])
-        .drop_duplicates("sleeper_id")
-        .copy()
-    )
+    crosswalk = id_map[["espn_id", "sleeper_id"]].dropna(subset=["espn_id", "sleeper_id"]).copy()
+    # BOTH keys through `normalize_join_id`: its docstring names `espn_id` as a column the
+    # id_map has stored float-stringified ("4374302.0"). Today's file is clean, and a bare
+    # `.astype(str)` would survive that regression by yielding an empty inner merge -- the
+    # whole roster silently reading "espn only", which is the exact degradation the notes
+    # exist to warn about, reported as a coverage problem rather than a join bug.
     crosswalk["sleeper_id"] = normalize_join_id(crosswalk["sleeper_id"])
-    crosswalk["espn_id"] = crosswalk["espn_id"].astype(str)
+    crosswalk["espn_id"] = normalize_join_id(crosswalk["espn_id"])
+    # Deduped on both sides. `espn_gsis_crosswalk` records that the live id_map holds ESPN ids
+    # mapping to two different players; two sleeper_ids sharing one espn_id would otherwise fan
+    # out through the outer merge and the last row would win, attaching an arbitrary Sleeper
+    # line to the wrong player.
+    crosswalk = crosswalk.drop_duplicates("sleeper_id").drop_duplicates("espn_id")
 
     keyed = sleeper.copy()
     keyed["sleeper_id"] = normalize_join_id(keyed["sleeper_id"])
@@ -214,14 +219,21 @@ class LineupRow:
     points: float | None
     #: The evidence behind `points`, for display. None when neither source priced him.
     blend: BlendedPoints | None
+    #: Feeds `VarianceParams.log_sd`, which has a genuinely wider rookie tier. Defaulting
+    #: every player to veteran made `p_right` read MORE confident than the fit supports on
+    #: exactly the comparisons where it should read less.
+    is_rookie: bool = False
 
 
 @dataclass(frozen=True)
 class Swap:
     """One change worth making."""
 
-    start: LineupRow
-    sit: LineupRow
+    #: None when a starting slot was simply EMPTY, so nobody comes out.
+    start: LineupRow | None
+    #: None when a current starter leaves with no replacement -- a slot the solver cannot
+    #: fill, which is what a D/ST neither source prices looks like.
+    sit: LineupRow | None
     #: Points the LINEUP gains, which is not `start.points - sit.points` when the cascade
     #: moves a third player. See `build_swaps`.
     gain: float
@@ -323,7 +335,7 @@ def p_right(
         params,
         np.array([start.position, sit.position], dtype=object),
         np.array([start.points * SEASON_GAMES, sit.points * SEASON_GAMES], dtype=np.float64),
-        np.array([False, False]),
+        np.array([start.is_rookie, sit.is_rookie]),
         n_sims=n_sims,
         n_weeks=1,
         rng=rng,
@@ -373,22 +385,34 @@ def build_swaps(
     generator = rng if rng is not None else np.random.default_rng(0)
     swaps: list[Swap] = []
     for start in entering:
-        if not leaving:
-            break
-        match = next((row for row in leaving if row.position == start.position), leaving[0])
-        leaving.remove(match)
+        # **The two lists need not be the same length, and an earlier cut assumed they were.**
+        # `break`ing when `leaving` ran dry silently discarded every remaining recommendation,
+        # so a roster with an EMPTY starting slot -- a waiver claim that landed on the bench,
+        # a starter moved to IR leaving his slot open -- printed "your lineup is already
+        # optimal" directly under an optimal total 12 points above the current one. The
+        # unmatched cases are rows in their own right, not rows to drop.
+        match = None
+        if leaving:
+            match = next((row for row in leaving if row.position == start.position), leaving[0])
+            leaving.remove(match)
         swaps.append(
             Swap(
                 start=start,
                 sit=match,
-                gain=float(start.points or 0.0) - float(match.points or 0.0),
+                gain=float(start.points or 0.0) - float(match.points or 0.0 if match else 0.0),
                 p_right=(
                     None
-                    if params is None
+                    if params is None or match is None
                     else p_right(start, match, params, n_sims=n_sims, rng=generator)
                 ),
             )
         )
+    # Whoever is left leaves with nobody replacing him: a slot the solver could not fill at
+    # all. Reported rather than dropped, because "your D/ST is not in the optimal lineup" is
+    # information, and its negative gain is part of the total by the same arithmetic.
+    swaps.extend(
+        Swap(start=None, sit=row, gain=-float(row.points or 0.0), p_right=None) for row in leaving
+    )
     return swaps
 
 
@@ -404,6 +428,9 @@ class StartSitRun:
     starters: list[int]
     #: The slot each entry of `starters` fills. Positional, same length.
     slots: list[RosterSlot]
+    #: The league's slot counts, carried so a presenter can number repeated slots (RB1/RB2)
+    #: from what the league HAS rather than from what the greedy managed to fill.
+    roster_slots: dict[RosterSlot, int]
     current_total: float
     optimal_total: float
     swaps: list[Swap]
@@ -461,6 +488,7 @@ def recommend_start_sit(
     week: int,
     weight_espn: float = 0.5,
     params: VarianceParams | None = None,
+    rookies: frozenset[str] | None = None,
     n_sims: int = 20_000,
     rng: np.random.Generator | None = None,
 ) -> StartSitRun:
@@ -485,8 +513,18 @@ def recommend_start_sit(
                 position=str(player.get("pos") or ""),
                 status=status,
                 current_slot=starting_slot(player.get("lineup_slot")),
-                points=startable_points(blend.points if blend else None, status),
+                # `is_on_ir` reads the LINEUP SLOT; `startable_points` reads the injury
+                # STATUS. Both are needed and they are different fields: ESPN routinely
+                # reports an IR-slotted player as OUT (PUP/NFI) or, once designated to
+                # return, as QUESTIONABLE -- and a QUESTIONABLE status alone would have him
+                # priced at 0.86 and recommended into a starting slot ESPN will not accept.
+                points=(
+                    None
+                    if is_on_ir(player)
+                    else startable_points(blend.points if blend else None, status)
+                ),
                 blend=blend,
+                is_rookie=bool(rookies and str(pid) in rookies),
             )
         )
 
@@ -498,6 +536,7 @@ def recommend_start_sit(
         rows=rows,
         starters=starters,
         slots=slots,
+        roster_slots=dict(roster_slots),
         current_total=lineup_total(current, range(len(current))),
         optimal_total=lineup_total(rows, starters),
         swaps=build_swaps(rows, roster_slots, params=params, n_sims=n_sims, rng=rng),

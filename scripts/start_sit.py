@@ -34,6 +34,7 @@ from projections.draft.assistant.league_profile import (
     resolve_league_target,
 )
 from projections.draft.assistant.performance_variance import VarianceParams
+from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.backtest.espn_weekly import espn_weekly_statlines
 from projections.draft.league_config import LeagueConfig
 from projections.ingest.espn_league import (
@@ -45,6 +46,7 @@ from projections.ingest.espn_league import (
     parse_rosters,
     parse_teams,
 )
+from projections.ingest.identity import normalize_join_id
 from projections.ingest.sleeper_weekly_projections import (
     SleeperWeeklyError,
     fetch_sleeper_weekly,
@@ -99,9 +101,11 @@ def _print_lineup(run: StartSitRun) -> None:
     # Repeated slots are numbered here and nowhere else: RB1/RB2 is a display convention, and
     # `label_starter_slots` deliberately returns the taxonomy rather than a rendering of it.
     seen: dict[str, int] = {}
-    counts: dict[str, int] = {}
-    for slot in run.slots:
-        counts[slot.value] = counts.get(slot.value, 0) + 1
+    # Counted from the LEAGUE's slots, not from the ones the greedy filled. Deriving it from
+    # the filled list makes the label depend on the fill outcome: a league with RB:2 and only
+    # one startable back printed a bare `RB`, the same "a slot went unfilled" condition that
+    # produced the D/ST mislabel.
+    counts = {slot.value: count for slot, count in run.roster_slots.items()}
     for index, slot in zip(run.starters, run.slots, strict=True):
         row = run.rows[index]
         seen[slot.value] = seen.get(slot.value, 0) + 1
@@ -136,6 +140,16 @@ def _print_swaps(run: StartSitRun) -> None:
     for swap in run.swaps:
         print()
         for verb, row in (("START", swap.start), ("SIT", swap.sit)):
+            if row is None:
+                # One-sided on purpose: an empty starting slot has nobody to bench, and a
+                # player the solver cannot place has nobody to replace him.
+                note = (
+                    "no one to bench — that slot is empty"
+                    if verb == "START"
+                    else ("no replacement — nobody else is eligible there")
+                )
+                print(f"  {verb:<6}{note}")
+                continue
             where = row.current_slot.value if row.current_slot else "bench"
             tag = "" if row.status.is_healthy else f"   {row.status.value}"
             print(
@@ -234,6 +248,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No roster for team {my_team_id}. Teams: {sorted(teams['team_id'])}")
         return 1
 
+    # Rookie flags reach `p_right` through here: `VarianceParams.log_sd` has a genuinely
+    # wider rookie tier, and treating every player as a veteran overstated confidence on
+    # exactly the comparisons that deserve less of it.
+    rookie_pool = attach_is_rookie(pool, season=target.season, data_root=args.data_root)
+    rookie_gsis = set(rookie_pool.loc[rookie_pool["is_rookie"], "gsis_id"].astype(str))
+    crosswalk = id_map.dropna(subset=["espn_id", "gsis_id"])
+    rookies = frozenset(
+        normalize_join_id(crosswalk["espn_id"])[
+            crosswalk["gsis_id"].astype(str).isin(rookie_gsis)
+        ].tolist()
+    )
+
     run = recommend_start_sit(
         roster,
         espn,
@@ -245,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         week=week,
         weight_espn=args.weight_espn,
         params=None if args.fast else VarianceParams.load(),
+        rookies=rookies,
         n_sims=args.n_sims,
         rng=np.random.default_rng(args.seed),
     )
