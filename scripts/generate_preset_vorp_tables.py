@@ -110,8 +110,9 @@ def main(argv: list[str] | None = None) -> int:
             f"No id_map at {id_map_path}. It is required: preset tables are reconciled to real "
             f"gsis ids so they join weekly_stats (injury p) and byes, and skipping that "
             f"degrades the availability model silently. Build it with "
-            f"`projections.ingest.id_map.build_id_map(data_root)` (or the whole raw layer with "
-            f"`projections.ingest.refresh.refresh(seasons, data_root=...)`, which runs it first)."
+            f"`projections.ingest.id_map.build_id_map(data_root)`, or run "
+            f"`python scripts/refresh_data.py`, which builds the id_map, pulls the projection "
+            f"snapshot this script reads, and then regenerates these tables."
         )
     id_map = pd.read_parquet(id_map_path)
     key_map = real_gsis_by_key(id_map)  # build once; reused across all 9 presets

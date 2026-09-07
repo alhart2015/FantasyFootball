@@ -57,9 +57,20 @@ One command, no arguments, from the repo root:
 python scripts/refresh_data.py
 ```
 
-It refreshes every raw source and then rebuilds the derived VORP tables (the 9 presets plus one per
-configured league), and prints a single summary block classifying each source as **OK**, **SKIPPED**,
-or **FAILED**.
+It refreshes every ingest source and then rebuilds the derived VORP tables (the 9 presets plus one
+per configured league), and prints a single summary block classifying each source as **OK**,
+**SKIPPED**, or **FAILED**.
+
+**There is one list of what we ingest: `INGEST_SOURCES` in `src/projections/ingest/sources.py`.**
+Add a source by adding one entry there — the script iterates the registry, so nothing in
+`scripts/refresh_data.py` changes. Two facts on the entry decide when a source runs:
+`needs_games_played` (per-game sources have no rows until kickoff) and `heavy` (`pbp` only, opt-in).
+Registry order encodes the dependencies — `id_map` before `snap_counts`, `schedules` before
+`depth_charts`.
+
+For programmatic use, `projections.ingest.refresh(seasons, data_root=...)` drives the same registry
+**fail-fast**: it aborts on the first failure and prints nothing. Use it when you want an exception;
+use the script when you want the run to finish and tell you what happened.
 
 **SKIPPED is not a problem.** The per-game sources (`weekly_stats`, `depth_charts`, `snap_counts`,
 `ngs_*`) have no rows upstream until the season kicks off — the Thursday after Labor Day — and

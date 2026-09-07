@@ -2,26 +2,28 @@
 
     python scripts/refresh_data.py
 
-This exists because refreshing by hand means remembering eight ingest entrypoints, the order they
-depend on each other in, and -- the part that actually burns time -- which of their failures mean
-"something is broken" versus "the NFL has not played that game yet". Those two look identical from
-a traceback: a 404 on an nflverse release, a `ValueError: Season must be between 2012 and 2025`,
-and a genuine schema regression all abort a naive loop at its first source and leave the remaining
-seven unrun.
+**What gets refreshed is not decided here.** `projections.ingest.sources.INGEST_SOURCES` is the one
+registry of ingest sources, in dependency order, and this script iterates it. Adding a source means
+adding a registry entry; nothing in this file changes. The library's `refresh()` drives the same
+registry fail-fast for programmatic callers.
 
-So this script does three things a bare loop does not:
+This script exists because a by-hand refresh means remembering which failures mean "something is
+broken" versus "the NFL has not played that game yet". Those look identical from a traceback: a 404
+on an nflverse release, a `ValueError: Season must be between 2012 and 2025`, and a genuine schema
+regression all abort a naive loop at its first source and leave the rest unrun.
 
-**It pre-checks the season.** The per-game sources only have rows once the season is underway
-(kickoff is the Thursday after Labor Day, matching `nflreadpy.get_current_season`). Before that
-date they are reported SKIPPED *with the kickoff date*, rather than attempted and caught. The
-market-facing sources -- schedules, draft picks, the id map, projections -- have no such gate and
-always run, which is the whole point in the preseason, when the projections are the only thing
-that moves.
+So it adds three things to the registry walk:
 
-**It isolates every source.** One failure never costs the others their run. Sources run in
-dependency order (`id_map` before `snap_counts`, `schedules` before `depth_charts`), so on a clean
-run a prerequisite is always in place. If a prerequisite itself fails, its dependent fails too and
-both appear in the summary, adjacent and in order -- which is the readable outcome, and better than
+**It pre-checks the season.** Per-game sources only have rows once the season is underway (kickoff
+is the Thursday after Labor Day, matching `nflreadpy.get_current_season`). Before that date they are
+reported SKIPPED *with the kickoff date*, rather than attempted and caught. The market-facing
+sources -- schedules, draft picks, the id map, projections -- have no such gate and always run,
+which is the whole point in the preseason, when the projections are the only thing that moves.
+
+**It isolates every source.** One failure never costs the others their run. Registry order puts
+`id_map` before `snap_counts` and `schedules` before `depth_charts`, so on a clean run a
+prerequisite is always in place. If a prerequisite itself fails, its dependent fails too and both
+appear in the summary, adjacent and in order -- which is the readable outcome, and better than
 laundering the dependent into a quiet "skipped".
 
 **It separates "not published" from "broken".** SKIPPED is an expected, quiet outcome and exits 0.
@@ -38,7 +40,7 @@ Flags, none of them required:
     --season 2026            one season (default: the configured league's, else the calendar's)
     --seasons 2021-2025      an inclusive range, or a comma list
     --with-pbp               also pull play-by-play (hundreds of MB; off by default)
-    --skip-derived           refresh raw sources only, leave the VORP tables alone
+    --skip-derived           ingest only, leave the VORP tables alone
     --verbose                print full tracebacks for FAILED sources
 """
 
@@ -60,16 +62,16 @@ from projections.draft.assistant.league_profile import (
     LeagueProfile,
     discover_profiles,
 )
-from projections.ingest.depth_charts import refresh_depth_charts
-from projections.ingest.draft_picks import refresh_draft_picks
-from projections.ingest.external_projections import refresh_external_projections
-from projections.ingest.id_map import build_id_map
-from projections.ingest.ngs import STAT_TYPES as NGS_STAT_TYPES
-from projections.ingest.ngs import NgsStatType, refresh_ngs
-from projections.ingest.pbp import refresh_pbp
-from projections.ingest.schedules import refresh_schedules
-from projections.ingest.snap_counts import refresh_snap_counts
-from projections.ingest.weekly_stats import refresh_weekly_stats
+from projections.ingest.sources import (
+    IngestSource,
+    games_played,
+    season_start_date,
+    selected_sources,
+)
+
+#: The registry entry the derived VORP tables are built from. Named once so the gate in `main`
+#: cannot drift from the source list.
+PROJECTIONS_SOURCE = "external_projections"
 
 # Substrings marking an upstream "this does not exist yet" rather than a defect on our side.
 # `nflreadpy` raises a bare `ValueError` for a season past its own rollover and wraps the GitHub
@@ -109,66 +111,20 @@ def classify_error(exc: BaseException) -> Status:
     return Status.SKIPPED if any(m in text for m in _NOT_PUBLISHED_MARKERS) else Status.FAILED
 
 
-def season_start_date(season: int) -> date:
-    """Kickoff Thursday -- the Thursday after Labor Day -- mirroring `nflreadpy`'s own rollover.
-
-    Used to tell the reader *when* skipped game data becomes available, so the summary line is
-    actionable ("comes back 2026-09-10") instead of just "no data".
-    """
-    labor_day = next(
-        date(season, 9, day) for day in range(1, 8) if date(season, 9, day).weekday() == 0
-    )
-    return date(season, 9, labor_day.day + 3)
-
-
-def games_played(season: int, *, today: date | None = None) -> bool:
-    """Whether `season` has begun, so its per-game sources could have rows upstream.
-
-    Deliberately not `nflreadpy.get_current_season()`: that takes no date argument, so it cannot
-    be pinned to a fixed point in the calendar by a test.
-    """
-    return (today or date.today()) >= season_start_date(season)
-
-
-def _count(paths: list[Path]) -> str:
-    return f"{len(paths)} partition(s)"
-
-
-def _ngs_step(data_root: Path, stat_type: NgsStatType, seasons: list[int]) -> Callable[[], str]:
-    """Bind `stat_type` per iteration -- a closure over the loop variable would run every NGS
-    step against whichever stat type the loop happened to end on."""
-
-    def _run() -> str:
-        return _count(refresh_ngs(data_root, stat_type=stat_type, seasons=seasons))
-
-    return _run
-
-
-def game_stat_steps(data_root: Path, seasons: list[int]) -> list[tuple[str, Callable[[], str]]]:
-    """The sources whose rows only exist once games have been played, in dependency order.
-
-    `id_map` and `schedules` are *not* here: they are published year-round and run earlier, which
-    is exactly what `snap_counts` (needs the gsis <-> pfr translation) and `depth_charts` (needs
-    schedules to derive season/week from the 2025+ snapshot format) depend on.
-    """
-    steps: list[tuple[str, Callable[[], str]]] = [
-        ("weekly_stats", lambda: _count(refresh_weekly_stats(data_root, seasons=seasons))),
-        ("depth_charts", lambda: _count(refresh_depth_charts(data_root, seasons=seasons))),
-        ("snap_counts", lambda: _count(refresh_snap_counts(data_root, seasons=seasons))),
-    ]
-    steps.extend(
-        (f"ngs_{stat_type}", _ngs_step(data_root, stat_type, seasons))
-        for stat_type in NGS_STAT_TYPES
-    )
-    return steps
-
-
 def run_step(name: str, thunk: Callable[[], str], *, verbose: bool = False) -> StepResult:
-    """Run one source, turning any exception into a classified result rather than aborting."""
+    """Run one source, turning any failure into a classified result rather than aborting.
+
+    `SystemExit` is caught alongside `Exception` and is not a hypothetical: the derived steps call
+    sibling scripts' `main()`, and `generate_preset_vorp_tables` raises `SystemExit` when the
+    id_map is missing. `SystemExit` derives from `BaseException`, so a bare `except Exception`
+    lets it through -- which would terminate the process after the full raw pull and discard every
+    result collected so far, printing no summary at all. `KeyboardInterrupt` is deliberately still
+    allowed to propagate: Ctrl-C must stop the run, not be recorded as one source failing.
+    """
     print(f"  -> {name} ...", flush=True)
     try:
         detail = thunk()
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         status = classify_error(exc)
         if verbose and status is Status.FAILED:
             traceback.print_exc()
@@ -177,7 +133,19 @@ def run_step(name: str, thunk: Callable[[], str], *, verbose: bool = False) -> S
     return StepResult(name, Status.OK, detail)
 
 
-def refresh_raw(
+def _source_step(source: IngestSource, data_root: Path, seasons: list[int]) -> Callable[[], str]:
+    """Bind one registry entry to its run. Eager binding, so a loop variable cannot leak."""
+
+    def _run() -> str:
+        written = source.run(data_root, seasons)
+        # A single write is worth naming -- `id_map` and each `external_projections` snapshot are
+        # the two a reader actually goes and looks at, and "1 partition(s)" tells them nothing.
+        return str(written[0]) if len(written) == 1 else f"{len(written)} partition(s)"
+
+    return _run
+
+
+def refresh_sources(
     *,
     data_root: Path,
     seasons: list[int],
@@ -185,62 +153,59 @@ def refresh_raw(
     verbose: bool = False,
     today: date | None = None,
 ) -> list[StepResult]:
-    """Every raw ingest source, isolated. One result per source, in run order."""
-    results: list[StepResult] = [
-        run_step("id_map", lambda: str(build_id_map(data_root)), verbose=verbose),
-        run_step(
-            "schedules",
-            lambda: _count(refresh_schedules(data_root, seasons=seasons)),
-            verbose=verbose,
-        ),
-        run_step(
-            "draft_picks",
-            lambda: _count(refresh_draft_picks(data_root, seasons=seasons)),
-            verbose=verbose,
-        ),
-    ]
+    """Every ingest source in `projections.ingest.sources.INGEST_SOURCES`, isolated.
 
+    The registry is the single list of what we ingest and in what order; this function adds only
+    the two things a library fail-fast call cannot: per-source isolation, and reporting the
+    seasons a per-game source could not be asked for. Adding a source means adding a registry
+    entry -- nothing here changes.
+    """
     playable = [s for s in seasons if games_played(s, today=today)]
-    if not playable:
-        reason = "no games played yet; " + ", ".join(
-            f"{s} kicks off {season_start_date(s)}" for s in seasons
-        )
-        names = [name for name, _ in game_stat_steps(data_root, seasons)]
-        if with_pbp:
-            names.append("pbp")
-        results.extend(StepResult(name, Status.SKIPPED, reason) for name in names)
-        return results
+    not_started = [s for s in seasons if s not in playable]
+    kickoffs = ", ".join(f"{s} kicks off {season_start_date(s)}" for s in not_started)
 
-    for name, thunk in game_stat_steps(data_root, playable):
-        results.append(run_step(name, thunk, verbose=verbose))
-    if with_pbp:
+    results: list[StepResult] = []
+    if not_started and playable:
+        # A mixed range (say `--seasons 2024-2026` today) must not let the unplayable season
+        # disappear. Running the rest and reporting them OK is a clean zero-failure run that says
+        # nothing about a season the user explicitly asked for.
         results.append(
-            run_step(
-                "pbp",
-                lambda: _count(refresh_pbp(data_root, seasons=playable)),
-                verbose=verbose,
+            StepResult(
+                "game_stats(not started)",
+                Status.SKIPPED,
+                f"per-game sources ran for {playable} only; {kickoffs}",
             )
+        )
+
+    for source in selected_sources(with_pbp=with_pbp):
+        applicable = playable if source.needs_games_played else seasons
+        if not applicable:
+            results.append(
+                StepResult(source.name, Status.SKIPPED, f"no games played yet; {kickoffs}")
+            )
+            continue
+        results.append(
+            run_step(source.name, _source_step(source, data_root, applicable), verbose=verbose)
         )
     return results
 
 
-def refresh_projections(*, data_root: Path, season: int, verbose: bool = False) -> StepResult:
-    """The ESPN + Sleeper consensus snapshot -- the only source that moves in the preseason.
+def _check_rc(script: str, rc: int) -> None:
+    """A sibling `main()` returning non-zero must fail the step, not be reported OK.
 
-    Written under an `asof=<date>` partition, so re-running on the same day overwrites in place
-    rather than accumulating snapshots.
+    Both siblings currently only return 0 or raise, so this is latent -- but the whole premise of
+    this script is not laundering a defect into a success, and the first non-zero return path
+    either of them grows would otherwise print `OK  vorp_presets` and exit 0.
     """
-    return run_step(
-        "external_projections",
-        lambda: str(refresh_external_projections(data_root, season=season)),
-        verbose=verbose,
-    )
+    if rc != 0:
+        raise RuntimeError(f"{script}.main() returned {rc}")
 
 
 def _rebuild_preset_tables(data_root: Path, season: int) -> str:
     import generate_preset_vorp_tables  # sibling script; scripts/ is on sys.path
 
-    generate_preset_vorp_tables.main(["--season", str(season), "--data-root", str(data_root)])
+    rc = generate_preset_vorp_tables.main(["--season", str(season), "--data-root", str(data_root)])
+    _check_rc("generate_preset_vorp_tables", rc)
     return "9 preset tables"
 
 
@@ -248,7 +213,7 @@ def _league_step(profile: LeagueProfile, data_root: Path, season: int) -> Callab
     def _run() -> str:
         import generate_league_vorp_table  # sibling script; scripts/ is on sys.path
 
-        generate_league_vorp_table.main(
+        rc = generate_league_vorp_table.main(
             [
                 "--league-config",
                 str(profile.league_config_path),
@@ -260,6 +225,7 @@ def _league_step(profile: LeagueProfile, data_root: Path, season: int) -> Callab
                 str(data_root),
             ]
         )
+        _check_rc("generate_league_vorp_table", rc)
         return str(profile.vorp_path)
 
     return _run
@@ -279,20 +245,24 @@ def refresh_derived(
     mtimes over identical numbers, which reads as "the pool is current" when nothing moved.
     """
     profiles, errors = discover_profiles(profile_root)
+    # A malformed profile is FAILED before anything else is decided, and in particular before the
+    # `projections_ok` gate below. A broken profile is broken whether or not the projections
+    # refreshed, and a league whose pool quietly stopped rebuilding would keep serving last week's
+    # numbers under a current-looking filename.
+    results: list[StepResult] = [
+        StepResult(f"league:{err.path.parent.name}", Status.FAILED, err.message) for err in errors
+    ]
+
     if not projections_ok:
         # Name every table that did NOT rebuild, leagues included. A summary showing one generic
         # "presets skipped" line reads as though the league pools were fine.
         reason = "external_projections did not refresh; tables left as they are"
         names = ["vorp_presets", *(f"league:{p.key}" for p in profiles)]
-        return [StepResult(name, Status.SKIPPED, reason) for name in names]
+        results.extend(StepResult(name, Status.SKIPPED, reason) for name in names)
+        return results
 
-    results = [
+    results.append(
         run_step("vorp_presets", lambda: _rebuild_preset_tables(data_root, season), verbose=verbose)
-    ]
-    # A malformed profile is FAILED, never silently skipped: a league whose pool quietly stopped
-    # rebuilding would keep serving last week's numbers under a current-looking filename.
-    results.extend(
-        StepResult(f"league:{err.path.parent.name}", Status.FAILED, err.message) for err in errors
     )
     for profile in profiles:
         if profile.season != season:
@@ -384,7 +354,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--data-root", type=Path, default=Path("data"))
     p.add_argument("--profile-root", type=Path, default=DEFAULT_PROFILE_ROOT)
     p.add_argument("--with-pbp", action="store_true", help="Also pull play-by-play (slow, large).")
-    p.add_argument("--skip-derived", action="store_true", help="Raw sources only.")
+    p.add_argument("--skip-derived", action="store_true", help="Ingest only.")
     p.add_argument("--verbose", action="store_true", help="Print tracebacks for failures.")
     return p.parse_args(argv)
 
@@ -406,22 +376,22 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Refreshing {seasons} under {args.data_root}; derived tables for {target_season}.")
     print(f"nflreadpy reports the current season as {nflreadpy.get_current_season()}.\n")
 
-    results = refresh_raw(
+    results = refresh_sources(
         data_root=args.data_root,
         seasons=seasons,
         with_pbp=args.with_pbp,
         verbose=args.verbose,
     )
-    projections = refresh_projections(
-        data_root=args.data_root, season=target_season, verbose=args.verbose
-    )
-    results.append(projections)
+    # The derived tables are built from the projection snapshot, so they rebuild only if that
+    # source actually refreshed. Read off the registry result by name rather than tracking it
+    # separately, so the gate cannot drift from the source list.
+    projections_ok = any(r.name == PROJECTIONS_SOURCE and r.status is Status.OK for r in results)
     if not args.skip_derived:
         results.extend(
             refresh_derived(
                 data_root=args.data_root,
                 season=target_season,
-                projections_ok=projections.status is Status.OK,
+                projections_ok=projections_ok,
                 profile_root=args.profile_root,
                 verbose=args.verbose,
             )
