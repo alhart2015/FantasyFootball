@@ -205,6 +205,49 @@ the crosswalk risk §Risks flagged did not materialise. The single-source cases 
 individually, with *which* source — a Sleeper-only player is one ESPN has no line for this
 week; an ESPN-only one is usually a crosswalk miss.
 
+## 9c. What the review found (PR #174, `/code-review high`)
+
+Seven findings, three of them plausible-wrong-answer bugs, all reproduced before fixing. The
+pattern across them: **every one lived in a case the happy path never reaches.**
+
+**The lineup could have an empty starting slot, and nobody had thought about it.** `entering`
+and `leaving` are the set difference of two solved lineups and are *not* guaranteed to be the
+same length — a waiver claim that landed on the bench, or a starter moved to IR, leaves a slot
+open, so the optimal lineup fills more slots than the current one. `if not leaving: break`
+discarded the surplus, and a roster whose optimal lineup scored **12 points above** the current
+one printed "your lineup is already optimal". A swap now has two optional sides.
+
+**IR is two different fields and the code read one.** `startable_points` blocks the injury
+*status* `INJURY_RESERVE`; ESPN reports an IR-*slotted* player as `OUT` (PUP/NFI) or, once
+designated to return, `QUESTIONABLE`. **This was live**: Josh Jacobs sits in the IR slot at
+`DAY_TO_DAY`, and the tool recommended starting him for +4.1 points into a lineup ESPN would
+have rejected. `waivers.is_on_ir` reads the slot; both checks now apply.
+
+**The blend's central rule was broken in one direction the whole time.** `_statline_dict`
+zero-fills all nine fields, so ESPN always "carried" every stat and a reception count only
+Sleeper had was averaged against a fabricated 0 — 9.5 where the rule promises 11.0.
+`espn_weekly_statlines` now emits absent ids as `pd.NA`, symmetric with `parse_sleeper_weekly`.
+**The existing test pinned only the mirror direction**, which is exactly why it survived: §3's
+argument was written for the Sleeper-omits case and never checked against its own converse.
+
+Four smaller ones: the `espn_id` join key skipped `normalize_join_id` (the id_map has stored it
+float-stringified, and the failure mode was an empty merge reported as a *coverage* problem);
+the crosswalk deduped on one side only, so an ESPN id mapping to two players kept whichever row
+landed last; `p_right` assumed veteran, discarding the wider rookie tier the fit actually has
+and overstating confidence; and repeated-slot numbering counted *filled* slots, so an unfilled
+RB slot printed its partner as bare `RB` — the same "a slot went unfilled" condition as §9b's
+mislabel, in a second place.
+
+**One correction came from running it afterwards, not from the review.** The fix for the first
+finding initially emitted an unpriceable D/ST as a one-sided swap, so a settled week printed
+"SWAPS — 1 change worth making  +0.0 pts". A leftover is now reported only when he was
+*startable*: a pointless leftover is not a change, contributes 0.0 to both totals, and the
+notes already name him. Dropping rows with real gain is a bug; dropping rows with none is the
+point of the tool.
+
+**Eight regression tests, each verified to fail against the pre-fix source.** That check
+matters more than the count — the PM log already records a test written to bless a mistake.
+
 ## 10. Reuse — what this does NOT rewrite
 
 - `choose_starters` (`draft/roster_eligibility.py`) — the engine. Fourth caller, not fourth copy.
