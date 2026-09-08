@@ -255,6 +255,20 @@ def build_context(
     every consumer.
     """
     target = resolve_league_target(args, require_team_id=require_team_id)
+    return assemble_context(target, args, require_config=require_config)
+
+
+def assemble_context(
+    target: LeagueTarget, args: argparse.Namespace, *, require_config: bool = True
+) -> InSeasonContext:
+    """The fetch-and-load half, for a target that is already resolved.
+
+    Split out because **`resolve_league_target` deletes the five league flags off the
+    Namespace**, so it cannot be called twice on one `args`. A caller that needs the target
+    before committing to the full assembly — the waiver tool lists the league's teams and
+    exits when no team was named, and loading a pool and an id_map to print that list would be
+    absurd — resolves once and hands the result here.
+    """
     my_team_id = target.team_id
     league_config_path = (
         target.require_league_config() if require_config else target.league_config_path

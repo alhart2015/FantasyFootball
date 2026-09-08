@@ -30,16 +30,10 @@ import argparse
 import sys
 from pathlib import Path
 
-import pandas as pd
-
-from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.league_profile import (
     add_league_arguments,
     resolve_league_target,
 )
-from projections.draft.assistant.performance_variance import VarianceParams
-from projections.draft.assistant.rookies import attach_is_rookie
-from projections.draft.league_config import LeagueConfig
 from projections.ingest.espn_league import (
     DEFAULT_FREE_AGENT_LIMIT,
     EspnCredentials,
@@ -47,12 +41,11 @@ from projections.ingest.espn_league import (
     fetch_free_agents,
     fetch_league_payload,
     parse_free_agents,
-    parse_rosters,
     parse_teams,
 )
 from projections.ingest.injury_news import InjuryNote, fetch_injury_notes
+from projections.midseason.context import InSeasonContext, assemble_context
 from projections.midseason.injuries import is_multi_week
-from projections.midseason.my_team import build_my_team
 from projections.midseason.standings import ProjectionInputError
 from projections.midseason.swap_impact import (
     PAIRED_DELTA_NOISE,
@@ -68,13 +61,10 @@ from projections.midseason.waivers import (
     weekly_projections_by_espn_id,
 )
 from projections.schemas import (
-    _PYARROW_STR,
     InjuryStatus,
-    VorpTableSchema,
     display_str,
     parse_injury_status,
 )
-from projections.store import read_partition
 
 
 def _print_header(team_name: str, week: int, n_agents: int, truncated: str | None) -> None:
@@ -167,50 +157,17 @@ def _print_note(note: InjuryNote | None, *, indent: str = "    ") -> None:
         print(f"{indent}{note.long_comment}")
 
 
-def run(args: argparse.Namespace) -> int:
-    try:
-        target = resolve_league_target(args)
-        league_config_path = target.require_league_config()
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    if target.source is not None:
-        print(target.describe())
-
-    creds = EspnCredentials.resolve(args.credentials)
-    payload = fetch_league_payload(target.league_id, target.season, creds)
-    teams = parse_teams(payload)
-
-    my_team_id = target.team_id
-    if my_team_id is None:
-        print("--team-id is required. Teams in this league:")
-        for _, team in teams.iterrows():
-            print(f"  {int(team['team_id']):>3}  {team['team_name']}")
-        return 2
-
-    config = LeagueConfig.model_validate_json(league_config_path.read_text(encoding="utf-8"))
-    pool = pd.read_parquet(target.pool)
-    pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
-    pool = attach_is_rookie(
-        VorpTableSchema.validate(pool), season=target.season, data_root=args.data_root
-    )
-    id_map = pd.read_parquet(args.data_root / "raw" / "id_map.parquet")
-
-    try:
-        weekly_stats = read_partition(args.data_root / "raw", "weekly_stats", season=target.season)
-    except FileNotFoundError:
-        weekly_stats = pd.DataFrame()
-
-    run_state = build_my_team(
-        payload,
-        pool,
-        id_map,
-        weekly_stats,
-        config,
-        my_team_id=my_team_id,
-        season=target.season,
-    )
-    week = args.week or run_state.week
+def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
+    """Rank the wire against my roster. Everything shared comes off `ctx`."""
+    target = ctx.target
+    config = ctx.require_config()
+    my_team_id = ctx.require_team_id()
+    pool = ctx.pool
+    id_map = ctx.id_map
+    payload = ctx.payload
+    creds = ctx.creds
+    run_state = ctx.my_team()
+    week = ctx.week
 
     fa_payload = fetch_free_agents(
         target.league_id,
@@ -229,23 +186,17 @@ def run(args: argparse.Namespace) -> int:
     # flag to speed a run up silently dropped my own starters from the projections, left holes
     # in the baseline lineup, and inflated every candidate's gain -- with no warning, because
     # the truncation check only runs on the free-agent side.
-    rostered_limit = config.n_teams * (sum(config.roster_slots.values()) + 2)
-    mine_payload = fetch_free_agents(
-        target.league_id,
-        target.season,
-        creds,
-        scoring_period=week,
-        limit=rostered_limit,
-        statuses=("ONTEAM",),
-    )
+    rostered_limit = ctx.rostered_limit()
+    # Memoised on the context: start/sit asks for the identical payload, and in a combined
+    # report the second caller reuses this response rather than repeating the request.
+    mine_payload = ctx.onteam_payload()
     _, mine_truncated = parse_free_agents(mine_payload, limit=rostered_limit)
     if mine_truncated:
         print(f"  ! your own roster may be incompletely priced: {mine_truncated}")
     projections.update(weekly_projections_by_espn_id(mine_payload, week, config.ruleset))
 
     remaining = remaining_points_by_espn_id(run_state, id_map)
-    roster = parse_rosters(payload)
-    roster = roster[roster["team_id"] == my_team_id]
+    roster = ctx.roster()
 
     candidates, open_spots = rank_free_agents(
         roster,
@@ -280,8 +231,8 @@ def run(args: argparse.Namespace) -> int:
             payload,
             pool,
             id_map,
-            load_store_availability(pool, season=target.season, data_root=args.data_root),
-            VarianceParams.load(),
+            ctx.availability(),
+            ctx.variance_params(),
             shortlist,
             season=target.season,
             my_team_id=my_team_id,
@@ -361,6 +312,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--n-sims", type=int, default=2000)
     return parser.parse_args(argv)
+
+
+def run(args: argparse.Namespace) -> int:
+    """Resolve, check, then assemble. Exit code 2 for a usage problem, as before."""
+    try:
+        target = resolve_league_target(args)
+        target.require_league_config()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if target.source is not None:
+        print(target.describe())
+
+    if target.team_id is None:
+        # **Before the assembly, deliberately.** Loading a pool, an id_map and a decade of
+        # weekly_stats in order to print a list of team ids would be absurd, and this is the
+        # one thing the tool must never guess at.
+        creds = EspnCredentials.resolve(args.credentials)
+        payload = fetch_league_payload(target.league_id, target.season, creds)
+        print("--team-id is required. Teams in this league:")
+        for _, team in parse_teams(payload).iterrows():
+            print(f"  {int(team['team_id']):>3}  {team['team_name']}")
+        return 2
+
+    return report(assemble_context(target, args), args)
 
 
 def main(argv: list[str] | None = None) -> int:
