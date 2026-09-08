@@ -22,6 +22,7 @@ import pytest
 
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.ingest.espn_league import EspnCredentials
+from projections.midseason import context as ctx_mod
 from projections.midseason.standings import ProjectionInputError
 from projections.midseason.swap_impact import injury_adjusted_pool
 from projections.schemas import RosterSlot
@@ -112,11 +113,11 @@ def _stubbed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     _id_map(tmp_path)
 
     monkeypatch.setattr(EspnCredentials, "resolve", classmethod(lambda cls, path: object()))
-    monkeypatch.setattr(projected_standings, "fetch_league_payload", lambda *a, **k: payload)
-    monkeypatch.setattr(
-        projected_standings, "attach_is_rookie", lambda pool, **k: pool.assign(is_rookie=False)
-    )
-    monkeypatch.setattr(projected_standings, "load_store_availability", lambda *a, **k: object())
+    # The fetch and the history scans now live in the shared context, so they are patched
+    # there. The assertion is unchanged: what pool does the simulator receive?
+    monkeypatch.setattr(ctx_mod, "fetch_league_payload", lambda *a, **k: payload)
+    monkeypatch.setattr(ctx_mod, "attach_is_rookie", lambda pool, **k: pool.assign(is_rookie=False))
+    monkeypatch.setattr(ctx_mod, "load_store_availability", lambda *a, **k: object())
     monkeypatch.setattr(VarianceParams, "load", classmethod(lambda cls, *a, **k: object()))
 
     def _capture(payload_arg: Any, pool_arg: pd.DataFrame, *args: Any, **kwargs: Any) -> Any:

@@ -137,8 +137,11 @@ def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
-        # `require_team_id=False`: this tool runs without one, it just loses the "you" marker.
-        ctx = build_context(args, require_team_id=False)
+        # Neither is required by this tool and both were optional before the refactor: it
+        # runs without --team-id (losing only the "you" marker) and never read a
+        # league_config.json, because `project_league_standings` derives its own from the
+        # payload. Demanding either here would make a working command start failing.
+        ctx = build_context(args, require_team_id=False, require_config=False)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1

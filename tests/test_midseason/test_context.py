@@ -183,7 +183,7 @@ def test_an_explicit_week_moves_every_consumer(_env: dict[str, Any]) -> None:
 
 def test_the_config_comes_from_the_file(_env: dict[str, Any]) -> None:
     ctx = _build(_env)
-    assert ctx.config.roster_slots == {RosterSlot.RB: 1, RosterSlot.BENCH: 3}
+    assert ctx.require_config().roster_slots == {RosterSlot.RB: 1, RosterSlot.BENCH: 3}
 
 
 def test_a_config_that_disagrees_with_espn_is_reported_not_silently_preferred(
@@ -209,7 +209,7 @@ def test_a_config_that_disagrees_with_espn_is_reported_not_silently_preferred(
     assert any("teams" in note for note in ctx.notes), ctx.notes
     assert any("scoring" in note for note in ctx.notes), ctx.notes
     # and the FILE still wins, including for the request size
-    assert ctx.config.roster_slots == {RosterSlot.RB: 1, RosterSlot.BENCH: 3}
+    assert ctx.require_config().roster_slots == {RosterSlot.RB: 1, RosterSlot.BENCH: 3}
     assert ctx.rostered_limit() == 2 * (1 + 3 + 2)
 
 
@@ -218,7 +218,7 @@ def test_a_config_that_cannot_be_derived_is_a_note_not_a_crash(_env: dict[str, A
     cannot run must not take the whole report down with it."""
     ctx = _build(_env)
     assert any("cross-check" in note for note in ctx.notes), ctx.notes
-    assert ctx.config.roster_slots == {RosterSlot.RB: 1, RosterSlot.BENCH: 3}
+    assert ctx.require_config().roster_slots == {RosterSlot.RB: 1, RosterSlot.BENCH: 3}
 
 
 def test_the_payload_is_fetched_exactly_once(_env: dict[str, Any]) -> None:
@@ -331,3 +331,17 @@ def test_the_config_cross_check_does_not_narrate(
     with caplog.at_level("INFO", logger="projections.ingest.espn_league"):
         _build(_env)
     assert not caplog.records
+
+
+def test_a_context_can_be_built_without_a_league_config(_env: dict[str, Any]) -> None:
+    """`projected_standings` never read one — `project_league_standings` derives its own from
+    the payload — so demanding one would make a working command start failing."""
+    _env["args"].league_dir = _env["tmp"] / "no-such-dir"
+    ctx = build_context(_env["args"], require_team_id=False, require_config=False)
+
+    assert ctx.config is None
+    assert ctx.notes == ()  # nothing to cross-check against
+    with pytest.raises(ValueError, match=r"league_config.json"):
+        ctx.require_config()
+    with pytest.raises(ValueError, match=r"league_config.json"):
+        ctx.rostered_limit()

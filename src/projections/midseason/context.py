@@ -61,7 +61,11 @@ class InSeasonContext:
     target: LeagueTarget
     creds: EspnCredentials
     payload: dict[str, Any]
-    config: LeagueConfig
+    #: None when the caller did not need one. `projected_standings` never read a
+    #: `league_config.json` — `project_league_standings` derives its own from the payload —
+    #: so demanding one here would have made a working command start failing. Sections that
+    #: need it call `require_config()`.
+    config: LeagueConfig | None
     #: Schema-validated with `is_rookie` attached, normalised ONCE — the trade analyzer
     #: skipped both and could carry a different `gsis_id` dtype into its joins.
     pool: pd.DataFrame
@@ -104,7 +108,8 @@ class InSeasonContext:
         free-agent-sized limit once silently dropped the waiver tool's own starters from the
         projections, left holes in the baseline lineup, and inflated every candidate's gain.
         """
-        return self.config.n_teams * (sum(self.config.roster_slots.values()) + 2)
+        config = self.require_config()
+        return config.n_teams * (sum(config.roster_slots.values()) + 2)
 
     def onteam_payload(self) -> dict[str, Any]:
         """ESPN's weekly projections for every ROSTERED player, at `self.week`.
@@ -140,11 +145,20 @@ class InSeasonContext:
                 self.pool,
                 self.id_map,
                 self.weekly_stats,
-                self.config,
+                self.require_config(),
                 my_team_id=self.require_team_id(),
                 season=self.target.season,
             )
         return self._my_team
+
+    def require_config(self) -> LeagueConfig:
+        """The league config, or a clear failure naming the flag that supplies it."""
+        if self.config is None:
+            raise ValueError(
+                "this section needs a league_config.json; pass --league-dir <dir>, or drop the "
+                "explicit arguments and let the league profile supply them"
+            )
+        return self.config
 
     def require_team_id(self) -> int:
         if self.my_team_id is None:
@@ -223,7 +237,12 @@ def _config_notes(from_file: LeagueConfig, payload: dict[str, Any]) -> tuple[str
     return tuple(notes)
 
 
-def build_context(args: argparse.Namespace, *, require_team_id: bool = True) -> InSeasonContext:
+def build_context(
+    args: argparse.Namespace,
+    *,
+    require_team_id: bool = True,
+    require_config: bool = True,
+) -> InSeasonContext:
     """Resolve, fetch and assemble. The one place any in-season tool starts.
 
     Raises `ValueError` for an unusable target (the callers turn that into an exit code and a
@@ -236,13 +255,19 @@ def build_context(args: argparse.Namespace, *, require_team_id: bool = True) -> 
     every consumer.
     """
     target = resolve_league_target(args, require_team_id=require_team_id)
-    league_config_path = target.require_league_config()
     my_team_id = target.team_id
+    league_config_path = (
+        target.require_league_config() if require_config else target.league_config_path
+    )
 
     creds = EspnCredentials.resolve(args.credentials)
     payload = fetch_league_payload(target.league_id, target.season, creds)
 
-    config = LeagueConfig.model_validate_json(league_config_path.read_text(encoding="utf-8"))
+    config = (
+        LeagueConfig.model_validate_json(league_config_path.read_text(encoding="utf-8"))
+        if league_config_path is not None and league_config_path.exists()
+        else None
+    )
     pool = load_pool(target.pool, season=target.season, data_root=args.data_root)
     id_map = pd.read_parquet(args.data_root / "raw" / "id_map.parquet")
 
@@ -274,5 +299,5 @@ def build_context(args: argparse.Namespace, *, require_team_id: bool = True) -> 
         week=getattr(args, "week", None) or schedule_week,
         data_root=args.data_root,
         my_team_id=my_team_id,
-        notes=_config_notes(config, dict(payload)),
+        notes=_config_notes(config, dict(payload)) if config is not None else (),
     )
