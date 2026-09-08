@@ -29,6 +29,7 @@ from projections.draft.assistant.availability_loader import load_store_availabil
 from projections.draft.assistant.league_profile import LeagueTarget, resolve_league_target
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
+from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
 from projections.ingest.espn_league import (
     EspnCredentials,
@@ -36,9 +37,11 @@ from projections.ingest.espn_league import (
     fetch_free_agents,
     fetch_league_payload,
     parse_rosters,
+    parse_schedule,
     parse_teams,
 )
 from projections.midseason.my_team import MyTeamRun, build_my_team
+from projections.midseason.standings import first_unplayed_week
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 from projections.store import read_partition
 
@@ -64,17 +67,17 @@ class InSeasonContext:
     pool: pd.DataFrame
     id_map: pd.DataFrame
     weekly_stats: pd.DataFrame
-    my_team: MyTeamRun
     #: **The single horizon.** The injury discount, `scoring_period` on the free-agent fetch
     #: and `games_remaining` all read this one integer. Two copies of a horizon that must stay
     #: identical is how an IR player gets discounted over seventeen games while the simulation
     #: prorates him over nine, and the resulting playoff odds still look reasonable.
     week: int
     data_root: Path
-    my_team_id: int
+    my_team_id: int | None
     #: Anything the assembly wants the reader to distrust. Printed by the tools, not here.
     notes: tuple[str, ...] = ()
 
+    _my_team: MyTeamRun | None = field(default=None, repr=False)
     _availability: PlayerAvailability | None = field(default=None, repr=False)
     _params: VarianceParams | None = field(default=None, repr=False)
     _onteam: dict[str, Any] | None = field(default=None, repr=False)
@@ -123,10 +126,35 @@ class InSeasonContext:
             )
         return self._onteam
 
+    def my_team(self) -> MyTeamRun:
+        """The `MyTeamRun`, built on first use.
+
+        **Lazy on purpose.** `projected_standings` needs no team at all, and building this
+        eagerly leaked its rest-of-season diagnostics into that report — which already prints
+        the same warning from its own `run.diagnostics`. A shared context must not put notes
+        on a section's page that the section never asked for.
+        """
+        if self._my_team is None:
+            self._my_team = build_my_team(
+                self.payload,
+                self.pool,
+                self.id_map,
+                self.weekly_stats,
+                self.config,
+                my_team_id=self.require_team_id(),
+                season=self.target.season,
+            )
+        return self._my_team
+
+    def require_team_id(self) -> int:
+        if self.my_team_id is None:
+            raise ValueError("--team-id is required for this section.")
+        return self.my_team_id
+
     def roster(self) -> pd.DataFrame:
         """My team's `parse_rosters` rows. A fresh copy each call — see the class docstring."""
         rosters = parse_rosters(dict(self.payload))
-        return rosters[rosters["team_id"] == self.my_team_id].copy()
+        return rosters[rosters["team_id"] == self.require_team_id()].copy()
 
     def teams(self) -> pd.DataFrame:
         return parse_teams(dict(self.payload))
@@ -160,10 +188,18 @@ def _config_notes(from_file: LeagueConfig, payload: dict[str, Any]) -> tuple[str
     failure would otherwise be silent: `roster_slots` feeds `rostered_limit`, so a drift would
     change the size of a network request and quietly thin the projections behind every number.
     """
+    espn_logger = logging.getLogger("projections.ingest.espn_league")
+    previously = espn_logger.disabled
     try:
+        # Silenced: `build_league_config` narrates ESPN's scoring categories, which is useful
+        # when a tool is genuinely deriving its config and pure noise when we are only
+        # cross-checking one we already have. It printed three lines on every run.
+        espn_logger.disabled = True
         derived = build_league_config(dict(payload), name=from_file.name)
     except Exception as exc:
         return (f"could not derive a league config from ESPN to cross-check the file: {exc}",)
+    finally:
+        espn_logger.disabled = previously
 
     notes: list[str] = []
     if derived.roster_slots != from_file.roster_slots:
@@ -201,7 +237,7 @@ def build_context(args: argparse.Namespace, *, require_team_id: bool = True) -> 
     """
     target = resolve_league_target(args, require_team_id=require_team_id)
     league_config_path = target.require_league_config()
-    my_team_id = target.require_team()
+    my_team_id = target.team_id
 
     creds = EspnCredentials.resolve(args.credentials)
     payload = fetch_league_payload(target.league_id, target.season, creds)
@@ -217,15 +253,15 @@ def build_context(args: argparse.Namespace, *, require_team_id: bool = True) -> 
         # scored yet", which is the truth then, rather than an abort.
         weekly_stats = pd.DataFrame()
 
-    my_team = build_my_team(
-        payload,
-        pool,
-        id_map,
-        weekly_stats,
-        config,
-        my_team_id=my_team_id,
-        season=target.season,
+    # **Derived from the payload, not from `my_team`.** The week is the league's, not one
+    # franchise's, and tying it to `MyTeamRun` would mean a tool that needs no team (projected
+    # standings) could not have a week. It is the same derivation `build_my_team` performs
+    # internally, so the two agree; a test pins that.
+    calendar = LeagueCalendar.from_espn_settings(
+        (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
     )
+    schedule = parse_schedule(dict(payload), parse_teams(dict(payload)))
+    schedule_week = first_unplayed_week(schedule, calendar) if not schedule.empty else 1
 
     return InSeasonContext(
         target=target,
@@ -235,9 +271,8 @@ def build_context(args: argparse.Namespace, *, require_team_id: bool = True) -> 
         pool=pool,
         id_map=id_map,
         weekly_stats=weekly_stats,
-        my_team=my_team,
-        week=getattr(args, "week", None) or my_team.week,
+        week=getattr(args, "week", None) or schedule_week,
         data_root=args.data_root,
         my_team_id=my_team_id,
-        notes=(*my_team.notes, *_config_notes(config, dict(payload))),
+        notes=_config_notes(config, dict(payload)),
     )

@@ -167,7 +167,7 @@ def test_missing_weekly_stats_is_an_empty_frame_not_an_error(_env: dict[str, Any
 
 def test_the_week_comes_from_the_schedule(_env: dict[str, Any]) -> None:
     ctx = _build(_env)
-    assert ctx.week == ctx.my_team.week == 1
+    assert ctx.week == 1
 
 
 def test_an_explicit_week_moves_every_consumer(_env: dict[str, Any]) -> None:
@@ -178,7 +178,7 @@ def test_an_explicit_week_moves_every_consumer(_env: dict[str, Any]) -> None:
     """
     ctx = _build(_env, week=7)
     assert ctx.week == 7
-    assert ctx.my_team.week == 1  # the schedule still says what it says
+    assert ctx.my_team().week == 1  # the schedule still says what it says
 
 
 def test_the_config_comes_from_the_file(_env: dict[str, Any]) -> None:
@@ -282,3 +282,52 @@ def test_a_config_matching_espn_produces_no_config_note(
     monkeypatch.setattr(ctx_mod, "build_league_config", lambda payload, name: file_config)
     ctx = _build(_env)
     assert not [note for note in ctx.notes if "league_config.json" in note]
+
+
+def test_the_context_week_matches_the_one_build_my_team_derives(_env: dict[str, Any]) -> None:
+    """Two derivations of one horizon, pinned together.
+
+    The context derives the week from the payload so a tool needing no team can still have
+    one; `build_my_team` derives it internally. They must not drift -- that is the whole
+    failure mode this object exists to remove.
+    """
+    ctx = _build(_env)
+    assert ctx.week == ctx.my_team().week
+
+
+def test_a_context_without_a_team_still_has_a_week(_env: dict[str, Any]) -> None:
+    """`projected_standings` runs without --team-id; it just loses the "you" marker.
+
+    Requiring a team here to build MyTeamRun would have tightened that tool for no reason,
+    which is a behaviour change smuggled into a refactor.
+    """
+    _env["args"].team_id = None
+    ctx = build_context(_env["args"], require_team_id=False)
+
+    assert ctx.my_team_id is None
+    assert ctx.week == 1
+    with pytest.raises(ValueError, match="team-id"):
+        ctx.my_team()
+    with pytest.raises(ValueError, match="team-id"):
+        ctx.roster()
+
+
+def test_my_team_is_not_built_until_a_section_asks(_env: dict[str, Any]) -> None:
+    """Building it eagerly leaked its rest-of-season diagnostics onto the standings report,
+    which already prints the same warning from its own `run.diagnostics` -- a duplicated line
+    that the baseline diff caught."""
+    ctx = _build(_env)
+    assert ctx._my_team is None
+    assert ctx.my_team() is ctx.my_team()
+    assert ctx._my_team is not None
+
+
+def test_the_config_cross_check_does_not_narrate(
+    _env: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """`build_league_config` announces ESPN's scoring categories. Useful when a tool is really
+    deriving its config, pure noise when we are cross-checking one we already have -- it put
+    three lines on every run of every tool."""
+    with caplog.at_level("INFO", logger="projections.ingest.espn_league"):
+        _build(_env)
+    assert not caplog.records

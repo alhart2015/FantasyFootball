@@ -25,22 +25,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.league_profile import (
     add_league_arguments,
-    resolve_league_target,
 )
-from projections.draft.assistant.performance_variance import VarianceParams
-from projections.draft.assistant.rookies import attach_is_rookie
 from projections.ingest.espn_league import (
-    EspnCredentials,
     EspnLeagueError,
-    fetch_league_payload,
-    parse_teams,
 )
+from projections.midseason.context import InSeasonContext, build_context
 from projections.midseason.standings import ProjectionInputError, project_league_standings
-from projections.midseason.swap_impact import injury_adjusted_pool_at_current_week
-from projections.schemas import _PYARROW_STR, VorpTableSchema
+from projections.midseason.swap_impact import injury_adjusted_pool
 from projections.store import write_partition
 
 
@@ -65,75 +58,38 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv)
-    try:
-        target = resolve_league_target(args)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    if target.source is not None:
-        print(target.describe())
-
-    # `resolve` tries the environment first and then the file, and raises with a longer
-    # message than anything reproduced here. Using it also keeps ESPN_SWID / ESPN_S2 working,
-    # which `from_file` alone silently ignored.
-    try:
-        creds = EspnCredentials.resolve(args.credentials)
-    except EspnLeagueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    payload = fetch_league_payload(target.league_id, target.season, creds=creds)
-
-    teams = parse_teams(payload)
-    if target.team_id is not None and target.team_id not in set(teams["team_id"]):
+def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
+    """Project the league and print it. Everything comes off `ctx` — no I/O here."""
+    teams = ctx.teams()
+    if ctx.my_team_id is not None and ctx.my_team_id not in set(teams["team_id"]):
         # `write_league_snapshot` performs exactly this check. Without it a typo just produces
         # a report with no "you" marker and no matchup section, which reads like success.
         print(
-            f"team id {target.team_id} is not a team in this league. Valid ids: "
+            f"team id {ctx.my_team_id} is not a team in this league. Valid ids: "
             f"{sorted(teams['team_id'])}.",
             file=sys.stderr,
         )
         return 1
 
-    # Guarded like every other precondition here. The id_map is load-bearing for the whole run
-    # -- rosters cannot be matched to projections without it -- so a missing file should say so
-    # rather than surface as a bare FileNotFoundError from inside an argument list.
-    id_map_path = args.data_root / "raw" / "id_map.parquet"
-    if not id_map_path.exists():
-        print(
-            f"No id_map at {id_map_path}. Rosters are matched to projections through it, so "
-            "the run cannot proceed without one.",
-            file=sys.stderr,
-        )
-        return 1
-
-    pool = attach_is_rookie(_load_pool(target.pool), season=target.season, data_root=args.data_root)
-    id_map = pd.read_parquet(id_map_path)
-
+    target = ctx.target
     # **The simulator has no concept of an injury, so the pool is where one has to reach it.**
     # This ran on the raw pool until 2026-09-07, which meant every projected finish in the
     # league treated a player on IR as though he would play all seventeen games. The waiver and
     # trade tools already adjusted before simulating; only the tool whose entire output IS the
     # simulation did not, so its numbers were the least trustworthy of the three and looked the
     # most authoritative.
-    #
-    # The horizon comes from the helper, not from a second derivation here:
-    # `season_multiplier` divides the games a designation costs by the games that REMAIN, so
-    # the same IR tag is a 24% cut in week 1 and a 67% cut in week 12, and a week that drifts
-    # from the simulation's own produces playoff odds that look entirely reasonable.
-    adjusted_pool = injury_adjusted_pool_at_current_week(pool, payload, id_map)
+    adjusted_pool = injury_adjusted_pool(ctx.pool, ctx.payload, ctx.id_map, week=ctx.week)
 
     try:
         run = project_league_standings(
-            payload,
+            ctx.payload,
             adjusted_pool,
-            id_map,
+            ctx.id_map,
             # Availability is fitted from history and is about MISSED GAMES generally; the
             # injury adjustment above is about THIS player's current designation. Two
             # different things, so availability still reads the unadjusted pool.
-            load_store_availability(pool, season=target.season, data_root=args.data_root),
-            VarianceParams.load(),
+            ctx.availability(),
+            ctx.variance_params(),
             season=target.season,
             n_sims=args.n_sims,
             rng=np.random.default_rng(args.seed),
@@ -161,14 +117,14 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    _print_standings(run.standings, my_team_id=target.team_id)
+    _print_standings(run.standings, my_team_id=ctx.my_team_id)
     _print_ties_footnote()
-    _print_my_matchups(run.odds, my_team_id=target.team_id)
+    _print_my_matchups(run.odds, my_team_id=ctx.my_team_id)
 
     if args.write_snapshot:
         for table, frame in (("projected_standings", run.standings), ("matchup_odds", run.odds)):
             path = write_partition(
-                args.data_root / "processed",
+                ctx.data_root / "processed",
                 table,
                 frame,
                 season=target.season,
@@ -178,15 +134,30 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _load_pool(path: Path) -> pd.DataFrame:
-    """Read a VORP parquet the way every other consumer does, validation included.
-
-    `tournament_cli._load_pool` is the same three lines; this mirrors it rather than dropping
-    the `VorpTableSchema.validate` that version performs.
-    """
-    frame = pd.read_parquet(path)
-    frame["gsis_id"] = frame["gsis_id"].astype(_PYARROW_STR)
-    return VorpTableSchema.validate(frame)
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    try:
+        # `require_team_id=False`: this tool runs without one, it just loses the "you" marker.
+        ctx = build_context(args, require_team_id=False)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except EspnLeagueError as exc:
+        # `resolve` tries the environment first and then the file, and raises with a longer
+        # message than anything reproduced here. Using it also keeps ESPN_SWID / ESPN_S2
+        # working, which `from_file` alone silently ignored.
+        print(str(exc), file=sys.stderr)
+        return 1
+    except FileNotFoundError as exc:
+        # The id_map is load-bearing -- rosters cannot be matched to projections without it --
+        # so a missing file should say so rather than surface from inside an argument list.
+        print(f"{exc}. Rosters are matched to projections through the id_map.", file=sys.stderr)
+        return 1
+    if ctx.target.source is not None:
+        print(ctx.target.describe())
+    for note in ctx.notes:
+        print(f"  ! {note}", file=sys.stderr)
+    return report(ctx, args)
 
 
 def _print_standings(standings: pd.DataFrame, *, my_team_id: int | None) -> None:
