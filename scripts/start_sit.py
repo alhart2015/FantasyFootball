@@ -27,24 +27,14 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 from projections.draft.assistant.league_profile import (
     add_league_arguments,
-    resolve_league_target,
 )
-from projections.draft.assistant.performance_variance import VarianceParams
-from projections.draft.assistant.rookies import attach_is_rookie
 from projections.draft.backtest.espn_weekly import espn_weekly_statlines
-from projections.draft.league_config import LeagueConfig
 from projections.ingest.espn_league import (
-    EspnCredentials,
     EspnLeagueError,
-    fetch_free_agents,
-    fetch_league_payload,
     parse_free_agents,
-    parse_rosters,
-    parse_teams,
 )
 from projections.ingest.identity import normalize_join_id
 from projections.ingest.sleeper_weekly_projections import (
@@ -52,11 +42,9 @@ from projections.ingest.sleeper_weekly_projections import (
     fetch_sleeper_weekly,
     parse_sleeper_weekly,
 )
-from projections.midseason.my_team import build_my_team
+from projections.midseason.context import InSeasonContext, build_context
 from projections.midseason.standings import ProjectionInputError
 from projections.midseason.start_sit import StartSitRun, recommend_start_sit
-from projections.schemas import _PYARROW_STR, VorpTableSchema
-from projections.store import read_partition
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -161,69 +149,28 @@ def _print_swaps(run: StartSitRun) -> None:
         print(f"         {swap.gain:+.1f} pts{odds}")
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv)
-    try:
-        target = resolve_league_target(args, require_team_id=True)
-        # Inside the try on purpose: `require_team_id` above is what normally raises, with a
-        # message naming the profile, but this is the same failure and must not be a traceback.
-        my_team_id = target.require_team()
-        league_config_path = target.require_league_config()
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    if target.source is not None:
-        print(target.describe())
+def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
+    """Price the roster from both sources, solve the lineup, print the diff."""
     if not 0.0 <= args.weight_espn <= 1.0:
         print(f"--weight-espn must be in [0, 1], got {args.weight_espn}", file=sys.stderr)
         return 1
-
     try:
-        creds = EspnCredentials.resolve(args.credentials)
-        payload = fetch_league_payload(target.league_id, target.season, creds)
-    except (EspnLeagueError, OSError) as exc:
-        print(f"Cannot reach the league: {exc}", file=sys.stderr)
-        return 1
-
-    config = LeagueConfig.model_validate_json(league_config_path.read_text(encoding="utf-8"))
-    pool = pd.read_parquet(target.pool)
-    pool["gsis_id"] = pool["gsis_id"].astype(_PYARROW_STR)
-    pool = VorpTableSchema.validate(pool)
-    id_map = pd.read_parquet(args.data_root / "raw" / "id_map.parquet")
-
-    try:
-        weekly_stats = read_partition(args.data_root / "raw", "weekly_stats", season=target.season)
-    except FileNotFoundError:
-        weekly_stats = pd.DataFrame()
-
-    try:
-        run_state = build_my_team(
-            payload,
-            pool,
-            id_map,
-            weekly_stats,
-            config,
-            my_team_id=my_team_id,
-            season=target.season,
-        )
+        run_state = ctx.my_team()
     except ProjectionInputError as exc:
         print(f"Cannot set a lineup: {exc}", file=sys.stderr)
         return 1
-    week = args.week or run_state.week
+    config = ctx.require_config()
+    my_team_id = ctx.require_team_id()
+    week = ctx.week
 
     # My own roster's weekly projections, priced by the league endpoint. The limit is sized to
     # the whole league on purpose: sharing a free-agent-sized limit silently dropped starters
     # from the projections in the waiver tool and inflated every number downstream.
-    rostered_limit = config.n_teams * (sum(config.roster_slots.values()) + 2)
+    rostered_limit = ctx.rostered_limit()
     try:
-        mine_payload = fetch_free_agents(
-            target.league_id,
-            target.season,
-            creds,
-            scoring_period=week,
-            limit=rostered_limit,
-            statuses=("ONTEAM",),
-        )
+        # Memoised on the context, so the waiver section of a combined report reuses this
+        # exact payload rather than making the identical request again.
+        mine_payload = ctx.onteam_payload()
     except (EspnLeagueError, OSError) as exc:
         print(f"Cannot price the roster: {exc}", file=sys.stderr)
         return 1
@@ -234,27 +181,26 @@ def main(argv: list[str] | None = None) -> int:
     espn = espn_weekly_statlines(mine_payload, week=week)
     try:
         sleeper = parse_sleeper_weekly(
-            fetch_sleeper_weekly(target.season, week), season=target.season, week=week
+            fetch_sleeper_weekly(ctx.target.season, week),
+            season=ctx.target.season,
+            week=week,
         )
     except SleeperWeeklyError as exc:
         # Not fatal, but it removes the entire reason to run this rather than open the app, so
         # it is said loudly rather than degraded into silently.
         print(f"  ! Sleeper unavailable ({exc}) — this run is ESPN alone.", file=sys.stderr)
-        sleeper = parse_sleeper_weekly([], season=target.season, week=week)
+        sleeper = parse_sleeper_weekly([], season=ctx.target.season, week=week)
 
-    roster = parse_rosters(payload)
-    roster = roster[roster["team_id"] == my_team_id]
+    roster = ctx.roster()
     if roster.empty:
-        teams = parse_teams(payload)
-        print(f"No roster for team {my_team_id}. Teams: {sorted(teams['team_id'])}")
+        print(f"No roster for team {my_team_id}. Teams: {sorted(ctx.teams()['team_id'])}")
         return 1
 
     # Rookie flags reach `p_right` through here: `VarianceParams.log_sd` has a genuinely
     # wider rookie tier, and treating every player as a veteran overstated confidence on
     # exactly the comparisons that deserve less of it.
-    rookie_pool = attach_is_rookie(pool, season=target.season, data_root=args.data_root)
-    rookie_gsis = set(rookie_pool.loc[rookie_pool["is_rookie"], "gsis_id"].astype(str))
-    crosswalk = id_map.dropna(subset=["espn_id", "gsis_id"])
+    rookie_gsis = set(ctx.pool.loc[ctx.pool["is_rookie"], "gsis_id"].astype(str))
+    crosswalk = ctx.id_map.dropna(subset=["espn_id", "gsis_id"])
     rookies = frozenset(
         normalize_join_id(crosswalk["espn_id"])[
             crosswalk["gsis_id"].astype(str).isin(rookie_gsis)
@@ -265,13 +211,13 @@ def main(argv: list[str] | None = None) -> int:
         roster,
         espn,
         sleeper,
-        id_map,
+        ctx.id_map,
         config.roster_slots,
         config.ruleset,
         team_name=run_state.team_name,
         week=week,
         weight_espn=args.weight_espn,
-        params=None if args.fast else VarianceParams.load(),
+        params=None if args.fast else ctx.variance_params(),
         rookies=rookies,
         n_sims=args.n_sims,
         rng=np.random.default_rng(args.seed),
@@ -288,6 +234,23 @@ def main(argv: list[str] | None = None) -> int:
         "  The 50/50 weight is a stated guess; no weekly benchmark has measured it yet."
     )
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    try:
+        ctx = build_context(args)
+    except ValueError as exc:
+        # `require_team_id` is what normally raises, with a message naming the profile. Same
+        # failure, and it must not be a traceback.
+        print(str(exc), file=sys.stderr)
+        return 1
+    except (EspnLeagueError, OSError) as exc:
+        print(f"Cannot reach the league: {exc}", file=sys.stderr)
+        return 1
+    if ctx.target.source is not None:
+        print(ctx.target.describe())
+    return report(ctx, args)
 
 
 if __name__ == "__main__":
