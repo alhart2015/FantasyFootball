@@ -34,28 +34,22 @@ from pathlib import Path
 
 import pandas as pd
 
-from projections.draft.assistant.availability_loader import load_store_availability
 from projections.draft.assistant.league_profile import (
     add_league_arguments,
-    resolve_league_target,
 )
-from projections.draft.assistant.performance_variance import SEASON_GAMES, VarianceParams
-from projections.draft.assistant.rookies import attach_is_rookie
+from projections.draft.assistant.performance_variance import SEASON_GAMES
 from projections.draft.league_calendar import LeagueCalendar
 from projections.ingest.espn_league import (
     DEFAULT_CREDS_PATH,
-    EspnCredentials,
     EspnLeagueError,
     build_league_config,
     espn_to_gsis,
-    fetch_league_payload,
     parse_rosters,
-    parse_schedule,
-    parse_teams,
     pool_name_index,
 )
+from projections.midseason.context import InSeasonContext, build_context
 from projections.midseason.roster_shape import TRADEABLE, team_shapes
-from projections.midseason.standings import ProjectionInputError, first_unplayed_week
+from projections.midseason.standings import ProjectionInputError
 from projections.midseason.trades import WINS_NOISE_FLOOR, generate_all, simulate_trades
 from projections.midseason.valuation import PlayerValue, build_values
 from projections.schemas import RosterSlot
@@ -112,28 +106,21 @@ def _fmt(value: float, width: int = 7, places: int = 1) -> str:
     return f"{value:>{width}.{places}f}"
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv)
-    try:
-        target = resolve_league_target(args, require_team_id=True)
-        # Inside the try on purpose: `require_team_id` above is what normally raises, with a
-        # message naming the profile, but this is the same failure and must not be a traceback.
-        my_team_id = target.require_team()
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    if target.source is not None:
-        print(target.describe())
-
-    try:
-        creds = EspnCredentials.resolve(args.credentials)
-        payload = fetch_league_payload(target.league_id, target.season, creds)
-    except EspnLeagueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    config = build_league_config(payload, name=f"league {target.league_id}")
-    teams = parse_teams(payload)
+def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
+    """Roster shape, market map and proposals. Shared inputs come off `ctx`."""
+    target = ctx.target
+    my_team_id = ctx.require_team_id()
+    payload = ctx.payload
+    # **The file, not `build_league_config(payload)`.** This tool derived its own and the
+    # other three read the file; measured identical on the live league on 2026-09-08, and the
+    # context warns if that ever stops being true. `roster_slots` also sizes a network
+    # request, so two sources for it is two request sizes.
+    # Prefers the file (three of four tools already read it, and it is what sizes the
+    # rostered-player request) but falls back to deriving one from the payload, which is what
+    # this tool did before. Requiring the file outright would break
+    # `trade_analyzer --league-id ... --pool ...` in a checkout with no profile.
+    config = ctx.config or build_league_config(dict(payload), name=f"league {target.league_id}")
+    teams = ctx.teams()
     # A team id read off a file deserves the check `projected_standings` gives a typed one:
     # without it, `shapes[team_id]` raises a bare KeyError partway down the report.
     if my_team_id not in set(teams["team_id"]):
@@ -144,24 +131,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     names = dict(zip(teams["team_id"], teams["team_name"].astype(str), strict=True))
-    rosters = parse_rosters(payload)
+    rosters = parse_rosters(dict(payload))
     if rosters.empty:
         print("No rosters yet — the draft has not happened.", file=sys.stderr)
         return 1
 
-    pool = attach_is_rookie(
-        pd.read_parquet(target.pool), season=target.season, data_root=args.data_root
-    )
-    id_map = pd.read_parquet(args.data_root / "raw" / "id_map.parquet")
+    # Validated and `is_rookie`-decorated by the context. This tool used to skip both and
+    # could carry a different `gsis_id` dtype into `espn_to_gsis`.
+    pool = ctx.pool
+    id_map = ctx.id_map
     try:
-        external = _latest_external(args.data_root, target.season)
+        external = _latest_external(ctx.data_root, target.season)
     except ProjectionInputError as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
     settings = payload.get("settings", {}) or {}
     calendar = LeagueCalendar.from_espn_settings(settings.get("scheduleSettings", {}) or {})
-    week = first_unplayed_week(parse_schedule(dict(payload), teams), calendar)
+    # **`schedule_week`.** Section C simulates seasons through `project_league_standings`,
+    # which re-derives the schedule's own week, and `simulate_trades` passes this same number
+    # to `injury_adjusted_pool`. A `--week` override here would discount injuries over one
+    # horizon while the simulation replayed another.
+    week = ctx.schedule_week
     games_remaining = max(SEASON_GAMES - (week - 1), 0)
     gsis = espn_to_gsis(rosters, id_map, name_index=pool_name_index(pool))
     # Defenses live in their own table (issue #166); without them every rostered D/ST is
@@ -170,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     if config.roster_slots.get(RosterSlot.DST, 0) > 0:
         try:
             dst = read_latest_partition(
-                args.data_root / "raw", "dst_projections", season=target.season
+                ctx.data_root / "raw", "dst_projections", season=target.season
             )
         except (FileNotFoundError, ValueError):
             print(
@@ -200,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Availability is what makes `surplus` see byes and injuries. Without it every bench
     # player prices at exactly 0.0 -- see `roster_shape.surplus`.
-    availability = load_store_availability(pool, season=target.season, data_root=args.data_root)
+    availability = ctx.availability()
     shapes = team_shapes(
         by_team,
         names,
@@ -275,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
             pool,
             id_map,
             availability,
-            VarianceParams.load(),
+            ctx.variance_params(),
             proposals,
             season=target.season,
             my_team_id=my_team_id,
@@ -315,6 +306,29 @@ def main(argv: list[str] | None = None) -> int:
         )
     print("\n  'Fair on ESPN's numbers' is a proxy for acceptability, not a prediction.")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    try:
+        ctx = build_context(args, require_config=False)
+    except ValueError as exc:
+        # `require_team_id` is what normally raises, with a message naming the profile. Same
+        # failure, and it must not be a traceback.
+        print(str(exc), file=sys.stderr)
+        return 1
+    except EspnLeagueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if ctx.target.source is not None:
+        print(ctx.target.describe())
+    for note in ctx.notes:
+        # The config-vs-ESPN drift warning. `roster_slots` from the file sizes the
+        # rostered-player request, so a drift silently thins the projections behind
+        # every number below -- computing this and discarding it is worse than not
+        # computing it, because it looks like the check is running.
+        print(f"  ! {note}", file=sys.stderr)
+    return report(ctx, args)
 
 
 if __name__ == "__main__":

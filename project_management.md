@@ -6,6 +6,83 @@ Running log of project status, decisions, and next steps. Append new entries at 
 
 ---
 
+## One weekly report, and the four tools now share their inputs (2026-09-08, branch `feat/weekly-report`)
+
+**`python scripts/weekly_report.py`** — start/sit, waivers, standings, trades, one league fetch.
+Spec `docs/superpowers/specs/2026-09-08-weekly-report-design.md`, plan
+`docs/superpowers/plans/2026-09-08-weekly-report.md`.
+
+**The reason for the refactor was not speed, and measuring said so.** All four tools together
+take ~31s (standings 2s, start/sit 3s, waivers 3s, trades 23s), so the "four redundant ESPN
+calls" argument was weak and the spec says so. The real problem was that **the four did not
+agree with each other and nothing made them agree**: the same payload fetched four times, the
+week derived three ways, `LeagueConfig` from two sources, `trade_analyzer` alone skipping pool
+validation, and `attach_is_rookie`/`load_store_availability` rescanning 2018.. up to eight
+times per combined run. #175 is what that costs when it drifts — the standings simulator was
+injury-blind while the other two were not.
+
+**`InSeasonContext` shares the INPUTS and deliberately not the outputs.** Start/sit's blended
+weekly number is *supposed* to differ from the waiver tool's ESPN-only one — a second opinion
+is the whole reason start/sit exists — so the report labels rather than reconciles. Averaging
+them would invent a quantity no tool computes. Same for the three rest-of-season bases and the
+two injury horizons.
+
+**The week is a field, and that fixed a live inconsistency.** `--week` used to move the waiver
+and start/sit horizons and leave standings and trades on the real week: one flag, two meanings.
+It now moves everything. That also makes the shared ONTEAM payload sound — it carries
+`scoring_period=week`, so reuse between the waiver and start/sit sections is only correct
+because both read one integer.
+
+**Task 0 captured all four tools' live output before anything was touched, and it earned its
+place three times over.** Every one of these was invisible to the test suite and visible in a
+diff:
+
+- Building `MyTeamRun` eagerly put its rest-of-season diagnostics on the **standings** report,
+  which already prints the same warning from its own `run.diagnostics`. Duplicate line. Now lazy.
+- The config cross-check calls `build_league_config`, which narrates ESPN's scoring categories
+  — three extra lines on **every run of every tool**. Silenced; it is a diagnostic, its logging
+  is not the caller's business.
+- `build_context` demanded a `league_config.json` that **`projected_standings` never read**
+  (`project_league_standings` derives its own from the payload). That would have turned a
+  working command into a failing one. `config` and `my_team_id` are optional now.
+
+**Result: `projected_standings`, `start_sit` and `waiver_recommender` are byte-identical to
+their baselines.** `trade_analyzer`'s numbers are byte-identical; the only change is two log
+lines that no longer appear, because it reads the config file instead of deriving one. That is
+the end-to-end proof the two config sources are equivalent — compared as objects first, now
+confirmed through a full report on real data.
+
+**`resolve_league_target` deletes the five league flags off the Namespace**, so it cannot be
+called twice on one `args`. `build_context` splits into resolve + `assemble_context` for the
+caller that needs the target before committing to the assembly: the waiver tool lists the
+league's teams and exits when no team was named, and loading a pool, an id_map and a decade of
+`weekly_stats` to print that list would be absurd. Its own existing test caught the regression.
+
+**The report's section flags are derived from each tool's parser, not listed by hand.** The
+first cut listed them and missed `--max-players`; trades crashed on the first real run. A
+tool's parser is the only thing that knows what that tool reads.
+
+**Sections are ordered by deadline, not importance** — lineup locks at kickoff, waivers clear
+Wednesday, standings and trades keep. A failing section prints under its own heading and the
+rest continue, with a non-zero exit so a cron can tell an incomplete document from a complete
+one. Verified live: **26s for all four, against 31s run separately**, every spot-checked number
+matching its standalone run.
+
+**Two things found and deliberately not fixed here**, both with issues, both because a
+composition PR whose discipline is "no number may change" is the wrong place to change one:
+
+- [#176](https://github.com/alhart2015/FantasyFootball/issues/176) — `VorpTableSchema` declares
+  `gsis_id: Series[str]`, which is object dtype in pandera, so it coerces the pyarrow string
+  back and **every caller's `astype(_PYARROW_STR)` has been dead**. Kept byte-for-byte, pinned
+  by a test that fails the day the schema is fixed.
+- [#177](https://github.com/alhart2015/FantasyFootball/issues/177) —
+  `project_league_standings` passes `points_to_date={}`, so the standings simulation ignores
+  points already scored. Nothing in week 1; by week 10 it is projecting teams as though the
+  season had not started. The one of the three rest-of-season differences that is a bug rather
+  than a decision.
+
+---
+
 ## Start/sit built, and it is a two-source tool on purpose (2026-09-07, branch `feat/start-sit`)
 
 **The last unbuilt mid-season tool.** Spec `docs/superpowers/specs/2026-09-07-start-sit-design.md`,
