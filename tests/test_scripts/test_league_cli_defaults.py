@@ -24,6 +24,7 @@ import run_season_dashboard
 import start_sit
 import trade_analyzer
 import waiver_recommender
+import weekly_report
 
 from projections.draft.assistant.league_profile import (
     LEAGUE_ARGUMENTS,
@@ -37,6 +38,7 @@ from projections.schemas import RosterSlot, Ruleset
 PARSERS: dict[str, Callable[[list[str]], argparse.Namespace]] = {
     "projected_standings": projected_standings._parse_args,
     "start_sit": start_sit._parse_args,
+    "weekly_report": weekly_report._parse_args,
     "waiver_recommender": waiver_recommender._parse_args,
     "trade_analyzer": trade_analyzer._parse_args,
     "run_season_dashboard": run_season_dashboard._parse_args,
