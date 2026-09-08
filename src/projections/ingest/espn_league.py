@@ -700,6 +700,45 @@ def parse_draft_settings(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: Messages already emitted this process, so a fact about a league is stated once.
+_SAID: set[str] = set()
+
+
+def _log_once(fmt: str, *args: object) -> None:
+    """Log at WARNING, but only the first time this exact message appears in a process.
+
+    **`build_league_config` is called once per SIMULATION.** `project_league_standings` derives
+    a config from the payload on every run, and `simulate_trades` runs one baseline plus one
+    per proposal — so a default trade report emitted the same two scoring sentences ten times,
+    twenty lines of stderr. In a terminal that interleaves with the report on stdout, and it
+    buried the section the reader had opened the report to see. Repetition did not make the
+    warning louder; it made the document unreadable, which is worse than not warning at all.
+
+    These are facts about a league's scoring settings. They do not change between calls within
+    a run, so the second copy carries no information.
+
+    Deduped on the FORMATTED message, so two genuinely different leagues in one process each
+    get their say — which is what a backtest sweeping seasons needs.
+    """
+    message = fmt % args if args else fmt
+    if message in _SAID:
+        return
+    if _log.disabled or not _log.isEnabledFor(logging.WARNING):
+        # **Suppressed is not said.** `context._config_notes` silences this logger while it
+        # cross-checks a config it already has, and that call is often the FIRST build of the
+        # run. Recording the message there would spend the single emission on a log line
+        # nobody could see, and the note would never appear at all -- which is how this fix,
+        # in its first cut, turned twenty copies into zero.
+        return
+    _SAID.add(message)
+    _log.warning("%s", message)
+
+
+def reset_log_once_cache() -> None:
+    """Forget what has been said. For tests that assert on the first emission."""
+    _SAID.clear()
+
+
 def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> LeagueConfig:
     """Derive a `LeagueConfig` from an ESPN payload.
 
@@ -738,13 +777,13 @@ def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> 
     draft = parse_draft_settings(payload)
     ruleset, notes = parse_ruleset(payload)
     for note in notes:
-        _log.warning("Scoring: %s", note)
+        _log_once("Scoring: %s", note)
 
     espn_slots = parse_roster_slots(payload)
     modelled_slots = {slot: count for slot, count in espn_slots.items() if slot != RosterSlot.K}
     dropped = {slot: espn_slots[slot] for slot in espn_slots if slot not in modelled_slots}
     if dropped:
-        _log.warning(
+        _log_once(
             "Roster: dropped %s from the LeagueConfig — kicker scoring is not modelled by "
             "Ruleset, so a K slot would be a position with no numbers behind it. ESPN's real "
             "roster is %d deep; this config models %d picks.",

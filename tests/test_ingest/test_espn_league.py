@@ -7,6 +7,7 @@ shaped like a real ESPN multi-view response.
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 from pathlib import Path
 from typing import Any
@@ -1246,3 +1247,94 @@ def test_an_unknown_name_still_resolves_to_na() -> None:
     resolved = espn_to_gsis(rosters, _rookie_id_map(), name_index=pool_name_index(_rookie_pool()))
 
     assert pd.isna(resolved.iloc[0])
+
+
+def test_a_league_scoring_note_is_logged_once_however_many_times_the_config_is_built(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`build_league_config` runs once per SIMULATION.
+
+    `project_league_standings` derives a config from the payload on every run and
+    `simulate_trades` runs a baseline plus one per proposal, so a default trade report emitted
+    the same two scoring sentences ten times -- twenty lines of stderr, interleaved on a
+    terminal with the report on stdout, burying the section the reader had opened it to see.
+    """
+    from projections.ingest.espn_league import build_league_config, reset_log_once_cache
+
+    reset_log_once_cache()
+    payload = _league_payload_with_unmodelled_scoring()
+
+    with caplog.at_level(logging.WARNING, logger="projections.ingest.espn_league"):
+        for _ in range(10):
+            build_league_config(dict(payload), name="repeat")
+
+    scoring = [r for r in caplog.records if r.getMessage().startswith("Scoring:")]
+    assert scoring, "the note must still be emitted at least once"
+    assert len(scoring) == len({r.getMessage() for r in scoring}), (
+        "each distinct note exactly once; repetition did not make it louder, it made the "
+        "report unreadable"
+    )
+
+
+def test_two_different_leagues_each_get_their_say(caplog: pytest.LogCaptureFixture) -> None:
+    """Deduped on the formatted message, not on "have we ever warned" -- a backtest sweeping
+    seasons must still hear about each one."""
+    from projections.ingest.espn_league import build_league_config, reset_log_once_cache
+
+    reset_log_once_cache()
+    one = _league_payload_with_unmodelled_scoring()
+    two = _league_payload_with_unmodelled_scoring(stat_id="999")
+
+    with caplog.at_level(logging.WARNING, logger="projections.ingest.espn_league"):
+        build_league_config(dict(one), name="a")
+        build_league_config(dict(two), name="b")
+
+    messages = {r.getMessage() for r in caplog.records if r.getMessage().startswith("Scoring:")}
+    assert len(messages) >= 2, messages
+
+
+def _league_payload_with_unmodelled_scoring(stat_id: str = "102") -> dict[str, Any]:
+    """A league whose scoring includes a category `Ruleset` does not model, so the note fires."""
+    return {
+        "id": 1,
+        "settings": {
+            "name": "Noisy League",
+            "size": 2,
+            "scheduleSettings": {"matchupPeriodCount": 2, "playoffTeamCount": 2},
+            "rosterSettings": {"lineupSlotCounts": {"2": 1, "20": 3}},
+            "scoringSettings": {
+                "scoringItems": [
+                    {"statId": 42, "points": 0.1},
+                    {"statId": int(stat_id), "points": 6},
+                ]
+            },
+            "draftSettings": {"auctionBudget": 200},
+        },
+        "teams": [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
+    }
+
+
+def test_a_suppressed_note_is_not_counted_as_said(caplog: pytest.LogCaptureFixture) -> None:
+    """The trap the first cut of this fix fell into: twenty copies became zero.
+
+    `context._config_notes` silences this logger while cross-checking a config it already
+    holds, and that is often the FIRST build of a run. Recording the message there spent the
+    single emission on a line nobody could see, so the note never appeared at all.
+    """
+    from projections.ingest.espn_league import build_league_config, reset_log_once_cache
+
+    reset_log_once_cache()
+    payload = _league_payload_with_unmodelled_scoring()
+    espn_logger = logging.getLogger("projections.ingest.espn_league")
+
+    espn_logger.disabled = True
+    try:
+        build_league_config(dict(payload), name="silenced")
+    finally:
+        espn_logger.disabled = False
+
+    with caplog.at_level(logging.WARNING, logger="projections.ingest.espn_league"):
+        build_league_config(dict(payload), name="silenced")
+
+    scoring = [r for r in caplog.records if r.getMessage().startswith("Scoring:")]
+    assert scoring, "the suppressed build must not have spent the one emission"
