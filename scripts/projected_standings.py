@@ -32,13 +32,20 @@ from projections.draft.assistant.league_profile import (
 )
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
+from projections.draft.league_calendar import LeagueCalendar
 from projections.ingest.espn_league import (
     EspnCredentials,
     EspnLeagueError,
     fetch_league_payload,
+    parse_schedule,
     parse_teams,
 )
-from projections.midseason.standings import ProjectionInputError, project_league_standings
+from projections.midseason.standings import (
+    ProjectionInputError,
+    first_unplayed_week,
+    project_league_standings,
+)
+from projections.midseason.swap_impact import injury_adjusted_pool
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 from projections.store import write_partition
 
@@ -108,11 +115,33 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     pool = attach_is_rookie(_load_pool(target.pool), season=target.season, data_root=args.data_root)
+    id_map = pd.read_parquet(id_map_path)
+
+    # **The simulator has no concept of an injury, so the pool is where one has to reach it.**
+    # This ran on the raw pool until 2026-09-07, which meant every projected finish in the
+    # league treated a player on IR as though he would play all seventeen games. The waiver and
+    # trade tools already adjusted before simulating; only the tool whose entire output IS the
+    # simulation did not, so its numbers were the least trustworthy of the three and looked the
+    # most authoritative.
+    #
+    # `first_unplayed_week` before the run, because the adjustment needs a horizon:
+    # `season_multiplier` divides the games a designation costs by the games that remain, so
+    # the same IR tag is a 24% cut in week 1 and a 67% cut in week 12.
+    calendar = LeagueCalendar.from_espn_settings(
+        (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
+    )
+    schedule = parse_schedule(dict(payload), teams)
+    week = first_unplayed_week(schedule, calendar) if not schedule.empty else 1
+    adjusted_pool = injury_adjusted_pool(pool, payload, id_map, week=week)
+
     try:
         run = project_league_standings(
             payload,
-            pool,
-            pd.read_parquet(id_map_path),
+            adjusted_pool,
+            id_map,
+            # Availability is fitted from history and is about MISSED GAMES generally; the
+            # injury adjustment above is about THIS player's current designation. Two
+            # different things, so availability still reads the unadjusted pool.
             load_store_availability(pool, season=target.season, data_root=args.data_root),
             VarianceParams.load(),
             season=target.season,

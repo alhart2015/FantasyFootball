@@ -185,7 +185,7 @@ def simulate_swaps(
     being dropped from the list. Silently omitting them printed them identically to a candidate
     that simulated at exactly 0.00, which is the row where the answer is most uncertain.
     """
-    adjusted = pool if week is None else _injury_adjusted_pool(pool, payload, id_map, week=week)
+    adjusted = pool if week is None else injury_adjusted_pool(pool, payload, id_map, week=week)
     baseline = _standings_row(
         project_league_standings(
             payload,
@@ -289,7 +289,7 @@ def _standings_row(run: StandingsRun, my_team_id: int) -> dict[str, float]:
     }
 
 
-def _injury_adjusted_pool(
+def injury_adjusted_pool(
     pool: pd.DataFrame, payload: Mapping[str, Any], id_map: pd.DataFrame, *, week: int
 ) -> pd.DataFrame:
     """The pool with each rostered player's remaining points scaled by his injury status.
@@ -303,6 +303,18 @@ def _injury_adjusted_pool(
     is left alone, which is correct — a free agent's designation is applied to his WEEKLY
     projection in stage 1, over a horizon of one week, and applying it again here would
     double-count.
+
+    **Public because `scripts/projected_standings.py` needs it too.** It shipped calling
+    `project_league_standings` on the RAW pool, so the playoff odds it printed simulated every
+    injured player in the league at full strength — a team carrying an IR back read as though
+    he would play all seventeen games. That is the identical defect the waiver work already
+    fixed once inside this module.
+
+    It stays HERE rather than moving into `standings` or `injuries` because it needs
+    `waivers.player_id`, and both of those are upstream of `waivers` in the import graph
+    (`standings <- my_team <- waivers`). The deeper fix is for `project_league_standings` to
+    apply this itself so no caller can forget; that needs `player_id` moved to a neutral home
+    first, which is a wider change than the bug warrants.
     """
     rosters = parse_rosters(dict(payload))
     crosswalk = espn_gsis_crosswalk(id_map)

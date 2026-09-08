@@ -45,7 +45,7 @@ from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.midseason.roster_shape import TeamShape, lineup_points
 from projections.midseason.standings import ProjectionInputError, project_league_standings
-from projections.midseason.swap_impact import _injury_adjusted_pool
+from projections.midseason.swap_impact import injury_adjusted_pool
 from projections.midseason.valuation import PlayerValue
 from projections.schemas import RosterSlot
 
@@ -281,12 +281,12 @@ def simulate_trades(
     draws and most of the noise cancels; the residual paired sd is ~0.062 wins at 2,000 sims,
     which is why `WINS_NOISE_FLOOR` exists and is printed rather than left to the reader.
 
-    **The pool is injury-adjusted first**, reusing `swap_impact._injury_adjusted_pool`.
+    **The pool is injury-adjusted first**, reusing `swap_impact.injury_adjusted_pool`.
     `project_league_standings` knows nothing about `injury_status`, so the raw pool would
     simulate a suspended player at full strength -- which on this league is the single case the
     tool was built for.
     """
-    adjusted = _injury_adjusted_pool(pool, payload, id_map, week=week)
+    adjusted = injury_adjusted_pool(pool, payload, id_map, week=week)
 
     def run(pay: Mapping[str, Any]) -> tuple[float, float, float]:
         standings = project_league_standings(
