@@ -58,7 +58,7 @@ def test_the_league_is_assembled_once_for_the_whole_report(
     monkeypatch.setattr(
         weekly_report,
         "SECTIONS",
-        tuple((name, name.upper(), _spy(name, calls)) for name in ("a", "b", "c")),
+        tuple((name, name.upper(), _FakeModule(name, calls)) for name in ("a", "b", "c")),
     )
     monkeypatch.setattr(weekly_report, "_NAMES", ("a", "b", "c"))
     monkeypatch.setattr(weekly_report, "_parse_args", lambda argv: _args())
@@ -74,19 +74,15 @@ def test_a_failing_section_does_not_stop_the_others(
     report that dies at section three has told you nothing at all."""
     calls: list[str] = []
 
-    def _boom(ctx: Any, args: Any) -> int:
-        calls.append("boom")
-        raise ValueError("external projections are stale")
-
     monkeypatch.setattr(weekly_report, "resolve_league_target", lambda args, **k: _Target())
     monkeypatch.setattr(weekly_report, "assemble_context", lambda target, args, **k: _ctx())
     monkeypatch.setattr(
         weekly_report,
         "SECTIONS",
         (
-            ("a", "A", _spy("a", calls)),
-            ("b", "B", _boom),
-            ("c", "C", _spy("c", calls)),
+            ("a", "A", _FakeModule("a", calls)),
+            ("b", "B", _FakeModule("b", calls, raises="external projections are stale")),
+            ("c", "C", _FakeModule("c", calls)),
         ),
     )
     monkeypatch.setattr(weekly_report, "_NAMES", ("a", "b", "c"))
@@ -94,7 +90,7 @@ def test_a_failing_section_does_not_stop_the_others(
 
     # non-zero, because the document is incomplete -- but every other section still ran
     assert weekly_report.main([]) == 1
-    assert calls == ["a", "boom", "c"]
+    assert calls == ["a", "b", "c"]
     err = capsys.readouterr().err
     assert "could not run" in err and "external projections are stale" in err
 
@@ -119,28 +115,61 @@ def test_an_unknown_section_name_is_an_error_not_a_silent_no_op(
     assert "trades" in err, "it names the valid options"
 
 
-def test_section_defaults_are_taken_from_each_tool_rather_than_listed_by_hand() -> None:
-    """The first cut hand-wrote the union and missed `--max-players`, so the trades section
-    crashed on the first real run. Each tool's parser is the only thing that knows what that
-    tool reads."""
+def test_each_section_gets_its_own_defaults_not_a_merged_namespace() -> None:
+    """The collisions a single merged Namespace got wrong, resolved by module import order.
+
+    `--top` is 5 for waivers and 8 for trades; `--n-sims` is 20,000 for start/sit's P(right)
+    and 2,000 everywhere else. Merging silently ran trades at 5 proposals and computed
+    P(right) from a tenth of the draws the standalone tool uses -- both contradicting this
+    report's claim that a section behaves here exactly as it does alone.
+    """
+    import start_sit
+    import trade_analyzer
+    import waiver_recommender
+
     args = weekly_report._parse_args([])
-    for flag in ("max_players", "espn_tolerance", "min_gain", "top", "weight_espn"):
-        assert hasattr(args, flag), f"{flag} is read by a section and must be present"
+    assert weekly_report.section_args(start_sit, args).n_sims == 20_000
+    assert weekly_report.section_args(trade_analyzer, args).n_sims == 2_000
+    assert weekly_report.section_args(trade_analyzer, args).top == 8
+    assert weekly_report.section_args(waiver_recommender, args).top == 5
 
 
-def test_the_report_declares_its_own_flags_over_a_section_default() -> None:
-    """`--n-sims` and `--seed` are the report's to set; a section default must not win."""
-    args = weekly_report._parse_args(["--n-sims", "17", "--seed", "9"])
-    assert args.n_sims == 17
-    assert args.seed == 9
+def test_a_flag_the_report_owns_overrides_the_section_default() -> None:
+    """`--week`, `--fast` and `--seed` are the reader's instruction to the whole report."""
+    import start_sit
+
+    args = weekly_report._parse_args(["--seed", "9", "--week", "5", "--fast"])
+    section = weekly_report.section_args(start_sit, args)
+    assert section.seed == 9
+    assert section.week == 5
+    assert section.fast is True
+    # ...and a flag it merely shares a name with is untouched
+    assert section.n_sims == 20_000
 
 
-def _spy(name: str, calls: list[str]) -> Any:
-    def _run(ctx: InSeasonContext, args: argparse.Namespace) -> int:
-        calls.append(name)
+def test_every_section_carries_its_own_module() -> None:
+    """One tuple, so a section cannot be half-registered: the module supplies both the
+    `report` to call and the `_parse_args` that owns its defaults."""
+    for name, heading, module in weekly_report.SECTIONS:
+        assert callable(module.report), name
+        assert callable(module._parse_args), name
+        assert heading
+
+
+class _FakeModule:
+    """Stands in for a section module: a `report` to call and a parser owning its defaults."""
+
+    def __init__(self, name: str, calls: list[str], raises: str | None = None) -> None:
+        self._name, self._calls, self._raises = name, calls, raises
+
+    def report(self, ctx: InSeasonContext, args: argparse.Namespace) -> int:
+        self._calls.append(self._name)
+        if self._raises:
+            raise ValueError(self._raises)
         return 0
 
-    return _run
+    def _parse_args(self, argv: list[str]) -> argparse.Namespace:
+        return argparse.Namespace()
 
 
 class _Target:

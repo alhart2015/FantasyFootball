@@ -27,6 +27,7 @@ import argparse
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import projected_standings
 import start_sit
@@ -41,13 +42,14 @@ from projections.ingest.espn_league import EspnLeagueError
 from projections.midseason.context import InSeasonContext, assemble_context
 from projections.midseason.standings import ProjectionInputError
 
-#: Section name -> (heading, the tool's `report`). Order is deadline order; see the module
-#: docstring. Adding a tool here is all it takes to put it in the report.
-SECTIONS: tuple[tuple[str, str, Callable[[InSeasonContext, argparse.Namespace], int]], ...] = (
-    ("start-sit", "START / SIT — your lineup locks at kickoff", start_sit.report),
-    ("waivers", "WAIVERS — claims clear Wednesday", waiver_recommender.report),
-    ("standings", "STANDINGS — where this is heading", projected_standings.report),
-    ("trades", "TRADES — no deadline, slowest to act on", trade_analyzer.report),
+#: (name, heading, module) per section, in DEADLINE order — see the module docstring. The
+#: module carries both the `report` to call and the `_parse_args` that owns that section's
+#: defaults; keeping them in one tuple means a section cannot be half-registered.
+SECTIONS: tuple[tuple[str, str, Any], ...] = (
+    ("start-sit", "START / SIT — your lineup locks at kickoff", start_sit),
+    ("waivers", "WAIVERS — claims clear Wednesday", waiver_recommender),
+    ("standings", "STANDINGS — where this is heading", projected_standings),
+    ("trades", "TRADES — no deadline, slowest to act on", trade_analyzer),
 )
 _NAMES = tuple(name for name, _, _ in SECTIONS)
 
@@ -68,32 +70,44 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--week", type=int, default=None, help="Default: the next unplayed week.")
     p.add_argument("--only", default=None, help=f"Comma-separated: {', '.join(_NAMES)}.")
     p.add_argument("--skip", default=None, help="Comma-separated sections to leave out.")
-    p.add_argument("--fast", action="store_true", help="Skip the simulations.")
-    p.add_argument("--n-sims", type=int, default=2000)
+    p.add_argument(
+        "--fast",
+        action="store_true",
+        help="Skip the OPTIONAL simulations (start/sit P(right), the waiver paired swaps, "
+        "trade stage 2). The standings Monte-Carlo still runs -- it is not optional, it IS "
+        "that section.",
+    )
     p.add_argument("--seed", type=int, default=0)
 
-    return _fill_section_defaults(p.parse_args(argv))
+    return p.parse_args(argv)
 
 
-def _fill_section_defaults(args: argparse.Namespace) -> argparse.Namespace:
-    """Give every section the tuning flags it reads, at its OWN default.
+#: Flags this script owns. A section reading one of these gets the report's value, because the
+#: reader typed it here; everything else falls back to that section's own default.
+_REPORT_OWNED = frozenset({"week", "fast", "seed", "data_root", "credentials", "only", "skip"})
 
-    **Derived, not hand-written.** The first cut listed the union by hand and missed
-    `--max-players`, so the trades section crashed on the first real run. Each tool's parser is
-    the only thing that knows what that tool reads, so it is asked directly; a flag added to a
-    section can no longer break this report by omission.
 
-    Only fills what is absent, so the flags this script declares itself (and the five league
-    ones) win. Anyone wanting to tune a section-specific knob runs that tool standalone —
-    surfacing thirty flags here would make `--help` useless.
+def section_args(module: Any, args: argparse.Namespace) -> argparse.Namespace:
+    """That section's own defaults, overlaid with what the reader actually typed here.
+
+    **Not one merged namespace.** The first cut built a single Namespace by filling absent keys
+    from each tool in turn, which resolved collisions by module import order and got two of
+    them wrong: `--top` is 5 for waivers and 8 for trades, so trades silently ran at 5; and
+    `--n-sims` is 20,000 for start/sit's P(right) and 2,000 elsewhere, so P(right) was computed
+    from a tenth of the draws the standalone tool uses. Both contradicted this report's claim
+    that a section behaves here exactly as it does alone.
+
+    So each section is handed ITS parser's defaults. A flag this script owns (`--week`,
+    `--fast`, `--seed`, …) overrides, because the reader typed it; a flag it merely happens to
+    share a name with does not.
     """
-    for module in (start_sit, waiver_recommender, projected_standings, trade_analyzer):
-        # `_parse_args([])` is exactly what `test_league_cli_defaults` drives, so every one of
-        # these is known to parse an empty command line.
-        for key, value in vars(module._parse_args([])).items():
-            if not hasattr(args, key):
-                setattr(args, key, value)
-    return args
+    section: argparse.Namespace = module._parse_args([])
+    for key in _REPORT_OWNED:
+        if hasattr(args, key) and hasattr(section, key):
+            setattr(section, key, getattr(args, key))
+    # The five league flags are consumed off `args` by `resolve_league_target` before any
+    # section runs, so they are neither present nor needed here.
+    return section
 
 
 def _selected(args: argparse.Namespace) -> list[str] | None:
@@ -169,9 +183,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ! {note}", file=sys.stderr)
 
     failures = 0
-    for name, heading, report in SECTIONS:
+    for name, heading, module in SECTIONS:
         if name in sections:
-            failures += 1 if _run_section(heading, report, ctx, args) else 0
+            ran = _run_section(heading, module.report, ctx, section_args(module, args))
+            failures += 1 if ran else 0
 
     # Non-zero when a section failed, so this is usable from a cron. The sections that DID run
     # have already printed; the exit code is about whether the document is complete.

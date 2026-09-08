@@ -345,3 +345,49 @@ def test_a_context_can_be_built_without_a_league_config(_env: dict[str, Any]) ->
         ctx.require_config()
     with pytest.raises(ValueError, match=r"league_config.json"):
         ctx.rostered_limit()
+
+
+def test_week_and_schedule_week_are_two_different_horizons(_env: dict[str, Any]) -> None:
+    """Collapsing them was a real bug on this branch, and the exact one #175 fixed.
+
+    `project_league_standings` takes no week and re-derives the schedule's own, so a season
+    simulation always replays from `schedule_week`. The injury discount handed to it divides
+    games missed by games REMAINING, so it must use that same number. With `--week 12` during
+    real week 3 a shared horizon haircut IR players over 6 games while the simulator replayed
+    15 — and the playoff odds still looked entirely reasonable.
+    """
+    ctx = _build(_env, week=12)
+    assert ctx.week == 12, "the week being asked about"
+    assert ctx.schedule_week == 1, "the week the league is actually in — --week must not move it"
+
+
+def test_without_an_override_the_two_horizons_agree(_env: dict[str, Any]) -> None:
+    ctx = _build(_env, week=None)
+    assert ctx.week == ctx.schedule_week == 1
+
+
+def test_schedule_week_matches_what_the_simulator_derives(_env: dict[str, Any]) -> None:
+    """Pinned against `first_unplayed_week` itself, which is what
+    `project_league_standings` calls internally."""
+    from projections.draft.league_calendar import LeagueCalendar
+    from projections.ingest.espn_league import parse_schedule, parse_teams
+    from projections.midseason.standings import first_unplayed_week
+
+    ctx = _build(_env, week=9)
+    payload = _env["payload"]
+    calendar = LeagueCalendar.from_espn_settings(
+        (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
+    )
+    schedule = parse_schedule(dict(payload), parse_teams(dict(payload)))
+    assert ctx.schedule_week == first_unplayed_week(schedule, calendar)
+
+
+def test_a_demanded_config_that_is_absent_fails_at_load_naming_the_file(
+    _env: dict[str, Any],
+) -> None:
+    """It used to fall through as `config=None` and raise later from inside `report()`, which
+    several callers invoke outside their try — so the user got a traceback, and a message
+    telling them to pass --league-dir when they just had."""
+    _env["args"].league_dir = _env["tmp"] / "no-such-dir"
+    with pytest.raises(ValueError, match=r"no league_config\.json at"):
+        build_context(_env["args"], require_team_id=False, require_config=True)

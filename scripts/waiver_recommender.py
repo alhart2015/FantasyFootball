@@ -336,7 +336,14 @@ def run(args: argparse.Namespace) -> int:
             print(f"  {int(team['team_id']):>3}  {team['team_name']}")
         return 2
 
-    return report(assemble_context(target, args), args)
+    ctx = assemble_context(target, args)
+    for note in ctx.notes:
+        # The config-vs-ESPN drift warning. `roster_slots` from the file sizes the
+        # rostered-player request, so a drift silently thins the projections behind
+        # every number below -- computing this and discarding it is worse than not
+        # computing it, because it looks like the check is running.
+        print(f"  ! {note}", file=sys.stderr)
+    return report(ctx, args)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -52,10 +52,14 @@ logger = logging.getLogger(__name__)
 class InSeasonContext:
     """Everything the in-season tools share, resolved once.
 
-    Not frozen, because the memo slots below are assigned on first use. The *shared data* is
-    protected differently: every accessor that hands out a DataFrame hands out a copy, so one
-    section cannot corrupt another's inputs. Four consumers reading one mutable frame is a
-    defect waiting for a `df["col"] = ...` somewhere.
+    Not frozen, because the memo slots below are assigned on first use.
+
+    **`roster()` returns a copy; `pool`, `id_map`, `weekly_stats` and `payload` do not.** They
+    are handed to all four sections by reference, and today no section mutates them — but that
+    is a property of the current callers, not something this object enforces. An in-place
+    `df["col"] = ...` in any section would reach the other three. `roster()` is a copy because
+    it is derived per call anyway; making the rest copies would mean four copies of the pool
+    per report for a hazard that has not occurred. Stated rather than claimed away.
     """
 
     target: LeagueTarget
@@ -71,11 +75,21 @@ class InSeasonContext:
     pool: pd.DataFrame
     id_map: pd.DataFrame
     weekly_stats: pd.DataFrame
-    #: **The single horizon.** The injury discount, `scoring_period` on the free-agent fetch
-    #: and `games_remaining` all read this one integer. Two copies of a horizon that must stay
-    #: identical is how an IR player gets discounted over seventeen games while the simulation
-    #: prorates him over nine, and the resulting playoff odds still look reasonable.
+    #: **The week being ASKED ABOUT.** `--week` moves it. This is what prices a weekly
+    #: projection: `scoring_period` on the ESPN request, the blend start/sit solves, the
+    #: lineup gain the waiver tool filters on.
     week: int
+    #: **The week the league is actually IN**, from the schedule. `--week` does NOT move it.
+    #:
+    #: These are two different things and collapsing them was a real bug on this branch.
+    #: `project_league_standings` takes no week and re-derives this one internally, so a
+    #: season simulation always replays from here — and the injury discount handed to it must
+    #: use the same number, because `season_multiplier` divides games missed by games
+    #: REMAINING. With `--week 12` during real week 3, a shared horizon haircut IR players
+    #: over 6 games while the simulator replayed 15, and the playoff odds still looked fine.
+    #: That is the exact failure #175's `injury_adjusted_pool_at_current_week` was written to
+    #: prevent, reintroduced here by making one week serve both jobs.
+    schedule_week: int
     data_root: Path
     my_team_id: int | None
     #: Anything the assembly wants the reader to distrust. Printed by the tools, not here.
@@ -277,6 +291,16 @@ def assemble_context(
     creds = EspnCredentials.resolve(args.credentials)
     payload = fetch_league_payload(target.league_id, target.season, creds)
 
+    # A path that was demanded and is not there fails HERE, naming the file. Letting it fall
+    # through as `config=None` meant `require_config()` raised later from inside `report()`,
+    # which several callers invoke outside their try block -- so the user got a traceback, and
+    # a message telling them to pass `--league-dir` when they just had.
+    if require_config and (league_config_path is None or not league_config_path.exists()):
+        raise ValueError(
+            f"no league_config.json at {league_config_path}. Pass --league-dir <dir> "
+            "containing one, or drop the explicit arguments and let the league profile supply "
+            "them."
+        )
     config = (
         LeagueConfig.model_validate_json(league_config_path.read_text(encoding="utf-8"))
         if league_config_path is not None and league_config_path.exists()
@@ -294,8 +318,8 @@ def assemble_context(
 
     # **Derived from the payload, not from `my_team`.** The week is the league's, not one
     # franchise's, and tying it to `MyTeamRun` would mean a tool that needs no team (projected
-    # standings) could not have a week. It is the same derivation `build_my_team` performs
-    # internally, so the two agree; a test pins that.
+    # standings) could not have a week. It is the same derivation `build_my_team` AND
+    # `project_league_standings` perform internally, so all three agree; tests pin that.
     calendar = LeagueCalendar.from_espn_settings(
         (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
     )
@@ -311,6 +335,7 @@ def assemble_context(
         id_map=id_map,
         weekly_stats=weekly_stats,
         week=getattr(args, "week", None) or schedule_week,
+        schedule_week=schedule_week,
         data_root=args.data_root,
         my_team_id=my_team_id,
         notes=_config_notes(config, dict(payload)) if config is not None else (),

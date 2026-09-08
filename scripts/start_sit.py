@@ -151,9 +151,6 @@ def _print_swaps(run: StartSitRun) -> None:
 
 def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
     """Price the roster from both sources, solve the lineup, print the diff."""
-    if not 0.0 <= args.weight_espn <= 1.0:
-        print(f"--weight-espn must be in [0, 1], got {args.weight_espn}", file=sys.stderr)
-        return 1
     try:
         run_state = ctx.my_team()
     except ProjectionInputError as exc:
@@ -238,6 +235,11 @@ def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    # Before the assembly: this used to be checked ahead of any network call, and moving it
+    # into `report` meant a typo cost a full ESPN round trip before the message appeared.
+    if not 0.0 <= args.weight_espn <= 1.0:
+        print(f"--weight-espn must be in [0, 1], got {args.weight_espn}", file=sys.stderr)
+        return 1
     try:
         ctx = build_context(args)
     except ValueError as exc:
@@ -250,6 +252,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if ctx.target.source is not None:
         print(ctx.target.describe())
+    for note in ctx.notes:
+        # The config-vs-ESPN drift warning. `roster_slots` from the file sizes the
+        # rostered-player request, so a drift silently thins the projections behind
+        # every number below -- computing this and discarding it is worse than not
+        # computing it, because it looks like the check is running.
+        print(f"  ! {note}", file=sys.stderr)
     return report(ctx, args)
 
 

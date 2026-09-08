@@ -42,6 +42,7 @@ from projections.draft.league_calendar import LeagueCalendar
 from projections.ingest.espn_league import (
     DEFAULT_CREDS_PATH,
     EspnLeagueError,
+    build_league_config,
     espn_to_gsis,
     parse_rosters,
     pool_name_index,
@@ -114,7 +115,11 @@ def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
     # other three read the file; measured identical on the live league on 2026-09-08, and the
     # context warns if that ever stops being true. `roster_slots` also sizes a network
     # request, so two sources for it is two request sizes.
-    config = ctx.require_config()
+    # Prefers the file (three of four tools already read it, and it is what sizes the
+    # rostered-player request) but falls back to deriving one from the payload, which is what
+    # this tool did before. Requiring the file outright would break
+    # `trade_analyzer --league-id ... --pool ...` in a checkout with no profile.
+    config = ctx.config or build_league_config(dict(payload), name=f"league {target.league_id}")
     teams = ctx.teams()
     # A team id read off a file deserves the check `projected_standings` gives a typed one:
     # without it, `shapes[team_id]` raises a bare KeyError partway down the report.
@@ -143,9 +148,11 @@ def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
 
     settings = payload.get("settings", {}) or {}
     calendar = LeagueCalendar.from_espn_settings(settings.get("scheduleSettings", {}) or {})
-    # One horizon for the whole run. This used to derive its own, which meant `--week` moved
-    # the waiver and start/sit horizons and left this one on the real week.
-    week = ctx.week
+    # **`schedule_week`.** Section C simulates seasons through `project_league_standings`,
+    # which re-derives the schedule's own week, and `simulate_trades` passes this same number
+    # to `injury_adjusted_pool`. A `--week` override here would discount injuries over one
+    # horizon while the simulation replayed another.
+    week = ctx.schedule_week
     games_remaining = max(SEASON_GAMES - (week - 1), 0)
     gsis = espn_to_gsis(rosters, id_map, name_index=pool_name_index(pool))
     # Defenses live in their own table (issue #166); without them every rostered D/ST is
@@ -304,7 +311,7 @@ def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
-        ctx = build_context(args)
+        ctx = build_context(args, require_config=False)
     except ValueError as exc:
         # `require_team_id` is what normally raises, with a message naming the profile. Same
         # failure, and it must not be a traceback.
@@ -315,6 +322,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if ctx.target.source is not None:
         print(ctx.target.describe())
+    for note in ctx.notes:
+        # The config-vs-ESPN drift warning. `roster_slots` from the file sizes the
+        # rostered-player request, so a drift silently thins the projections behind
+        # every number below -- computing this and discarding it is worse than not
+        # computing it, because it looks like the check is running.
+        print(f"  ! {note}", file=sys.stderr)
     return report(ctx, args)
 
 

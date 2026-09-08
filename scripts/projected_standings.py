@@ -78,7 +78,13 @@ def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
     # trade tools already adjusted before simulating; only the tool whose entire output IS the
     # simulation did not, so its numbers were the least trustworthy of the three and looked the
     # most authoritative.
-    adjusted_pool = injury_adjusted_pool(ctx.pool, ctx.payload, ctx.id_map, week=ctx.week)
+    #
+    # **`schedule_week`, not `week`.** `project_league_standings` takes no week and
+    # re-derives the schedule's own, so the discount handed to it must use that same
+    # number: `season_multiplier` divides games missed by games REMAINING. With `--week 12`
+    # during real week 3 the two diverge -- IR players haircut over 6 games while the
+    # simulator replays 15 -- and the playoff odds still look entirely reasonable.
+    adjusted_pool = injury_adjusted_pool(ctx.pool, ctx.payload, ctx.id_map, week=ctx.schedule_week)
 
     try:
         run = project_league_standings(
@@ -154,7 +160,10 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         # The id_map is load-bearing -- rosters cannot be matched to projections without it --
         # so a missing file should say so rather than surface from inside an argument list.
-        print(f"{exc}. Rosters are matched to projections through the id_map.", file=sys.stderr)
+        # Names the file that is actually missing. `build_context` reads the pool, the
+        # id_map and the rookie history; blaming the id_map for a mistyped --pool pointed
+        # the reader at the wrong file.
+        print(f"cannot start: {exc}", file=sys.stderr)
         return 1
     if ctx.target.source is not None:
         print(ctx.target.describe())
