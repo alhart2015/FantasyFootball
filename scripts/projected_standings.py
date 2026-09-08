@@ -32,20 +32,14 @@ from projections.draft.assistant.league_profile import (
 )
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.assistant.rookies import attach_is_rookie
-from projections.draft.league_calendar import LeagueCalendar
 from projections.ingest.espn_league import (
     EspnCredentials,
     EspnLeagueError,
     fetch_league_payload,
-    parse_schedule,
     parse_teams,
 )
-from projections.midseason.standings import (
-    ProjectionInputError,
-    first_unplayed_week,
-    project_league_standings,
-)
-from projections.midseason.swap_impact import injury_adjusted_pool
+from projections.midseason.standings import ProjectionInputError, project_league_standings
+from projections.midseason.swap_impact import injury_adjusted_pool_at_current_week
 from projections.schemas import _PYARROW_STR, VorpTableSchema
 from projections.store import write_partition
 
@@ -124,15 +118,11 @@ def main(argv: list[str] | None = None) -> int:
     # simulation did not, so its numbers were the least trustworthy of the three and looked the
     # most authoritative.
     #
-    # `first_unplayed_week` before the run, because the adjustment needs a horizon:
-    # `season_multiplier` divides the games a designation costs by the games that remain, so
-    # the same IR tag is a 24% cut in week 1 and a 67% cut in week 12.
-    calendar = LeagueCalendar.from_espn_settings(
-        (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
-    )
-    schedule = parse_schedule(dict(payload), teams)
-    week = first_unplayed_week(schedule, calendar) if not schedule.empty else 1
-    adjusted_pool = injury_adjusted_pool(pool, payload, id_map, week=week)
+    # The horizon comes from the helper, not from a second derivation here:
+    # `season_multiplier` divides the games a designation costs by the games that REMAIN, so
+    # the same IR tag is a 24% cut in week 1 and a 67% cut in week 12, and a week that drifts
+    # from the simulation's own produces playoff odds that look entirely reasonable.
+    adjusted_pool = injury_adjusted_pool_at_current_week(pool, payload, id_map)
 
     try:
         run = project_league_standings(

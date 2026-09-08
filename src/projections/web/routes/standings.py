@@ -17,6 +17,7 @@ from projections.midseason.standings import (
     StandingsRun,
     project_league_standings,
 )
+from projections.midseason.swap_impact import injury_adjusted_pool_at_current_week
 from projections.web.app import DashboardConfig, dashboard_config
 from projections.web.inputs import (
     VARIANCE_PARAMS,
@@ -79,10 +80,17 @@ def _run_projection(config: DashboardConfig, notes: list[str]) -> StandingsRun:
     payload = fetch_league_payload(config.league_id, config.season, creds=creds)
 
     pool = attach_is_rookie(load_pool(config), season=config.season, data_root=config.data_root)
+    id_map = load_id_map(config)
+    # **The same adjustment `scripts/projected_standings.py` makes, for the same reason.** The
+    # simulator has no concept of an injury, so without this the page projects every hurt
+    # player in the league at full strength. This page is the more authoritative-looking of
+    # the two surfaces, and a CLI and a web page disagreeing about one team's playoff odds is
+    # worse than either being wrong alone -- by week 12 an IR tag is a 67% cut, so the two
+    # numbers would diverge widely and grow further apart all season.
     return project_league_standings(
         payload,
-        pool,
-        load_id_map(config),
+        injury_adjusted_pool_at_current_week(pool, payload, id_map),
+        id_map,
         load_store_availability(
             pool, season=config.season, data_root=config.data_root, notes=notes
         ),

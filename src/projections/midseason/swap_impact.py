@@ -27,15 +27,19 @@ import pandas as pd
 
 from projections.draft.assistant.availability import PlayerAvailability
 from projections.draft.assistant.performance_variance import SEASON_GAMES, VarianceParams
+from projections.draft.league_calendar import LeagueCalendar
 from projections.ingest.espn_league import (
     ESPN_POSITION_IDS,
     espn_gsis_crosswalk,
     parse_rosters,
+    parse_schedule,
+    parse_teams,
 )
 from projections.midseason.injuries import season_multiplier
 from projections.midseason.standings import (
     ProjectionInputError,
     StandingsRun,
+    first_unplayed_week,
     project_league_standings,
 )
 from projections.midseason.waivers import Candidate, player_id
@@ -334,6 +338,31 @@ def injury_adjusted_pool(
     scale = out["gsis_id"].astype(str).map(factors).fillna(1.0)
     out["season_mean_fpts"] = out["season_mean_fpts"] * scale
     return out
+
+
+def injury_adjusted_pool_at_current_week(
+    pool: pd.DataFrame, payload: Mapping[str, Any], id_map: pd.DataFrame
+) -> pd.DataFrame:
+    """`injury_adjusted_pool` at the week the payload itself says we are in.
+
+    **Exists so the horizon is derived once.** `season_multiplier` divides the games a
+    designation costs by the games that REMAIN, so the discount is meaningless without a week —
+    and every caller that has a payload but no week was about to re-derive it with the same
+    four lines. Two copies of a horizon that must stay identical is how an IR player ends up
+    discounted over seventeen games while the simulation prorates him over nine, which produces
+    playoff odds that look entirely reasonable.
+
+    Callers holding a week already (the swap and trade simulators, which vary it) should call
+    `injury_adjusted_pool` directly.
+    """
+    calendar = LeagueCalendar.from_espn_settings(
+        (payload.get("settings", {}) or {}).get("scheduleSettings", {}) or {}
+    )
+    schedule = parse_schedule(dict(payload), parse_teams(dict(payload)))
+    # An empty schedule means `project_league_standings` is about to raise anyway; week 1 keeps
+    # this total rather than letting the guard live in each caller.
+    week = first_unplayed_week(schedule, calendar) if not schedule.empty else 1
+    return injury_adjusted_pool(pool, payload, id_map, week=week)
 
 
 def _payload_with_swap(
