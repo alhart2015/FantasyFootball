@@ -1277,20 +1277,62 @@ def test_a_league_scoring_note_is_logged_once_however_many_times_the_config_is_b
 
 
 def test_two_different_leagues_each_get_their_say(caplog: pytest.LogCaptureFixture) -> None:
-    """Deduped on the formatted message, not on "have we ever warned" -- a backtest sweeping
-    seasons must still hear about each one."""
+    """Deduped on the formatted message, not on "have we ever said this kind of thing" -- a
+    backtest sweeping seasons must still hear about each league."""
     from projections.ingest.espn_league import build_league_config, reset_log_once_cache
 
     reset_log_once_cache()
     one = _league_payload_with_unmodelled_scoring()
     two = _league_payload_with_unmodelled_scoring(stat_id="999")
 
-    with caplog.at_level(logging.WARNING, logger="projections.ingest.espn_league"):
+    # DEBUG, because the note that DIFFERS between these two is the descriptive one.
+    with caplog.at_level(logging.DEBUG, logger="projections.ingest.espn_league"):
         build_league_config(dict(one), name="a")
         build_league_config(dict(two), name="b")
 
-    messages = {r.getMessage() for r in caplog.records if r.getMessage().startswith("Scoring:")}
-    assert len(messages) >= 2, messages
+    messages = {
+        r.getMessage() for r in caplog.records if "not modelled by Ruleset" in r.getMessage()
+    }
+    assert len(messages) == 2, messages
+
+
+def test_a_descriptive_note_is_debug_and_a_mispricing_note_stays_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The whole point of `ScoringNote`.
+
+    "11 categories are not modelled" was worth **0.36 points across a season** on the live
+    league — seven kicker rules in a league with no kicker slot, three return TDs already
+    modelled for D/ST, one skill-player return TD at ~0.01 occurrences. At WARNING on every
+    run it trained the reader to skim, and it buried a report section badly enough that the
+    report looked like it did not contain one.
+
+    "ESPN did not report these categories, defaults apply" is the opposite: every number
+    downstream may be scored under the wrong rules.
+    """
+    from projections.ingest.espn_league import build_league_config, reset_log_once_cache
+
+    reset_log_once_cache()
+    payload = _league_payload_with_unmodelled_scoring()
+
+    with caplog.at_level(logging.DEBUG, logger="projections.ingest.espn_league"):
+        build_league_config(dict(payload), name="split")
+
+    by_level = {
+        r.levelno: r.getMessage() for r in caplog.records if r.getMessage().startswith("Scoring:")
+    }
+    unmodelled = [m for m in by_level.values() if "not modelled by Ruleset" in m]
+    defaults = [m for m in by_level.values() if "defaults apply" in m]
+    assert unmodelled and defaults, by_level
+
+    levels = {
+        "unmodelled": next(
+            r.levelno for r in caplog.records if "not modelled by Ruleset" in r.getMessage()
+        ),
+        "defaults": next(r.levelno for r in caplog.records if "defaults apply" in r.getMessage()),
+    }
+    assert levels["unmodelled"] == logging.DEBUG
+    assert levels["defaults"] == logging.WARNING
 
 
 def _league_payload_with_unmodelled_scoring(stat_id: str = "102") -> dict[str, Any]:
