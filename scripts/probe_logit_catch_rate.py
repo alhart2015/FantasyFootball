@@ -28,6 +28,7 @@ from projections.backtest.logit_catch_rate_probe import (
     compute_verdict,
     walk_forward_residuals,
 )
+from projections.console import force_utf8_stdio
 from projections.features.cache import read_features
 from projections.schemas import Position
 from projections.store import read_partition
@@ -213,6 +214,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main() -> None:
+    # The verdict line prints `RMSE Δ`; see `projections.console`.
+    force_utf8_stdio()
     args = _parse_args()
 
     features, weekly_stats = _load_inputs(
