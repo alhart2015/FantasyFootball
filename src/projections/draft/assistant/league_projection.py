@@ -28,7 +28,7 @@ from projections.draft.assistant.season_value import (
 )
 from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import RosterSlot
+from projections.schemas import RosterSlot, ScoringEnhancement
 
 #: Module-level calendar constants, kept as the DEFAULT shape only. They are the values the
 #: simulator used when the calendar was hard-coded, so callers that pass no `calendar=` get
@@ -103,6 +103,7 @@ __all__ = [
     "project_draft",
     "simulate_seasons",
     "team_weekly_points",
+    "top_half_credit",
 ]
 
 
@@ -271,6 +272,36 @@ def resolve_bracket(
     return (f1, f2) if f1_total >= f2_total else (f2, f1)
 
 
+def top_half_credit(points: np.ndarray) -> np.ndarray:
+    """(n_sims, n_teams) weekly points -> (n_sims, n_teams) top-half bonus wins, in [0, 1].
+
+    ESPN's `WIN_BONUS_TOP_HALF` hands every team a second result each week: a win for
+    finishing in the top half of that week's league-wide scores, a loss for the bottom half.
+    `points` holds only the teams that actually played that week, so a bye in an odd-sized
+    league is excluded and the half is taken over the teams present.
+
+    Ties share the contested places instead of breaking arbitrarily. A team with `above` teams
+    strictly ahead of it and `equal` teams on its exact score (itself included) occupies places
+    `above .. above + equal - 1`; its credit is the fraction of those that fall inside the top
+    half. Cleanly ahead gives 1.0, cleanly behind 0.0, and a sixteen-way tie gives 0.5 each.
+
+    That is not a theoretical nicety. `sample_weekly_points` returns exactly 0.0 for a
+    non-positive projection, so a zeroed or unresolved pool produces identical all-zero columns
+    for every team -- and an argsort there would hand the bonus to the eight lowest slot
+    numbers and report it as a finding. The same rule `head_to_head` uses for an exact tie.
+    """
+    n_teams = points.shape[1]
+    half = n_teams // 2
+    # (n_sims, n_teams, n_teams): delta[:, i, j] = points_i - points_j. Bounded by n_teams**2
+    # per week (16x16 for the Critts league), so the materialisation is cheap.
+    delta = points[:, :, None] - points[:, None, :]
+    above = (delta < 0).sum(axis=2)
+    equal = (delta == 0).sum(axis=2)  # >= 1: a team always equals itself
+    inside = np.clip(half - above, 0, equal)
+    credit: np.ndarray = inside / equal
+    return credit
+
+
 def simulate_seasons(
     rosters: Mapping[int, list[str]],
     pool: pd.DataFrame,
@@ -308,6 +339,15 @@ def simulate_seasons(
     by a draw that has not happened. It is the wrong choice during a season, where who you
     actually play drives your record -- pass the league's real fixture list, **in slot space**
     (the caller maps ESPN team ids to 1..n_teams slots; this function knows only slots).
+
+    **`league_config.scoring_enhancement` is part of the fixture list, not a display option.**
+    Under `WIN_BONUS_TOP_HALF` each simulated week credits a second result -- top half of that
+    week's league-wide scores wins, bottom half loses -- so the season decides twice as many
+    games as it has weeks. That is not a shift applied afterwards: doubling the games roughly
+    halves the spread in final records, which is what playoff, bye and title percentages are
+    read off. Simulating such a league as plain head-to-head miscalibrates all three rather
+    than merely offsetting them (issue #185). The weekly points are already drawn, so the
+    ranking costs no extra sampling.
 
     `locked` supplies each slot's ACTUAL wins/losses/ties/points-for from the weeks already
     played, and `first_unplayed_week` says where simulation starts. Weeks before it are not
@@ -365,6 +405,14 @@ def simulate_seasons(
             a_win = np.where(pa > pb, 1.0, np.where(pa == pb, 0.5, 0.0))
             wins[a] += a_win
             wins[b] += 1.0 - a_win
+        if league_config.scoring_enhancement is ScoringEnhancement.WIN_BONUS_TOP_HALF:
+            # Read off THIS week's already-drawn points, after the head-to-head results, so
+            # the two are the same simulation rather than two views that could disagree.
+            active = sorted({slot for pair in matchups for slot in pair})
+            if len(active) >= 2:
+                credit = top_half_credit(np.stack([weekly[s][:, w - 1] for s in active], axis=1))
+                for col, s in enumerate(active):
+                    wins[s] += credit[:, col]
 
     win_mat = np.stack([wins[s] for s in slots], axis=1)
     pf_mat = np.stack([pf[s] for s in slots], axis=1)

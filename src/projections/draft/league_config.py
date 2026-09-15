@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from projections.schemas import RosterSlot, Ruleset
+from projections.schemas import RosterSlot, Ruleset, ScoringEnhancement
 
 _RULESET_PRESETS: dict[str, Ruleset] = {
     "espn_ppr": Ruleset.espn_ppr(),
@@ -31,6 +31,12 @@ class LeagueConfig(BaseModel):
     min_bid: int = Field(ge=1, default=1)
     roster_slots: dict[RosterSlot, int] = Field(min_length=1)
     ruleset: Ruleset
+    #: Extra weekly result layered on the head-to-head game (ESPN's `scoringEnhancementType`).
+    #: Under `WIN_BONUS_TOP_HALF` the season decides twice as many games as it has weeks, which
+    #: changes both the banked record and the simulated spread -- see `ScoringEnhancement`.
+    #: Defaults to `NONE` so every hand-written config and stored `league_config.json` keeps
+    #: the plain head-to-head behaviour it was written under.
+    scoring_enhancement: ScoringEnhancement = ScoringEnhancement.NONE
 
     @field_validator("ruleset", mode="before")
     @classmethod

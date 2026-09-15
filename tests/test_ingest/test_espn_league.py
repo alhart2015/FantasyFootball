@@ -33,6 +33,7 @@ from projections.ingest.espn_league import (
     parse_rosters,
     parse_ruleset,
     parse_schedule,
+    parse_scoring_enhancement,
     parse_teams,
     pro_team_code,
     scoring_family,
@@ -43,6 +44,7 @@ from projections.schemas import (
     _RULESET_NAME_VALUES,
     InjuryStatus,
     RosterSlot,
+    ScoringEnhancement,
     Team,
     parse_injury_status,
 )
@@ -774,6 +776,227 @@ def test_team_records_ignores_unplayed_matchups() -> None:
 def test_team_records_is_empty_before_kickoff() -> None:
     payload = _payload(schedule=[_matchup(1, 1, 2)])
     assert team_records(parse_schedule(payload, parse_teams(payload))).empty
+
+
+# --- the top-half bonus win (issue #185) ----------------------------------------------------
+
+
+def _enhanced(value: object) -> dict[str, Any]:
+    """`_payload` with `scoringEnhancementType` set (or left absent, for `None`)."""
+    payload = _payload()
+    if value is not None:
+        payload["settings"]["scoringSettings"]["scoringEnhancementType"] = value
+    return payload
+
+
+def test_scoring_enhancement_reads_the_top_half_bonus_off_the_payload() -> None:
+    assert (
+        parse_scoring_enhancement(_enhanced("WIN_BONUS_TOP_HALF"))
+        is ScoringEnhancement.WIN_BONUS_TOP_HALF
+    )
+
+
+@pytest.mark.parametrize("value", [None, "NONE", ""])
+def test_scoring_enhancement_defaults_to_plain_head_to_head(value: object) -> None:
+    """Absent, explicit NONE and empty are the same league. Older ESPN leagues omit the key."""
+    assert parse_scoring_enhancement(_enhanced(value)) is ScoringEnhancement.NONE
+
+
+def test_an_unknown_scoring_enhancement_raises_rather_than_degrading() -> None:
+    """Every other unmappable ESPN setting in this module degrades and logs. This one must not.
+
+    An enhancement type this code does not model changes how many results a week decides, so
+    falling back to plain head-to-head produces a complete, plausible standings table built on
+    the wrong number of games -- wrong everywhere, wrong-looking nowhere.
+    """
+    with pytest.raises(EspnLeagueError, match="scoringEnhancementType"):
+        parse_scoring_enhancement(_enhanced("WIN_BONUS_SOMETHING_NEW"))
+
+
+def test_build_league_config_carries_the_enhancement() -> None:
+    """The config is what every downstream tool reads; a parser nothing calls fixes nothing."""
+    assert (
+        build_league_config(_enhanced("WIN_BONUS_TOP_HALF")).scoring_enhancement
+        is ScoringEnhancement.WIN_BONUS_TOP_HALF
+    )
+    assert build_league_config(_payload()).scoring_enhancement is ScoringEnhancement.NONE
+
+
+def test_top_half_bonus_adds_a_second_result_to_every_team_each_week() -> None:
+    """Four teams, one week: the top two scorers bank a bonus win, the bottom two a loss.
+
+    The whole point of the fix sits in the two middle rows. A high-scoring team that loses its
+    head-to-head (team 2) is 1-1 rather than 0-1, and a low-scoring team that wins its own
+    (team 3) is 1-1 rather than 1-0. Under plain head-to-head the two are indistinguishable
+    from 0-1 and 1-0, which is the systematic bias issue #185 measured.
+    """
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=115.0, winner="HOME"),
+            _matchup(1, 3, 4, home_pts=60.0, away_pts=50.0, winner="HOME"),
+        ]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+    recs = team_records(
+        schedule, scoring_enhancement=ScoringEnhancement.WIN_BONUS_TOP_HALF
+    ).set_index("team_id")
+
+    assert (recs.loc[1, "wins"], recs.loc[1, "losses"]) == (2, 0)  # 120.0, 1st: won both
+    assert (recs.loc[2, "wins"], recs.loc[2, "losses"]) == (1, 1)  # 115.0, 2nd: lost its H2H
+    assert (recs.loc[3, "wins"], recs.loc[3, "losses"]) == (1, 1)  # 60.0, 3rd: won its H2H
+    assert (recs.loc[4, "wins"], recs.loc[4, "losses"]) == (0, 2)  # 50.0, 4th: lost both
+    for team_id in (1, 2, 3, 4):
+        assert recs.loc[team_id, "games_played"] == 2
+    # Points-for is the same points read a second way, not doubled.
+    assert recs.loc[1, "points_for"] == pytest.approx(120.0)
+
+
+def test_top_half_bonus_is_off_by_default() -> None:
+    """A plain head-to-head league must behave exactly as it did before #185."""
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=60.0, winner="HOME"),
+            _matchup(1, 3, 4, home_pts=110.0, away_pts=100.0, winner="HOME"),
+        ]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+    plain = team_records(schedule).set_index("team_id")
+    assert (plain.loc[4, "wins"], plain.loc[4, "losses"]) == (0, 1)
+    assert plain.loc[4, "games_played"] == 1
+
+
+def test_top_half_bonus_skips_a_partially_played_week() -> None:
+    """Sunday evening, Monday night still to come.
+
+    The top half of the four teams who have finished is not the top half of the league, and
+    banking a bonus now means re-deciding it once the week completes. Week 1 is final and
+    counts; week 2 is half done and contributes no bonus -- though its finished head-to-head
+    still counts, exactly as it did before.
+    """
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=60.0, winner="HOME"),
+            _matchup(1, 3, 4, home_pts=110.0, away_pts=100.0, winner="HOME"),
+            _matchup(2, 1, 3, home_pts=50.0, away_pts=40.0, winner="HOME"),
+            _matchup(2, 2, 4),  # still undecided
+        ]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+    recs = team_records(
+        schedule, scoring_enhancement=ScoringEnhancement.WIN_BONUS_TOP_HALF
+    ).set_index("team_id")
+    # Week 1: head-to-head win + bonus win. Week 2: head-to-head win only.
+    assert (recs.loc[1, "wins"], recs.loc[1, "losses"]) == (3, 0)
+    assert recs.loc[1, "games_played"] == 3
+
+
+def test_top_half_bonus_ranks_only_the_teams_that_played_that_week() -> None:
+    """An odd-sized league byes one team a week; the half is over who actually played."""
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=60.0, winner="HOME"),
+            _matchup(1, 3, 4, home_pts=110.0, away_pts=100.0, winner="HOME"),
+            {"matchupPeriodId": 1, "winner": "UNDECIDED", "home": {"teamId": 5}},  # a bye
+        ]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+    recs = team_records(
+        schedule, scoring_enhancement=ScoringEnhancement.WIN_BONUS_TOP_HALF
+    ).set_index("team_id")
+    # The idle team banks nothing at all, and the four who played split two bonus wins and
+    # two bonus losses between them -- not the two-and-a-half a five-team half would imply.
+    assert 5 not in recs.index
+    assert sum(int(recs.loc[t, "wins"]) for t in (1, 2, 3, 4)) == 4
+    assert (recs.loc[4, "wins"], recs.loc[4, "losses"]) == (0, 2)  # 100.0, last of the four
+
+
+def test_a_points_tie_across_the_cutoff_is_a_tie_not_a_coin_flip() -> None:
+    """Two teams tied on the exact score that straddles the boundary split the places.
+
+    `LockedRecord.credited_wins` scores a tie as half a win, which is precisely the share of
+    the top half they are entitled to -- and unlike a fractional win it is representable in
+    the integer win/loss/tie columns. Teams cleanly above and below are unaffected.
+    """
+    payload = _payload(
+        schedule=[
+            _matchup(1, 1, 2, home_pts=120.0, away_pts=100.0, winner="HOME"),
+            _matchup(1, 3, 4, home_pts=100.0, away_pts=50.0, winner="HOME"),
+        ]
+    )
+    schedule = parse_schedule(payload, parse_teams(payload))
+    recs = team_records(
+        schedule, scoring_enhancement=ScoringEnhancement.WIN_BONUS_TOP_HALF
+    ).set_index("team_id")
+    assert (recs.loc[1, "wins"], recs.loc[1, "losses"], recs.loc[1, "ties"]) == (2, 0, 0)
+    # Teams 2 and 3 both scored 100.0 and occupy places 2 and 3, around a cutoff of 2.
+    for team_id in (2, 3):
+        assert recs.loc[team_id, "ties"] == 1
+    assert (recs.loc[2, "wins"], recs.loc[2, "losses"]) == (0, 1)
+    assert (recs.loc[3, "wins"], recs.loc[3, "losses"]) == (1, 0)
+    assert (recs.loc[4, "wins"], recs.loc[4, "losses"], recs.loc[4, "ties"]) == (0, 2, 0)
+
+
+#: Week 1 of the Critts 2026 league exactly as ESPN reported it (issue #185): each team's
+#: head-to-head result, its score, and the two-game record ESPN's own `record.overall` shows.
+#: The pairings are reconstructed by matching each winner with a lower-scoring loser, the only
+#: arrangement consistent with the reported results -- the bonus does not depend on them.
+_CRITTS_WEEK_1: tuple[tuple[str, float, bool, tuple[int, int]], ...] = (
+    ("BROCKMONSTERS are best", 143.46, True, (2, 0)),
+    ("BIG Macs", 123.82, True, (2, 0)),
+    ("Dart Vader", 123.60, True, (2, 0)),
+    ("Rice Rice Baby", 118.60, True, (2, 0)),
+    ("Kellys Heros", 115.42, True, (2, 0)),
+    ("Gibbs in a blanket", 105.06, False, (1, 1)),
+    ("Critt While Were Ahead", 95.82, True, (2, 0)),
+    ("Easy Breecey Beautiful", 93.96, False, (1, 1)),
+    ("Certified Beautys", 91.00, False, (0, 2)),
+    ("Who are these guys", 87.16, False, (0, 2)),
+    ("Left Hand Up!", 86.16, False, (0, 2)),
+    ("Dumpster fire", 79.16, True, (1, 1)),
+    ("Triple Threat Tracy", 78.66, True, (1, 1)),
+    ("Jamarry poppins", 69.40, False, (0, 2)),
+    ("Wing-T and a Prayer", 61.40, False, (0, 2)),
+    ("EL Tractorcito", 46.54, False, (0, 2)),
+)
+
+
+def test_top_half_bonus_reproduces_every_critts_week_1_record() -> None:
+    """The regression this exists for: 16 real teams, 8 matchups, 32 games.
+
+    Before the fix `team_records` reproduced 2 of these 16 records, and those two by
+    coincidence -- a bonus loss cancelling a head-to-head win. Anything that quietly drops the
+    bonus again fails here against numbers ESPN published, not numbers this repo computed.
+    """
+    winners = [entry for entry in _CRITTS_WEEK_1 if entry[2]]
+    losers = [entry for entry in _CRITTS_WEEK_1 if not entry[2]]
+    assert len(winners) == len(losers) == 8
+    index = {entry[0]: i + 1 for i, entry in enumerate(_CRITTS_WEEK_1)}
+
+    schedule_rows: list[dict[str, Any]] = []
+    for winner, loser in zip(winners, losers, strict=True):
+        assert winner[1] > loser[1], "reconstructed pairing must agree with the reported result"
+        schedule_rows.append(
+            _matchup(
+                1,
+                index[winner[0]],
+                index[loser[0]],
+                home_pts=winner[1],
+                away_pts=loser[1],
+                winner="HOME",
+            )
+        )
+    payload = _payload(schedule=schedule_rows)
+    payload["settings"]["scoringSettings"]["scoringEnhancementType"] = "WIN_BONUS_TOP_HALF"
+    config = build_league_config(payload)
+    schedule = parse_schedule(payload, parse_teams(payload))
+    recs = team_records(
+        schedule, through_week=1, scoring_enhancement=config.scoring_enhancement
+    ).set_index("team_id")
+
+    for name, _points, _won, (wins, losses) in _CRITTS_WEEK_1:
+        row = recs.loc[index[name]]
+        assert (int(row["wins"]), int(row["losses"])) == (wins, losses), name
+        assert int(row["games_played"]) == 2, name
 
 
 def test_mmatchup_is_pulled_by_default() -> None:
