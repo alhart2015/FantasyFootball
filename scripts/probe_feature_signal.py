@@ -59,6 +59,7 @@ from projections.backtest.feature_probe import (
     probe_composite,
     probe_per_stat,
 )
+from projections.console import force_utf8_stdio
 from projections.models import POSITION_DISPATCH
 from projections.models.base import Model
 from projections.models.baseline import BaselineModel
@@ -654,11 +655,8 @@ def _get_production_columns_and_stats(
 
 
 def main(argv: list[str] | None = None) -> None:
-    # Force utf-8 stdout so Δ (ΔRMSE) and — (em dash) in the markdown render
-    # cleanly when redirected to a file on Windows. Without this, cp1252's
-    # default stdout codec raises UnicodeEncodeError on Phase 2 output.
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+    # `ΔRMSE` in the Phase 2 markdown is not encodable in cp1252; see `projections.console`.
+    force_utf8_stdio()
 
     args = parse_args(argv)
     seasons_range = range(args.seasons[0], args.seasons[1] + 1)

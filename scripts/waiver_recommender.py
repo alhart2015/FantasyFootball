@@ -30,6 +30,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from projections.console import force_utf8_stdio
 from projections.draft.assistant.league_profile import (
     add_league_arguments,
     resolve_league_target,
@@ -347,6 +348,10 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The `Δ wins` footer is not encodable in a Windows console's cp1252; see
+    # `projections.console`. Printed after every recommendation, so the crash it caused
+    # destroyed only the explanation of the numbers, which made it easy to miss.
+    force_utf8_stdio()
     args = _parse_args(argv)
     try:
         return run(args)

@@ -34,6 +34,7 @@ import start_sit
 import trade_analyzer
 import waiver_recommender
 
+from projections.console import force_utf8_stdio
 from projections.draft.assistant.league_profile import (
     add_league_arguments,
     resolve_league_target,
@@ -157,6 +158,11 @@ def _run_section(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Needed here in its own right, not inherited: the sections are run by calling each
+    # module's `report` directly, so `waiver_recommender.main` — and the call it makes — is
+    # never on this path. `_run_section` catches `ValueError`, and `UnicodeEncodeError` is one,
+    # so the crash arrived disguised as "this section could not run".
+    force_utf8_stdio()
     args = _parse_args(argv)
     sections = _selected(args)
     if sections is None:
