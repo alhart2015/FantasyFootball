@@ -374,7 +374,9 @@ def project_league_standings(
     1. Calendar and config from ESPN's own settings, never assumed.
     2. `first_unplayed_week` from the results, never from a flag or the wall clock.
     3. `team_records` bounded to `week - 1` -- the weeks the simulator will NOT replay, so a
-       partially-played week and any played playoff week cannot be counted twice.
+       partially-played week and any played playoff week cannot be counted twice. It is given
+       the league's `scoring_enhancement`, the same one the simulator reads off `league_config`,
+       so a top-half-bonus league banks and projects the same two-results-a-week season.
     4. Rest-of-season projections, with the pool as the fresh source.
     5. Rosters resolved ESPN id -> gsis through the id_map, raising if NOTHING resolves.
     6. One simulation over the real remaining fixture list, with played weeks locked.
@@ -403,7 +405,12 @@ def project_league_standings(
 
     week = first_unplayed_week(schedule, calendar)
     weeks_remaining = max(calendar.reg_weeks - week + 1, 0)
-    records = team_records(schedule, through_week=week - 1)
+    # The enhancement comes from the league's own settings, and the SAME value reaches the
+    # simulator through `league_config` below -- banked weeks and simulated weeks have to
+    # score by one rule, or the record and the projection beside it describe two leagues.
+    records = team_records(
+        schedule, through_week=week - 1, scoring_enhancement=config.scoring_enhancement
+    )
     slots = SlotMap.from_team_ids(list(teams["team_id"]))
 
     # The pool IS the fresh projection source: its `season_mean_fpts` comes from whichever

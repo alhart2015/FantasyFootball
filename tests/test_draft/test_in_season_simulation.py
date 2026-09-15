@@ -22,11 +22,12 @@ from projections.draft.assistant.league_projection import (
     SeasonOutcomes,
     gauntlet_schedule,
     simulate_seasons,
+    top_half_credit,
 )
 from projections.draft.assistant.performance_variance import VarianceParams
 from projections.draft.league_calendar import LeagueCalendar
 from projections.draft.league_config import LeagueConfig
-from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset
+from projections.schemas import _PYARROW_STR, RosterSlot, Ruleset, ScoringEnhancement
 
 _N_TEAMS = 6
 _CAL = LeagueCalendar(reg_weeks=4, playoff_size=2, n_byes=0, final_weeks=1)
@@ -55,7 +56,9 @@ def _rosters_and_pool(strengths: dict[int, float]) -> tuple[dict[int, list[str]]
     return rosters, pool
 
 
-def _config() -> LeagueConfig:
+def _config(
+    enhancement: ScoringEnhancement = ScoringEnhancement.NONE,
+) -> LeagueConfig:
     return LeagueConfig(
         name="in_season_test",
         n_teams=_N_TEAMS,
@@ -66,6 +69,7 @@ def _config() -> LeagueConfig:
             RosterSlot.TE: 1,
         },
         ruleset=Ruleset.espn_half(),
+        scoring_enhancement=enhancement,
     )
 
 
@@ -76,6 +80,7 @@ def _run(
     locked: dict[int, LockedRecord] | None = None,
     first_unplayed_week: int = 1,
     n_sims: int = 200,
+    enhancement: ScoringEnhancement = ScoringEnhancement.NONE,
 ) -> SeasonOutcomes:
     rosters, pool = _rosters_and_pool(strengths)
     availability = PlayerAvailability(p={g: 1.0 for g in pool["gsis_id"].astype(str)}, bye={})
@@ -84,7 +89,7 @@ def _run(
         pool,
         availability,
         VarianceParams.load(),
-        league_config=_config(),
+        league_config=_config(enhancement),
         n_sims=n_sims,
         rng=np.random.default_rng(3),
         calendar=_CAL,
@@ -312,3 +317,89 @@ def test_a_decisive_week_is_still_a_whole_win() -> None:
     strengths = {s: (2.0 if s == 1 else 0.1) for s in range(1, _N_TEAMS + 1)}
     res = _run(strengths, n_sims=60)
     assert res.wins[:, res.slots.index(1)].mean() > _CAL.reg_weeks * 0.9
+
+
+# --- the top-half bonus win (issue #185) ----------------------------------------------------
+
+
+def test_top_half_credit_gives_the_better_half_a_win_and_the_rest_nothing() -> None:
+    """The ranking rule on its own, with no simulation noise in the way."""
+    points = np.array([[10.0, 40.0, 30.0, 20.0]])
+    assert list(top_half_credit(points)[0]) == [0.0, 1.0, 1.0, 0.0]
+
+
+def test_top_half_credit_splits_a_tie_across_the_cutoff() -> None:
+    """Teams tied on the exact score that straddles the boundary share the contested places.
+
+    An argsort here would hand the bonus to whichever column happened to sort first, and the
+    all-zero case below is not hypothetical -- `sample_weekly_points` returns exactly 0.0 for a
+    non-positive projection, so an unresolved roster produces identical columns for every team.
+    """
+    # Places 2 and 3 of 4 are tied on 20.0; half of that pair falls inside the top two.
+    assert list(top_half_credit(np.array([[30.0, 20.0, 20.0, 10.0]]))[0]) == [1.0, 0.5, 0.5, 0.0]
+    # Every team identical: each is entitled to exactly half a bonus win, not slot order.
+    assert list(top_half_credit(np.zeros((1, 6)))[0]) == [0.5] * 6
+
+
+def test_top_half_credit_hands_out_exactly_half_the_available_wins_every_week() -> None:
+    """The invariant that makes the record add up: `n // 2` bonus wins per week, always."""
+    rng = np.random.default_rng(11)
+    for n_teams in (4, 6, 7, 16):
+        credit = top_half_credit(rng.normal(100.0, 25.0, size=(64, n_teams)))
+        assert np.allclose(credit.sum(axis=1), n_teams // 2)
+        assert credit.min() >= 0.0 and credit.max() <= 1.0
+
+
+def test_the_bonus_doubles_the_games_a_simulated_season_decides() -> None:
+    """A `_CAL` season is 4 weeks. Plain head-to-head decides 4 games; with the bonus, 8.
+
+    Checked on the total across the league rather than one seat, because that is the figure a
+    miscount shows up in regardless of which seat absorbs it.
+    """
+    plain = _run(_EVEN)
+    bonus = _run(_EVEN, enhancement=ScoringEnhancement.WIN_BONUS_TOP_HALF)
+    assert plain.wins.sum(axis=1) == pytest.approx(np.full(plain.wins.shape[0], 4 * 3))
+    assert bonus.wins.sum(axis=1) == pytest.approx(np.full(bonus.wins.shape[0], 4 * 3 + 4 * 3))
+
+
+def test_the_bonus_is_added_only_to_weeks_the_simulator_actually_plays() -> None:
+    """Locked weeks are facts and must not be re-credited.
+
+    `team_records` already banked their bonus; crediting it here too would give a team more
+    games than the season has -- the exact double-count `through_week` exists to prevent on the
+    head-to-head side.
+    """
+    locked = {slot: LockedRecord(wins=2, losses=2, points_for=400.0) for slot in range(1, 7)}
+    out = _run(
+        _EVEN,
+        locked=locked,
+        first_unplayed_week=3,  # weeks 1-2 played, and already worth two results each
+        enhancement=ScoringEnhancement.WIN_BONUS_TOP_HALF,
+    )
+    # 4 banked games per team + 2 simulated weeks x 2 results = 8 games, 24 wins league-wide.
+    assert out.wins.sum(axis=1) == pytest.approx(np.full(out.wins.shape[0], 6 * 2 + 2 * 3 + 2 * 3))
+
+
+def test_the_bonus_tightens_the_spread_in_final_records() -> None:
+    """Why miscalibration, not merely a shift: twice the games is twice the sample.
+
+    A team's win TOTAL rises under the bonus, but the spread of its final record -- which is
+    what playoff, bye and title percentages are read off -- tightens relative to the games
+    played. Simulating a bonus league as plain head-to-head therefore reports odds drawn from
+    half the sample the league will really produce.
+    """
+    plain = _run(_EVEN, n_sims=600)
+    bonus = _run(_EVEN, n_sims=600, enhancement=ScoringEnhancement.WIN_BONUS_TOP_HALF)
+    # Win RATE, so the two are comparable: 4 games a season against 8.
+    plain_sd = float(np.std(plain.wins / 4.0, axis=0).mean())
+    bonus_sd = float(np.std(bonus.wins / 8.0, axis=0).mean())
+    assert bonus_sd < plain_sd
+
+
+def test_a_plain_head_to_head_league_is_untouched_by_the_change() -> None:
+    """`NONE` is the default, and every league not carrying the setting must be bit-identical
+    to the pre-#185 simulator -- the same rng draws in the same order."""
+    baseline = _run(_EVEN, n_sims=64)
+    again = _run(_EVEN, n_sims=64, enhancement=ScoringEnhancement.NONE)
+    assert np.array_equal(baseline.wins, again.wins)
+    assert np.array_equal(baseline.seed, again.seed)

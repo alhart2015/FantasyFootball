@@ -386,6 +386,29 @@ DST_TEAM_BY_GSIS: Final[Mapping[GsisId, Team]] = {
 }
 
 
+class ScoringEnhancement(StrEnum):
+    """ESPN's `settings.scoringSettings.scoringEnhancementType` — an extra weekly result
+    layered on top of the head-to-head game.
+
+    `WIN_BONUS_TOP_HALF` gives every team a **second** result each week: a win for finishing
+    in the top half of that week's scores across the whole league, a loss for the bottom half.
+    A 16-team league therefore decides 32 games a week from 8 matchups, and a full season is
+    twice as many games as it has weeks. Ignoring it does not merely shift records — it halves
+    the effective sample the standings are drawn from, so playoff odds are miscalibrated
+    rather than just offset (issue #185).
+
+    `NONE` is the plain head-to-head league and covers the absent-key case: ESPN omits the
+    field entirely in older leagues.
+
+    **Unrecognised values must raise, never degrade to `NONE`.** A silent fallback is exactly
+    the failure this enum exists to prevent — a confident standings table built on the wrong
+    number of games.
+    """
+
+    NONE = "NONE"
+    WIN_BONUS_TOP_HALF = "WIN_BONUS_TOP_HALF"
+
+
 class Ruleset(BaseModel):
     """Scoring ruleset. Defaults match ESPN standard PPR.
 

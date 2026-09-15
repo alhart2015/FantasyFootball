@@ -248,6 +248,17 @@ def _config_notes(from_file: LeagueConfig, payload: dict[str, Any]) -> tuple[str
             "league_config.json and ESPN disagree on scoring. Every points number in every "
             "section is computed under the file's ruleset."
         )
+    if derived.scoring_enhancement != from_file.scoring_enhancement:
+        # Reachable the moment #185 lands: every `league_config.json` written before it has no
+        # `scoring_enhancement` key at all and deserialises to NONE, so a top-half-bonus league
+        # reads as plain head-to-head off the file while ESPN says otherwise. The standings
+        # path derives its own config from the payload and is unaffected; a section that reads
+        # the file would be counting half the season's games.
+        notes.append(
+            f"league_config.json says scoring enhancement {from_file.scoring_enhancement.value}, "
+            f"ESPN says {derived.scoring_enhancement.value}. That is the number of results a "
+            "week decides, not a display setting — re-export the league snapshot."
+        )
     return tuple(notes)
 
 

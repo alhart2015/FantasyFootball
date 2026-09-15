@@ -33,7 +33,7 @@ import os
 import urllib.error
 import urllib.request
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +47,7 @@ from projections.schemas import (
     _PYARROW_STR,
     RosterSlot,
     Ruleset,
+    ScoringEnhancement,
     Team,
     normalize_team_code,
     parse_injury_status,
@@ -557,6 +558,35 @@ def scoring_family(reception_pts: float) -> tuple[str, bool]:
     return _SCORING_FAMILIES[nearest], nearest == reception_pts
 
 
+def parse_scoring_enhancement(payload: dict[str, Any]) -> ScoringEnhancement:
+    """`settings.scoringSettings.scoringEnhancementType` -> `ScoringEnhancement`.
+
+    Absent or null means the plain head-to-head league (`NONE`): ESPN omits the field
+    entirely in older leagues, and the two cases are indistinguishable from here anyway.
+
+    **An unrecognised value raises.** Every other unmappable ESPN setting in this module
+    degrades and logs, because the alternative is bricking a config over one category. This
+    one cannot: an enhancement this code does not model changes how many games the season
+    decides, and a standings table built on the wrong game count is wrong everywhere without
+    looking wrong anywhere (issue #185). A new enhancement type has to be modelled, not
+    tolerated.
+    """
+    raw = (payload.get("settings", {}) or {}).get("scoringSettings", {}) or {}
+    value = raw.get("scoringEnhancementType")
+    if value is None or str(value).strip() == "":
+        return ScoringEnhancement.NONE
+    try:
+        return ScoringEnhancement(str(value).strip().upper())
+    except ValueError as exc:
+        known = ", ".join(sorted(member.value for member in ScoringEnhancement))
+        raise EspnLeagueError(
+            f"Unrecognised settings.scoringSettings.scoringEnhancementType {value!r}. "
+            f"Known values: {known}. An enhancement changes how many results a week decides, "
+            "so treating an unknown one as plain head-to-head would silently misstate every "
+            "record, playoff odd and simulated season in this league. Model it before use."
+        ) from exc
+
+
 def parse_ruleset(payload: dict[str, Any], name: str | None = None) -> tuple[Ruleset, list[str]]:
     """`settings.scoringSettings.scoringItems` -> `Ruleset`, plus a list of human-readable
     notes about anything that did not map cleanly.
@@ -872,6 +902,7 @@ def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> 
         "n_teams": n_teams,
         "roster_slots": modelled_slots,
         "ruleset": ruleset,
+        "scoring_enhancement": parse_scoring_enhancement(payload),
     }
     # ESPN reports auctionBudget: 200 even for snake leagues, where it means nothing.
     # Only trust it when the draft is actually an auction; otherwise let LeagueConfig's
@@ -1058,7 +1089,55 @@ def parse_schedule(payload: dict[str, Any], teams: pd.DataFrame) -> pd.DataFrame
     return frame.sort_values(["week", "home_team_id"]).reset_index(drop=True)
 
 
-def team_records(schedule: pd.DataFrame, *, through_week: int | None = None) -> pd.DataFrame:
+def _top_half_bonus(scoped: pd.DataFrame, seat: Callable[[int], dict[str, float]]) -> None:
+    """Credit each fully-played week's top-half bonus result into the running `tally`.
+
+    Under `ScoringEnhancement.WIN_BONUS_TOP_HALF` a week hands out a second result to every
+    team that played: a win for the top half of that week's scores league-wide, a loss for the
+    bottom half. Points-for is untouched -- the same points are simply read a second way.
+
+    **Only weeks where every matchup is played count.** Ranking a half-finished week would
+    bank a bonus against Sunday's scores and then re-decide it once Monday night lands, and
+    the top half of four teams is not the top half of sixteen. `through_week` already excludes
+    partial weeks on the in-season path; this guard is what makes the unbounded call safe too.
+
+    A team on a bye in an odd-sized league simply is not in that week's ranking, and the half
+    is taken over the teams that actually played.
+
+    An exact points tie straddling the cutoff is recorded as a **tie**, not a coin flip:
+    `LockedRecord.credited_wins` scores a tie as half a win, which is precisely the share of
+    the top half those teams are entitled to, and it is representable in the integer
+    win/loss/tie columns that a fractional win is not.
+    """
+    for _, rows in scoped.groupby("week", sort=True):
+        if not bool(rows["is_played"].all()):
+            continue
+        scores: dict[int, float] = {}
+        for row in rows.itertuples():
+            scores[int(row.home_team_id)] = float(row.home_points)
+            scores[int(row.away_team_id)] = float(row.away_points)
+        if len(scores) < 2:
+            continue
+        values = list(scores.values())
+        half = len(values) // 2
+        for team_id, points in scores.items():
+            above = sum(1 for other in values if other > points)
+            equal = sum(1 for other in values if other == points)  # includes this team
+            record = seat(team_id)
+            if above + equal <= half:
+                record["wins"] += 1
+            elif above >= half:
+                record["losses"] += 1
+            else:
+                record["ties"] += 1
+
+
+def team_records(
+    schedule: pd.DataFrame,
+    *,
+    through_week: int | None = None,
+    scoring_enhancement: ScoringEnhancement = ScoringEnhancement.NONE,
+) -> pd.DataFrame:
     """Played matchups -> one row per team: `team_id wins losses ties points_for games_played`.
 
     Derived from the schedule rather than read from ESPN's `cumulativeScore`, so the record
@@ -1082,6 +1161,13 @@ def team_records(schedule: pd.DataFrame, *, through_week: int | None = None) -> 
 
     **Ties are carried, not folded into a half-win** here -- but see `LockedRecord`, whose
     consumer converts them to half a win for seeding, which is ESPN's rule.
+
+    **`scoring_enhancement` must match the league's own setting.** Under
+    `WIN_BONUS_TOP_HALF` each fully-played week decides a second result for every team, so a
+    record built without it understates roughly half the league and overstates the other half
+    -- and the games it omits are exactly the ones a high-scoring, unlucky team banks. It
+    defaults to `NONE` because that is what every league not carrying the setting does; pass
+    `league_config.scoring_enhancement` rather than assuming.
     """
     played = schedule[schedule["is_played"]] if not schedule.empty else schedule
     if through_week is not None and not played.empty:
@@ -1106,6 +1192,12 @@ def team_records(schedule: pd.DataFrame, *, through_week: int | None = None) -> 
         else:  # TIE
             home["ties"] += 1
             away["ties"] += 1
+
+    if scoring_enhancement is ScoringEnhancement.WIN_BONUS_TOP_HALF and not schedule.empty:
+        # Ranked over the FULL week, played or not -- `played` cannot tell a finished week
+        # from a half-finished one, and only a finished week has a top half to speak of.
+        scoped = schedule if through_week is None else schedule[schedule["week"] <= through_week]
+        _top_half_bonus(scoped, _seat)
 
     frame = pd.DataFrame(
         [
@@ -1404,7 +1496,13 @@ def write_league_snapshot(
             "regular-season record.",
             detail,
         )
-    records = team_records(schedule, through_week=reg_weeks)
+    records = team_records(
+        schedule,
+        through_week=reg_weeks,
+        # From the league's own settings, not assumed: a top-half-bonus league decides two
+        # results a week, and records.tsv is read by hand as ground truth.
+        scoring_enhancement=config.scoring_enhancement,
+    )
     if not records.empty:
         records.to_csv(out_dir / "records.tsv", sep="	", index=False)
 
