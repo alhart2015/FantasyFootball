@@ -606,8 +606,13 @@ def parse_ruleset(payload: dict[str, Any], name: str | None = None) -> tuple[Rul
         other_overrides = {k: v for k, v in overrides.items() if k != _ESPN_DST_POSITION_ID}
         if other_overrides:
             notes.append(
-                f"statId {stat_id} has per-position pointsOverrides "
-                f"{other_overrides}; Ruleset applies one value to all positions."
+                ScoringNote(
+                    f"statId {stat_id} has per-position pointsOverrides "
+                    f"{other_overrides}; Ruleset applies one value to all positions.",
+                    # A category that scores differently by position, flattened to one value:
+                    # every projection at the losing positions is priced wrong.
+                    level=logging.WARNING,
+                )
             )
         if stat_id in _DIRECT_SCORING_IDS:
             fields[_DIRECT_SCORING_IDS[stat_id]] = points
@@ -628,8 +633,11 @@ def parse_ruleset(payload: dict[str, Any], name: str | None = None) -> tuple[Rul
     distinct_two_pt = set(two_pt.values())
     if len(distinct_two_pt) > 1:
         notes.append(
-            f"Two-point conversions score differently by type ({two_pt}); Ruleset has one "
-            f"two_pt_pts. Using the rushing value."
+            ScoringNote(
+                f"Two-point conversions score differently by type ({two_pt}); Ruleset has one "
+                f"two_pt_pts. Using the rushing value.",
+                level=logging.WARNING,
+            )
         )
         fields["two_pt_pts"] = two_pt.get("rushing", next(iter(distinct_two_pt)))
     elif distinct_two_pt:
@@ -647,31 +655,56 @@ def parse_ruleset(payload: dict[str, Any], name: str | None = None) -> tuple[Rul
             "scoring is not in pointsOverrides['16'] and cannot be applied."
         )
         notes.append(
-            f"{len(unmodelled)} scoring categories are not modelled by Ruleset (kicking and "
-            f"bonus categories have no skill-position equivalent): {', '.join(unmodelled)}."
-            f"{modelled_note}"
+            ScoringNote(
+                f"{len(unmodelled)} scoring categories are not modelled by Ruleset (kicking "
+                f"and bonus categories have no skill-position equivalent): "
+                f"{', '.join(unmodelled)}.{modelled_note}",
+                # Measured on the live league before demoting: of eleven, seven were kicker
+                # rules in a league with NO kicker slot, three were return TDs already
+                # modelled for D/ST, and the last was a skill-player return TD projected at
+                # ~0.01 occurrences. Largest cost to any player: 0.36 points across a season,
+                # against ~140 points per win. Loud on every run, it taught the reader to skim
+                # past the line above that actually means something.
+                level=logging.DEBUG,
+            )
         )
 
     expected = set(_DIRECT_SCORING_IDS.values()) | set(_YARDAGE_SCORING_IDS.values())
     missing = sorted(expected - fields.keys())
     if missing:
         notes.append(
-            f"ESPN did not report these categories; Ruleset defaults apply: {', '.join(missing)}."
+            ScoringNote(
+                "ESPN did not report these categories; Ruleset defaults apply: "
+                f"{', '.join(missing)}.",
+                # **The one that matters.** A category ESPN did not report is scored under
+                # OUR default rather than this league's, so every number downstream may be
+                # computed under the wrong rules. Stays loud.
+                level=logging.WARNING,
+            )
         )
 
     reception_pts = fields.get("reception_pts", Ruleset().reception_pts)
     family, exact = scoring_family(reception_pts)
     if not exact:
         notes.append(
-            f"This league scores {reception_pts:g} points per reception, which is not a "
-            f"standard family; tagged as the nearest one, {family}. The exact value is still "
-            "what scores projections — only the family tag is approximate."
+            ScoringNote(
+                f"This league scores {reception_pts:g} points per reception, which is not a "
+                f"standard family; tagged as the nearest one, {family}. The exact value is "
+                "still what scores projections — only the family tag is approximate.",
+                # Says itself that nothing is mispriced: the tag is cosmetic.
+                level=logging.DEBUG,
+            )
         )
     if dst_points:
         notes.append(
-            f"{len(dst_points)} D/ST scoring categories parsed into Ruleset.dst_stat_points. "
-            "These carry base points of 0 with the real value in pointsOverrides['16'], so "
-            "they were invisible to this parser before 2026-09-06 (issue #166)."
+            ScoringNote(
+                f"{len(dst_points)} D/ST scoring categories parsed into "
+                "Ruleset.dst_stat_points. These carry base points of 0 with the real value in "
+                "pointsOverrides['16'], so they were invisible to this parser before "
+                "2026-09-06 (issue #166).",
+                # A count of what WORKED. Reassuring once, noise on every run.
+                level=logging.DEBUG,
+            )
         )
 
     return Ruleset(
@@ -698,6 +731,69 @@ def parse_draft_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "keeper_count": int(draft.get("keeperCount", 0) or 0),
         "time_per_selection_sec": int(draft.get("timePerSelection", 0) or 0),
     }
+
+
+#: Messages already emitted this process, so a fact about a league is stated once.
+_SAID: set[str] = set()
+
+
+class ScoringNote(str):
+    """A parser note that knows how loudly it deserves to be said.
+
+    **A `str` subclass on purpose.** Callers and tests treat these as plain strings
+    (`"statId 83" in note`), and that keeps working; only the logging site reads `.level`.
+
+    The split matters because the two kinds are not comparable. "ESPN did not report
+    `passing_td_pts`, defaults apply" means **every number downstream may be scored under the
+    wrong rules** — that is a warning. "This league scores 11 categories `Ruleset` does not
+    model" sounds equally alarming and, for the league it was firing on, was worth **0.36
+    points across a whole season**: seven of the eleven were kicker rules in a league with no
+    kicker slot, three were return TDs already modelled for D/ST, and the last was a
+    skill-player return TD projected at ~0.01 occurrences. Printing that at WARNING on every
+    run trained the reader to skim past the line that actually matters.
+    """
+
+    level: int
+
+    def __new__(cls, text: str, *, level: int = logging.DEBUG) -> ScoringNote:
+        note = super().__new__(cls, text)
+        note.level = level
+        return note
+
+
+def _log_once(fmt: str, *args: object, level: int = logging.WARNING) -> None:
+    """Log at WARNING, but only the first time this exact message appears in a process.
+
+    **`build_league_config` is called once per SIMULATION.** `project_league_standings` derives
+    a config from the payload on every run, and `simulate_trades` runs one baseline plus one
+    per proposal — so a default trade report emitted the same two scoring sentences ten times,
+    twenty lines of stderr. In a terminal that interleaves with the report on stdout, and it
+    buried the section the reader had opened the report to see. Repetition did not make the
+    warning louder; it made the document unreadable, which is worse than not warning at all.
+
+    These are facts about a league's scoring settings. They do not change between calls within
+    a run, so the second copy carries no information.
+
+    Deduped on the FORMATTED message, so two genuinely different leagues in one process each
+    get their say — which is what a backtest sweeping seasons needs.
+    """
+    message = fmt % args if args else fmt
+    if message in _SAID:
+        return
+    if _log.disabled or not _log.isEnabledFor(level):
+        # **Suppressed is not said.** `context._config_notes` silences this logger while it
+        # cross-checks a config it already has, and that call is often the FIRST build of the
+        # run. Recording the message there would spend the single emission on a log line
+        # nobody could see, and the note would never appear at all -- which is how this fix,
+        # in its first cut, turned twenty copies into zero.
+        return
+    _SAID.add(message)
+    _log.log(level, "%s", message)
+
+
+def reset_log_once_cache() -> None:
+    """Forget what has been said. For tests that assert on the first emission."""
+    _SAID.clear()
 
 
 def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> LeagueConfig:
@@ -738,13 +834,15 @@ def build_league_config(payload: dict[str, Any], *, name: str | None = None) -> 
     draft = parse_draft_settings(payload)
     ruleset, notes = parse_ruleset(payload)
     for note in notes:
-        _log.warning("Scoring: %s", note)
+        # DEBUG for the descriptive ones, WARNING for anything that means the scoring
+        # itself may be wrong. See `ScoringNote`.
+        _log_once("Scoring: %s", note, level=getattr(note, "level", logging.WARNING))
 
     espn_slots = parse_roster_slots(payload)
     modelled_slots = {slot: count for slot, count in espn_slots.items() if slot != RosterSlot.K}
     dropped = {slot: espn_slots[slot] for slot in espn_slots if slot not in modelled_slots}
     if dropped:
-        _log.warning(
+        _log_once(
             "Roster: dropped %s from the LeagueConfig — kicker scoring is not modelled by "
             "Ruleset, so a K slot would be a position with no numbers behind it. ESPN's real "
             "roster is %d deep; this config models %d picks.",
