@@ -1,6 +1,6 @@
 # Contributing
 
-Setup, daily commands, workflow, and pattern recipes for the FantasyFootball repo. For Claude-specific behavioral rules, see `CLAUDE.md`. For project status and the running decision log, see `project_management.md`.
+Setup, daily commands, workflow, and pattern recipes for the FantasyFootball repo. For Claude-specific behavioral rules, see `CLAUDE.md`. For current status and open work, see the [GitHub issues](https://github.com/alhart2015/FantasyFootball/issues).
 
 ## Setup
 
@@ -143,6 +143,13 @@ The auction board is **co-pilot only** — there is no mock-auction mode yet, so
 analogue of the snake board's auto-drafting field or "Advance to my pick". Tracked in
 [#137](https://github.com/alhart2015/FantasyFootball/issues/137).
 
+## Historical references
+
+Two retired documents are still cited across `docs/superpowers/**` and `reports/**`. Both are recoverable from git history; neither should be recreated.
+
+- **`TODO.md`** (retired 2026-07-17, commit `a83acfc`) — open items moved to GitHub issues. Resolve a `TODO #N` reference by searching issues for the phrase `Migrated from TODO #N` (e.g. TODO #52 -> [#103](https://github.com/alhart2015/FantasyFootball/issues/103), TODO #49 -> [#105](https://github.com/alhart2015/FantasyFootball/issues/105), TODO #55 -> [#126](https://github.com/alhart2015/FantasyFootball/issues/126)). Completed items were not migrated and have no issue; read them with `git show <sha>:TODO.md` for any `<sha>` before `a83acfc`.
+- **`project_management.md`** (retired 2026-09-15) — a 500 KB running prose log that duplicated the issue tracker and the specs while drifting from both. Read it with `git show <sha>:project_management.md` for any `<sha>` before its deletion.
+
 ## Workflow
 
 This project uses the superpowers spec → plan → execute discipline.
@@ -185,7 +192,7 @@ This project uses the superpowers spec → plan → execute discipline.
 Before opening a PR:
 
 - [ ] **Run `pytest -v` and confirm all tests pass.** This is the only manual gate; we deliberately don't run GitHub Actions CI. mypy and ruff are caught by pre-commit.
-- [ ] If the work is foundational (a completed plan, an architectural decision, a convention change), update `project_management.md` (decision log + next-action) and/or the relevant [GitHub issue](https://github.com/alhart2015/FantasyFootball/issues) (close it, or open/comment as needed).
+- [ ] If the work is foundational (a completed plan, an architectural decision, a convention change), record it where it will be found again: a convention belongs in `CONTRIBUTING.md`, a design decision in the spec under `docs/superpowers/specs/`, and anything still open in a [GitHub issue](https://github.com/alhart2015/FantasyFootball/issues) (close it, or open/comment as needed). The PR description carries the rest — it is the durable record of why a change landed.
 - [ ] If a new convention emerged, capture it in `CONTRIBUTING.md` (this file) so it's repo-resident, not memory-only.
 - [ ] Confirm the spec and plan are committed on the feature branch.
 
