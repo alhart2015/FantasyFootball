@@ -844,6 +844,96 @@ class NgsReceivingSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class _PfrCommonSchema(pa.DataFrameModel):
+    """Columns every `pfr_advstats` stat type shares.
+
+    No `position`: unlike `snap_counts`, PFR's weekly advanced tables do not carry one. Rather
+    than invent it from id_map -- which would make this table a second, staler source of truth
+    for a player's position -- consumers join it from `weekly_stats` or `id_map` themselves.
+
+    No `game_type` either. Postseason rows are present but their weeks *continue* rather than
+    restart (WC=19, DIV=20, CON=21, SB=22), so `week` already carries the distinction and
+    `schedules` remains the source of truth for game metadata.
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+
+    class Config:
+        strict = "filter"
+
+
+class PfrPassingSchema(_PfrCommonSchema):
+    """Per-QB per-game pressure and accuracy charting -- `ingest.pfr_advstats`, `pass`.
+
+    What this adds over `weekly_stats` and NGS: the *reason* behind a bad game. `times_sacked`
+    is already in weekly stats, but sacks are the pressure that succeeded; `times_pressured` and
+    `times_blitzed` are the pressure that was applied, which is a property of the offensive line
+    and the opponent rather than the quarterback, and it is what carries forward.
+
+    `passing_bad_throws` is charted, not derived -- an accurate throw a receiver dropped is not
+    a bad throw, and an incompletion under pressure may not be either.
+
+    **The `_pct` columns are fractions in [0, 1], not percentages out of 100.** Upstream's naming
+    suggests otherwise; probed across 2018-2024, every one of them tops out at 1.0.
+    """
+
+    passing_drops: Series[float] = pa.Field(ge=0)
+    passing_drop_pct: Series[float] = pa.Field(ge=0, le=1)
+    passing_bad_throws: Series[float] = pa.Field(ge=0)
+    passing_bad_throw_pct: Series[float] = pa.Field(ge=0, le=1)
+    times_sacked: Series[float] = pa.Field(ge=0)
+    times_blitzed: Series[float] = pa.Field(ge=0)
+    times_hurried: Series[float] = pa.Field(ge=0)
+    times_hit: Series[float] = pa.Field(ge=0)
+    times_pressured: Series[float] = pa.Field(ge=0)
+    times_pressured_pct: Series[float] = pa.Field(ge=0, le=1)
+
+
+class PfrRushingSchema(_PfrCommonSchema):
+    """Per-rusher per-game contact charting -- `ingest.pfr_advstats`, `rush`.
+
+    The yards-before/after-contact split is the point: before-contact yardage is mostly the
+    offensive line's work and after-contact is mostly the back's, and a rushing line that
+    collapses them into one number cannot tell a back who lost his line from a back who was
+    never good.
+
+    **Before- and after-contact yards can both be negative** (a run stuffed behind the line of
+    scrimmage), so unlike the count fields they carry no lower bound.
+
+    The two `_avg` columns are nullable: they divide by `carries`, and a player charted with
+    zero carries in a game yields a null rather than a zero.
+    """
+
+    carries: Series[float] = pa.Field(ge=0)
+    rushing_yards_before_contact: Series[float]
+    rushing_yards_before_contact_avg: Series[float] = pa.Field(nullable=True)
+    rushing_yards_after_contact: Series[float]
+    rushing_yards_after_contact_avg: Series[float] = pa.Field(nullable=True)
+    rushing_broken_tackles: Series[float] = pa.Field(ge=0)
+
+
+class PfrReceivingSchema(_PfrCommonSchema):
+    """Per-receiver per-game drop and target-quality charting -- `ingest.pfr_advstats`, `rec`.
+
+    `receiving_rat` is the passer rating a quarterback earned when targeting this receiver,
+    which separates a receiver who was targeted badly from one who played badly. Its upper bound
+    is the perfect-rating ceiling of the NFL formula (158.3); a value above it is a data error
+    worth stopping on rather than storing.
+
+    `receiving_drop_pct` is a fraction in [0, 1] -- see `PfrPassingSchema`.
+    """
+
+    receiving_broken_tackles: Series[float] = pa.Field(ge=0)
+    receiving_drop: Series[float] = pa.Field(ge=0)
+    receiving_drop_pct: Series[float] = pa.Field(ge=0, le=1)
+    receiving_int: Series[float] = pa.Field(ge=0)
+    receiving_rat: Series[float] = pa.Field(ge=0, le=158.4)
+
+
 class PbpSchema(pa.DataFrameModel):
     """Per-play data — what `ingest.pbp` produces. Curated subset of
     `nfl_data_py.import_pbp_data`'s ~370-column output."""

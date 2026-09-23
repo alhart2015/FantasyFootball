@@ -14,6 +14,7 @@ from projections.ingest.id_map import build_id_map
 from projections.ingest.injury_report import refresh_injury_report
 from projections.ingest.ngs import refresh_ngs
 from projections.ingest.pbp import refresh_pbp
+from projections.ingest.pfr_advstats import refresh_pfr_advstats
 from projections.ingest.schedules import refresh_schedules
 from projections.ingest.snap_counts import refresh_snap_counts
 from projections.ingest.sources import (
@@ -38,6 +39,7 @@ __all__ = [
     "refresh_injury_report",
     "refresh_ngs",
     "refresh_pbp",
+    "refresh_pfr_advstats",
     "refresh_schedules",
     "refresh_snap_counts",
     "refresh_weekly_stats",

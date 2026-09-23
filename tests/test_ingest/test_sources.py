@@ -71,6 +71,9 @@ def test_registry_covers_every_source_we_ingest() -> None:
         "ngs_passing",
         "ngs_rushing",
         "ngs_receiving",
+        "pfr_pass",
+        "pfr_rush",
+        "pfr_rec",
         "pbp",
     }
 
@@ -80,6 +83,14 @@ def test_registry_names_are_unique() -> None:
     would make one of them unreachable."""
     names = [s.name for s in INGEST_SOURCES]
     assert len(names) == len(set(names))
+
+
+def test_id_map_precedes_every_pfr_keyed_source() -> None:
+    """`snap_counts` and all three `pfr_*` tables arrive keyed on `pfr_player_id` and resolve it
+    through the crosswalk `build_id_map` writes; each raises `FileNotFoundError` without it."""
+    names = [s.name for s in INGEST_SOURCES]
+    for pfr_keyed in ("snap_counts", "pfr_pass", "pfr_rush", "pfr_rec"):
+        assert names.index("id_map") < names.index(pfr_keyed), pfr_keyed
 
 
 def test_id_map_precedes_snap_counts() -> None:

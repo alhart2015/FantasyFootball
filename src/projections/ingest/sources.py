@@ -21,8 +21,9 @@ caller:
 
 Order matters and is encoded by position:
 
-- `build_id_map` must precede `refresh_snap_counts`, which joins on the gsis_id <-> pfr_id
-  translation table it writes and raises `FileNotFoundError` without it.
+- `build_id_map` must precede `refresh_snap_counts` and all three `pfr_*` sources, which arrive
+  keyed on `pfr_player_id` and join on the gsis_id <-> pfr_id translation table it writes. Each
+  raises `FileNotFoundError` without it.
 - `refresh_schedules` must precede `refresh_depth_charts`, which needs schedules to resolve
   `(season, week)` from the 2025+ snapshot format.
 
@@ -45,6 +46,8 @@ from projections.ingest.injury_report import refresh_injury_report
 from projections.ingest.ngs import STAT_TYPES as NGS_STAT_TYPES
 from projections.ingest.ngs import NgsStatType, refresh_ngs
 from projections.ingest.pbp import refresh_pbp
+from projections.ingest.pfr_advstats import STAT_TYPES as PFR_STAT_TYPES
+from projections.ingest.pfr_advstats import PfrStatType, refresh_pfr_advstats
 from projections.ingest.schedules import refresh_schedules
 from projections.ingest.snap_counts import refresh_snap_counts
 from projections.ingest.weekly_stats import refresh_weekly_stats
@@ -80,6 +83,15 @@ def _ngs_runner(stat_type: NgsStatType) -> Callable[[Path, list[int]], list[Path
 
     def _run(data_root: Path, seasons: list[int]) -> list[Path]:
         return refresh_ngs(data_root, stat_type=stat_type, seasons=seasons)
+
+    return _run
+
+
+def _pfr_runner(stat_type: PfrStatType) -> Callable[[Path, list[int]], list[Path]]:
+    """Bind `stat_type` eagerly, for the same reason `_ngs_runner` does."""
+
+    def _run(data_root: Path, seasons: list[int]) -> list[Path]:
+        return refresh_pfr_advstats(data_root, stat_type=stat_type, seasons=seasons)
 
     return _run
 
@@ -146,6 +158,12 @@ INGEST_SOURCES: tuple[IngestSource, ...] = (
             f"ngs_{stat_type}", needs_games_played=True, heavy=False, run=_ngs_runner(stat_type)
         )
         for stat_type in NGS_STAT_TYPES
+    ),
+    *(
+        IngestSource(
+            f"pfr_{stat_type}", needs_games_played=True, heavy=False, run=_pfr_runner(stat_type)
+        )
+        for stat_type in PFR_STAT_TYPES
     ),
     IngestSource(
         "pbp",
