@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from projections.ingest import build_id_map
 from projections.ingest.identity import (
     drop_placeholder_gsis_rows,
     normalize_join_id,
     placeholder_name_key,
+    resolve_gsis_via_id_map,
 )
 
 
@@ -183,3 +186,67 @@ def test_reserved_placeholder_gsis_ids_are_kept() -> None:
     and must survive -- dropping them would silently empty the defense pool."""
     frame = pd.DataFrame({"gsis_id": ["99-0001234", "98-0000001"]})
     assert len(drop_placeholder_gsis_rows(frame, source="test")) == 2
+
+
+# --- resolve_gsis_via_id_map ------------------------------------------------------------------
+#
+# The pfr_id -> gsis_id crosswalk, shared by `snap_counts` and every `pfr_advstats` stat type.
+# `tests/test_ingest/test_snap_counts.py` covers it through one real caller; these cover the
+# helper's own contract, including the two edges no caller currently exercises.
+
+
+def _build_id_map(
+    tmp_path: Path, fake_id_map_df: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("projections.ingest.id_map._fetch_raw_id_map", lambda: fake_id_map_df)
+    build_id_map(tmp_path)
+
+
+def test_resolve_attaches_gsis_and_drops_both_id_columns(
+    tmp_path: Path, fake_id_map_df: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _build_id_map(tmp_path, fake_id_map_df, monkeypatch)
+    frame = pd.DataFrame({"pfr_player_id": ["MahoPa00", "KelcTr00"], "snaps": [60, 55]})
+
+    out = resolve_gsis_via_id_map(frame, tmp_path)
+
+    assert set(out["gsis_id"]) == {"00-0034857", "00-0030506"}
+    # The frame is gsis-keyed now; neither pfr column may survive into a schema.
+    assert "pfr_player_id" not in out.columns
+    assert "pfr_id" not in out.columns
+    assert list(out["snaps"]) == [60, 55]
+
+
+def test_resolve_drops_rows_with_no_id_map_entry(
+    tmp_path: Path, fake_id_map_df: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pfr id we don't carry is a player we don't track -- deep bench, practice squad, a
+    lineman on a fumble recovery. There is no GsisId to give them, so the row goes."""
+    _build_id_map(tmp_path, fake_id_map_df, monkeypatch)
+    frame = pd.DataFrame({"pfr_player_id": ["MahoPa00", "NobdyWh00"], "snaps": [60, 2]})
+
+    out = resolve_gsis_via_id_map(frame, tmp_path)
+
+    assert list(out["gsis_id"]) == ["00-0034857"]
+
+
+def test_resolve_honours_a_custom_pfr_column(
+    tmp_path: Path, fake_id_map_df: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`pfr_col` is parameterized so a caller need not assume upstream's spelling."""
+    _build_id_map(tmp_path, fake_id_map_df, monkeypatch)
+    frame = pd.DataFrame({"player_pfr": ["BarkSa00"], "carries": [22]})
+
+    out = resolve_gsis_via_id_map(frame, tmp_path, pfr_col="player_pfr")
+
+    assert list(out["gsis_id"]) == ["00-0034796"]
+    assert "player_pfr" not in out.columns
+
+
+def test_resolve_without_an_id_map_raises(tmp_path: Path) -> None:
+    """`INGEST_SOURCES` orders id_map first so this cannot happen in a normal refresh; when it
+    does, a loud FileNotFoundError beats an empty partition that reports success."""
+    frame = pd.DataFrame({"pfr_player_id": ["MahoPa00"]})
+
+    with pytest.raises(FileNotFoundError):
+        resolve_gsis_via_id_map(frame, tmp_path)
