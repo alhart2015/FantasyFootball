@@ -146,7 +146,10 @@ def _objective(
                 LightGBMPruningCallback(trial, metric="quantile", valid_name="valid_0"),
             ],
         )
-        y_pred_score = regressor.predict(x_score)
+        # lightgbm types `predict` as `ndarray | Any | list[Any]` -- it really can hand back a
+        # list -- so narrow it before the arithmetic in `_pinball_loss` rather than relying on
+        # broadcasting to paper over the list case.
+        y_pred_score = np.asarray(regressor.predict(x_score))
         total += _pinball_loss(y_score, y_pred_score, q)
     return total
 

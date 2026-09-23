@@ -6,7 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "projections"
 version = "0.0.1"
 description = "FantasyFootball Projections Core"
-requires-python = ">=3.11"
+# 3.12, not 3.11: numpy >=2.5 (which a fresh `pip install` resolves to) declares
+# `requires-python >=3.12`, and its type stubs use 3.12-only `type` statements. Claiming
+# 3.11 while the dependency floor and both dev environments are 3.12 meant mypy analysed
+# 3.12 stubs as 3.11 and died on the syntax -- a fresh worktree failed the gate on
+# untouched code. Nothing has ever been tested on 3.11.
+requires-python = ">=3.12"
 dependencies = [
     "pandas>=2.2",
     "pyarrow>=15",
@@ -79,7 +84,9 @@ filterwarnings = [
 
 [tool.mypy]
 strict = true
-python_version = "3.11"
+# Must track `requires-python` above; when they drift, mypy reads a dependency's stubs
+# under the wrong language version and reports syntax errors in site-packages.
+python_version = "3.12"
 # scripts/ is on the path so test_scripts/ tests (which import script modules
 # directly via tests/test_scripts/conftest.py) type-check cleanly.
 mypy_path = ["src", "scripts"]

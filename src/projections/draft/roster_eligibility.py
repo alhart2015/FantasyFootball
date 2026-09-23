@@ -12,11 +12,8 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from math import ceil
-from typing import TypeVar
 
 from projections.schemas import Position, RosterSlot
-
-_Player = TypeVar("_Player")
 
 # Position-specific starting slots (a slot whose label is also a Position).
 POSITION_SLOTS: tuple[RosterSlot, ...] = (
@@ -47,12 +44,12 @@ FLEX_SLOTS: tuple[tuple[RosterSlot, frozenset[Position]], ...] = (
 )
 
 
-def choose_starters_with_slots(
-    players: Sequence[_Player],
+def choose_starters_with_slots[Player](
+    players: Sequence[Player],
     roster_slots: Mapping[RosterSlot, int],
     *,
-    value: Callable[[_Player], float | None],
-    position: Callable[[_Player], str],
+    value: Callable[[Player], float | None],
+    position: Callable[[Player], str],
 ) -> list[tuple[int, RosterSlot]]:
     """Who starts and WHICH SLOT each one fills. Restrictive slots, then flex.
 
@@ -126,12 +123,12 @@ def choose_starters_with_slots(
     return chosen
 
 
-def choose_starters(
-    players: Sequence[_Player],
+def choose_starters[Player](
+    players: Sequence[Player],
     roster_slots: Mapping[RosterSlot, int],
     *,
-    value: Callable[[_Player], float | None],
-    position: Callable[[_Player], str],
+    value: Callable[[Player], float | None],
+    position: Callable[[Player], str],
 ) -> list[int]:
     """Indices of the players who start, best lineup first.
 
@@ -158,10 +155,10 @@ def bench_eligible_positions(roster_slots: Mapping[RosterSlot, int]) -> frozense
     )
 
 
-def allocate_roster_slots(
-    players: Iterable[tuple[_Player, Position]],
+def allocate_roster_slots[Player](
+    players: Iterable[tuple[Player, Position]],
     roster_slots: Mapping[RosterSlot, int],
-) -> tuple[list[tuple[_Player, Position, RosterSlot]], Counter[RosterSlot], frozenset[Position]]:
+) -> tuple[list[tuple[Player, Position, RosterSlot]], Counter[RosterSlot], frozenset[Position]]:
     """Greedily place each player into a roster slot; return placements, open slots, benchable.
 
     Fill priority per player: own position slot → FLEX → SUPER_FLEX → BENCH. A player
@@ -175,7 +172,7 @@ def allocate_roster_slots(
         {slot: count for slot, count in roster_slots.items() if slot != RosterSlot.IR and count > 0}
     )
     benchable = bench_eligible_positions(roster_slots)
-    placements: list[tuple[_Player, Position, RosterSlot]] = []
+    placements: list[tuple[Player, Position, RosterSlot]] = []
     for key, pos in players:
         candidates = (
             (RosterSlot(pos.value), True),
