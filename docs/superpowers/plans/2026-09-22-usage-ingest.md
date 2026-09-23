@@ -8,6 +8,19 @@ before the next begins. Phases 2–4 are independent of each other and both depe
 
 ---
 
+## Phase 0 — Toolchain (unplanned; added during Phase 1)
+
+Creating the worktree's venv surfaced that a fresh `pip install -e ".[dev]"` fails the repo's own
+gate on untouched code: `requires-python` claimed `>=3.11` while numpy >=2.5 requires 3.12, so
+mypy read 3.12-only stub syntax under a 3.11 target. Fixed forward — floor moved to 3.12 (both
+dev environments were already 3.12.1 and nothing has ever been tested on 3.11), plus the two
+consequences that surfaced: a real `lightgbm.predict` typing gap in `scripts/tune_lightgbm.py`
+and PEP 695 conversion of `draft/roster_eligibility.py`'s three generic functions.
+
+Landed as its own commit so it is reviewable independently of the ingest work.
+
+---
+
 ## Phase 1 — Extract the pfr→gsis crosswalk
 
 Phase 4 needs the `pfr_player_id` → `gsis_id` join that currently lives as a private function in
@@ -35,16 +48,19 @@ Cleanest of the three (real `gsis_id`, int season/week). Doing it first proves t
 shape — schema + module + registry + tests — on the source with the fewest traps.
 
 **Files**
-1. `src/projections/schemas.py` — add `InjuryStatus` and `PracticeStatus` enums and
-   `InjuryReportSchema`. `report_status`, `practice_status`, and the four injury-description
+1. `src/projections/schemas.py` — add the `PracticeStatus` enum and `InjuryReportSchema`.
+   `InjuryStatus` already exists and is reused, not forked (see spec). `report_status`, `practice_status`, and the four injury-description
    columns are `nullable=True`; docstring states that null is meaningful here (on the report, no
    designation) and not a gap.
-2. `src/projections/ingest/injuries.py` — new module on the `weekly_stats.py` template.
+2. `src/projections/ingest/injury_report.py` — new module on the `weekly_stats.py` template.
+   Named `injury_report`, not `injuries`: `ingest/injury_news.py` and `midseason/injuries.py`
+   already exist.
    `_fetch_raw_injuries` seam; filter `season_type == "REG"`; map verbose practice labels to
    `PracticeStatus` values; `drop_placeholder_gsis_rows`; `normalize_team_code`; validate.
-3. `src/projections/ingest/sources.py` — register `injuries`, `needs_games_played=True`,
+3. `src/projections/ingest/sources.py` — register `injury_report`, `needs_games_played=True`,
    `heavy=False`.
-4. `tests/test_ingest_injuries.py` — POST filtered; null `report_status` survives as null;
+4. `tests/test_ingest/test_injury_report.py` (plus the registry inventory in
+   `tests/test_ingest/test_sources.py`, which pins the set of source names) — POST filtered; null `report_status` survives as null;
    verbose practice labels → enum; placeholder ids dropped.
 
 **Gate:** `pytest -v -k "ingest or store or schemas"`, then the full gate.

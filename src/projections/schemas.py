@@ -228,6 +228,30 @@ def parse_injury_status(raw: object) -> tuple[InjuryStatus, str]:
         return InjuryStatus.UNKNOWN, text
 
 
+class PracticeStatus(StrEnum):
+    """How much of a practice a player took part in, from the weekly NFL injury report.
+
+    The companion to `InjuryStatus` on the same report: the designation says what the team will
+    admit about Sunday, the practice line says what the player actually did on Wednesday through
+    Friday. A Questionable who practised in full and a Questionable who sat all week carry the
+    same designation and very different odds of playing, which is the whole reason this column
+    is worth storing separately.
+
+    Upstream spells these as sentences -- "Did Not Participate In Practice" -- and those strings
+    are what a reader would otherwise end up matching on downstream. Wrapped here per the repo
+    convention, so the match is on a value that cannot be typo'd into silence.
+
+    There is no `UNKNOWN` member and that is deliberate: unlike ESPN's open-ended status field,
+    this column has exactly three upstream spellings plus null. A fourth would be a real change
+    in the source and should stop the ingest rather than be absorbed -- see
+    `ingest.injury_report._PRACTICE_LABELS`.
+    """
+
+    FULL = "FULL"
+    LIMITED = "LIMITED"
+    DNP = "DNP"
+
+
 class DistributionFamily(StrEnum):
     """Backing representation of a `Distribution`."""
 
@@ -522,6 +546,8 @@ _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
 _RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD", "DRAFTKINGS"]
 _BACKTEST_VERDICT_VALUES = ["ADOPT", "NULL", "DO_NOT_ADOPT"]
 _SOURCE_VALUES = [s.value for s in ProjectionSource]
+_INJURY_STATUS_VALUES = [s.value for s in InjuryStatus]
+_PRACTICE_STATUS_VALUES = [s.value for s in PracticeStatus]
 
 
 class WeeklyStatsSchema(pa.DataFrameModel):
@@ -632,6 +658,48 @@ class DepthChartsSchema(pa.DataFrameModel):
     position: Series[str] = pa.Field(isin=_POSITION_VALUES)
     depth_team: Series[str]
     depth_rank: Series[int] = pa.Field(ge=1, le=10)
+
+    class Config:
+        strict = "filter"
+
+
+class InjuryReportSchema(pa.DataFrameModel):
+    """Per-player per-week NFL injury report -- what `ingest.injury_report` produces.
+
+    **A null is data here, not a gap.** This is the only ingest table in the repo where that is
+    true, so it is worth being explicit about what each one means:
+
+    - A player who is fully healthy has **no row at all**. Absence from this table is the
+      healthy signal; never `fillna` a designation onto a player and never read a missing row
+      as a missing measurement.
+    - `report_status` null means the player is *on* the report without a game designation --
+      typically a Wednesday or Thursday entry before the team commits to a Sunday status. That
+      is not the same as healthy, and collapsing the two would move every number downstream.
+    - The four injury-description columns are null whenever the team did not name a body part,
+      which they frequently do not.
+
+    `report_status` reuses `InjuryStatus` rather than defining a parallel enum: upstream emits
+    only Questionable/Doubtful/Out, which are three of its members. Note that
+    `parse_injury_status` is **not** the right constructor for this column -- it maps empty to
+    `ACTIVE` because ESPN omits the field for uninjured players, whereas here an empty value
+    means the opposite (on the report, undesignated).
+
+    Regular season only. Upstream mixes `POST` rows in with a restarted week numbering, so a
+    Week 1 postseason row would collide with a Week 1 regular-season row on any
+    `(gsis_id, season, week)` join.
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    report_status: Series[str] = pa.Field(isin=_INJURY_STATUS_VALUES, nullable=True)
+    report_primary_injury: Series[str] = pa.Field(nullable=True)
+    report_secondary_injury: Series[str] = pa.Field(nullable=True)
+    practice_status: Series[str] = pa.Field(isin=_PRACTICE_STATUS_VALUES, nullable=True)
+    practice_primary_injury: Series[str] = pa.Field(nullable=True)
+    practice_secondary_injury: Series[str] = pa.Field(nullable=True)
 
     class Config:
         strict = "filter"

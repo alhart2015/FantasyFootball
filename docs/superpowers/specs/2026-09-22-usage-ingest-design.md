@@ -148,10 +148,29 @@ Two categorical columns, both nullable, both with verbose upstream labels:
 - `practice_status` ∈ {`Full Participation in Practice`, `Limited Participation in Practice`,
   `Did Not Participate In Practice`, `None`}.
 
-These become two enums in `schemas.py` — `InjuryStatus` and `PracticeStatus` — per the repo rule
-that we reference enums, never the strings they wrap. The verbose practice labels are mapped to
-`FULL` / `LIMITED` / `DNP`; storing the upstream sentence in a parquet column and then string-
-matching on it downstream is exactly the pattern the enum convention exists to prevent.
+`InjuryStatus` **already exists** in `schemas.py` (added for the ESPN path) and is reused rather
+than forked: upstream emits only Questionable/Doubtful/Out, three of its members. Only
+`PracticeStatus` is new. The verbose practice labels map to `FULL` / `LIMITED` / `DNP`; storing
+the upstream sentence in a parquet column and then string-matching on it downstream is exactly
+the pattern the enum convention exists to prevent.
+
+One trap in that reuse: `parse_injury_status` is *not* the right constructor here. It maps empty
+to `ACTIVE`, because ESPN omits the field for uninjured players. On this report an empty value
+means the opposite — the player is on the report without a Sunday designation — so the ingest
+has its own mapping that preserves null. The two mappings are also deliberately asymmetric: an
+unrecognised *designation* maps to `UNKNOWN` and warns (matching how `InjuryStatus.UNKNOWN` is
+used everywhere else), while an unrecognised *practice label* raises, because that column has
+exactly three upstream spellings and a fourth is a source change rather than a row to absorb.
+
+**Module name.** `ingest/injury_report.py`, not `injuries.py`: `ingest/injury_news.py` (ESPN
+beat-reporter prose) and `midseason/injuries.py` (the cost of a designation) already exist, and
+a third thing called "injuries" would be unreadable.
+
+**A second, divergent pull already exists.** `scripts/measure_injury_impact.py` calls
+`nflreadpy.load_injuries` directly and keeps postseason rows, where this ingest drops them. Its
+output is baked into the constants in `midseason/injuries.py`, so repointing it at this
+partition would silently move measured numbers. Left alone deliberately; recorded as a
+follow-up.
 
 `season_type` includes `POST`. Unlike `ff_opportunity`, here the postseason rows are genuinely
 mixed in with a `game_type` column, and the `week` numbering restarts — so we **keep** `REG` only
