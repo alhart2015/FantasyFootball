@@ -228,6 +228,36 @@ def parse_injury_status(raw: object) -> tuple[InjuryStatus, str]:
         return InjuryStatus.UNKNOWN, text
 
 
+class PracticeStatus(StrEnum):
+    """How much of a practice a player took part in, from the weekly NFL injury report.
+
+    The companion to `InjuryStatus` on the same report: the designation says what the team will
+    admit about Sunday, the practice line says what the player actually did on Wednesday through
+    Friday. A Questionable who practised in full and a Questionable who sat all week carry the
+    same designation and very different odds of playing, which is the whole reason this column
+    is worth storing separately.
+
+    Upstream spells these as sentences -- "Did Not Participate In Practice" -- and those strings
+    are what a reader would otherwise end up matching on downstream. Wrapped here per the repo
+    convention, so the match is on a value that cannot be typo'd into silence.
+
+    `UNKNOWN` mirrors `InjuryStatus.UNKNOWN` and exists because the obvious assumption -- that
+    this column holds exactly three spellings plus null -- is false. Across 2016-2025 upstream
+    also emits `"Note"` (7 rows, a marker that the row is a free-text clarification rather than
+    a participation level) and 212 whitespace-only values. An eleventh-hour fourth label must
+    not abort a season's ingest; that is the failure mode issue #169 was opened for.
+
+    Whitespace-only and missing values are *not* `UNKNOWN` -- they stay null, which already
+    means "on the report, no practice line". `UNKNOWN` means "upstream said something we have
+    no mapping for", and it is logged so the mapping can be widened deliberately.
+    """
+
+    FULL = "FULL"
+    LIMITED = "LIMITED"
+    DNP = "DNP"
+    UNKNOWN = "UNKNOWN"
+
+
 class DistributionFamily(StrEnum):
     """Backing representation of a `Distribution`."""
 
@@ -522,6 +552,8 @@ _DIST_FAMILY_VALUES = [f.value for f in DistributionFamily]
 _RULESET_NAME_VALUES = ["ESPN_PPR", "ESPN_HALF", "STANDARD", "DRAFTKINGS"]
 _BACKTEST_VERDICT_VALUES = ["ADOPT", "NULL", "DO_NOT_ADOPT"]
 _SOURCE_VALUES = [s.value for s in ProjectionSource]
+_INJURY_STATUS_VALUES = [s.value for s in InjuryStatus]
+_PRACTICE_STATUS_VALUES = [s.value for s in PracticeStatus]
 
 
 class WeeklyStatsSchema(pa.DataFrameModel):
@@ -637,6 +669,111 @@ class DepthChartsSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class InjuryReportSchema(pa.DataFrameModel):
+    """Per-player per-week NFL injury report -- what `ingest.injury_report` produces.
+
+    **A null is data here, not a gap.** This is the only ingest table in the repo where that is
+    true, so it is worth being explicit about what each one means:
+
+    - A player who is fully healthy has **no row at all**. Absence from this table is the
+      healthy signal; never `fillna` a designation onto a player and never read a missing row
+      as a missing measurement.
+    - `report_status` null means the player is *on* the report without a game designation --
+      typically a Wednesday or Thursday entry before the team commits to a Sunday status. That
+      is not the same as healthy, and collapsing the two would move every number downstream.
+    - The four injury-description columns are null whenever the team did not name a body part,
+      which they frequently do not.
+
+    `report_status` reuses `InjuryStatus` rather than defining a parallel enum: upstream emits
+    only Questionable/Doubtful/Out, which are three of its members. Note that
+    `parse_injury_status` is **not** the right constructor for this column -- it maps empty to
+    `ACTIVE` because ESPN omits the field for uninjured players, whereas here an empty value
+    means the opposite (on the report, undesignated).
+
+    Postseason rows are included, with weeks 19-22 (WC, DIV, CON, SB). Upstream's week
+    numbering continues rather than restarting, so there is no collision on
+    `(gsis_id, season, week)`; a consumer wanting regular season only filters `week <= 18`.
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+    report_status: Series[str] = pa.Field(isin=_INJURY_STATUS_VALUES, nullable=True)
+    report_primary_injury: Series[str] = pa.Field(nullable=True)
+    report_secondary_injury: Series[str] = pa.Field(nullable=True)
+    practice_status: Series[str] = pa.Field(isin=_PRACTICE_STATUS_VALUES, nullable=True)
+    practice_primary_injury: Series[str] = pa.Field(nullable=True)
+    practice_secondary_injury: Series[str] = pa.Field(nullable=True)
+
+    class Config:
+        strict = "filter"
+
+
+class FfOpportunitySchema(pa.DataFrameModel):
+    """Per-player per-week actual and *expected* production -- what `ingest.ff_opportunity`
+    produces, from nflverse's `ffopportunity` play-by-play model.
+
+    The point of this table is the `_exp` columns. Every other source here records what a player
+    got; these record what his opportunities were worth. A three-catch game that happened to end
+    in a 60-yard catch-and-run and a nine-target grind score the same in `weekly_stats`, and the
+    gap between actual and expected is the luck-regression signal that distinguishes them.
+
+    **`total_fantasy_points` and `total_fantasy_points_exp` are the upstream model's scoring, not
+    ours.** They are stored for diagnostic comparison only. `src/projections/scoring/` is the
+    only place that knows what counts as a fantasy point, and it converts the `_exp` *stat*
+    columns under our league's ruleset -- a consumer that reads these two as a projection has
+    silently adopted someone else's scoring settings.
+
+    `_diff` columns are not stored: they are `actual - exp`, and a stored subtraction drifts from
+    its inputs. The `*_team` mirror of every column is not stored either: `groupby(["season",
+    "week", "team"])` reproduces it exactly, which is why `team` is kept.
+
+    Weeks run to 22 -- upstream includes the postseason. Stored as-is, matching
+    `SnapCountsSchema`; the playoff-week filter belongs to the consumer (issue #123).
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+
+    # Opportunity counts: the denominators the expectations are built on.
+    pass_attempt: Series[float] = pa.Field(ge=0)
+    rec_attempt: Series[float] = pa.Field(ge=0)
+    rush_attempt: Series[float] = pa.Field(ge=0)
+
+    # Actual / expected pairs. Both sides are floats: an expectation is fractional by nature,
+    # and the actual side is kept float so a pair is subtractable without a dtype dance.
+    pass_completions: Series[float] = pa.Field(ge=0)
+    pass_completions_exp: Series[float] = pa.Field(ge=0)
+    receptions: Series[float] = pa.Field(ge=0)
+    receptions_exp: Series[float] = pa.Field(ge=0)
+    pass_yards_gained: Series[float]
+    pass_yards_gained_exp: Series[float]
+    rec_yards_gained: Series[float]
+    rec_yards_gained_exp: Series[float]
+    rush_yards_gained: Series[float]
+    rush_yards_gained_exp: Series[float]
+    pass_touchdown: Series[float] = pa.Field(ge=0)
+    pass_touchdown_exp: Series[float] = pa.Field(ge=0)
+    rec_touchdown: Series[float] = pa.Field(ge=0)
+    rec_touchdown_exp: Series[float] = pa.Field(ge=0)
+    rush_touchdown: Series[float] = pa.Field(ge=0)
+    rush_touchdown_exp: Series[float] = pa.Field(ge=0)
+    pass_interception: Series[float] = pa.Field(ge=0)
+    pass_interception_exp: Series[float] = pa.Field(ge=0)
+
+    #: Upstream's own scoring. Diagnostic only -- see the class docstring.
+    total_fantasy_points: Series[float]
+    total_fantasy_points_exp: Series[float]
+
+    class Config:
+        strict = "filter"
+
+
 class NgsPassingSchema(pa.DataFrameModel):
     """NGS passing — season-to-date weekly snapshot per QB.
     Coverage starts 2016 (RFID-chip era)."""
@@ -711,6 +848,104 @@ class NgsReceivingSchema(pa.DataFrameModel):
 
     class Config:
         strict = "filter"
+
+
+class _PfrCommonSchema(pa.DataFrameModel):
+    """Columns every `pfr_advstats` stat type shares.
+
+    No `position`: unlike `snap_counts`, PFR's weekly advanced tables do not carry one. Rather
+    than invent it from id_map -- which would make this table a second, staler source of truth
+    for a player's position -- consumers join it from `weekly_stats` or `id_map` themselves.
+
+    No `game_type` either. Postseason rows are present but their weeks *continue* rather than
+    restart (WC=19, DIV=20, CON=21, SB=22), so `week` already carries the distinction and
+    `schedules` remains the source of truth for game metadata.
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    opponent: Series[str] = pa.Field(isin=_TEAM_VALUES)
+
+    class Config:
+        strict = "filter"
+
+
+class PfrPassingSchema(_PfrCommonSchema):
+    """Per-QB per-game pressure and accuracy charting -- `ingest.pfr_advstats`, `pass`.
+
+    What this adds over `weekly_stats` and NGS: the *reason* behind a bad game. `times_sacked`
+    is already in weekly stats, but sacks are the pressure that succeeded; `times_pressured` and
+    `times_blitzed` are the pressure that was applied, which is a property of the offensive line
+    and the opponent rather than the quarterback, and it is what carries forward.
+
+    `passing_bad_throws` is charted, not derived -- an accurate throw a receiver dropped is not
+    a bad throw, and an incompletion under pressure may not be either.
+
+    **The `_pct` columns are fractions in [0, 1], not percentages out of 100**, despite the
+    naming. `passing_drop_pct`, `passing_bad_throw_pct` and `receiving_drop_pct` top out at
+    exactly 1.0 across 2018-2025 and are bounded accordingly.
+
+    `times_pressured_pct` is the exception and carries **no upper bound**. One row in those eight
+    seasons exceeds 1.0: Aaron Rodgers, 2023 Week 1, at 1.5 -- the four-snap Achilles game, where
+    the dropback denominator is small enough for upstream's ratio to come out above one. It is an
+    artifact of a tiny sample rather than bad data, and a `le=1` here would abort a whole
+    season's ingest over it. Found by the live-API drift smoke, not by a fixture.
+    """
+
+    passing_drops: Series[float] = pa.Field(ge=0)
+    passing_drop_pct: Series[float] = pa.Field(ge=0, le=1)
+    passing_bad_throws: Series[float] = pa.Field(ge=0)
+    passing_bad_throw_pct: Series[float] = pa.Field(ge=0, le=1)
+    times_sacked: Series[float] = pa.Field(ge=0)
+    times_blitzed: Series[float] = pa.Field(ge=0)
+    times_hurried: Series[float] = pa.Field(ge=0)
+    times_hit: Series[float] = pa.Field(ge=0)
+    times_pressured: Series[float] = pa.Field(ge=0)
+    times_pressured_pct: Series[float] = pa.Field(ge=0)
+
+
+class PfrRushingSchema(_PfrCommonSchema):
+    """Per-rusher per-game contact charting -- `ingest.pfr_advstats`, `rush`.
+
+    The yards-before/after-contact split is the point: before-contact yardage is mostly the
+    offensive line's work and after-contact is mostly the back's, and a rushing line that
+    collapses them into one number cannot tell a back who lost his line from a back who was
+    never good.
+
+    **Before- and after-contact yards can both be negative** (a run stuffed behind the line of
+    scrimmage), so unlike the count fields they carry no lower bound.
+
+    The two `_avg` columns are nullable: they divide by `carries`, and a player charted with
+    zero carries in a game yields a null rather than a zero.
+    """
+
+    carries: Series[float] = pa.Field(ge=0)
+    rushing_yards_before_contact: Series[float]
+    rushing_yards_before_contact_avg: Series[float] = pa.Field(nullable=True)
+    rushing_yards_after_contact: Series[float]
+    rushing_yards_after_contact_avg: Series[float] = pa.Field(nullable=True)
+    rushing_broken_tackles: Series[float] = pa.Field(ge=0)
+
+
+class PfrReceivingSchema(_PfrCommonSchema):
+    """Per-receiver per-game drop and target-quality charting -- `ingest.pfr_advstats`, `rec`.
+
+    `receiving_rat` is the passer rating a quarterback earned when targeting this receiver,
+    which separates a receiver who was targeted badly from one who played badly. Its upper bound
+    is the perfect-rating ceiling of the NFL formula (158.3, which is also the observed maximum
+    across 2018-2025); a value above it is a data error
+    worth stopping on rather than storing.
+
+    `receiving_drop_pct` is a fraction in [0, 1] -- see `PfrPassingSchema`.
+    """
+
+    receiving_broken_tackles: Series[float] = pa.Field(ge=0)
+    receiving_drop: Series[float] = pa.Field(ge=0)
+    receiving_drop_pct: Series[float] = pa.Field(ge=0, le=1)
+    receiving_int: Series[float] = pa.Field(ge=0)
+    receiving_rat: Series[float] = pa.Field(ge=0, le=158.4)
 
 
 class PbpSchema(pa.DataFrameModel):

@@ -14,9 +14,10 @@ from pathlib import Path
 import nflreadpy
 import pandas as pd
 
+from projections.ingest.identity import resolve_gsis_via_id_map
 from projections.ingest.manifest import record as record_manifest
 from projections.schemas import _PYARROW_STR, Position, SnapCountsSchema, normalize_team_code
-from projections.store import read_partition, write_partition
+from projections.store import write_partition
 
 _KEEP = [
     "gsis_id",
@@ -42,20 +43,6 @@ def _normalize_team(v: str) -> str:
     return normalize_team_code(v).value
 
 
-def _resolve_gsis_via_id_map(df: pd.DataFrame, data_root: Path) -> pd.DataFrame:
-    """Inner-join `df.pfr_player_id` with id_map's `pfr_id` to attach `gsis_id`.
-    Rows with no id_map match are dropped (bench/practice players)."""
-    id_map = read_partition(data_root / "raw", "id_map", season=None)
-    id_map_subset = id_map[["pfr_id", "gsis_id"]].dropna(subset=["pfr_id"])
-    merged = df.merge(
-        id_map_subset,
-        left_on="pfr_player_id",
-        right_on="pfr_id",
-        how="inner",
-    )
-    return merged.drop(columns=["pfr_player_id", "pfr_id"])
-
-
 def _normalize_one_season(raw: pd.DataFrame, data_root: Path) -> pd.DataFrame:
     df = raw.copy()
 
@@ -63,7 +50,7 @@ def _normalize_one_season(raw: pd.DataFrame, data_root: Path) -> pd.DataFrame:
     df = df[df["pfr_player_id"].notna()].copy()
 
     # Resolve pfr_player_id -> gsis_id via id_map. Drops unmatched rows.
-    df = _resolve_gsis_via_id_map(df, data_root)
+    df = resolve_gsis_via_id_map(df, data_root)
 
     # Drop rows with NaN season/week before int64 coercion.
     df = df[df["season"].notna() & df["week"].notna()].copy()

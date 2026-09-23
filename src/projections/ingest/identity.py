@@ -7,6 +7,10 @@ import it from here so they agree by construction rather than re-deriving the ru
 
 `drop_placeholder_gsis_rows` is the single source of truth for the other half of that problem:
 upstream rows carrying an id that is not a gsis_id at all.
+
+`resolve_gsis_via_id_map` is the third: sources keyed on a *different* platform's id
+(`pfr_player_id`, from PFR-derived nflverse releases) that must be crosswalked to `GsisId`
+before anything else can touch them.
 """
 
 from __future__ import annotations
@@ -14,10 +18,12 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
+from pathlib import Path
 
 import pandas as pd
 
 from projections.schemas import GSIS_ID_PATTERN
+from projections.store import read_partition
 
 _log = logging.getLogger(__name__)
 
@@ -85,6 +91,37 @@ def drop_placeholder_gsis_rows(
     if n_null:
         _log.debug("%s: dropped %d row(s) with a null %s.", source, n_null, gsis_col)
     return kept
+
+
+def resolve_gsis_via_id_map(
+    df: pd.DataFrame, data_root: Path, *, pfr_col: str = "pfr_player_id"
+) -> pd.DataFrame:
+    """Inner-join `df[pfr_col]` against id_map's `pfr_id` to attach `gsis_id`.
+
+    Several nflverse releases are sourced from Pro-Football-Reference and are therefore keyed on
+    a `PfrId` rather than the `GsisId` everything here stores and joins on: `snap_counts` and
+    every `pfr_advstats` stat type. `id_map` (built by `build_id_map`) is the only sanctioned
+    place that translation happens, per the repo's ID-hygiene rule, and this is the one caller
+    of it for that direction.
+
+    **Unmatched rows are dropped, silently and deliberately.** A `pfr_player_id` with no id_map
+    entry is a player we do not track at all -- deep bench, practice squad, a lineman who
+    recovered a fumble -- so there is no `GsisId` to give them and nothing downstream could join
+    to them anyway. This is a different failure from `drop_placeholder_gsis_rows`, which fires on
+    a row we *should* have and warns about it; here the row was never ours. Callers that care
+    about the drop rate should log it themselves against `len(df)`.
+
+    Both id columns are dropped from the result: `pfr_col` because the frame is now gsis-keyed,
+    and `pfr_id` because it is the merge's duplicate of it. No ingest schema carries either.
+
+    Raises `FileNotFoundError` if id_map has not been built yet, which is the correct loud
+    failure -- `INGEST_SOURCES` orders `id_map` first precisely so this cannot happen in a normal
+    refresh.
+    """
+    id_map = read_partition(data_root / "raw", "id_map", season=None)
+    id_map_subset = id_map[["pfr_id", "gsis_id"]].dropna(subset=["pfr_id"])
+    merged = df.merge(id_map_subset, left_on=pfr_col, right_on="pfr_id", how="inner")
+    return merged.drop(columns=[pfr_col, "pfr_id"])
 
 
 def placeholder_name_key(full_name: str, position: str) -> str:
