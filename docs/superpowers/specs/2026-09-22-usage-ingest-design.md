@@ -131,6 +131,13 @@ One schema per stat type, mirroring how `ngs` already splits into
 `NgsPassingSchema` / `NgsRushingSchema` / `NgsReceivingSchema`, and one partition per
 `(stat_type, season)`, mirroring `ngs_*`'s registry entries.
 
+**The `_pct` columns are fractions in [0, 1]**, not percentages out of 100, despite the naming —
+with exactly one exception across 2018–2025. `times_pressured_pct` reaches 1.5 for Aaron Rodgers
+in 2023 Week 1, the four-snap Achilles game, where the dropback denominator is small enough for
+upstream's ratio to exceed one. It therefore carries no upper bound while the other three do. The
+live-API drift smoke caught this on a season no fixture covered; a `le=1` would have aborted the
+whole 2023 ingest.
+
 Note `rush` and `rec` both carry `rushing_broken_tackles` and `receiving_broken_tackles`, and
 `pass` and `rec` both carry `passing_drops`/`receiving_drop`. The overlap is upstream's, not ours;
 each table keeps only the columns that are meaningful at its own grain.
@@ -172,10 +179,29 @@ output is baked into the constants in `midseason/injuries.py`, so repointing it 
 partition would silently move measured numbers. Left alone deliberately; recorded as a
 follow-up.
 
-`season_type` includes `POST`. Unlike `ff_opportunity`, here the postseason rows are genuinely
-mixed in with a `game_type` column, and the `week` numbering restarts — so we **keep** `REG` only
-and record the filter, since a Week 1 `POST` row colliding with a Week 1 `REG` row would corrupt
-any join on `(gsis_id, season, week)`.
+~~`season_type` includes `POST` … the `week` numbering restarts~~ — **this was wrong, and the
+real-data smoke run in Phase 5 disproved it.** Two corrections, both recorded here rather than
+silently edited away, because the mistake in each case was probing exactly one season:
+
+- **Postseason weeks do not restart.** They continue: WC=19, DIV=20, CON=21, SB=22, identical to
+  `pfr_advstats`. There is no `(gsis_id, season, week)` collision, so nothing is filtered and the
+  source matches every other per-game table here. A consumer wanting regular season only filters
+  `week <= 18`.
+- **`season_type` exists only from 2025.** 2020–2024 carry `game_type` (REG/WC/DIV/CON/SB) and a
+  `date_modified` that 2025 drops. A filter keyed on `season_type` raised `KeyError` on the first
+  real 2024 pull. `game_type` is the column present in every season — though as above, nothing
+  now needs either.
+
+Two further findings from the same run:
+
+- **`season` and `week` come back as float before 2022**, int32 from 2022 on.
+- **`practice_status` has more than three spellings.** Across 2016–2025 upstream also emits
+  `"Note"` (7 rows, marking a free-text clarification rather than a participation level) and 212
+  whitespace-only values. The original design raised on an unrecognised label; that would abort a
+  whole season's ingest over one row in a decade, which is precisely the failure
+  [#169](https://github.com/alhart2015/FantasyFootball/issues/169) was opened for. `PracticeStatus`
+  therefore has an `UNKNOWN` member mirroring `InjuryStatus.UNKNOWN`, whitespace stays null, and an
+  unmapped label warns.
 
 Nullability: `report_status` and the injury-description columns are `nullable=True` in the schema.
 This is the first ingest table in the repo where a null is *meaningful data* rather than a gap, so
@@ -219,8 +245,27 @@ Plus the repo's standing gate: `pytest -v`, `mypy src tests`, `ruff check src te
 `ruff format --check src tests`, and — because this touches pandera schemas and ingest paths —
 `pytest -v -k "ingest or store or schemas"`.
 
-A real-data smoke run against 2024–2025 is run manually before merge and its row counts recorded in
-the PR description, since synthetic fixtures cannot catch an upstream shape change.
+A real-data smoke run against 2024–2025 is run manually before merge, since synthetic fixtures
+cannot catch an upstream shape change. **It found three defects that every unit test passed
+through** — the missing `season_type`, the `"Note"` practice label, and the `times_pressured_pct`
+bound — which is the argument for running it before merge rather than after.
+
+Results (scratch data root, 2026-09-23):
+
+| table | 2024 rows | 2025 rows | cols |
+|---|---|---|---|
+| `injury_report` | 1,857 | 1,870 | 11 |
+| `ff_opportunity` | 5,546 | 5,599 | 28 |
+| `pfr_pass` | 686 | 679 | 15 |
+| `pfr_rush` | 2,347 | 2,346 | 11 |
+| `pfr_rec` | 4,435 | 4,515 | 10 |
+
+id_map crosswalk loss on the `pfr_*` sources is 0.4–1.6%, well under the 25% warn threshold, so
+`id_map` coverage is not a practical constraint (this was listed as a risk in the plan).
+
+The signal is real rather than merely present: for 2024 WRs, `receptions - receptions_exp` has
+mean +0.043, sd 0.975, range −4.0 to +4.3 — centred on zero with a full reception of spread either
+way, which is the shape a luck-regression term should have.
 
 ## Follow-ups (issues, not scope)
 

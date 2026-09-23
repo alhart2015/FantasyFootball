@@ -1,7 +1,8 @@
 """Injury report ingest tests.
 
-The traps this source has, one test each: postseason week collision, the two enum mappings
-(one forgiving, one strict), and null semantics that are the opposite of ESPN's.
+The traps this source has, one test each: two upstream payload shapes that differ by season,
+float-typed season/week before 2022, the two enum mappings (one forgiving, one strict), and
+null semantics that are the opposite of ESPN's.
 """
 
 from __future__ import annotations
@@ -23,11 +24,17 @@ _DNP = "Did Not Participate In Practice"
 
 
 def _raw(**overrides: list[object]) -> pd.DataFrame:
-    """A three-row `load_injuries` payload, shaped like the real one (Int32 season/week)."""
+    """A three-row `load_injuries` payload in the **2020-2024** shape.
+
+    That shape carries `game_type` and `date_modified` and has no `season_type`; 2025 carries
+    `season_type` and drops `date_modified`. The original fixture here assumed the 2025 shape
+    and a real pull against 2024 failed on the missing column, so the default is now the older
+    one and `test_both_upstream_payload_shapes_normalize` covers the newer.
+    """
     base: dict[str, list[object]] = {
         "season": [2024, 2024, 2024],
-        "season_type": ["REG", "REG", "REG"],
         "game_type": ["REG", "REG", "REG"],
+        "date_modified": ["2024-09-04", "2024-09-04", "2024-09-04"],
         "team": ["KC", "MIN", "PHI"],
         "week": [1, 1, 1],
         "gsis_id": ["00-0034857", "00-0036322", "00-0034796"],
@@ -62,14 +69,36 @@ def test_refresh_writes_a_validated_partition(
     assert len(df) == 3
 
 
-def test_postseason_rows_are_dropped() -> None:
-    """POST week numbering restarts, so a Week 1 POST row would collide with a Week 1 REG row
-    on any (gsis_id, season, week) join -- the reason this filter exists at all."""
-    raw = _raw(season_type=["REG", "POST", "POST"])
+def test_postseason_rows_are_kept() -> None:
+    """Upstream's postseason weeks continue rather than restart (WC=19, DIV=20, CON=21, SB=22),
+    so there is no (gsis_id, season, week) collision and nothing to filter. Keeping them matches
+    every other per-game source here."""
+    raw = _raw(week=[19, 20, 22], game_type=["WC", "DIV", "SB"])
 
     out = _normalize_one_season(raw)
 
-    assert list(out["gsis_id"]) == ["00-0034857"]
+    assert sorted(out["week"]) == [19, 20, 22]
+
+
+def test_both_upstream_payload_shapes_normalize() -> None:
+    """2020-2024 ship `game_type` + `date_modified`; 2025 ships `season_type` and no
+    `date_modified`. Neither column is needed, but a filter keyed on one of them dies on the
+    seasons that lack it -- which is exactly what a real 2024 pull did."""
+    older = _raw()
+    newer = _raw().drop(columns=["date_modified"]).assign(season_type=["REG", "REG", "REG"])
+
+    assert len(_normalize_one_season(older)) == 3
+    assert len(_normalize_one_season(newer)) == 3
+
+
+def test_float_typed_season_and_week_are_coerced() -> None:
+    """2020 and earlier return both as Float64 where 2022+ return int32."""
+    raw = _raw().astype({"season": "float64", "week": "float64"})
+
+    out = _normalize_one_season(raw)
+
+    assert out["season"].dtype == "int64"
+    assert out["week"].dtype == "int64"
 
 
 def test_a_null_designation_stays_null_rather_than_becoming_active() -> None:
@@ -100,14 +129,29 @@ def test_a_null_practice_line_is_preserved() -> None:
     assert pd.isna(out.set_index("gsis_id")["practice_status"]["00-0036322"])
 
 
-def test_an_unknown_practice_label_raises() -> None:
-    """Strict where the designation mapping is forgiving: this column has exactly three upstream
-    spellings, so a fourth is a source change. Nulling it silently would widen a null that
-    already means something specific."""
-    raw = _raw(practice_status=[_FULL, "Rested", _DNP])
+def test_an_unknown_practice_label_maps_to_unknown_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Upstream really does emit a fourth value -- `"Note"`, 7 rows across 2016-2025, marking a
+    free-text clarification rather than a practice line. One unmapped label in a decade must not
+    take a season's ingest down (issue #169), so it warns and lands as UNKNOWN."""
+    raw = _raw(practice_status=[_FULL, "Note", _DNP])
 
-    with pytest.raises(ValueError, match="unrecognised practice_status"):
-        _normalize_one_season(raw)
+    with caplog.at_level(logging.WARNING):
+        out = _normalize_one_season(raw)
+
+    assert out.set_index("gsis_id")["practice_status"]["00-0036322"] == PracticeStatus.UNKNOWN.value
+    assert "Note" in caplog.text
+
+
+def test_a_whitespace_only_practice_line_is_null_not_unknown() -> None:
+    """Upstream emits 212 whitespace-only values across 2016-2025. Those mean "no practice line"
+    -- the existing null -- not "a label we could not map"."""
+    raw = _raw(practice_status=[_FULL, "\n    ", _DNP])
+
+    out = _normalize_one_season(raw)
+
+    assert pd.isna(out.set_index("gsis_id")["practice_status"]["00-0036322"])
 
 
 def test_an_unknown_designation_maps_to_unknown_and_warns(

@@ -241,15 +241,21 @@ class PracticeStatus(StrEnum):
     are what a reader would otherwise end up matching on downstream. Wrapped here per the repo
     convention, so the match is on a value that cannot be typo'd into silence.
 
-    There is no `UNKNOWN` member and that is deliberate: unlike ESPN's open-ended status field,
-    this column has exactly three upstream spellings plus null. A fourth would be a real change
-    in the source and should stop the ingest rather than be absorbed -- see
-    `ingest.injury_report._PRACTICE_LABELS`.
+    `UNKNOWN` mirrors `InjuryStatus.UNKNOWN` and exists because the obvious assumption -- that
+    this column holds exactly three spellings plus null -- is false. Across 2016-2025 upstream
+    also emits `"Note"` (7 rows, a marker that the row is a free-text clarification rather than
+    a participation level) and 212 whitespace-only values. An eleventh-hour fourth label must
+    not abort a season's ingest; that is the failure mode issue #169 was opened for.
+
+    Whitespace-only and missing values are *not* `UNKNOWN` -- they stay null, which already
+    means "on the report, no practice line". `UNKNOWN` means "upstream said something we have
+    no mapping for", and it is logged so the mapping can be widened deliberately.
     """
 
     FULL = "FULL"
     LIMITED = "LIMITED"
     DNP = "DNP"
+    UNKNOWN = "UNKNOWN"
 
 
 class DistributionFamily(StrEnum):
@@ -684,9 +690,9 @@ class InjuryReportSchema(pa.DataFrameModel):
     `ACTIVE` because ESPN omits the field for uninjured players, whereas here an empty value
     means the opposite (on the report, undesignated).
 
-    Regular season only. Upstream mixes `POST` rows in with a restarted week numbering, so a
-    Week 1 postseason row would collide with a Week 1 regular-season row on any
-    `(gsis_id, season, week)` join.
+    Postseason rows are included, with weeks 19-22 (WC, DIV, CON, SB). Upstream's week
+    numbering continues rather than restarting, so there is no collision on
+    `(gsis_id, season, week)`; a consumer wanting regular season only filters `week <= 18`.
     """
 
     gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
@@ -877,8 +883,15 @@ class PfrPassingSchema(_PfrCommonSchema):
     `passing_bad_throws` is charted, not derived -- an accurate throw a receiver dropped is not
     a bad throw, and an incompletion under pressure may not be either.
 
-    **The `_pct` columns are fractions in [0, 1], not percentages out of 100.** Upstream's naming
-    suggests otherwise; probed across 2018-2024, every one of them tops out at 1.0.
+    **The `_pct` columns are fractions in [0, 1], not percentages out of 100**, despite the
+    naming. `passing_drop_pct`, `passing_bad_throw_pct` and `receiving_drop_pct` top out at
+    exactly 1.0 across 2018-2025 and are bounded accordingly.
+
+    `times_pressured_pct` is the exception and carries **no upper bound**. One row in those eight
+    seasons exceeds 1.0: Aaron Rodgers, 2023 Week 1, at 1.5 -- the four-snap Achilles game, where
+    the dropback denominator is small enough for upstream's ratio to come out above one. It is an
+    artifact of a tiny sample rather than bad data, and a `le=1` here would abort a whole
+    season's ingest over it. Found by the live-API drift smoke, not by a fixture.
     """
 
     passing_drops: Series[float] = pa.Field(ge=0)
@@ -890,7 +903,7 @@ class PfrPassingSchema(_PfrCommonSchema):
     times_hurried: Series[float] = pa.Field(ge=0)
     times_hit: Series[float] = pa.Field(ge=0)
     times_pressured: Series[float] = pa.Field(ge=0)
-    times_pressured_pct: Series[float] = pa.Field(ge=0, le=1)
+    times_pressured_pct: Series[float] = pa.Field(ge=0)
 
 
 class PfrRushingSchema(_PfrCommonSchema):
@@ -921,7 +934,8 @@ class PfrReceivingSchema(_PfrCommonSchema):
 
     `receiving_rat` is the passer rating a quarterback earned when targeting this receiver,
     which separates a receiver who was targeted badly from one who played badly. Its upper bound
-    is the perfect-rating ceiling of the NFL formula (158.3); a value above it is a data error
+    is the perfect-rating ceiling of the NFL formula (158.3, which is also the observed maximum
+    across 2018-2025); a value above it is a data error
     worth stopping on rather than storing.
 
     `receiving_drop_pct` is a fraction in [0, 1] -- see `PfrPassingSchema`.

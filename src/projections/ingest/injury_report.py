@@ -14,10 +14,18 @@ report: no text, every player, joinable on `(gsis_id, season, week)`.
 manufactures a "healthy" row, and no consumer should read a missing row as a missing
 measurement -- see `InjuryReportSchema` for what each flavour of null means.
 
+**Upstream's columns move between seasons**, which synthetic fixtures cannot catch and a real
+pull found immediately:
+
+- `season_type` exists only from 2025. 2020-2024 carry `game_type` (REG/WC/DIV/CON/SB) and a
+  `date_modified` that 2025 drops. Anything that needs regular-season rows must key off
+  `game_type`, the one column present in every season.
+- `season` and `week` come back as int32 from 2022 but as *float* in 2020 and earlier.
+
 `scripts/measure_injury_impact.py` predates this module and still calls `load_injuries`
-directly, with a *different* filter (it keeps postseason rows). Pointing it at this partition
-would change the constants in `midseason.injuries` that it produced, so it is deliberately left
-alone here and tracked separately.
+directly. It drops rows with no designation, where this keeps them as a meaningful null.
+Pointing it at this partition would change the constants in `midseason.injuries` that it
+produced, so it is deliberately left alone here and tracked separately.
 
 Usage:
     python -m projections.ingest.injury_report --seasons 2024 2025
@@ -62,11 +70,11 @@ _KEEP: Final = [
     "practice_secondary_injury",
 ]
 
-#: Upstream spells practice participation as a sentence. The mapping is exhaustive on purpose:
-#: unlike ESPN's open-ended status field, this column has exactly three spellings, so a fourth
-#: is a real change in the source rather than a value to absorb. `_to_practice_status` raises on
-#: one instead of silently nulling it, because a null here already means something specific
-#: ("on the report, no practice line") and quietly widening that would corrupt the column.
+#: Upstream spells practice participation as a sentence. These three are the participation
+#: levels; they are not the only values the column holds. Across 2016-2025 it also carries
+#: `"Note"` (7 rows -- a marker that the row is free-text clarification, not a practice line)
+#: and 212 whitespace-only values. The whitespace ones become null via the strip in
+#: `_to_practice_status`; anything else becomes `PracticeStatus.UNKNOWN` with a warning.
 _PRACTICE_LABELS: Final[dict[str, PracticeStatus]] = {
     "full participation in practice": PracticeStatus.FULL,
     "limited participation in practice": PracticeStatus.LIMITED,
@@ -110,39 +118,44 @@ def _to_injury_status(raw: object) -> object:
 def _to_practice_status(raw: object) -> object:
     """One upstream practice sentence -> a `PracticeStatus` value, preserving null.
 
-    Raises on an unrecognised label. See `_PRACTICE_LABELS` for why this is strict where
-    `_to_injury_status` is forgiving.
+    Missing and whitespace-only values (upstream emits 212 of the latter across 2016-2025) stay
+    null, which already means "on the report, no practice line". Anything else unrecognised
+    becomes `UNKNOWN` and warns, symmetrically with `_to_injury_status` -- one unmapped label in
+    a decade must not take a whole season's ingest down (issue #169).
     """
     if pd.isna(raw):
         return pd.NA
     text = str(raw).strip()
     if not text:
         return pd.NA
-    try:
-        return _PRACTICE_LABELS[text.lower()].value
-    except KeyError:
-        raise ValueError(
-            f"injury_report: unrecognised practice_status {text!r}. Upstream has historically "
-            f"emitted exactly {sorted(_PRACTICE_LABELS)}, so a new value is a source change, "
-            f"not a row to drop -- add it to _PRACTICE_LABELS and PracticeStatus."
-        ) from None
+    label = _PRACTICE_LABELS.get(text.lower())
+    if label is not None:
+        return label.value
+    _log.warning(
+        "injury_report: unrecognised practice_status %r mapped to %s. If upstream has added a "
+        "participation level, add it to _PRACTICE_LABELS and PracticeStatus.",
+        text,
+        PracticeStatus.UNKNOWN.value,
+    )
+    return PracticeStatus.UNKNOWN.value
 
 
 def _normalize_one_season(raw: pd.DataFrame) -> pd.DataFrame:
     df = raw.copy()
 
-    # Regular season only. Upstream mixes POST rows in with a restarted week numbering, so a
-    # Week 1 postseason row would collide with a Week 1 regular-season row on any
-    # (gsis_id, season, week) join.
-    df = df[df["season_type"] == "REG"].copy()
-
+    # Postseason rows are KEPT. Their weeks continue rather than restart (WC=19, DIV=20,
+    # CON=21, SB=22), so there is no (gsis_id, season, week) collision to filter away, and
+    # keeping them matches `snap_counts`, `ngs_*`, `ff_opportunity` and `pfr_*`. A consumer
+    # that wants regular season only filters `week <= 18`.
     df = drop_placeholder_gsis_rows(df, source="injury_report")
 
-    # Drop rows with NaN season/week before int64 coercion.
+    # Drop rows with NaN season/week before int coercion.
     df = df[df["season"].notna() & df["week"].notna()].copy()
-    # Upstream returns int32; pandera Series[int] requires int64.
+    # 2022+ returns int32, but 2020 and earlier return *float*; pandera Series[int] requires
+    # int64 and `astype("int64")` raises on a NaN rather than propagating it, hence the
+    # null-drop above and the explicit float hop here.
     for int_col in ("season", "week"):
-        df[int_col] = df[int_col].astype("int64")
+        df[int_col] = df[int_col].astype("float64").astype("int64")
 
     df["team"] = df["team"].map(lambda v: normalize_team_code(v).value).astype(_PYARROW_STR)
     df["gsis_id"] = df["gsis_id"].astype(_PYARROW_STR)

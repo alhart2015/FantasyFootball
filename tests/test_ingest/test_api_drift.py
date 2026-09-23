@@ -40,7 +40,18 @@ from projections.ingest.draft_picks import (
 from projections.ingest.draft_picks import (
     _normalize_one_season as _normalize_draft_picks,
 )
+from projections.ingest.ff_opportunity import _KEEP as _KEEP_FF_OPPORTUNITY
+from projections.ingest.ff_opportunity import _fetch_raw_ff_opportunity
+from projections.ingest.ff_opportunity import (
+    _normalize_one_season as _normalize_ff_opportunity,
+)
 from projections.ingest.id_map import _fetch_raw_id_map, build_id_map
+from projections.ingest.injury_report import (
+    _fetch_raw_injuries,
+)
+from projections.ingest.injury_report import (
+    _normalize_one_season as _normalize_injury_report,
+)
 from projections.ingest.ngs import (
     _fetch_raw_ngs,
 )
@@ -51,6 +62,12 @@ from projections.ingest.pbp import _KEEP as _KEEP_PBP
 from projections.ingest.pbp import _fetch_raw_pbp
 from projections.ingest.pbp import (
     _normalize_one_season as _normalize_pbp,
+)
+from projections.ingest.pfr_advstats import _KEEP_FOR as _KEEP_FOR_PFR
+from projections.ingest.pfr_advstats import STAT_TYPES as PFR_STAT_TYPES
+from projections.ingest.pfr_advstats import PfrStatType, _fetch_raw_pfr_advstats
+from projections.ingest.pfr_advstats import (
+    _normalize_one_season as _normalize_pfr_advstats,
 )
 from projections.ingest.schedules import (
     _fetch_raw_schedules,
@@ -314,3 +331,51 @@ def test_draft_picks_api_columns_and_schema(tmp_path: Path) -> None:
         "pfr_id",
         "draft_age",
     }
+
+
+def test_injury_report_api_columns_and_schema() -> None:
+    """Only the columns the normalize actually reads are asserted, and `season_type` is
+    deliberately NOT among them: it exists from 2025 only, while 2020-2024 carry `game_type` and
+    a `date_modified` that 2025 drops. A real 2024 pull died on that difference, so pinning
+    either season-specific column here would re-introduce the bug this smoke exists to catch."""
+    raw = _fetch_raw_injuries([_DRIFT_SEASON])
+    expected = {
+        "gsis_id",
+        "season",
+        "week",
+        "team",
+        "position",
+        "report_status",
+        "report_primary_injury",
+        "report_secondary_injury",
+        "practice_status",
+        "practice_primary_injury",
+        "practice_secondary_injury",
+    }
+    _assert_columns_present(set(raw.columns), expected, "load_injuries")
+    df = _normalize_injury_report(raw)
+    assert not df.empty
+
+
+def test_ff_opportunity_api_columns_and_schema() -> None:
+    """`_KEEP` is post-rename, so the two renamed columns are checked under their upstream
+    spellings (`player_id`, `posteam`) and the rest verbatim."""
+    raw = _fetch_raw_ff_opportunity([_DRIFT_SEASON])
+    expected = {"player_id", "posteam"} | {
+        c for c in _KEEP_FF_OPPORTUNITY if c not in {"gsis_id", "team"}
+    }
+    _assert_columns_present(set(raw.columns), expected, "load_ff_opportunity")
+    df = _normalize_ff_opportunity(raw)
+    assert not df.empty
+
+
+@pytest.mark.parametrize("stat_type", PFR_STAT_TYPES)
+def test_pfr_advstats_api_columns_and_schema(stat_type: PfrStatType, tmp_path: Path) -> None:
+    """Like snap_counts, this joins on `id_map.pfr_id`, so the id_map has to be built from the
+    live API first."""
+    raw = _fetch_raw_pfr_advstats(stat_type, [_DRIFT_SEASON])
+    expected = {"pfr_player_id"} | {c for c in _KEEP_FOR_PFR[stat_type] if c != "gsis_id"}
+    _assert_columns_present(set(raw.columns), expected, f"load_pfr_advstats({stat_type})")
+    build_id_map(tmp_path)
+    df = _normalize_pfr_advstats(stat_type, raw, tmp_path)
+    assert not df.empty

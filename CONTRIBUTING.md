@@ -65,15 +65,15 @@ per configured league), and prints a single summary block classifying each sourc
 Add a source by adding one entry there — the script iterates the registry, so nothing in
 `scripts/refresh_data.py` changes. Two facts on the entry decide when a source runs:
 `needs_games_played` (per-game sources have no rows until kickoff) and `heavy` (`pbp` only, opt-in).
-Registry order encodes the dependencies — `id_map` before `snap_counts`, `schedules` before
-`depth_charts`.
+Registry order encodes the dependencies — `id_map` before `snap_counts` and the three `pfr_*`
+sources (all four arrive keyed on `pfr_player_id`), `schedules` before `depth_charts`.
 
 For programmatic use, `projections.ingest.refresh(seasons, data_root=...)` drives the same registry
 **fail-fast**: it aborts on the first failure and prints nothing. Use it when you want an exception;
 use the script when you want the run to finish and tell you what happened.
 
 **SKIPPED is not a problem.** The per-game sources (`weekly_stats`, `depth_charts`, `snap_counts`,
-`ngs_*`) have no rows upstream until the season kicks off — the Thursday after Labor Day — and
+`ngs_*`, `injury_report`, `ff_opportunity`, `pfr_*`) have no rows upstream until the season kicks off — the Thursday after Labor Day — and
 nflverse publishes each week's release on a lag after that. The script pre-checks the date and
 reports those as skipped *with the kickoff date*, rather than 404-ing through them. The
 market-facing sources (`id_map`, `schedules`, `draft_picks`, `external_projections`) are published
@@ -259,8 +259,8 @@ python scripts/pickem_backtest.py --seasons 2015-2025
 
 ## Adding a new ingest source
 
-The pattern is established in `src/projections/ingest/weekly_stats.py`. Follow it. Two things are
-easy to forget and both have bitten:
+The pattern is established in `src/projections/ingest/weekly_stats.py`. Follow it. Five things are
+easy to forget, and the first four have each already cost a debugging session:
 
 - **Add the source to `INGEST_SOURCES` in `src/projections/ingest/sources.py`.** That is the one
   registry both `refresh()` and `scripts/refresh_data.py` walk. A source that ingests fine but is
@@ -276,6 +276,23 @@ easy to forget and both have bitten:
   It **raises** if *every* row is a placeholder — that is upstream changing its id format, and
   `write_partition` unlinks before writing, so silently returning empty would overwrite a good
   season's partition with zero rows and still report success.
+
+- **Probe more than one season before you bound a schema field, and never trust the one season
+  you happened to look at.** Every dtype and value assumption made from a single season's probe
+  on the usage-ingest branch turned out to be wrong somewhere else: `load_injuries` returns
+  `season_type` only from 2025 (2020–2024 carry `game_type` and a `date_modified` that 2025
+  drops) and returns `season`/`week` as *float* before 2022; `load_ff_opportunity` returns
+  `season` as a *string* and `week` as a *float*; `times_pressured_pct` is a [0, 1] fraction in
+  every season except one row in 2023 — Aaron Rodgers' four-snap Achilles game, where a tiny
+  denominator puts it at 1.5. A `le=1` that looked obviously correct would have aborted a whole
+  season's ingest. Probe the range of seasons you intend to ingest, not one.
+- **Add the live-API drift smoke at the same time as the source**, not later — see "API drift
+  smokes" below. That `times_pressured_pct` bound was caught by the smoke, on a season no
+  synthetic fixture covered, minutes after it was written. A source without one is a source
+  whose upstream contract nothing checks.
+- **If the source arrives keyed on a `pfr_player_id`, call
+  `identity.resolve_gsis_via_id_map(df, data_root)`** rather than writing the join again, and
+  register it *after* `id_map` in `INGEST_SOURCES` — it raises `FileNotFoundError` without one.
 
 ### Skeleton
 
