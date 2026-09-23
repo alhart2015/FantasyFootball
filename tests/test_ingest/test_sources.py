@@ -67,6 +67,7 @@ def test_registry_covers_every_source_we_ingest() -> None:
         "depth_charts",
         "snap_counts",
         "injury_report",
+        "ff_opportunity",
         "ngs_passing",
         "ngs_rushing",
         "ngs_receiving",

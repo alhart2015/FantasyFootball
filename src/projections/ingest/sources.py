@@ -39,6 +39,7 @@ from pathlib import Path
 from projections.ingest.depth_charts import refresh_depth_charts
 from projections.ingest.draft_picks import refresh_draft_picks
 from projections.ingest.external_projections import refresh_external_projections
+from projections.ingest.ff_opportunity import refresh_ff_opportunity
 from projections.ingest.id_map import build_id_map
 from projections.ingest.injury_report import refresh_injury_report
 from projections.ingest.ngs import STAT_TYPES as NGS_STAT_TYPES
@@ -133,6 +134,12 @@ INGEST_SOURCES: tuple[IngestSource, ...] = (
         needs_games_played=True,
         heavy=False,
         run=lambda root, seasons: refresh_injury_report(root, seasons=seasons),
+    ),
+    IngestSource(
+        "ff_opportunity",
+        needs_games_played=True,
+        heavy=False,
+        run=lambda root, seasons: refresh_ff_opportunity(root, seasons=seasons),
     ),
     *(
         IngestSource(

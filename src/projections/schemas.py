@@ -705,6 +705,69 @@ class InjuryReportSchema(pa.DataFrameModel):
         strict = "filter"
 
 
+class FfOpportunitySchema(pa.DataFrameModel):
+    """Per-player per-week actual and *expected* production -- what `ingest.ff_opportunity`
+    produces, from nflverse's `ffopportunity` play-by-play model.
+
+    The point of this table is the `_exp` columns. Every other source here records what a player
+    got; these record what his opportunities were worth. A three-catch game that happened to end
+    in a 60-yard catch-and-run and a nine-target grind score the same in `weekly_stats`, and the
+    gap between actual and expected is the luck-regression signal that distinguishes them.
+
+    **`total_fantasy_points` and `total_fantasy_points_exp` are the upstream model's scoring, not
+    ours.** They are stored for diagnostic comparison only. `src/projections/scoring/` is the
+    only place that knows what counts as a fantasy point, and it converts the `_exp` *stat*
+    columns under our league's ruleset -- a consumer that reads these two as a projection has
+    silently adopted someone else's scoring settings.
+
+    `_diff` columns are not stored: they are `actual - exp`, and a stored subtraction drifts from
+    its inputs. The `*_team` mirror of every column is not stored either: `groupby(["season",
+    "week", "team"])` reproduces it exactly, which is why `team` is kept.
+
+    Weeks run to 22 -- upstream includes the postseason. Stored as-is, matching
+    `SnapCountsSchema`; the playoff-week filter belongs to the consumer (issue #123).
+    """
+
+    gsis_id: Series[str] = pa.Field(str_matches=rf"^{GSIS_ID_PATTERN}$")
+    season: Series[int] = pa.Field(ge=1999, le=2100)
+    week: Series[int] = pa.Field(ge=1, le=22)
+    team: Series[str] = pa.Field(isin=_TEAM_VALUES)
+    position: Series[str] = pa.Field(isin=_POSITION_VALUES)
+
+    # Opportunity counts: the denominators the expectations are built on.
+    pass_attempt: Series[float] = pa.Field(ge=0)
+    rec_attempt: Series[float] = pa.Field(ge=0)
+    rush_attempt: Series[float] = pa.Field(ge=0)
+
+    # Actual / expected pairs. Both sides are floats: an expectation is fractional by nature,
+    # and the actual side is kept float so a pair is subtractable without a dtype dance.
+    pass_completions: Series[float] = pa.Field(ge=0)
+    pass_completions_exp: Series[float] = pa.Field(ge=0)
+    receptions: Series[float] = pa.Field(ge=0)
+    receptions_exp: Series[float] = pa.Field(ge=0)
+    pass_yards_gained: Series[float]
+    pass_yards_gained_exp: Series[float]
+    rec_yards_gained: Series[float]
+    rec_yards_gained_exp: Series[float]
+    rush_yards_gained: Series[float]
+    rush_yards_gained_exp: Series[float]
+    pass_touchdown: Series[float] = pa.Field(ge=0)
+    pass_touchdown_exp: Series[float] = pa.Field(ge=0)
+    rec_touchdown: Series[float] = pa.Field(ge=0)
+    rec_touchdown_exp: Series[float] = pa.Field(ge=0)
+    rush_touchdown: Series[float] = pa.Field(ge=0)
+    rush_touchdown_exp: Series[float] = pa.Field(ge=0)
+    pass_interception: Series[float] = pa.Field(ge=0)
+    pass_interception_exp: Series[float] = pa.Field(ge=0)
+
+    #: Upstream's own scoring. Diagnostic only -- see the class docstring.
+    total_fantasy_points: Series[float]
+    total_fantasy_points_exp: Series[float]
+
+    class Config:
+        strict = "filter"
+
+
 class NgsPassingSchema(pa.DataFrameModel):
     """NGS passing — season-to-date weekly snapshot per QB.
     Coverage starts 2016 (RFID-chip era)."""
