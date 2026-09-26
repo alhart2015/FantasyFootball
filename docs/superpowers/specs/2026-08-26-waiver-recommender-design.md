@@ -503,3 +503,40 @@ And one finding **declined**, recorded because the reasoning outlives it: roundi
 False for `OUT` at exactly 1.0 as well, and that is correct — a game status covers one game.
 Rounding would have made the two tables disagree at a one-week horizon to fix a boundary that
 was never wrong. §4.5 now carries the precise number instead.
+
+## 13. Stage 1 compares against the whole roster, on two horizons (2026-09-26)
+
+**§5.2's filter was the wrong question.** "Does he crack my starting lineup this week" scored a
+free agent who was better than my entire bench as exactly 0.0, because he still would not
+start. That hid the most common useful move there is — replace the worst player on the bench
+with a better one — and the owner's call was that the tool should ask whether anyone on the
+wire is better than **anyone** on the roster, starter or bench.
+
+It now produces two lists, which are never summed or mixed (§5's point about currencies).
+Both compare a free agent with my weakest player **at his own position**. The first cut
+compared across the whole roster, and a live run on Critts week 3 listed nothing but backup
+quarterbacks: a 190-point QB "beat" a 55-point bench back while being useless to a team that
+starts one QB. Per position, the same run listed two running backs and five receivers.
+
+- **Rest of season** (`waivers.season_upgrades`). A free agent is listed when his
+  injury-adjusted rest-of-season points beat the weakest active, priced player at his position on my roster by
+  `--min-season-margin` (default 5 season points, a few hundredths of a win). **That weakest
+  player is the drop, starter or not** — this replaces §5.3's "cheapest player not in the
+  optimal lineup". If he is a starter the row's lineup change can go negative and stage 2
+  weighs it. Dropping within the position keeps the roster's shape. A free agent at a position
+  where I roster nobody priced gets no season row. The top `--top` go through the paired simulation, and Δ wins is still the order.
+- **This week** (`waivers.weekly_upgrades`). A free agent is listed when his projection beats
+  the weakest active player at his position who is *playing* (a bye has no projection and is not a
+  zero), or when adding him would raise this week's optimal lineup — which keeps the bye-hole
+  streamer §5.2 was built for. Blind to rest of season on purpose, names no drop, not simulated.
+
+The lineup change is still computed and printed on every row as the check a reader can verify
+by hand; it is no longer a filter on the season list.
+
+Two consequences worth knowing:
+
+- `remaining_points_by_espn_id` now takes the free agents too, so the **add** side is
+  injury-discounted — the old filter never needed a free agent's season number.
+- Positions the league cannot start (a kicker in a kicker-less league) are dropped from both
+  lists; with nobody at the position to compare against, the weekly list would otherwise
+  show every kicker on the wire.

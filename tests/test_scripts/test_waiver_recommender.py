@@ -53,6 +53,10 @@ def _candidate(**overrides: Any) -> Candidate:
         "drop_player_id": 7,
         "drop_player": "Bench RB",
         "drop_cost": 21.0,
+        "season_points": 60.0,
+        "beats_player": "Bench RB",
+        "beats_points": 21.0,
+        "margin": 39.0,
     }
     fields.update(overrides)
     return Candidate(**fields)
@@ -79,7 +83,30 @@ def test_a_needed_drop_is_named_with_its_cost(capsys: pytest.CaptureFixture[str]
     module._print_candidate(candidate, None, _impact(candidate))
     out = capsys.readouterr().out
     assert "drop Bench RB" in out
-    assert "costs 21 rest-of-season points" in out
+    # His season points against the drop's -- the cost is the right-hand side.
+    assert "60 rest-of-season pts vs Bench RB 21 (+39)" in out
+
+
+def test_a_weekly_row_names_who_he_outscores_and_no_drop(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The THIS WEEK list is for spotting a stream. Out-projecting someone for one week is not
+    a reason to cut him, so the row must not read as a drop recommendation."""
+    module = _module()
+    candidate = _candidate(
+        drop_player_id=None,
+        drop_player="",
+        drop_cost=0.0,
+        season_points=None,
+        beats_player="Bench WR",
+        beats_points=6.0,
+        margin=8.0,
+    )
+    module._print_weekly(candidate, None)
+    out = capsys.readouterr().out
+    assert "14.0 pts this week vs Bench WR 6.0 (+8.0)" in out
+    assert "no rest-of-season projection" in out
+    assert "drop" not in out
 
 
 def test_no_drop_needed_and_no_drop_found_do_not_print_the_same(

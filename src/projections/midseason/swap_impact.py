@@ -11,8 +11,8 @@ expensive calculation" while it sat in the same file. Stage 1 there needs a `Lea
 a lineup chooser; this needs numpy, the availability model, the variance model, the season
 simulator and ESPN payload surgery. They share only `Candidate`.
 
-**Expensive on purpose.** Each candidate is a full Monte-Carlo season. `waivers.rank_free_agents`
-exists to make sure this only ever runs on candidates that could possibly matter.
+**Expensive on purpose.** Each candidate is a full Monte-Carlo season, so it runs on the top of
+`waivers.season_upgrades` only -- the free agents who out-project someone I roster.
 """
 
 from __future__ import annotations
@@ -266,14 +266,14 @@ def simulate_swaps(
         )
 
     # Simulated candidates first, best delta first. An unsimulated one has no delta to rank on,
-    # so it sorts last on its lineup gain rather than being interleaved at a fictitious zero.
+    # so it sorts last on its season margin rather than being interleaved at a fictitious zero.
     #
     # Paired and unpaired deltas ARE ranked against each other, which mixes two precisions: a
     # free add worth nothing can land at +0.10 from noise alone and outrank a swap genuinely
     # worth +0.08. Accepted rather than hidden -- each row prints which floor it was judged
     # against, so a reader can see it. Ranking them apart would need a common scale the two
     # estimates do not have.
-    impacts.sort(key=lambda i: (not i.simulated, -i.delta_wins, -i.candidate.lineup_gain))
+    impacts.sort(key=lambda i: (not i.simulated, -i.delta_wins, -i.candidate.margin))
     return impacts
 
 
