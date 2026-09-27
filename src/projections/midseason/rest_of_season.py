@@ -10,8 +10,10 @@ Chosen over prorating the preseason number (blind to everything that has happene
 blending actual pace with the preseason projection (more accurate in principle, but its
 weighting is a free parameter that deserves its own backtest — a follow-up worth doing once
 this exists to compare against). Re-pulling `external_projections` mid-season is a path that
-already works, and providers revise season totals weekly, so a fresh pull reflects injuries,
-benchings and depth-chart moves without any new modelling.
+already works, and a fresh pull reflects injuries, benchings and depth-chart moves without any
+new modelling. ESPN revises its season total in-season; **Sleeper does not** -- its season
+endpoint stays at the preseason line -- so the ingest rebuilds Sleeper's from weekly actuals
+plus weekly projections (`external_projections.fetch_sleeper_season_to_date`).
 
 **The assumption, stated rather than buried.** This takes ESPN's / Sleeper's in-season
 "season total" to mean *the full season including games already played*, so subtracting

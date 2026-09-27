@@ -54,8 +54,8 @@ tore an ACL and who broke out.
 
 **`ros_points = fresh_season_projection − points_scored_to_date`.**
 
-Re-pull `external_projections` in-season (providers revise season totals weekly, so a fresh
-pull already reflects injuries, benchings and depth-chart moves), run it through the existing
+Re-pull `external_projections` in-season (a fresh pull reflects injuries, benchings and
+depth-chart moves), run it through the existing
 consensus → season-projection path, and subtract each player's actual points to date.
 
 Chosen over the alternatives because it reuses the ingest path unchanged and is the only
@@ -245,3 +245,19 @@ smuggled in here.
 5. Matchup odds read-out.
 
 Each step is its own commit; steps 1–2 are independently useful and testable.
+
+
+## Correction (2026-09-26): Sleeper's season total does not move in-season
+
+The premise above — that providers revise season totals weekly — held for ESPN and not for
+Sleeper. Sleeper's season endpoint returned the identical preseason line in every snapshot from
+Aug 30 to Sep 26 (Chris Rodriguez Jr.: 125.0 half-PPR points every time) while its weekly
+projections for the same player had fallen to about 4.4 a week. Averaged with ESPN, that
+inflated him to 90 rest-of-season points and made him the waiver tool's top add.
+
+The ingest now rebuilds Sleeper's season line in-season as **actual stats for weeks played +
+weekly projections for weeks left**, which keeps the "full season including games played"
+reading this section's subtraction relies on. Preseason and for past seasons the season
+endpoint is stored unchanged, so backtests still read preseason forecasts. See
+`external_projections.fetch_sleeper_season_to_date`. Measured on the rebuild, week 3:
+Rodriguez 125.0 → 76.9, Samaje Perine 62.8 → 81.3, Justice Hill 55.7 → 85.0.

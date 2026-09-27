@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from projections.ingest import external_projections as ext
+from projections.store import read_partition
 
 
 def test_parse_espn_players_extracts_statline_adp_rank() -> None:
@@ -738,3 +739,140 @@ def test_to_canonical_sleeper_auction_columns_are_float64_na() -> None:
     for col in ("espn_auction_value_avg", "espn_auction_value_ppr", "espn_auction_value_std"):
         assert str(out[col].dtype) == "Float64"
         assert pd.isna(out[col].iloc[0])
+
+
+# --- Sleeper's season line, rebuilt in-season ---------------------------------------------------
+
+
+def _season_item(pid: str, **stats: float) -> dict[str, Any]:
+    return {
+        "player_id": pid,
+        "stats": {"adp_ppr": 150.0, **stats},
+        "player": {"first_name": "C", "last_name": "Rod", "position": "RB"},
+    }
+
+
+def _week_row(pid: str, game: str, **stats: float) -> dict[str, Any]:
+    return {"player_id": pid, "game_id": game, "stats": dict(stats)}
+
+
+def test_the_frozen_season_line_is_replaced_by_actuals_plus_remaining_projections() -> None:
+    """The bug: Sleeper's season endpoint still said 728 rushing yards in week 3 while its own
+    weekly projections had him at a fraction of that. Weeks played count what happened; weeks
+    left count what Sleeper projects NOW."""
+    season = [_season_item("1", rush_yd=728.0, rush_td=6.0)]
+    projections = {
+        1: [_week_row("1", "g1", rush_yd=50.0)],
+        2: [_week_row("1", "g2", rush_yd=45.0)],
+        3: [_week_row("1", "g3", rush_yd=22.0, rush_td=0.2)],
+        4: [_week_row("1", "g4", rush_yd=23.0, rush_td=0.2)],
+    }
+    actuals = {1: [_week_row("1", "g1", rush_yd=20.0)], 2: [_week_row("1", "g2", rush_yd=16.0)]}
+
+    [item] = ext.sleeper_season_to_date(season, projections, actuals, current_week=3)
+    assert item["stats"]["rush_yd"] == pytest.approx(20 + 16 + 22 + 23)
+    assert item["stats"]["rush_td"] == pytest.approx(0.4)
+    assert item["stats"]["adp_ppr"] == 150.0, "non-stat fields are kept"
+
+
+def test_a_finished_week_without_a_stat_row_counts_zero_not_the_projection() -> None:
+    """He was inactive. The week happened and he scored nothing."""
+    season = [_season_item("1", rush_yd=728.0)]
+    projections = {1: [_week_row("1", "g1", rush_yd=50.0)], 2: [_week_row("1", "g2", rush_yd=45.0)]}
+    [item] = ext.sleeper_season_to_date(season, projections, {1: []}, current_week=2)
+    assert item["stats"]["rush_yd"] == pytest.approx(45.0)
+
+
+def test_the_current_week_uses_actuals_for_games_already_played() -> None:
+    """Thursday night is over; Sunday is not. Whether a game is done is read off the game, so a
+    player inactive on Thursday is not credited with his projection."""
+    season = [_season_item("thu"), _season_item("inactive"), _season_item("sun")]
+    projections = {
+        1: [
+            _week_row("thu", "thursday", rush_yd=50.0),
+            _week_row("inactive", "thursday", rush_yd=40.0),
+            _week_row("sun", "sunday", rush_yd=30.0),
+        ]
+    }
+    actuals = {1: [_week_row("thu", "thursday", rush_yd=80.0)]}
+    rebuilt = {
+        item["player_id"]: item["stats"]["rush_yd"]
+        for item in ext.sleeper_season_to_date(season, projections, actuals, current_week=1)
+    }
+    assert rebuilt == {"thu": 80.0, "inactive": 0.0, "sun": 30.0}
+
+
+def test_a_player_in_no_week_loses_the_frozen_line_rather_than_keeping_it() -> None:
+    """The frozen line is what this exists to stop reading. No weekly data is no projection."""
+    season = [_season_item("ghost", rush_yd=728.0)]
+    [item] = ext.sleeper_season_to_date(season, {1: []}, {}, current_week=2)
+    assert "rush_yd" not in item["stats"]
+    assert ext._sleeper_stats_to_statline(item["stats"]) is None
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ({"season": "2026", "season_type": "regular", "week": 3}, 3),
+        ({"season": "2026", "season_type": "post", "week": 19}, 19),
+        # Before any kickoff the season line is the freshest thing there is.
+        ({"season": "2026", "season_type": "regular", "week": 1, "season_has_scores": False}, None),
+        ({"season": "2026", "season_type": "pre", "week": 0}, None),
+        # A backfill of a past season keeps its PRESEASON line: backtests read it as one.
+        ({"season": "2027", "season_type": "regular", "week": 5}, None),
+    ],
+)
+def test_the_rebuild_runs_only_while_this_season_is_in_progress(
+    state: dict[str, Any], expected: int | None
+) -> None:
+    assert ext.sleeper_current_week(state, 2026) == expected
+
+
+def test_out_of_season_the_payload_is_returned_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_weekly_calls(*_: object) -> list[dict[str, Any]]:
+        raise AssertionError("no weekly fetch outside the season")
+
+    monkeypatch.setattr(ext, "fetch_sleeper_week_projections", no_weekly_calls)
+    monkeypatch.setattr(ext, "fetch_sleeper_week_stats", no_weekly_calls)
+    season = [_season_item("1", rush_yd=728.0)]
+    assert ext.fetch_sleeper_season_to_date(2026, season) is season
+
+
+def test_in_season_the_refresh_stores_the_rebuilt_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The wiring: what lands in the snapshot is the rebuilt line, not the season endpoint's."""
+    from datetime import date
+
+    monkeypatch.setattr(ext, "fetch_espn", lambda season: {"players": []})
+    monkeypatch.setattr(
+        ext, "fetch_sleeper_season", lambda season: [_season_item("6794", rush_yd=728.0)]
+    )
+    monkeypatch.setattr(
+        ext, "fetch_sleeper_state", lambda: {"season": "2026", "season_type": "regular", "week": 2}
+    )
+    monkeypatch.setattr(
+        ext,
+        "fetch_sleeper_week_projections",
+        lambda season, week: [_week_row("6794", f"g{week}", rush_yd=10.0)],
+    )
+    monkeypatch.setattr(
+        ext,
+        "fetch_sleeper_week_stats",
+        lambda season, week: [_week_row("6794", "g1", rush_yd=30.0)] if week == 1 else [],
+    )
+    (tmp_path / "raw").mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "gsis_id": pd.array(["00-0011111"], dtype="string[pyarrow]"),
+            "espn_id": pd.array(["x"], dtype="string[pyarrow]"),
+            "sleeper_id": pd.array(["6794"], dtype="string[pyarrow]"),
+        }
+    ).to_parquet(tmp_path / "raw" / "id_map.parquet", index=False)
+
+    ext.refresh_external_projections(tmp_path, season=2026, asof=date(2026, 9, 26))
+    stored = read_partition(
+        tmp_path / "raw", "external_projections", season=2026, asof=date(2026, 9, 26)
+    )
+    # Week 1 actual (30) + weeks 2..18 projected (17 x 10).
+    assert stored["rushing_yards"].tolist() == [pytest.approx(30.0 + 17 * 10.0)]
