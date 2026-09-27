@@ -17,6 +17,7 @@ from typing import Any
 import pandas as pd
 
 from projections.ingest.external_projections import (
+    _SLEEPER_WEEK_PROJECTIONS_URL,
     SLEEPER_STAT_FIELDS,
     _make_placeholder_gsis,  # reuse the same placeholder scheme
 )
@@ -28,7 +29,6 @@ from projections.schemas import (
 )
 from projections.store import read_partition, write_partition
 
-_SLEEPER_WEEKLY_URL = "https://api.sleeper.com/projections/nfl/{season}/{week}?season_type=regular"
 _SKILL_POSITIONS = {
     Position.QB.value,
     Position.RB.value,
@@ -80,7 +80,7 @@ def fetch_sleeper_weekly(season: int, week: int) -> list[dict[str, Any]]:
     Public because the start/sit tool wants the payload WITHOUT the store write
     `refresh_sleeper_weekly` performs -- it prices a live lineup, it does not ingest.
     """
-    url = _SLEEPER_WEEKLY_URL.format(season=season, week=week)
+    url = _SLEEPER_WEEK_PROJECTIONS_URL.format(season=season, week=week)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:  # trusted host

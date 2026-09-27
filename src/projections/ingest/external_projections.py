@@ -1,4 +1,8 @@
-"""Ingest source for external preseason projections (ESPN + Sleeper).
+"""Ingest source for external season projections (ESPN + Sleeper).
+
+Preseason, both are the providers' season forecasts. In-season, Sleeper's season endpoint stops
+moving, so its line is rebuilt from weekly actuals plus weekly projections -- see
+`fetch_sleeper_season_to_date`.
 
 Repeatable, dated-snapshot ingest: each `refresh_external_projections(...)` writes one
 `ExternalProjectionSchema` snapshot under data/raw/external_projections/season=YYYY/
@@ -447,6 +451,198 @@ def fetch_sleeper_season(season: int) -> list[dict[str, Any]]:
         return json.load(resp)  # type: ignore[no-any-return]
 
 
+# ---------------------------------------------------------------------------------------------
+# Sleeper's season total, rebuilt once the season is under way.
+#
+# **Sleeper does not revise its season endpoint in-season.** Measured 2026-09-26: Chris
+# Rodriguez Jr.'s season line was byte-identical in every snapshot from Aug 30 to Sep 22 and
+# live that day (728 rush yards, 125.0 half-PPR points), while Sleeper's own WEEKLY projections
+# for him had fallen to 4.4 a week -- about 66 points for the rest of the year. Averaged with
+# ESPN, the frozen number put him at 90 rest-of-season points and made him the top waiver add.
+# Every in-season consumer (rest-of-season, standings, waivers, trades) reads half its weight
+# from this line, so a frozen half is a frozen consensus.
+#
+# So in-season the line is rebuilt from what Sleeper DOES update: actual stats for every week
+# that has been played, plus weekly projections for every week that has not. The result is a
+# full-season line INCLUDING games played -- the reading `midseason.rest_of_season` assumes,
+# which subtracts points-to-date from it.
+# ---------------------------------------------------------------------------------------------
+
+_SLEEPER_STATE_URL = "https://api.sleeper.app/v1/state/nfl"
+_SLEEPER_WEEK_PROJECTIONS_URL = (
+    "https://api.sleeper.com/projections/nfl/{season}/{week}?season_type=regular"
+)
+_SLEEPER_WEEK_STATS_URL = "https://api.sleeper.com/stats/nfl/{season}/{week}?season_type=regular"
+#: NFL regular-season weeks since 2021. A week Sleeper has no data for contributes nothing.
+SLEEPER_REGULAR_SEASON_WEEKS: Final = 18
+
+
+def _get_json(url: str) -> Any:
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.load(resp)
+
+
+def fetch_sleeper_state() -> dict[str, Any]:
+    """Sleeper's view of the NFL calendar: `season`, `season_type` and the current `week`."""
+    state = _get_json(_SLEEPER_STATE_URL)
+    if not isinstance(state, dict):
+        raise ExternalProjectionError(f"Unexpected Sleeper state payload: {type(state).__name__}")
+    return state
+
+
+def fetch_sleeper_week_projections(season: int, week: int) -> list[dict[str, Any]]:
+    """One week of Sleeper projections, as the weekly endpoint returns them."""
+    return _as_rows(_get_json(_SLEEPER_WEEK_PROJECTIONS_URL.format(season=season, week=week)))
+
+
+def fetch_sleeper_week_stats(season: int, week: int) -> list[dict[str, Any]]:
+    """One week of Sleeper ACTUAL stats. Mid-week, only the games already played are present."""
+    return _as_rows(_get_json(_SLEEPER_WEEK_STATS_URL.format(season=season, week=week)))
+
+
+def _as_rows(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        raise ExternalProjectionError(f"Unexpected Sleeper payload: {type(payload).__name__}")
+    return payload
+
+
+def sleeper_current_week(state: dict[str, Any], season: int) -> int | None:
+    """The first regular-season week not yet complete, or None when `season` is not in progress.
+
+    None for any season other than the one Sleeper says is current -- a backfill of 2023 must
+    keep the preseason line it was always stored with, because backtests read those snapshots as
+    PRESEASON forecasts -- and before week 1 has any scores, when the season line is still the
+    freshest thing there is. After the regular season every week is complete.
+    """
+    if str(state.get("season")) != str(season):
+        return None
+    season_type = state.get("season_type")
+    if season_type == "post":
+        return SLEEPER_REGULAR_SEASON_WEEKS + 1
+    if season_type != "regular":
+        return None
+    week = int(state.get("week") or 0)
+    if week <= 1 and not state.get("season_has_scores"):
+        return None
+    return max(week, 1)
+
+
+def sleeper_season_to_date(
+    season_payload: list[dict[str, Any]],
+    projections_by_week: dict[int, list[dict[str, Any]]],
+    actuals_by_week: dict[int, list[dict[str, Any]]],
+    *,
+    current_week: int,
+) -> list[dict[str, Any]]:
+    """Rewrite each player's season stat line as actuals-to-date plus remaining weekly projections.
+
+    Pure. Per week, per player:
+
+    - **Before `current_week`**: his actual stats. Absent means he did not play -- zero, which
+      is what the week was worth.
+    - **`current_week`**: actuals if his game is already played (Thursday, Sunday), otherwise the
+      projection. "Played" is read off the game, not the player: a player inactive for a game
+      that has finished has no stat row, and his projection must not be counted for it.
+    - **After `current_week`**: the projection. A bye has none and contributes nothing.
+
+    Everything that is not a mapped stat (ADP, `gp`, ...) is kept from the season payload. A
+    player who appears in no week at all keeps NO stat line rather than the frozen one: the
+    frozen line is precisely what this exists to stop reading, and "no projection" is stored as
+    NA downstream rather than as a fabricated number.
+    """
+    projected = {week: _by_player(rows) for week, rows in projections_by_week.items()}
+    actual = {week: _by_player(rows) for week, rows in actuals_by_week.items()}
+    played_games = {
+        week: {row.get("game_id") for row in rows if row.get("game_id")}
+        for week, rows in actuals_by_week.items()
+    }
+    weeks = sorted(set(projected) | set(actual))
+
+    rebuilt: list[dict[str, Any]] = []
+    for item in season_payload:
+        pid = str(item.get("player_id"))
+        totals = dict.fromkeys(SLEEPER_STAT_FIELDS, 0.0)
+        seen = False
+        for week in weeks:
+            line = _week_line(
+                pid,
+                projection=projected.get(week, {}).get(pid),
+                actual=actual.get(week, {}).get(pid),
+                played=played_games.get(week, set()),
+                completed=week < current_week,
+                current=week == current_week,
+            )
+            if line is None:
+                continue
+            seen = True
+            for key in SLEEPER_STAT_FIELDS:
+                value = line.get(key)
+                if value is not None:
+                    totals[key] += float(value)
+        others = {
+            k: v for k, v in (item.get("stats") or {}).items() if k not in SLEEPER_STAT_FIELDS
+        }
+        rebuilt.append({**item, "stats": {**others, **totals} if seen else others})
+    return rebuilt
+
+
+def _by_player(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(row["player_id"]): row for row in rows if row.get("player_id") is not None}
+
+
+def _week_line(
+    pid: str,
+    *,
+    projection: dict[str, Any] | None,
+    actual: dict[str, Any] | None,
+    played: set[Any],
+    completed: bool,
+    current: bool,
+) -> dict[str, Any] | None:
+    """One player's stats for one week under the rules in `sleeper_season_to_date`.
+
+    `{}` means "counted, and worth zero"; None means "nothing known about him this week".
+    """
+    if actual is not None:
+        if completed or current:
+            return dict(actual.get("stats") or {})
+    if completed:
+        # A finished week he has no stat row for: he did not play. Counted only when he is
+        # someone Sleeper projected that week, so a player the league has never heard of does
+        # not acquire a zero line out of nothing.
+        return {} if projection is not None else None
+    if projection is None:
+        return None
+    if current and projection.get("game_id") in played:
+        return {}
+    return dict(projection.get("stats") or {})
+
+
+def fetch_sleeper_season_to_date(
+    season: int, season_payload: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """`season_payload`, rebuilt from weekly data when `season` is in progress; else unchanged.
+
+    One projection call per regular-season week and one stats call per week started -- about
+    twenty requests, made only in-season.
+    """
+    current_week = sleeper_current_week(fetch_sleeper_state(), season)
+    if current_week is None:
+        return season_payload
+    last = SLEEPER_REGULAR_SEASON_WEEKS
+    projections = {w: fetch_sleeper_week_projections(season, w) for w in range(1, last + 1)}
+    actuals = {
+        w: fetch_sleeper_week_stats(season, w) for w in range(1, min(current_week, last) + 1)
+    }
+    _log.info(
+        "sleeper: season in progress (week %d); season line rebuilt from weekly actuals and "
+        "projections.",
+        current_week,
+    )
+    return sleeper_season_to_date(season_payload, projections, actuals, current_week=current_week)
+
+
 def _warn_on_placeholder_collisions(frame: pd.DataFrame) -> None:
     """Log if two DISTINCT rookies hashed to the same placeholder gsis_id (bounded 10^7 space).
     Distinct = different normalized name+position; the same rookie appearing under ESPN and
@@ -481,10 +677,11 @@ def refresh_external_projections(
     asof: date | None = None,
     espn_payload: dict[str, Any] | None = None,
 ) -> Path:
-    """Fetch ESPN + Sleeper preseason projections, crosswalk to gsis_id (placeholder for
-    rookies), validate, and write one dated snapshot. `asof` defaults to today (UTC). A pull is
-    refused only if BOTH sources are empty; a single empty source is logged and the other is
-    written (losing a good single-source snapshot would be worse than a partial one).
+    """Fetch ESPN + Sleeper season projections (Sleeper's rebuilt in-season), crosswalk to
+    gsis_id (placeholder for rookies), validate, and write one dated snapshot. `asof` defaults
+    to today (UTC). A pull is refused only if BOTH sources are empty; a single empty source is
+    logged and the other is written (losing a good single-source snapshot would be worse than a
+    partial one).
 
     `espn_payload` is injectable so one pull can feed both this and `refresh_dst_projections`
     (the CLI writes both under a single `asof`, and two fetches could straddle a server-side
@@ -493,7 +690,7 @@ def refresh_external_projections(
     try:
         if espn_payload is None:
             espn_payload = fetch_espn(season)
-        sleeper_payload = fetch_sleeper_season(season)
+        sleeper_payload = fetch_sleeper_season_to_date(season, fetch_sleeper_season(season))
     except (urllib.error.URLError, json.JSONDecodeError) as exc:
         if isinstance(exc, urllib.error.HTTPError):
             detail = f"HTTP {exc.code}"
