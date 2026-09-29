@@ -11,8 +11,12 @@ expensive calculation" while it sat in the same file. Stage 1 there needs a `Lea
 a lineup chooser; this needs numpy, the availability model, the variance model, the season
 simulator and ESPN payload surgery. They share only `Candidate`.
 
-**Expensive on purpose.** Each candidate is a full Monte-Carlo season, so it runs on the top of
-`waivers.season_upgrades` only -- the free agents who out-project someone I roster.
+**Expensive on purpose.** Each candidate is a full Monte-Carlo season, so it belongs on a short
+list such as the top of `waivers.season_upgrades`.
+
+**No tool calls `simulate_swaps` as of 2026-09-29.** The waiver recommender moved to points only
+at the owner's request. It is kept, with its measured noise floors, because the measurement is
+the expensive part and the objective argument above still stands if wins come back.
 """
 
 from __future__ import annotations

@@ -62,25 +62,13 @@ def _candidate(**overrides: Any) -> Candidate:
     return Candidate(**fields)
 
 
-def _impact(candidate: Candidate, **overrides: Any) -> SwapImpact:
-    fields: dict[str, Any] = {
-        "candidate": candidate,
-        "delta_wins": 0.21,
-        "delta_playoff_pct": 0.04,
-        "delta_title_pct": 0.01,
-        "simulated": True,
-    }
-    fields.update(overrides)
-    return SwapImpact(**fields)
-
-
 # --- the three states of "who do I drop" --------------------------------------------------------
 
 
 def test_a_needed_drop_is_named_with_its_cost(capsys: pytest.CaptureFixture[str]) -> None:
     module = _module()
     candidate = _candidate()
-    module._print_candidate(candidate, None, _impact(candidate))
+    module._print_candidate(candidate, None)
     out = capsys.readouterr().out
     assert "drop Bench RB" in out
     # His season points against the drop's -- the cost is the right-hand side.
@@ -116,11 +104,11 @@ def test_no_drop_needed_and_no_drop_found_do_not_print_the_same(
     them -- and it is the one the module calls the first thing worth telling a reader."""
     module = _module()
     free = _candidate(needs_no_drop=True, drop_player_id=None, drop_player="", drop_cost=0.0)
-    module._print_candidate(free, None, _impact(free))
+    module._print_candidate(free, None)
     free_out = capsys.readouterr().out
 
     stuck = _candidate(needs_no_drop=False, drop_player_id=None, drop_player="", drop_cost=0.0)
-    module._print_candidate(stuck, None, _impact(stuck))
+    module._print_candidate(stuck, None)
     stuck_out = capsys.readouterr().out
 
     assert "no drop needed" in free_out
@@ -145,38 +133,15 @@ def test_a_healthy_free_agent_is_not_claimed_to_have_been_adjusted(
         InjuryStatus.UNKNOWN,
     ):
         candidate = _candidate(injury_status=status)
-        module._print_candidate(candidate, None, _impact(candidate))
+        module._print_candidate(candidate, None)
         assert "adjusted for this" not in capsys.readouterr().out, status
 
 
 def test_an_actually_adjusted_player_says_so(capsys: pytest.CaptureFixture[str]) -> None:
     module = _module()
     candidate = _candidate(injury_status=InjuryStatus.QUESTIONABLE)
-    module._print_candidate(candidate, None, _impact(candidate))
+    module._print_candidate(candidate, None)
     assert "QUESTIONABLE — adjusted for this" in capsys.readouterr().out
-
-
-def test_an_unsimulated_candidate_is_not_printed_as_a_zero(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Silence read as "simulated, and it came to nothing" on the row where the answer is most
-    uncertain."""
-    module = _module()
-    candidate = _candidate()
-    module._print_candidate(
-        candidate,
-        None,
-        _impact(
-            candidate,
-            simulated=False,
-            delta_wins=0.0,
-            not_simulated_because="no season projection for him",
-        ),
-    )
-    out = capsys.readouterr().out
-    assert "NOT SIMULATED" in out
-    assert "no season projection for him" in out, "it says WHY, which is the actionable part"
-    assert "+0.00 wins" not in out
 
 
 def test_an_unsimulated_impact_must_carry_a_reason() -> None:
@@ -190,39 +155,6 @@ def test_an_unsimulated_impact_must_carry_a_reason() -> None:
             delta_title_pct=0.0,
             simulated=False,
         )
-
-
-def test_a_delta_inside_the_noise_is_marked(capsys: pytest.CaptureFixture[str]) -> None:
-    """A tool printing 0.03 wins to two decimals when its own measured spread is 0.062 is
-    inventing precision."""
-    module = _module()
-    candidate = _candidate()
-    module._print_candidate(candidate, None, _impact(candidate, delta_wins=0.03))
-    out = capsys.readouterr().out
-    assert "inside noise" in out
-    # The row names the floor it was judged against, because a swap and a free add are held to
-    # different ones -- a bare "inside noise" on a 0.09 free add contradicts a footer quoting
-    # the paired floor. Three decimals, because two rounds a delta of -0.0615 and its floor of
-    # 0.062 to the same "0.06" and the row then reads as though 0.06 were inside 0.06.
-    assert "floor 0.062" in out
-
-    module._print_candidate(candidate, None, _impact(candidate, delta_wins=0.30))
-    assert "inside noise" not in capsys.readouterr().out
-
-
-def test_a_free_add_is_judged_against_the_wider_floor(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """0.09 wins is signal for a swap and noise for a free add, and the row says which."""
-    module = _module()
-    free = _candidate(needs_no_drop=True, drop_player_id=None, drop_player="", drop_cost=0.0)
-    module._print_candidate(free, None, _impact(free, delta_wins=0.09))
-    out = capsys.readouterr().out
-    assert "inside noise" in out and "floor 0.127" in out
-
-    swap = _candidate()
-    module._print_candidate(swap, None, _impact(swap, delta_wins=0.09))
-    assert "inside noise" not in capsys.readouterr().out
 
 
 # --- the write-up ---------------------------------------------------------------------------------
@@ -284,14 +216,19 @@ def _parse(module: Any, argv: list[str]) -> argparse.Namespace:
     return captured["args"]
 
 
-def test_simulation_is_on_by_default() -> None:
-    """Δ wins is the objective, so the default run has to contain one. An opt-in flag made the
-    default a points ranking with no wins number in it at all."""
-    assert _parse(_module(), _MINIMAL).fast is False
+def test_rows_are_in_points_not_wins(capsys: pytest.CaptureFixture[str]) -> None:
+    """The owner dropped the win simulation for numbers a reader can check by hand."""
+    module = _module()
+    module._print_candidate(_candidate(), None)
+    out = capsys.readouterr().out
+    assert "wins" not in out
+    assert "rest-of-season pts" in out
 
 
-def test_fast_is_available_for_when_seconds_matter() -> None:
-    assert _parse(_module(), [*_MINIMAL, "--fast"]).fast is True
+def test_there_is_no_simulation_flag_left_to_set() -> None:
+    """`--fast` skipped the simulation. With no simulation it would be a flag that does nothing."""
+    with pytest.raises(SystemExit):
+        _module()._parse_args([*_MINIMAL, "--fast"])
 
 
 def test_a_missing_team_id_is_not_guessed_at(

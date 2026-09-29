@@ -540,3 +540,18 @@ Two consequences worth knowing:
 - Positions the league cannot start (a kicker in a kicker-less league) are dropped from both
   lists; with nobody at the position to compare against, the weekly list would otherwise
   show every kicker on the wire.
+
+## 14. Points, not wins (2026-09-29)
+
+The owner dropped expected wins as the waiver tool's measure. Both lists are now in projected
+fantasy points only, sorted by how far a free agent beats the weakest player at his position,
+and nothing is simulated — so `--fast` and `--n-sims` are gone. This reverses §5's "Δ WINS is
+the recommendation" for this tool.
+
+What prompted it: the first run on refreshed projections put Ravens D/ST over Chiefs D/ST at
++0.49 wins for a 24-point season gap, about three times what §5.1's ~140 points-per-win
+conversion predicts, and nothing on screen explained why. A points margin is a number a reader
+can check against their own roster; a simulated win total is not.
+
+`midseason.swap_impact.simulate_swaps` and its noise measurements are kept, uncalled, in case
+the objective comes back.

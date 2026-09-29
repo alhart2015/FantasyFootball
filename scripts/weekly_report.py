@@ -74,7 +74,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--fast",
         action="store_true",
-        help="Skip the OPTIONAL simulations (start/sit P(right), the waiver paired swaps, "
+        help="Skip the OPTIONAL simulations (start/sit P(right), "
         "trade stage 2). The standings Monte-Carlo still runs -- it is not optional, it IS "
         "that section.",
     )

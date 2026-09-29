@@ -2,7 +2,6 @@
 
     python scripts/waiver_recommender.py                     # the one configured league
     python scripts/waiver_recommender.py --team-id 8         # somebody else's team
-    python scripts/waiver_recommender.py ... --fast          # skip the simulation
     python scripts/waiver_recommender.py ... --min-season-margin 15  # only real upgrades
 
 **Two lists, one per horizon, never mixed.** "Better than someone" means better than anyone on
@@ -13,19 +12,19 @@ earlier version asked and which scored a free agent better than my whole bench a
 otherwise backup quarterbacks "beat" your bench running back on raw points and fill the list.
 
 **REST OF SEASON** — free agents with more rest-of-season points than your weakest player at
-their position. That player is the drop. The top of this list is simulated, and **Δ WINS is the
-recommendation** and the order it comes back in: it is the only currency in which "better this
-week" and "worse for the rest of the season" are the same unit.
+their position. That player is the drop.
 
 **THIS WEEK** — free agents projected to outscore your weakest player at their position who
 is playing this week, whatever their rest of season looks like. For spotting a one-week stream.
-No drop is named and nothing is simulated; the season list is where cuts are decided.
+No drop is named; the season list is where cuts are decided.
+
+**Points, not wins.** Both lists are in projected fantasy points, sorted by how many points he
+beats your player by. An earlier version simulated each season swap and ranked by expected
+wins; the owner dropped it on 2026-09-29 in favour of numbers a reader can check by hand. The
+simulator is still in `midseason.swap_impact`.
 
 **LINEUP** on every row is what this week's starting lineup does if you make the move. It is a
 sanity check you can verify against your own roster, not a filter: a bench upgrade reads 0.0.
-
-`--fast` skips the simulation. Use it when you want an answer in seconds and are prepared to do
-the season-long arithmetic yourself.
 
 When a recommendation is driven by an injury, the beat-reporter write-up is printed under it.
 The games-missed number for a player on IR is a guess (the NFL minimum); the write-up usually
@@ -56,12 +55,6 @@ from projections.ingest.injury_news import InjuryNote, fetch_injury_notes
 from projections.midseason.context import InSeasonContext, assemble_context
 from projections.midseason.injuries import is_multi_week
 from projections.midseason.standings import ProjectionInputError
-from projections.midseason.swap_impact import (
-    PAIRED_DELTA_NOISE,
-    UNPAIRED_DELTA_NOISE,
-    SwapImpact,
-    simulate_swaps,
-)
 from projections.midseason.waivers import (
     Candidate,
     player_id,
@@ -107,9 +100,7 @@ def _headline(candidate: Candidate, tail: str) -> None:
     print(f"\n  {add:<32} {where:<8} {tail}")
 
 
-def _print_candidate(
-    candidate: Candidate, note: InjuryNote | None, impact: SwapImpact | None
-) -> None:
+def _print_candidate(candidate: Candidate, note: InjuryNote | None) -> None:
     """One row of the REST OF SEASON list."""
     _headline(candidate, _drop_line(candidate))
     print(
@@ -117,34 +108,7 @@ def _print_candidate(
         f"{_versus(candidate, f'{candidate.beats_points:.0f}')} ({candidate.margin:+.0f})   "
         f"{candidate.lineup_gain:+.1f} to this week's lineup"
     )
-    if impact is not None and not impact.simulated:
-        # WHY it could not be simulated, not just that it could not. The two reasons are
-        # different facts and printing "no season projection for him" under a line that says
-        # his roster spot is the problem asserts something false about the data.
-        print(f"    NOT SIMULATED — {impact.not_simulated_because}.")
-    elif impact is not None:
-        # The floor differs by regime, so the row says which one it was judged against --
-        # otherwise a free add reading "+0.09 (inside noise)" contradicts a footer quoting 0.06.
-        # Read off the object rather than recomputed, so the printed floor cannot disagree with
-        # the verdict it explains.
-        #
-        # Three decimals, because two rounds a delta of -0.0615 and its floor of 0.062 to the
-        # same "0.06" and the row then reads as though 0.06 were inside 0.06 -- at exactly the
-        # boundary this annotation exists to describe.
-        certainty = (
-            "" if impact.beats_noise else f"   (inside noise, floor {impact.noise_floor:.3f})"
-        )
-        print(
-            f"    {impact.delta_wins:+.3f} wins   "
-            f"{impact.delta_playoff_pct * 100:+.1f}% playoffs{certainty}"
-        )
     _print_status(candidate)
-    if impact is not None and impact.beats_noise and not impact.helps:
-        # Gated on `beats_noise` as well. Without it the line fired on a delta of -0.004 that
-        # the row above had just marked "(inside simulation noise)" -- two statements in two
-        # lines, flatly contradicting each other, on the majority of candidates. A number we
-        # cannot distinguish from zero cannot be said to LOWER anything.
-        print("    ! this move LOWERS your expected wins — the drop costs more than the add adds")
     _print_note(note)
 
 
@@ -201,10 +165,7 @@ def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
     """Rank the wire against my roster. Everything shared comes off `ctx`."""
     target = ctx.target
     config = ctx.require_config()
-    my_team_id = ctx.require_team_id()
-    pool = ctx.pool
     id_map = ctx.id_map
-    payload = ctx.payload
     creds = ctx.creds
     run_state = ctx.my_team()
     week = ctx.week
@@ -265,28 +226,7 @@ def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
         # spots -- not one each. Acting on two of them when one is free overfills the roster.
         print(f"\n  {open_spots} active roster spot(s) open — an add there costs nothing.")
 
-    # The margin is the FILTER and decides who is worth simulating. The order the reader sees
-    # is the order stage 2 returns, because Δ wins is the recommendation.
     shortlist = season[: args.top]
-    impacts: dict[int, SwapImpact] = {}
-    if shortlist and not args.fast:
-        print(f"\n  simulating the top {len(shortlist)} ({args.n_sims} seasons each)…")
-        simulated = simulate_swaps(
-            payload,
-            pool,
-            id_map,
-            ctx.availability(),
-            ctx.variance_params(),
-            shortlist,
-            season=target.season,
-            my_team_id=my_team_id,
-            n_sims=args.n_sims,
-            week=week,
-        )
-        impacts = {impact.candidate.player_id: impact for impact in simulated}
-        # Re-ordered by what the tool is actually maximising. Keeping the margin order made
-        # Δ wins an annotation on a points ranking rather than the objective.
-        shortlist = [impact.candidate for impact in simulated]
 
     # My OWN injured players, not just the adds. "My starter went down, who do I pick up" is
     # the case this tool was built for, and his write-up is the thing that says how long he is
@@ -319,25 +259,13 @@ def report(ctx: InSeasonContext, args: argparse.Namespace) -> int:
     if not shortlist:
         print("\n  Nobody on the wire out-projects anyone on your roster for the rest of the year.")
     for candidate in shortlist:
-        _print_candidate(
-            candidate, notes.get(candidate.player_id), impacts.get(candidate.player_id)
-        )
+        _print_candidate(candidate, notes.get(candidate.player_id))
 
     print("\n  THIS WEEK — projected to outscore your weakest player at his position this week")
     if not weekly:
         print("\n  Nobody on the wire out-projects anyone on your roster this week.")
     for candidate in weekly:
         _print_weekly(candidate, notes.get(candidate.player_id))
-
-    if args.fast:
-        print("\n  Points only. Drop --fast to see what each season move is worth in wins.")
-    elif shortlist:
-        print(
-            f"\n  Δ wins is a simulated difference. A swap is paired (same roster size both "
-            f"sides) and its noise floor is {PAIRED_DELTA_NOISE:.3f}; an add into an open spot "
-            f"grows the roster, so it is unpaired and its floor is "
-            f"{UNPAIRED_DELTA_NOISE:.3f}. Roughly 140 season points to a win."
-        )
     return 0
 
 
@@ -357,8 +285,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--min-season-margin",
         type=float,
         default=5.0,
-        help="rest-of-season points a free agent must beat your weakest player by "
-        "(about 140 make a win)",
+        help="rest-of-season points a free agent must beat your weakest player by",
     )
     parser.add_argument(
         "--min-week-margin",
@@ -367,12 +294,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="points this week a free agent must beat your weakest playing player by",
     )
     parser.add_argument("--top", type=int, default=5, help="how many to show on each list")
-    parser.add_argument(
-        "--fast",
-        action="store_true",
-        help="skip the simulation and show points alone",
-    )
-    parser.add_argument("--n-sims", type=int, default=2000)
     return parser.parse_args(argv)
 
 
@@ -409,9 +330,8 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # The `Δ wins` footer is not encodable in a Windows console's cp1252; see
-    # `projections.console`. Printed after every recommendation, so the crash it caused
-    # destroyed only the explanation of the numbers, which made it easy to miss.
+    # The em dashes in the output are not encodable in a Windows console's cp1252; see
+    # `projections.console`.
     force_utf8_stdio()
     args = _parse_args(argv)
     try:
