@@ -313,12 +313,11 @@ FREE_AGENT_STATUSES: tuple[str, ...] = ("FREEAGENT", "WAIVERS")
 #: `statuses=("ONTEAM",)`), and a kicker the tool cannot price is a kicker it treats as
 #: unstartable -- leaving a hole in the baseline lineup and inflating every candidate's gain.
 #:
-#: They are NOT filtered out of the free-agent side, and in a league with a K or D/ST starting
-#: slot a free-agent kicker with a weekly projection will therefore be ranked as an add and come
-#: back `simulated=False` from stage 2, because the pool holds no rest-of-season number for him.
-#: (An earlier comment claimed `rank_free_agents` would not surface him -- it gates on
-#: `lineup_gain`, not on `remaining_points`.) Latent for Critts, which starts neither; the fix
-#: when it stops being latent is a separate slot set per call, not a filter after the fact.
+#: They are NOT filtered out of the free-agent side. In a league with a K or D/ST starting slot
+#: a free-agent kicker with a weekly projection will appear on the waiver tool's THIS-WEEK list;
+#: he cannot appear on its season list, which needs a rest-of-season number the pool does not
+#: hold for him. In a league that starts neither, `waivers` drops him as unstartable. Latent for
+#: Critts; the fix when it stops being latent is a separate slot set per call.
 _SKILL_SLOT_IDS: tuple[int, ...] = (0, 2, 4, 6, 23, 16, 17)
 
 #: How many free agents to request. Sorted by percent-owned descending, so a cap keeps the
